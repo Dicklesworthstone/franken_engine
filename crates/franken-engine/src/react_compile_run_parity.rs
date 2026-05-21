@@ -2171,9 +2171,9 @@ mod tests {
     #[test]
     fn test_serde_round_trip_workflow_kind() {
         for wk in WorkflowKind::all() {
-            let json = serde_json::to_string(wk).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(wk).expect("serialize derived Serialize");
             let back: WorkflowKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*wk, back);
         }
     }
@@ -2181,9 +2181,8 @@ mod tests {
     #[test]
     fn test_serde_round_trip_surface() {
         for s in Surface::all() {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
-            let back: Surface =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
+            let back: Surface = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -2195,9 +2194,9 @@ mod tests {
             CellVerdict::Fail,
             CellVerdict::Inconclusive,
         ] {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: CellVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2205,9 +2204,8 @@ mod tests {
     #[test]
     fn test_serde_round_trip_matrix_config() {
         let config = MatrixConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: MatrixConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
+        let back: MatrixConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 

@@ -956,10 +956,10 @@ mod tests {
     fn transferable_kind_serde_roundtrip() {
         for kind in TransferableKind::ALL {
             // SAFETY: TransferableKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid TransferableKind serialization
             let back: TransferableKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -976,10 +976,10 @@ mod tests {
     fn drift_kind_serde_roundtrip() {
         for kind in DriftKind::ALL {
             // SAFETY: DriftKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid DriftKind serialization
             let back: DriftKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -999,10 +999,10 @@ mod tests {
             TransferVerdict::Deferred,
         ] {
             // SAFETY: TransferVerdict derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid TransferVerdict serialization
             let back: TransferVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1407,10 +1407,10 @@ mod tests {
     fn transfer_candidate_serde_roundtrip() {
         let candidate = specimen_candidate("c1", TransferableKind::RewritePack, 800_000);
         // SAFETY: TransferCandidate derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&candidate).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&candidate).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid TransferCandidate serialization
         let back: TransferCandidate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(candidate, back);
     }
 
@@ -1424,10 +1424,10 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
         };
         // SAFETY: TransferDecision derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid TransferDecision serialization
         let back: TransferDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
     }
 
@@ -1445,18 +1445,18 @@ mod tests {
             prior_hash: ContentHash::compute(b"test"),
             rollback_hash: ContentHash::compute(b"rollback"),
         };
-        let json = serde_json::to_string(&rollback).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rollback).expect("serialize derived Serialize");
         let back: TransferRollback =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rollback, back);
     }
 
     #[test]
     fn transfer_config_serde_roundtrip() {
         let config = TransferConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: TransferConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1583,9 +1583,9 @@ mod tests {
         let c1 = make_candidate("c1", TransferableKind::RewritePack);
         session.evaluate_candidate(&c1);
 
-        let json = serde_json::to_string(&session).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&session).expect("serialize derived Serialize");
         let back: TransferSession =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(session, back);
     }
 
@@ -1593,9 +1593,9 @@ mod tests {
     fn report_serde_roundtrip() {
         let session = make_session();
         let report = session.build_report();
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: TransferReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 

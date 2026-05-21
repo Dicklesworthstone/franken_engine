@@ -2112,27 +2112,25 @@ mod tests {
     #[test]
     fn test_serde_transfer_kind() {
         let kind = TransferKind::RewritePack;
-        let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-        let back: TransferKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
+        let back: TransferKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(kind, back);
     }
 
     #[test]
     fn test_serde_transfer_policy() {
         let policy = TransferPolicy::default();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let back: TransferPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, back);
     }
 
     #[test]
     fn test_serde_prior_entry() {
         let prior = make_prior("p1", TransferKind::CacheHint, 3, 900_000, 10);
-        let json = serde_json::to_string(&prior).expect("serde deserialization should succeed");
-        let back: PriorEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&prior).expect("serialize derived Serialize");
+        let back: PriorEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(prior, back);
     }
 
@@ -2156,18 +2154,18 @@ mod tests {
             drift_observations: 0,
             content_hash: test_hash("t1"),
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: TransferRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
     }
 
     #[test]
     fn test_serde_drift_observation() {
         let obs = DriftObservation::new("t1", "exec_time", 500_000, 510_000, test_epoch(5), 1);
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         let back: DriftObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, back);
     }
 
@@ -2178,9 +2176,8 @@ mod tests {
             budget_millionths: 100_000,
             trigger_metric: "exec_time".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: DriftVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
+        let back: DriftVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -2199,9 +2196,9 @@ mod tests {
             content_hash: test_hash("t1"),
             signature: test_hash("sig"),
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: RevocationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -2218,9 +2215,9 @@ mod tests {
             max_drift_millionths: 50_000,
             summary_epoch: test_epoch(5),
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: TransferSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -2236,9 +2233,9 @@ mod tests {
             policy_hash: test_hash("policy"),
             epoch: test_epoch(10),
         };
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         let back: TransferEvidenceInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv, back);
     }
 

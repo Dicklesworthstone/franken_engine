@@ -2089,7 +2089,7 @@ mod tests {
         let c = BatchTransportConfig::default();
         let json = serde_json::to_string(&c).expect("serde serialization should succeed");
         let back: BatchTransportConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -2144,8 +2144,7 @@ mod tests {
     fn credit_pool_serde_roundtrip() {
         let pool = CreditPool::new("s".into(), 100, 200);
         let json = serde_json::to_string(&pool).expect("serde serialization should succeed");
-        let back: CreditPool =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CreditPool = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pool.available(), back.available());
         assert_eq!(pool.session_id(), back.session_id());
     }
@@ -2245,7 +2244,7 @@ mod tests {
         };
         let json = serde_json::to_string(&r).expect("serde serialization should succeed");
         let back: SharedMemoryRegion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r.region_id, back.region_id);
     }
 
@@ -2828,7 +2827,7 @@ mod tests {
         for r in MembraneRejectionReason::ALL {
             let json = serde_json::to_string(r).expect("serde serialization should succeed");
             let back: MembraneRejectionReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, back);
         }
     }
@@ -2856,7 +2855,7 @@ mod tests {
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde serialization should succeed");
             let back: BatchTransportError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }
@@ -2948,7 +2947,7 @@ mod tests {
         for variant in RegionState::ALL {
             let json = serde_json::to_string(variant).expect("serde serialization should succeed");
             let back: RegionState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(
                 *variant, back,
                 "RegionState serde roundtrip failed for {variant}"
@@ -2977,7 +2976,7 @@ mod tests {
         for family in BatchTransportSpecimenFamily::ALL {
             let json = serde_json::to_string(family).expect("serde serialization should succeed");
             let back: BatchTransportSpecimenFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*family, back, "Family serde roundtrip failed for {family}");
         }
     }
@@ -3201,7 +3200,7 @@ mod tests {
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde serialization should succeed");
             let back: BatchTransportError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back, "serde roundtrip failed for {err:?}");
         }
     }
@@ -3258,7 +3257,7 @@ mod tests {
         for p in &payloads {
             let json = serde_json::to_string(p).expect("serde serialization should succeed");
             let back: BatchPayload =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*p, back);
         }
     }
@@ -3694,7 +3693,7 @@ mod tests {
         };
         let json = serde_json::to_string(&entry).expect("serde serialization should succeed");
         let back: MembraneAuditEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
 
         let entry_reject = MembraneAuditEntry {
@@ -3707,7 +3706,7 @@ mod tests {
         let json2 =
             serde_json::to_string(&entry_reject).expect("serde serialization should succeed");
         let back2: MembraneAuditEntry =
-            serde_json::from_str(&json2).expect("serde deserialization should succeed");
+            serde_json::from_str(&json2).expect("deserialize known-valid JSON");
         assert_eq!(entry_reject, back2);
     }
 
@@ -3721,7 +3720,7 @@ mod tests {
         for v in [&accept, &reject] {
             let json = serde_json::to_string(v).expect("serde serialization should succeed");
             let back: MembraneVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -3739,8 +3738,7 @@ mod tests {
             accepted_at_tick: 300,
         };
         let json = serde_json::to_string(&receipt).expect("serde serialization should succeed");
-        let back: BatchReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BatchReceipt = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -3762,7 +3760,7 @@ mod tests {
         };
         let json = serde_json::to_string(&envelope).expect("serde serialization should succeed");
         let back: BatchEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(envelope, back);
     }
 
@@ -3770,8 +3768,7 @@ mod tests {
     fn batch_entry_serde_roundtrip() {
         let entry = make_entry(42, b"serde-check");
         let json = serde_json::to_string(&entry).expect("serde serialization should succeed");
-        let back: BatchEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BatchEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 

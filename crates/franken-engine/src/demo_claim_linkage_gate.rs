@@ -1093,8 +1093,7 @@ mod tests {
             require_evidence: false,
             ..Default::default()
         };
-        let mut gate =
-            DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
+        let mut gate = DemoClaimLinkageGate::new(config).expect("constructor with valid inputs");
 
         let demos = vec![make_demo("d1", true)];
         let claims = vec![make_claim(
@@ -1117,8 +1116,7 @@ mod tests {
         };
         config.require_expected_outputs = false;
         config.require_verification_commands = false;
-        let mut gate =
-            DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
+        let mut gate = DemoClaimLinkageGate::new(config).expect("constructor with valid inputs");
 
         let claims = vec![make_claim(
             "c1",
@@ -1263,18 +1261,18 @@ mod tests {
     #[test]
     fn serde_roundtrip_claim() {
         let claim = make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]);
-        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&claim).expect("serialize derived Serialize");
         let back: MilestoneClaim =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(claim, back);
     }
 
     #[test]
     fn serde_roundtrip_demo() {
         let demo = make_demo("d1", true);
-        let json = serde_json::to_string(&demo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&demo).expect("serialize derived Serialize");
         let back: DemoSpecification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(demo, back);
     }
 
@@ -1291,18 +1289,18 @@ mod tests {
         let decision = gate
             .evaluate("m1", &claims, &demos)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: LinkageGateDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
     }
 
     #[test]
     fn serde_roundtrip_config() {
         let config = LinkageGateConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: LinkageGateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1359,7 +1357,7 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let mut gate_missing_demo =
-            DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
+            DemoClaimLinkageGate::new(config).expect("constructor with valid inputs");
         let decision_missing_demo = gate_missing_demo
             .evaluate("m1", &claims_missing_demo, &demos)
             .expect("serde deserialization should succeed");
@@ -1551,7 +1549,7 @@ mod tests {
     #[test]
     fn json_fields_demo_specification() {
         let demo = make_demo("d1", true);
-        let json = serde_json::to_string(&demo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&demo).expect("serialize derived Serialize");
         assert!(json.contains("\"demo_id\""));
         assert!(json.contains("\"title\""));
         assert!(json.contains("\"description\""));
@@ -1575,7 +1573,7 @@ mod tests {
         let decision = gate
             .evaluate("m1", &claims, &demos)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"milestone_id\""));
         assert!(json.contains("\"epoch\""));
@@ -1592,7 +1590,7 @@ mod tests {
     #[test]
     fn json_fields_linkage_gate_config() {
         let config = LinkageGateConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         assert!(json.contains("\"epoch\""));
         assert!(json.contains("\"min_completeness_millionths\""));
         assert!(json.contains("\"require_runnable_demo\""));
@@ -1610,9 +1608,9 @@ mod tests {
             count: 100,
             max: 64,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: LinkageGateError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1640,8 +1638,7 @@ mod tests {
         config.require_evidence = false;
         config.require_expected_outputs = false;
         config.require_verification_commands = false;
-        let mut gate =
-            DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
+        let mut gate = DemoClaimLinkageGate::new(config).expect("constructor with valid inputs");
         let claims = vec![make_claim("c1", ClaimCategory::Reliability, vec![], vec![])];
         let decision = gate
             .evaluate("m1", &claims, &[])
@@ -1836,7 +1833,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 6);
     }
@@ -1854,7 +1851,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 7);
     }
@@ -1868,7 +1865,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 3);
     }
@@ -1902,7 +1899,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 8);
     }
@@ -2051,7 +2048,7 @@ mod tests {
     #[test]
     fn json_field_names_verification_command() {
         let cmd = make_command("cmd1");
-        let json = serde_json::to_string(&cmd).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cmd).expect("serialize derived Serialize");
         assert!(json.contains("\"command_id\""));
         assert!(json.contains("\"command\""));
         assert!(json.contains("\"expected_exit_code\""));
@@ -2062,7 +2059,7 @@ mod tests {
     #[test]
     fn json_field_names_expected_output() {
         let out = make_output("out1");
-        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&out).expect("serialize derived Serialize");
         assert!(json.contains("\"name\""));
         assert!(json.contains("\"expected_hash\""));
         assert!(json.contains("\"exact_match\""));
@@ -2072,7 +2069,7 @@ mod tests {
     #[test]
     fn json_field_names_milestone_claim() {
         let claim = make_claim("c1", ClaimCategory::Performance, vec!["d1"], vec!["e1"]);
-        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&claim).expect("serialize derived Serialize");
         assert!(json.contains("\"claim_id\""));
         assert!(json.contains("\"statement\""));
         assert!(json.contains("\"milestone_id\""));
@@ -2084,7 +2081,7 @@ mod tests {
     #[test]
     fn json_field_names_evidence_link() {
         let ev = make_evidence("e1");
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         assert!(json.contains("\"evidence_id\""));
         assert!(json.contains("\"kind\""));
         assert!(json.contains("\"artifact_hash\""));
@@ -2103,7 +2100,7 @@ mod tests {
             missing: Vec::new(),
             completeness_millionths: MILLION,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(json.contains("\"claim_id\""));
         assert!(json.contains("\"linked\""));
         assert!(json.contains("\"has_runnable_demo\""));
@@ -2324,9 +2321,9 @@ mod tests {
             timeout_ms: u64::MAX,
             deterministic: true,
         };
-        let json = serde_json::to_string(&cmd).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cmd).expect("serialize derived Serialize");
         let back: VerificationCommand =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.timeout_ms, u64::MAX);
     }
 
@@ -2338,9 +2335,9 @@ mod tests {
             exact_match: false,
             tolerance_millionths: i64::MAX,
         };
-        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&out).expect("serialize derived Serialize");
         let back: ExpectedOutput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.tolerance_millionths, i64::MAX);
     }
 
@@ -2352,9 +2349,9 @@ mod tests {
             exact_match: false,
             tolerance_millionths: i64::MIN,
         };
-        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&out).expect("serialize derived Serialize");
         let back: ExpectedOutput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.tolerance_millionths, i64::MIN);
     }
 
@@ -2370,9 +2367,9 @@ mod tests {
             expected_outputs: BTreeMap::new(),
             tags: BTreeSet::new(),
         };
-        let json = serde_json::to_string(&demo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&demo).expect("serialize derived Serialize");
         let back: DemoSpecification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(demo, back);
     }
 
@@ -2386,9 +2383,9 @@ mod tests {
             evidence_links: Vec::new(),
             demos: Vec::new(),
         };
-        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&claim).expect("serialize derived Serialize");
         let back: MilestoneClaim =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(claim, back);
     }
 
@@ -2404,7 +2401,7 @@ mod tests {
             missing: Vec::new(),
             completeness_millionths: MILLION,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(json.contains("\"missing\":[]"));
     }
 
@@ -2416,10 +2413,10 @@ mod tests {
             exact_match: false,
             tolerance_millionths: 500_000,
         };
-        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&out).expect("serialize derived Serialize");
         assert!(json.contains("\"expected_hash\":null"));
         let back: ExpectedOutput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(out, back);
     }
 
@@ -2473,9 +2470,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(u64::MAX),
             ..Default::default()
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: LinkageGateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.epoch, SecurityEpoch::from_raw(u64::MAX));
     }
 
@@ -2498,9 +2495,9 @@ mod tests {
             timeout_ms: 0,
             deterministic: false,
         };
-        let json = serde_json::to_string(&cmd).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cmd).expect("serialize derived Serialize");
         let back: VerificationCommand =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.expected_exit_code, -1);
     }
 
@@ -2524,9 +2521,9 @@ mod tests {
             },
             tags,
         };
-        let json = serde_json::to_string(&demo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&demo).expect("serialize derived Serialize");
         let back: DemoSpecification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.tags.len(), 100);
     }
 
@@ -2540,9 +2537,8 @@ mod tests {
             artifact_hash: ContentHash::compute(b"complex-data"),
             description: "Complex evidence with special chars: <>&\"".to_string(),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: EvidenceLink =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
+        let back: EvidenceLink = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -2555,9 +2551,9 @@ mod tests {
             timeout_ms: 999_999,
             deterministic: false,
         };
-        let json = serde_json::to_string(&cmd).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cmd).expect("serialize derived Serialize");
         let back: VerificationCommand =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cmd, back);
     }
 
@@ -2569,9 +2565,9 @@ mod tests {
             exact_match: true,
             tolerance_millionths: 100,
         };
-        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&out).expect("serialize derived Serialize");
         let back: ExpectedOutput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(out, back);
     }
 
@@ -2587,9 +2583,9 @@ mod tests {
             missing: vec!["no demo".to_string(), "no outputs".to_string()],
             completeness_millionths: 250_000,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: ClaimLinkageResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -2626,9 +2622,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: LinkageGateError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2636,9 +2632,9 @@ mod tests {
     #[test]
     fn serde_roundtrip_gate_struct() {
         let gate = default_gate();
-        let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gate).expect("serialize derived Serialize");
         let back: DemoClaimLinkageGate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.evaluation_count(), 0);
     }
 
@@ -2651,9 +2647,9 @@ mod tests {
             .evaluate("m1", &claims, &demos)
             .expect("serde deserialization should succeed");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: LinkageGateDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
     }
 
@@ -2668,9 +2664,9 @@ mod tests {
             ClaimCategory::DeveloperExperience,
         ];
         for cat in &categories {
-            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cat).expect("serialize derived Serialize");
             let back: ClaimCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cat, back);
         }
     }
@@ -2687,9 +2683,9 @@ mod tests {
             EvidenceKind::ThirdPartyVerification,
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: EvidenceKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -2702,9 +2698,9 @@ mod tests {
             LinkageVerdict::Empty,
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: LinkageVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2769,8 +2765,7 @@ mod tests {
             require_verification_commands: false,
             ..Default::default()
         };
-        let mut gate =
-            DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
+        let mut gate = DemoClaimLinkageGate::new(config).expect("constructor with valid inputs");
         let claims = vec![make_claim(
             "c1",
             ClaimCategory::DeveloperExperience,
@@ -2792,8 +2787,7 @@ mod tests {
             require_verification_commands: false,
             ..Default::default()
         };
-        let mut gate =
-            DemoClaimLinkageGate::new(config).expect("serde deserialization should succeed");
+        let mut gate = DemoClaimLinkageGate::new(config).expect("constructor with valid inputs");
         let claims = vec![make_claim(
             "c1",
             ClaimCategory::Correctness,

@@ -1914,9 +1914,9 @@ mod tests {
             self_closing: true,
             span: SourceSpan::new(0, 7, 1, 1, 1, 8),
         };
-        let json = serde_json::to_string(&el).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&el).expect("serialize derived Serialize");
         let roundtrip: JsxElement =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(el, roundtrip);
     }
 
@@ -1929,18 +1929,17 @@ mod tests {
             }],
             span: SourceSpan::new(0, 10, 1, 1, 1, 11),
         });
-        let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
-        let roundtrip: JsxNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&node).expect("serialize derived Serialize");
+        let roundtrip: JsxNode = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(node, roundtrip);
     }
 
     #[test]
     fn test_serde_config() {
         let config = JsxParserConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let roundtrip: JsxParserConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, roundtrip);
     }
 
@@ -1952,9 +1951,9 @@ mod tests {
             message: "test".into(),
             span: Some(SourceSpan::new(0, 5, 1, 1, 1, 6)),
         };
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let roundtrip: JsxDiagnostic =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, roundtrip);
     }
 
@@ -1964,9 +1963,9 @@ mod tests {
             depth: 100,
             limit: 64,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let roundtrip: JsxParseError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, roundtrip);
     }
 
@@ -1981,9 +1980,9 @@ mod tests {
             fail_count: 0,
             expected_failure_count: 2,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let roundtrip: JsxRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, roundtrip);
     }
 
@@ -1997,9 +1996,9 @@ mod tests {
             family_coverage: BTreeMap::new(),
             evidence_hash: "sha256:abc".into(),
         };
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         let roundtrip: JsxEvidenceInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv, roundtrip);
     }
 
@@ -2153,9 +2152,9 @@ mod tests {
     #[test]
     fn test_attribute_value_implicit_true_serde() {
         let val = JsxAttributeValue::ImplicitTrue;
-        let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&val).expect("serialize derived Serialize");
         let roundtrip: JsxAttributeValue =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(val, roundtrip);
     }
 

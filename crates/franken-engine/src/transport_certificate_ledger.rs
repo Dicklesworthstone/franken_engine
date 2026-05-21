@@ -1405,9 +1405,9 @@ mod tests {
     #[test]
     fn artifact_kind_serde_roundtrip() {
         for kind in ArtifactKind::ALL {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: ArtifactKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1457,10 +1457,9 @@ mod tests {
             TransportOutcome::Incompatible,
         ];
         for outcome in outcomes {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: TransportOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, back);
         }
     }
@@ -1514,10 +1513,9 @@ mod tests {
             DegradationReason::UnknownReason("custom".into()),
         ];
         for reason in reasons {
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             let back: DegradationReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(reason, back);
         }
     }
@@ -1618,9 +1616,8 @@ mod tests {
     #[test]
     fn hardware_cell_serde_roundtrip() {
         let cell = cell_x86_avx512();
-        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
-        let back: HardwareCell =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cell).expect("serialize derived Serialize");
+        let back: HardwareCell = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cell, back);
     }
 
@@ -1926,9 +1923,9 @@ mod tests {
             700_000,
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let back: TransportCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, back);
     }
 
@@ -1964,9 +1961,9 @@ mod tests {
     #[test]
     fn residual_component_serde_roundtrip() {
         let comp = ResidualComponent::new("cache", 500_000, 400_000, "eviction");
-        let json = serde_json::to_string(&comp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&comp).expect("serialize derived Serialize");
         let back: ResidualComponent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(comp, back);
     }
 
@@ -2061,9 +2058,9 @@ mod tests {
 
         let ledger =
             build_residual_ledger(&cert, components).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         let back: ResidualLedger =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ledger, back);
     }
 
@@ -2226,9 +2223,9 @@ mod tests {
             TransportError::InternalError("test error".into()),
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let back: TransportError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, back);
         }
     }
@@ -2359,9 +2356,9 @@ mod tests {
     fn manifest_summary_serde_roundtrip() {
         let certs = franken_engine_transport_manifest();
         let summary = TransportManifestSummary::build(&certs);
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: TransportManifestSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -2420,9 +2417,9 @@ mod tests {
         .expect("serde deserialization should succeed");
         let evt =
             TransportEvent::from_certificate(&cert, TransportEventKind::LedgerBuilt, test_epoch());
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
         let back: TransportEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evt, back);
     }
 

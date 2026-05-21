@@ -1388,9 +1388,8 @@ mod tests {
                 make_slot(2, HookKind::Memo, Some(vec![])),
             ],
         );
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let m2: HookManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
+        let m2: HookManifest = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, m2);
     }
 
@@ -1444,9 +1443,9 @@ mod tests {
             RenderPhase::Idle,
             RenderPhase::Unmounting,
         ] {
-            let json = serde_json::to_string(phase).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(phase).expect("serialize derived Serialize");
             let p2: RenderPhase =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*phase, p2);
         }
     }
@@ -1784,9 +1783,9 @@ mod tests {
             precondition_met: true,
             reason: "adjacent setState".into(),
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let r2: TransformationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, r2);
     }
 
@@ -1884,9 +1883,9 @@ mod tests {
         let mut t = ComponentPhaseTracker::new("Counter");
         t.run_full_cycle()
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let t2: ComponentPhaseTracker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, t2);
     }
 
@@ -1940,9 +1939,9 @@ mod tests {
     #[test]
     fn scheduling_boundary_serde_roundtrip() {
         let bounds = SchedulingBoundary::canonical_boundaries();
-        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bounds).expect("serialize derived Serialize");
         let b2: Vec<SchedulingBoundary> =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bounds, b2);
     }
 
@@ -2038,9 +2037,9 @@ mod tests {
             ],
         ));
         c.approve_transformation(LegalTransformation::MemoConstantFold);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let c2: HookEffectContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, c2);
     }
 
@@ -2094,9 +2093,8 @@ mod tests {
     #[test]
     fn pending_effect_serde_roundtrip() {
         let e = make_effect("Counter", 2, EffectTiming::Layout, 42, true);
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let e2: PendingEffect =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
+        let e2: PendingEffect = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, e2);
     }
 
@@ -2341,9 +2339,8 @@ mod tests {
     #[test]
     fn hook_kind_serde_all_variants() {
         for kind in HookKind::ALL {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
-            let back: HookKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
+            let back: HookKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -2365,9 +2362,9 @@ mod tests {
             RenderPhase::Unmounting,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: RenderPhase =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2380,9 +2377,9 @@ mod tests {
             EffectTiming::Passive,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: EffectTiming =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2398,9 +2395,9 @@ mod tests {
             UnsupportedSemanticsTrigger::TransformationProofMissing,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: UnsupportedSemanticsTrigger =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }

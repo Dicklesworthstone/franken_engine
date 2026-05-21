@@ -2352,10 +2352,10 @@ mod tests {
     fn test_severity_serde_roundtrip() {
         let severity = ShiftSeverity::Critical;
         // SAFETY: ShiftSeverity derives Serialize; writing to an in-memory String cannot fail here.
-        let json = serde_json::to_string(&severity).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&severity).expect("serialize derived Serialize");
         // SAFETY: JSON was produced from the same ShiftSeverity schema immediately above.
         let back: ShiftSeverity =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(severity, back);
     }
 
@@ -2364,11 +2364,10 @@ mod tests {
         let alarm = make_alarm("a1", ShiftDomain::ApiUsage, ShiftSeverity::Warning, 5);
         // SAFETY: ShiftAlarm derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&alarm).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&alarm).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid ShiftAlarm,
         // so from_str back to ShiftAlarm cannot fail (valid format + matching schema).
-        let back: ShiftAlarm =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ShiftAlarm = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(alarm, back);
     }
 
@@ -2377,11 +2376,11 @@ mod tests {
         let ev = make_acquisition(ShiftDomain::General, 50, 100, AcquisitionStatus::Active);
         // SAFETY: AcquisitionEvidence derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid AcquisitionEvidence,
         // so from_str back to AcquisitionEvidence cannot fail (valid format + matching schema).
         let back: AcquisitionEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -2390,11 +2389,10 @@ mod tests {
         let config = GateConfig::default();
         // SAFETY: GateConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid GateConfig,
         // so from_str back to GateConfig cannot fail (valid format + matching schema).
-        let back: GateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -2406,11 +2404,11 @@ mod tests {
         let verdict = gate.evaluate_claim(&claim);
         // SAFETY: FreshnessVerdict derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&verdict).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FreshnessVerdict,
         // so from_str back to FreshnessVerdict cannot fail (valid format + matching schema).
         let back: FreshnessVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(verdict, back);
     }
 
@@ -2425,11 +2423,11 @@ mod tests {
         ));
         // SAFETY: FreshnessGate derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gate).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FreshnessGate,
         // so from_str back to FreshnessGate cannot fail (valid format + matching schema).
         let back: FreshnessGate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.alarm_ledger.active_count(), 1);
     }
 
@@ -2439,9 +2437,8 @@ mod tests {
         gate.silence_tracker.record_signal(epoch(10));
         let claims = vec![make_claim("c1", ClaimSurface::Performance, &[])];
         let batch = gate.evaluate_batch(&claims);
-        let json = serde_json::to_string(&batch).expect("serde deserialization should succeed");
-        let back: BatchVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&batch).expect("serialize derived Serialize");
+        let back: BatchVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(batch.claims_total, back.claims_total);
     }
 
@@ -2452,9 +2449,9 @@ mod tests {
         let claim = make_claim("c1", ClaimSurface::Performance, &[]);
         let verdict = gate.evaluate_claim(&claim);
         let receipt = DecisionReceipt::from_verdict(&verdict, &gate.config);
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 

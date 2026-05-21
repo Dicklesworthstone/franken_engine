@@ -773,11 +773,11 @@ mod tests {
         for s in &severities {
             // SAFETY: Severity derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid Severity,
             // so from_str back to Severity cannot fail (valid format + matching schema).
             let restored: Severity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, restored);
         }
     }
@@ -787,11 +787,11 @@ mod tests {
         let config = test_config("svc-1");
         // SAFETY: ServiceConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid ServiceConfig,
         // so from_str back to ServiceConfig cannot fail (valid format + matching schema).
         let restored: ServiceConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -806,9 +806,9 @@ mod tests {
             budget_remaining: 2,
             severity: Severity::Restart,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: SupervisorEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -824,9 +824,9 @@ mod tests {
             RestartPolicy::Temporary,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: RestartPolicy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -842,9 +842,9 @@ mod tests {
             ServiceState::Terminated,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: ServiceState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -876,9 +876,9 @@ mod tests {
             HealthStatus::Critical,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: HealthStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -906,9 +906,9 @@ mod tests {
             SupervisorAction::Escalate,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: SupervisorAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -943,9 +943,9 @@ mod tests {
             max_restarts: 5,
             window_ticks: 200,
         };
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         let restored: RestartBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(b, restored);
     }
 
@@ -1139,9 +1139,9 @@ mod tests {
             },
             shutdown_order: 42,
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: ServiceConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1665,7 +1665,7 @@ mod tests {
             max_restarts: 7,
             window_ticks: 500,
         };
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         assert!(json.contains("max_restarts"));
         assert!(json.contains("window_ticks"));
         assert!(json.contains("7"));
@@ -1680,7 +1680,7 @@ mod tests {
             restart_budget: RestartBudget::default(),
             shutdown_order: 99,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         assert!(json.contains("service_id"));
         assert!(json.contains("restart_policy"));
         assert!(json.contains("restart_budget"));
@@ -1700,7 +1700,7 @@ mod tests {
             budget_remaining: 0,
             severity: Severity::Isolate,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("trace_id"));
         assert!(json.contains("service_id"));
         assert!(json.contains("action"));

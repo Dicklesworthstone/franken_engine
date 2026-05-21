@@ -1623,18 +1623,17 @@ mod tests {
     #[test]
     fn request_context_serde_roundtrip() {
         let ctx = context();
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         let back: RequestContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctx, back);
     }
 
     #[test]
     fn auth_context_serde_roundtrip() {
         let auth = auth_with_scopes(&[SCOPE_HEALTH_READ, SCOPE_CONTROL_WRITE]);
-        let json = serde_json::to_string(&auth).expect("serde deserialization should succeed");
-        let back: AuthContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&auth).expect("serialize derived Serialize");
+        let back: AuthContext = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(auth, back);
     }
 
@@ -1671,9 +1670,9 @@ mod tests {
     fn endpoint_failure_serde_roundtrip() {
         let mut f = EndpointFailure::new("E-42", "bad input");
         f.details.insert("key".to_string(), "value".to_string());
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let back: EndpointFailure =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f, back);
     }
 
@@ -1684,9 +1683,9 @@ mod tests {
             action: ControlAction::Quarantine,
             reason: "policy violation".to_string(),
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: ControlActionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, back);
     }
 
@@ -1698,9 +1697,9 @@ mod tests {
             page_size: 50,
             cursor: Some("cursor-abc".to_string()),
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: EvidenceExportRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, back);
     }
 
@@ -1711,9 +1710,9 @@ mod tests {
             trace_id: Some("trace-001".to_string()),
             session_id: None,
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: ReplayControlRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, back);
     }
 
@@ -1725,9 +1724,9 @@ mod tests {
             security_epoch: 7,
             gc_pressure_basis_points: 500,
         };
-        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&h).expect("serialize derived Serialize");
         let back: HealthStatusResponse =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(h, back);
     }
 
@@ -1742,9 +1741,9 @@ mod tests {
             outcome: "ok".to_string(),
             artifact_ref: "evidence://ref".to_string(),
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: EvidenceRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1759,9 +1758,9 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: Some("E-1".to_string()),
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: StructuredLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1776,9 +1775,9 @@ mod tests {
             component: "c".to_string(),
             details,
         };
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let back: ErrorEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(env, back);
     }
 
@@ -1926,9 +1925,9 @@ mod tests {
             ],
             next_cursor: Some("cursor-next".to_string()),
         };
-        let json = serde_json::to_string(&resp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&resp).expect("serialize derived Serialize");
         let back: EvidenceExportResponse =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(resp, back);
     }
 
@@ -1963,9 +1962,9 @@ mod tests {
             page_size: 1,
             cursor: None,
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: EvidenceExportRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req.since_epoch_seconds, back.since_epoch_seconds);
         assert_eq!(back.since_epoch_seconds, u64::MAX);
     }
@@ -2003,9 +2002,9 @@ mod tests {
             accepted: true,
             decision_id: "d-1".into(),
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: ControlActionResponse =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -2017,9 +2016,9 @@ mod tests {
             trace_id: Some("t-1".into()),
             note: "replay in progress".into(),
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: ReplayControlResponse =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -2219,9 +2218,9 @@ mod tests {
         assert_eq!(f.details.len(), 1);
         assert_eq!(f.details["retry_after_seconds"], "30");
         // serde roundtrip preserves details
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let back: EndpointFailure =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.details.len(), 1);
     }
 
@@ -2349,9 +2348,9 @@ mod tests {
             ControlAction::Quarantine,
         ];
         for action in &variants {
-            let json = serde_json::to_string(action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(action).expect("serialize derived Serialize");
             let back: ControlAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*action, back);
         }
     }
@@ -2364,9 +2363,9 @@ mod tests {
             ReplayCommand::Status,
         ];
         for cmd in &variants {
-            let json = serde_json::to_string(cmd).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cmd).expect("serialize derived Serialize");
             let back: ReplayCommand =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cmd, back);
         }
     }
@@ -2402,7 +2401,7 @@ mod tests {
         let auth = auth_with_scopes(&[SCOPE_HEALTH_READ]);
         let ctx = context();
         let resp = tmpl.health_endpoint(&auth, &ctx);
-        let json = serde_json::to_string(&resp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&resp).expect("serialize derived Serialize");
         assert!(json.contains("\"status\""));
         assert!(json.contains("\"endpoint\""));
         assert!(json.contains("\"trace_id\""));

@@ -1028,9 +1028,9 @@ mod tests {
     #[test]
     fn test_startup_path_serde_roundtrip() {
         for kind in StartupPathKind::ALL {
-            let j = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: StartupPathKind =
-                serde_json::from_str(&j).expect("serde deserialization should succeed");
+                serde_json::from_str(&j).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1061,9 +1061,9 @@ mod tests {
     #[test]
     fn test_benchmark_verdict_serde_roundtrip() {
         for v in BenchmarkVerdict::ALL {
-            let j = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: BenchmarkVerdict =
-                serde_json::from_str(&j).expect("serde deserialization should succeed");
+                serde_json::from_str(&j).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1094,9 +1094,9 @@ mod tests {
     #[test]
     fn test_parity_check_kind_serde_roundtrip() {
         for k in ParityCheckKind::ALL {
-            let j = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: ParityCheckKind =
-                serde_json::from_str(&j).expect("serde deserialization should succeed");
+                serde_json::from_str(&j).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1141,9 +1141,9 @@ mod tests {
     #[test]
     fn test_rollback_trigger_serde_roundtrip() {
         for t in RollbackTrigger::ALL {
-            let j = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(t).expect("serialize derived Serialize");
             let back: RollbackTrigger =
-                serde_json::from_str(&j).expect("serde deserialization should succeed");
+                serde_json::from_str(&j).expect("deserialize known-valid JSON");
             assert_eq!(*t, back);
         }
     }
@@ -1752,9 +1752,9 @@ mod tests {
             GovernanceError::InsufficientSamples { have: 1, need: 30 },
         ];
         for e in &errors {
-            let j = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(e).expect("serialize derived Serialize");
             let back: GovernanceError =
-                serde_json::from_str(&j).expect("serde deserialization should succeed");
+                serde_json::from_str(&j).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }
@@ -1771,9 +1771,9 @@ mod tests {
             },
         ];
         for v in &verdicts {
-            let j = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: GovernanceVerdict =
-                serde_json::from_str(&j).expect("serde deserialization should succeed");
+                serde_json::from_str(&j).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }

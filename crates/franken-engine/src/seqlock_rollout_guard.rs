@@ -552,7 +552,7 @@ fn write_bundle(
     let events_jsonl = evaluated
         .logs
         .iter()
-        .map(|event| serde_json::to_string(event).expect("serde deserialization should succeed"))
+        .map(|event| serde_json::to_string(event).expect("serialize derived Serialize"))
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -1104,9 +1104,9 @@ mod tests {
             GuardEvidenceVerdict::Missing,
             GuardEvidenceVerdict::Fail,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: GuardEvidenceVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }
@@ -1275,9 +1275,9 @@ mod tests {
                 3, 1,
             ),
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: super::CandidateRolloutInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -1335,7 +1335,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
         let back: super::TraceIdsArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1352,19 +1352,18 @@ mod tests {
             candidate_id: Some("candidate-1".to_string()),
             detail: "detail text".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: super::StructuredLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
         let event_none = super::StructuredLogEvent {
             error_code: None,
             candidate_id: None,
             ..event
         };
-        let json2 =
-            serde_json::to_string(&event_none).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&event_none).expect("serialize derived Serialize");
         let back2: super::StructuredLogEvent =
-            serde_json::from_str(&json2).expect("serde deserialization should succeed");
+            serde_json::from_str(&json2).expect("deserialize known-valid JSON");
         assert_eq!(event_none, back2);
     }
 
@@ -1431,10 +1430,9 @@ mod tests {
             GuardEvidenceVerdict::Missing,
             GuardEvidenceVerdict::Fail,
         ] {
-            let json =
-                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&verdict).expect("serialize derived Serialize");
             let back: GuardEvidenceVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(verdict, back);
         }
     }
@@ -1444,9 +1442,9 @@ mod tests {
         let candidates = accepted_candidates("2026-03-06T00:00:00Z")
             .expect("serde deserialization should succeed");
         let row = run_starvation_microbench(&candidates[0]);
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let back: StarvationMicrobenchRow =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(row.candidate_id, back.candidate_id);
         assert_eq!(row.verdict, back.verdict);
     }
@@ -1458,9 +1456,9 @@ mod tests {
         let starvation = run_starvation_microbench(&candidates[0]);
         let model_check = build_missing_model_check_row(&candidates[0]);
         let safety = build_safety_case_row(&candidates[0], &starvation, &model_check);
-        let json = serde_json::to_string(&safety).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&safety).expect("serialize derived Serialize");
         let back: SeqlockSafetyCaseRow =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(safety.candidate_id, back.candidate_id);
         assert_eq!(safety.rollout_allowed, back.rollout_allowed);
     }
@@ -1474,9 +1472,9 @@ mod tests {
             required_artifacts: vec!["safety_case.json".to_string()],
             disable_reasons: vec!["model_check_missing".to_string()],
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let back: SeqlockRolloutGuardRow =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(row, back);
     }
 
@@ -1610,8 +1608,7 @@ mod tests {
             GuardEvidenceVerdict::Fail,
         ] {
             let label = super::verdict_label(verdict);
-            let serde_str =
-                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let serde_str = serde_json::to_string(&verdict).expect("serialize derived Serialize");
             // serde_str is "\"pass\"", strip quotes to get "pass"
             let serde_str_trimmed = serde_str.trim_matches('"');
             assert_eq!(
@@ -1940,7 +1937,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
         let back: super::StarvationMicrobenchReportArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1958,7 +1955,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
         let back: super::LoomScheduleCoverageReportArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1976,7 +1973,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
         let back: super::SeqlockSafetyCaseArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1995,7 +1992,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
         let back: super::SeqlockRolloutGuardArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -2005,7 +2002,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&fixture).expect("serde deserialization should succeed");
         let back: super::DocsContractFixture =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fixture.schema_version, back.schema_version);
         assert_eq!(fixture.bead_id, back.bead_id);
         assert_eq!(
@@ -2087,9 +2084,9 @@ mod tests {
             post_publish_source: FastPathReadSource::FastPath,
             post_publish_value: 42,
         };
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         let back: super::StarvationBurstObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, back);
     }
 
@@ -2104,9 +2101,9 @@ mod tests {
             post_publish_source: FastPathReadSource::FastPath,
             post_publish_value: 100,
         };
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         let back: super::StarvationBurstObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, back);
         assert!(json.contains("null"), "None should serialize as null");
     }
@@ -2117,9 +2114,9 @@ mod tests {
             path: "seqlock_safety_case.json".to_string(),
             sha256: "sha256:abcdef0123456789".to_string(),
         };
-        let json = serde_json::to_string(&reference).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reference).expect("serialize derived Serialize");
         let back: super::ManifestArtifactReference =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reference, back);
     }
 

@@ -1094,10 +1094,10 @@ mod tests {
     fn test_entry_kind_serde_roundtrip() {
         for kind in EntryKind::ALL {
             // SAFETY: EntryKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid EntryKind serialization
             let back: EntryKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1122,10 +1122,10 @@ mod tests {
     fn test_compile_target_serde_roundtrip() {
         for t in CompileTarget::ALL {
             // SAFETY: CompileTarget derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid CompileTarget serialization
             let back: CompileTarget =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, back);
         }
     }
@@ -1153,10 +1153,10 @@ mod tests {
     fn test_compile_status_serde_roundtrip() {
         for s in CompileStatus::ALL {
             // SAFETY: CompileStatus derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid CompileStatus serialization
             let back: CompileStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1194,10 +1194,10 @@ mod tests {
     fn test_compile_verdict_serde_roundtrip() {
         for v in CompileVerdict::ALL {
             // SAFETY: CompileVerdict derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid CompileVerdict serialization
             let back: CompileVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1760,10 +1760,10 @@ mod tests {
         ];
         for e in &errors {
             // SAFETY: CompileError derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid CompileError serialization
             let back: CompileError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }
@@ -1835,10 +1835,10 @@ mod tests {
         let report = compile_entrygraph(&graph, &default_config(), epoch())
             .expect("serde deserialization should succeed");
         // SAFETY: CompilationReport derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid CompilationReport serialization
         let back: CompilationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1857,10 +1857,9 @@ mod tests {
         let batch = compile_batch(&[g], &default_config(), epoch())
             .expect("serde deserialization should succeed");
         // SAFETY: BatchReport derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&batch).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&batch).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid BatchReport serialization
-        let back: BatchReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: BatchReport = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(batch, back);
     }
 
@@ -1877,10 +1876,10 @@ mod tests {
             .expect("serde deserialization should succeed");
         let receipt = build_receipt(&report, graph.graph_hash, &default_config());
         // SAFETY: DecisionReceipt derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid DecisionReceipt serialization
         let back: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 }

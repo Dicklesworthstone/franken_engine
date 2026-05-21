@@ -1078,18 +1078,16 @@ mod tests {
     #[test]
     fn canonical_matrix_serde_roundtrip() {
         let m = build_canonical_gap_matrix();
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let m2: GapMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
+        let m2: GapMatrix = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, m2);
     }
 
     #[test]
     fn surface_id_serde_roundtrip() {
         for s in SurfaceId::ALL {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-            let s2: SurfaceId =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
+            let s2: SurfaceId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, s2);
         }
     }
@@ -1102,9 +1100,9 @@ mod tests {
             CoverageLevel::Missing,
             CoverageLevel::LocalOnly,
         ] {
-            let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&c).expect("serialize derived Serialize");
             let c2: CoverageLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(c, c2);
         }
     }
@@ -1116,9 +1114,9 @@ mod tests {
             MigrationDecision::ThinBridge,
             MigrationDecision::MaintainedWrapper,
         ] {
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             let d2: MigrationDecision =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, d2);
         }
     }

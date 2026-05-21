@@ -2272,7 +2272,7 @@ mod tests {
         for cat in ALL_CATEGORIES {
             let json = serde_json::to_string(cat).expect("serde serialization should succeed");
             let back: CheckCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cat, back);
         }
     }
@@ -2288,7 +2288,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&sev).expect("serde serialization should succeed");
             let back: CheckSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, back);
         }
     }
@@ -2303,8 +2303,7 @@ mod tests {
         let report =
             run_doctor(&default_config(), &entries).expect("serde serialization should succeed");
         let json = serde_json::to_string(&report).expect("serde serialization should succeed");
-        let back: DoctorReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DoctorReport = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report.len(), back.len());
         assert_eq!(report.report_hash, back.report_hash);
     }
@@ -2320,7 +2319,7 @@ mod tests {
             run_preflight(&default_config(), &entries).expect("serde serialization should succeed");
         let json = serde_json::to_string(&result).expect("serde serialization should succeed");
         let back: PreflightResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.passed, back.passed);
         assert_eq!(result.blocker_count(), back.blocker_count());
     }
@@ -2338,7 +2337,7 @@ mod tests {
         for g in &guidance {
             let json = serde_json::to_string(g).expect("serde serialization should succeed");
             let back: GuidanceEntry =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(g.guidance_id, back.guidance_id);
         }
     }
@@ -2355,7 +2354,7 @@ mod tests {
         let bundle = build_support_bundle(&report).expect("serde serialization should succeed");
         let json = serde_json::to_string(&bundle).expect("serde serialization should succeed");
         let back: SupportBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle.len(), back.len());
     }
 
@@ -2363,8 +2362,7 @@ mod tests {
     fn serde_roundtrip_doctor_config() {
         let cfg = DoctorConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde serialization should succeed");
-        let back: DoctorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DoctorConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -2372,8 +2370,7 @@ mod tests {
     fn serde_roundtrip_doctor_error() {
         let err = DoctorError::EmptyInput;
         let json = serde_json::to_string(&err).expect("serde serialization should succeed");
-        let back: DoctorError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DoctorError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 

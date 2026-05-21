@@ -1375,9 +1375,9 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_witness() {
         let w = make_witness(SupportSurface::Parser, ObstructionKind::SemanticGap);
-        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&w).expect("serialize derived Serialize");
         let deserialized: ObstructionWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(w, deserialized);
     }
 
@@ -1390,18 +1390,18 @@ mod tests {
             "typed",
             "untyped",
         );
-        let json = serde_json::to_string(&ng).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ng).expect("serialize derived Serialize");
         let deserialized: NongluableProgram =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ng, deserialized);
     }
 
     #[test]
     fn test_serde_roundtrip_seam_diagnosis() {
         let d = diagnose_seam(&[], SupportSurface::Parser, SupportSurface::Lowering);
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let deserialized: SeamDiagnosis =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, deserialized);
     }
 
@@ -1417,9 +1417,9 @@ mod tests {
             vec![],
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let deserialized: ObstructionReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, deserialized);
     }
 
@@ -1433,9 +1433,9 @@ mod tests {
             ObstructionError::InternalError("test".to_string()),
         ];
         for e in errors {
-            let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&e).expect("serialize derived Serialize");
             let deserialized: ObstructionError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(e, deserialized);
         }
     }

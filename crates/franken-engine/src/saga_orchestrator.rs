@@ -1633,9 +1633,8 @@ mod tests {
     #[test]
     fn saga_id_serialization_round_trip() {
         let id = SagaId::from_trace("test-123");
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let restored: SagaId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let restored: SagaId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, restored);
     }
 
@@ -1651,9 +1650,9 @@ mod tests {
             },
         ];
         for state in &states {
-            let json = serde_json::to_string(state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(state).expect("serialize derived Serialize");
             let restored: SagaState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*state, restored);
         }
     }
@@ -1666,9 +1665,8 @@ mod tests {
             compensating_action: "undo_a".to_string(),
             timeout_ticks: 100,
         };
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let restored: SagaStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
+        let restored: SagaStep = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, restored);
     }
 
@@ -1685,9 +1683,9 @@ mod tests {
             epoch_id: 1,
             event: "step_complete".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: SagaEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1703,9 +1701,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: SagaError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1724,9 +1722,9 @@ mod tests {
             },
         ];
         for o in &outcomes {
-            let json = serde_json::to_string(o).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(o).expect("serialize derived Serialize");
             let restored: StepOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*o, restored);
         }
     }
@@ -1981,9 +1979,9 @@ mod tests {
             SagaType::Publish,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: SagaType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -1992,9 +1990,9 @@ mod tests {
     fn action_type_serde_roundtrip() {
         let variants = [ActionType::Forward, ActionType::Compensate];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: ActionType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -2017,9 +2015,9 @@ mod tests {
             completed_at: 500,
             idempotency_key_hex: "abc123".to_string(),
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let restored: StepRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, restored);
     }
 
@@ -2044,9 +2042,8 @@ mod tests {
             }],
             created_at: 50,
         };
-        let json = serde_json::to_string(&saga).expect("serde deserialization should succeed");
-        let restored: Saga =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&saga).expect("serialize derived Serialize");
+        let restored: Saga = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(saga, restored);
     }
 
@@ -2078,9 +2075,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: SagaError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2381,9 +2378,8 @@ mod tests {
     #[test]
     fn saga_id_serde_roundtrip() {
         let id = SagaId::from_trace("trace-99");
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let restored: SagaId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let restored: SagaId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, restored);
     }
 
@@ -2395,9 +2391,8 @@ mod tests {
             compensating_action: "validate.rollback".to_string(),
             timeout_ticks: 5000,
         };
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let restored: SagaStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
+        let restored: SagaStep = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, restored);
     }
 
@@ -2414,9 +2409,9 @@ mod tests {
             epoch_id: 5,
             event: "step_complete".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: SagaEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -2434,9 +2429,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: StepOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -2453,9 +2448,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: SagaState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }

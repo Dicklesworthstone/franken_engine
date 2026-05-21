@@ -715,10 +715,9 @@ mod tests {
             OraclePartition::Full,
             OraclePartition::Nightly,
         ] {
-            let json =
-                serde_json::to_string(&partition).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&partition).expect("serialize derived Serialize");
             let back: OraclePartition =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, partition);
         }
     }
@@ -758,9 +757,9 @@ mod tests {
     #[test]
     fn gate_mode_serde_roundtrip() {
         for mode in [OracleGateMode::ReportOnly, OracleGateMode::FailClosed] {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let back: OracleGateMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, mode);
         }
     }
@@ -817,9 +816,9 @@ mod tests {
             DriftClass::HarnessNondeterminism,
             DriftClass::ArtifactIntegrityFailure,
         ] {
-            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&class).expect("serialize derived Serialize");
             let back: DriftClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, class);
         }
     }
@@ -837,10 +836,9 @@ mod tests {
     #[test]
     fn gate_action_serde_roundtrip() {
         for action in [GateAction::Promote, GateAction::Hold, GateAction::Reject] {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let back: GateAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, action);
         }
     }
@@ -1441,7 +1439,7 @@ mod tests {
             latency_ns: 1000,
             replay_command: "cargo run ...".to_string(),
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(json.contains("f-01"));
         assert!(json.contains("equivalent"));
     }
@@ -1475,7 +1473,7 @@ mod tests {
             fallback_triggered: false,
             fallback_reason: Some("minor drift".to_string()),
         };
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         assert!(json.contains("hold"));
         assert!(json.contains("minor drift"));
     }

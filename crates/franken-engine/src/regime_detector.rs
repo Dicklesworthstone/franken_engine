@@ -918,9 +918,9 @@ mod tests {
             Regime::Recovery,
         ];
         for regime in &regimes {
-            let json = serde_json::to_string(regime).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(regime).expect("serialize derived Serialize");
             let restored: Regime =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*regime, restored);
         }
     }
@@ -936,9 +936,9 @@ mod tests {
             change_point_index: 42,
             epoch: SecurityEpoch::from_raw(3),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: RegimeChangeEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -953,9 +953,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: DetectorError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -963,9 +963,9 @@ mod tests {
     #[test]
     fn normal_stats_serialization_round_trip() {
         let stats = NormalStats::default_prior();
-        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&stats).expect("serialize derived Serialize");
         let restored: NormalStats =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(stats, restored);
     }
 
@@ -989,9 +989,9 @@ mod tests {
     #[test]
     fn constant_hazard_serde_roundtrip() {
         let h = ConstantHazard { lambda: 42 };
-        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&h).expect("serialize derived Serialize");
         let restored: ConstantHazard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.lambda, 42);
     }
 
@@ -1029,20 +1029,18 @@ mod tests {
     #[test]
     fn regime_serde_format() {
         // Verify the JSON representation uses quoted enum names
-        let json =
-            serde_json::to_string(&Regime::Normal).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&Regime::Normal).expect("serialize derived Serialize");
         assert_eq!(json, "\"Normal\"");
-        let json =
-            serde_json::to_string(&Regime::Attack).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&Regime::Attack).expect("serialize derived Serialize");
         assert_eq!(json, "\"Attack\"");
     }
 
     #[test]
     fn classifier_serialization_round_trip() {
         let c = RegimeClassifier::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let restored: RegimeClassifier =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, restored);
     }
 
@@ -1111,9 +1109,9 @@ mod tests {
     #[test]
     fn detector_config_serde_roundtrip() {
         let config = test_config("hostcall_rate");
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: DetectorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.detector_id, config.detector_id);
         assert_eq!(restored.metric_stream, config.metric_stream);
         assert_eq!(restored.max_run_length, config.max_run_length);
@@ -1146,9 +1144,8 @@ mod tests {
             Regime::Recovery,
         ];
         for r in &regimes {
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
-            let back: Regime =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
+            let back: Regime = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, back);
         }
     }
@@ -1522,7 +1519,7 @@ mod tests {
             change_point_index: 10,
             epoch: SecurityEpoch::GENESIS,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         // Verify all fields are present in serialization
         assert!(json.contains("detector_id"));
         assert!(json.contains("metric_stream"));
@@ -1598,9 +1595,9 @@ mod tests {
             alpha0: 2_000_000,
             beta0: 500_000,
         };
-        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&stats).expect("serialize derived Serialize");
         let restored: NormalStats =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(stats, restored);
     }
 
@@ -1613,9 +1610,9 @@ mod tests {
             attack_threshold: 500_000,
             degraded_threshold: -100_000,
         };
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let restored: RegimeClassifier =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, restored);
     }
 

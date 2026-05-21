@@ -2180,9 +2180,9 @@ mod tests {
             .certify(&input)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let deserialized: CertificationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(result.outcome, deserialized.outcome);
         assert_eq!(result.total_obstructions, deserialized.total_obstructions);
@@ -2207,9 +2207,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let cert = &result.certificates[0];
 
-        let json = serde_json::to_string(cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(cert).expect("serialize derived Serialize");
         let deserialized: ObstructionCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert.id, deserialized.id);
         assert_eq!(cert.certificate_hash, deserialized.certificate_hash);
     }
@@ -2688,9 +2688,9 @@ mod tests {
     #[test]
     fn test_config_serde_roundtrip() {
         let config = ObstructionCertifierConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let deserialized: ObstructionCertifierConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config.max_certificates, deserialized.max_certificates);
         assert_eq!(config.disruption_costs, deserialized.disruption_costs);
     }
@@ -2702,9 +2702,9 @@ mod tests {
     #[test]
     fn test_certifier_serde_roundtrip() {
         let c = ObstructionCertifier::new();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let deserialized: ObstructionCertifier =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(
             c.config.max_certificates,
             deserialized.config.max_certificates
@@ -2800,10 +2800,9 @@ mod tests {
             FallbackActionKind::Escalate,
         ];
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let back: FallbackActionKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, variant);
         }
     }
@@ -2832,10 +2831,9 @@ mod tests {
             CertificationOutcome::BudgetExhausted,
         ];
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let back: CertificationOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, variant);
         }
     }
@@ -2856,9 +2854,9 @@ mod tests {
             contract_aspect: "context.provides".to_string(),
             contract_value: "ThemeCtx".to_string(),
         };
-        let json = serde_json::to_string(&frag).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&frag).expect("serialize derived Serialize");
         let back: WitnessFragment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, frag);
     }
 
@@ -2892,9 +2890,9 @@ mod tests {
             ObstructionError::InternalInconsistency("oops".to_string()),
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: ObstructionError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, err);
         }
     }
@@ -2955,9 +2953,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let action = &plan.actions[0];
 
-        let json = serde_json::to_string(action).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(action).expect("serialize derived Serialize");
         let back: FallbackAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.id, action.id);
         assert_eq!(back.kind, action.kind);
         assert_eq!(back.feasible, action.feasible);
@@ -2991,9 +2989,8 @@ mod tests {
             .as_ref()
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(plan).expect("serde deserialization should succeed");
-        let back: FallbackPlan =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(plan).expect("serialize derived Serialize");
+        let back: FallbackPlan = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.id, plan.id);
         assert_eq!(back.plan_hash, plan.plan_hash);
         assert_eq!(back.actions.len(), plan.actions.len());
@@ -3819,9 +3816,9 @@ mod tests {
         let result = c
             .certify(&input)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CertificationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -3842,9 +3839,9 @@ mod tests {
             .certify(&input)
             .expect("serde deserialization should succeed");
         let cert = &result.certificates[0];
-        let json = serde_json::to_string(cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(cert).expect("serialize derived Serialize");
         let back: ObstructionCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*cert, back);
     }
 
@@ -4200,9 +4197,9 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: ObstructionCertifierConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 

@@ -1078,10 +1078,10 @@ mod tests {
     fn conformance_level_serde() {
         for c in ConformanceLevel::ALL {
             // SAFETY: ConformanceLevel derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(c).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ConformanceLevel serialization
             let back: ConformanceLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*c, back);
         }
     }
@@ -1104,10 +1104,10 @@ mod tests {
     fn degraded_reason_serde() {
         for r in DegradedModeReason::ALL {
             // SAFETY: DegradedModeReason derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid DegradedModeReason serialization
             let back: DegradedModeReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, back);
         }
     }
@@ -1137,9 +1137,9 @@ mod tests {
     #[test]
     fn gate_verdict_serde() {
         for v in GateVerdict::ALL {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: GateVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1155,10 +1155,10 @@ mod tests {
     fn replay_drop_kind_serde() {
         for k in ReplayDropKind::ALL {
             // SAFETY: ReplayDropKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ReplayDropKind serialization
             let back: ReplayDropKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1204,10 +1204,10 @@ mod tests {
     fn conformance_vector_serde() {
         let v = partial_conformance();
         // SAFETY: ConformanceVector derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ConformanceVector serialization
         let back: ConformanceVector =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1243,10 +1243,10 @@ mod tests {
     fn replay_drop_serde() {
         let r = bad_drop_record();
         // SAFETY: ReplayDropRecord derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ReplayDropRecord serialization
         let back: ReplayDropRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1276,10 +1276,10 @@ mod tests {
     fn degraded_record_serde() {
         let r = mild_degraded_record();
         // SAFETY: DegradedModeRecord derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid DegradedModeRecord serialization
         let back: DegradedModeRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1331,10 +1331,10 @@ mod tests {
     fn observability_delta_serde() {
         let d = ObservabilityDelta::new(900_000, 1_000_000);
         // SAFETY: ObservabilityDelta derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ObservabilityDelta serialization
         let back: ObservabilityDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -1367,10 +1367,9 @@ mod tests {
     fn gate_config_serde() {
         let c = GateConfig::strict();
         // SAFETY: GateConfig derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid GateConfig serialization
-        let back: GateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GateConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1586,9 +1585,8 @@ mod tests {
     #[test]
     fn gate_result_serde() {
         let r = evaluate(&good_conformance(), &[], &[], None, &default_config());
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: GateResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
+        let back: GateResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1623,9 +1621,9 @@ mod tests {
     fn decision_receipt_serde() {
         let eh = ContentHash::compute(b"test");
         let r = DecisionReceipt::new(epoch(), GateVerdict::ConditionalPass, eh);
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1683,9 +1681,8 @@ mod tests {
             &default_config(),
         )];
         let s = GateSummary::from_results(&results);
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: GateSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
+        let back: GateSummary = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 }

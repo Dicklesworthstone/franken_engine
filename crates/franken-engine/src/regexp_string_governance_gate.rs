@@ -1758,10 +1758,10 @@ mod tests {
     fn serde_string_surface_roundtrip() {
         let s = StringSurface::Concat;
         // SAFETY: StringSurface derives Serialize and has no non-serializable fields.
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid StringSurface serialization.
         let back: StringSurface =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -1769,28 +1769,27 @@ mod tests {
     fn serde_regexp_surface_roundtrip() {
         let s = RegExpSurface::Lookahead;
         // SAFETY: RegExpSurface derives Serialize and has no non-serializable fields.
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid RegExpSurface serialization.
         let back: RegExpSurface =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
     #[test]
     fn serde_parity_verdict_roundtrip() {
         let v = ParityVerdict::PartialParity;
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ParityVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
     #[test]
     fn serde_gate_config_roundtrip() {
         let c = GateConfig::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: GateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
+        let back: GateConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1804,9 +1803,8 @@ mod tests {
             epoch(1),
         )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: GateResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
+        let back: GateResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -1821,18 +1819,17 @@ mod tests {
         )];
         let result = evaluate(&string_ev, &[], &[], &[], &default_config());
         let receipt = DecisionReceipt::from_result(&result, epoch(1));
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
     #[test]
     fn serde_gate_summary_roundtrip() {
         let summary = GateSummary::from_results(&[]);
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let back: GateSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
+        let back: GateSummary = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 

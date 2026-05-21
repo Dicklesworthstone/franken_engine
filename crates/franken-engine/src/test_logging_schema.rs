@@ -589,7 +589,7 @@ pub fn apply_redaction_with_audit(
         detected_secret_patterns: &detected_secret_patterns,
     };
     let report_hash = stable_sensitive_hash(
-        &serde_json::to_string(&hash_input).expect("serde deserialization should succeed"),
+        &serde_json::to_string(&hash_input).expect("serialize derived Serialize"),
     );
 
     RedactionAuditReport {
@@ -1027,9 +1027,8 @@ mod tests {
             TestLane::Governance,
             TestLane::E2e,
         ] {
-            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
-            let back: TestLane =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&lane).expect("serialize derived Serialize");
+            let back: TestLane = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(lane, back);
         }
     }
@@ -1052,9 +1051,9 @@ mod tests {
             FailureTaxonomy::SchemaDrift,
             FailureTaxonomy::Unknown,
         ] {
-            let json = serde_json::to_string(&tax).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&tax).expect("serialize derived Serialize");
             let back: FailureTaxonomy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(tax, back);
         }
     }
@@ -1067,10 +1066,9 @@ mod tests {
             DataSensitivity::Sensitive,
             DataSensitivity::Secret,
         ] {
-            let json =
-                serde_json::to_string(&sensitivity).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sensitivity).expect("serialize derived Serialize");
             let back: DataSensitivity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sensitivity, back);
         }
     }
@@ -1082,10 +1080,9 @@ mod tests {
             RedactionAction::Hash,
             RedactionAction::Drop,
         ] {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let back: RedactionAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, back);
         }
     }
@@ -1100,9 +1097,9 @@ mod tests {
             ValidationErrorCode::SecretPatternLeak,
             ValidationErrorCode::ContractValidationViolation,
         ] {
-            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&code).expect("serialize derived Serialize");
             let back: ValidationErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(code, back);
         }
     }
@@ -1117,9 +1114,9 @@ mod tests {
             action: RedactionAction::Drop,
             rationale: "must never be retained".to_string(),
         };
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
         let back: RedactionRule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rule, back);
     }
 
@@ -1130,18 +1127,17 @@ mod tests {
             require_redaction_for_sensitive: true,
             permit_raw_seed_storage: false,
         };
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let back: RetentionPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, back);
     }
 
     #[test]
     fn test_log_event_serde_roundtrip() {
         let event = baseline_event();
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: TestLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let back: TestLogEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1149,9 +1145,8 @@ mod tests {
     fn test_log_event_with_failure_taxonomy_serde() {
         let mut event = baseline_event();
         event.failure_taxonomy = Some(FailureTaxonomy::DeterminismDrift);
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: TestLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let back: TestLogEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
         assert_eq!(
             back.failure_taxonomy,
@@ -1162,27 +1157,27 @@ mod tests {
     #[test]
     fn test_logging_schema_spec_serde_roundtrip() {
         let spec = TestLoggingSchemaSpec::default();
-        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&spec).expect("serialize derived Serialize");
         let back: TestLoggingSchemaSpec =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(spec, back);
     }
 
     #[test]
     fn validation_failure_serde_roundtrip() {
         let failure = ValidationFailure::missing_field("trace_id");
-        let json = serde_json::to_string(&failure).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&failure).expect("serialize derived Serialize");
         let back: ValidationFailure =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(failure, back);
     }
 
     #[test]
     fn validation_report_serde_roundtrip() {
         let report = validate_events(&[baseline_event()]);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: ValidationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1742,7 +1737,7 @@ mod tests {
     #[test]
     fn json_field_presence_test_log_event() {
         let event = baseline_event();
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"scenario_id\""));
         assert!(json.contains("\"fixture_id\""));
         assert!(json.contains("\"trace_id\""));
@@ -1756,7 +1751,7 @@ mod tests {
     #[test]
     fn json_field_presence_validation_report() {
         let report = validate_events(&[baseline_event()]);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"valid\""));
@@ -1772,7 +1767,7 @@ mod tests {
             action: RedactionAction::Redact,
             rationale: "reason".to_string(),
         };
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
         assert!(json.contains("\"field_path\""));
         assert!(json.contains("\"sensitivity\""));
         assert!(json.contains("\"action\""));
@@ -1824,9 +1819,9 @@ mod tests {
             require_redaction_for_sensitive: false,
             permit_raw_seed_storage: false,
         };
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let back: RetentionPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, back);
         assert_eq!(back.retention_days, 0);
     }

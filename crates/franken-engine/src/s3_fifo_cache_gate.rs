@@ -3027,18 +3027,18 @@ mod tests {
             original_size_bytes: 256,
             sequence_number: 42,
         };
-        let json = serde_json::to_string(&ghost).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ghost).expect("serialize derived Serialize");
         let restored: GhostEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ghost, restored);
     }
 
     #[test]
     fn test_config_serde_roundtrip() {
         let config = S3FifoCacheConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: S3FifoCacheConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 }

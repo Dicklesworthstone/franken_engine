@@ -1118,9 +1118,9 @@ mod tests {
     #[test]
     fn artifact_context_serde_roundtrip() {
         let ctx = ArtifactContext::new("/tmp/serde-test");
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         let decoded: ArtifactContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctx, decoded);
     }
 
@@ -1137,9 +1137,9 @@ mod tests {
             policy_id: POLICY_ID.to_string(),
             subordinate_trace_ids: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let decoded: TraceIdsArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, decoded);
     }
 
@@ -1153,9 +1153,9 @@ mod tests {
             total_graphs: 10,
             usable_graphs: 8,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let decoded: EntryKindSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, decoded);
     }
 
@@ -1173,9 +1173,9 @@ mod tests {
             speedup_millionths: 180_000,
             preserves_claim: true,
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let decoded: ColdStartObservabilityDeltaRow =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(row, decoded);
     }
 
@@ -1206,9 +1206,9 @@ mod tests {
             policy_id: POLICY_ID.to_string(),
             rows: Vec::new(),
         };
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let decoded: ColdStartObservabilityDeltaArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, decoded);
     }
 
@@ -1352,7 +1352,7 @@ mod tests {
         let report = build_memory_envelope_report();
         let json = serde_json::to_string(&report).expect("serde serialization should succeed");
         let decoded: ColdStartMemoryEnvelopeReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, decoded);
         assert_eq!(decoded.publication_verdict, MemoryEnvelopeVerdict::Matching);
     }
@@ -1377,9 +1377,9 @@ mod tests {
             best_warm_start_mode: Some("prewarmed_pool".to_string()),
             registry: ImageRegistry::new(crate::runtime_image_contract::ImagePolicy::default()),
         };
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let decoded: RuntimeImageManifestArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, decoded);
     }
 
@@ -1525,9 +1525,9 @@ mod tests {
             entry_kind_summary: BTreeMap::new(),
             target_summary: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let decoded: AotBundleCompilationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, decoded);
     }
 }

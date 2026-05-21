@@ -1577,11 +1577,11 @@ mod tests {
         for proof in &proofs {
             // SAFETY: SecurityProof derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(proof).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(proof).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid SecurityProof,
             // so from_str back to SecurityProof cannot fail (valid format + matching schema).
             let decoded: SecurityProof =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(proof, &decoded);
         }
     }
@@ -1600,11 +1600,11 @@ mod tests {
         );
         // SAFETY: CompilerPolicyConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid CompilerPolicyConfig,
         // so from_str back to CompilerPolicyConfig cannot fail (valid format + matching schema).
         let decoded: CompilerPolicyConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, decoded);
     }
 
@@ -1624,11 +1624,11 @@ mod tests {
         };
         // SAFETY: SpecializationDecision derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid SpecializationDecision,
         // so from_str back to SpecializationDecision cannot fail (valid format + matching schema).
         let decoded: SpecializationDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, decoded);
     }
 
@@ -1736,10 +1736,10 @@ mod tests {
         ];
         for o in &outcomes {
             // SAFETY: SpecializationOutcome derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(o).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(o).expect("serialize derived Serialize");
             // SAFETY: JSON was just generated from SpecializationOutcome, deserialization guaranteed to succeed
             let back: SpecializationOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*o, back);
         }
     }
@@ -1816,10 +1816,10 @@ mod tests {
         ];
         for c in &classes {
             // SAFETY: OptimizationClass derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(c).expect("serialize derived Serialize");
             // SAFETY: JSON was just generated from OptimizationClass, deserialization guaranteed to succeed
             let back: OptimizationClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*c, back);
         }
     }
@@ -1836,10 +1836,10 @@ mod tests {
             error_code: None,
         };
         // SAFETY: CompilerPolicyEvent derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from CompilerPolicyEvent, deserialization guaranteed to succeed
         let back: CompilerPolicyEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1975,10 +1975,9 @@ mod tests {
             elided_check_description: "flow label check".into(),
         };
         // SAFETY: MarkedRegion derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&region).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&region).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from MarkedRegion, deserialization guaranteed to succeed
-        let back: MarkedRegion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: MarkedRegion = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(region, back);
     }
 
@@ -2007,10 +2006,10 @@ mod tests {
             error_code: Some("GLOBAL_DISABLE".into()),
         };
         // SAFETY: CompilerPolicyEvent derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from CompilerPolicyEvent, deserialization guaranteed to succeed
         let back: CompilerPolicyEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
         assert_eq!(back.error_code.as_deref(), Some("GLOBAL_DISABLE"));
     }
@@ -2077,10 +2076,10 @@ mod tests {
             governance_approved: true,
         };
         // SAFETY: OptimizationClassPolicy derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from OptimizationClassPolicy, deserialization guaranteed to succeed
         let back: OptimizationClassPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, back);
     }
 
@@ -2219,7 +2218,7 @@ mod tests {
         let mut jsons: BTreeSet<String> = BTreeSet::new();
         for o in &outcomes {
             // SAFETY: SpecializationOutcome derives Serialize and has no non-serializable fields
-            let j = serde_json::to_string(o).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(o).expect("serialize derived Serialize");
             jsons.insert(j);
         }
         assert_eq!(
@@ -2239,7 +2238,7 @@ mod tests {
         ];
         let mut jsons: BTreeSet<String> = BTreeSet::new();
         for c in &classes {
-            let j = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(c).expect("serialize derived Serialize");
             jsons.insert(j);
         }
         assert_eq!(jsons.len(), classes.len());
@@ -2254,7 +2253,7 @@ mod tests {
         ];
         let mut jsons: BTreeSet<String> = BTreeSet::new();
         for t in &types {
-            let j = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(t).expect("serialize derived Serialize");
             jsons.insert(j);
         }
         assert_eq!(jsons.len(), types.len());
@@ -2266,9 +2265,9 @@ mod tests {
         let cw = cap_witness_proof("sv-cw", epoch);
         let fp = flow_proof("sv-fp", epoch);
         let rm = replay_motif_proof("sv-rm", epoch);
-        let j_cw = serde_json::to_string(&cw).expect("serde deserialization should succeed");
-        let j_fp = serde_json::to_string(&fp).expect("serde deserialization should succeed");
-        let j_rm = serde_json::to_string(&rm).expect("serde deserialization should succeed");
+        let j_cw = serde_json::to_string(&cw).expect("serialize derived Serialize");
+        let j_fp = serde_json::to_string(&fp).expect("serialize derived Serialize");
+        let j_rm = serde_json::to_string(&rm).expect("serialize derived Serialize");
         assert_ne!(j_cw, j_fp);
         assert_ne!(j_fp, j_rm);
         assert_ne!(j_cw, j_rm);
@@ -2342,7 +2341,7 @@ mod tests {
     fn compiler_policy_config_json_field_names() {
         let epoch = SecurityEpoch::from_raw(1);
         let config = CompilerPolicyConfig::new("field-test", epoch);
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         assert!(
             json.contains("\"current_epoch\""),
             "missing current_epoch field"
@@ -2366,7 +2365,7 @@ mod tests {
             proof_refs: vec![],
             elided_check_description: "desc".to_string(),
         };
-        let json = serde_json::to_string(&region).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&region).expect("serialize derived Serialize");
         assert!(json.contains("\"region_id\""), "missing region_id field");
         assert!(
             json.contains("\"optimization_class\""),
@@ -2393,7 +2392,7 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             timestamp_ns: 0,
         };
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2417,7 +2416,7 @@ mod tests {
             outcome: "o".to_string(),
             error_code: Some("err".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2621,10 +2620,9 @@ mod tests {
     fn proof_store_serde_roundtrip_empty() {
         let store = ProofStore::new();
         // SAFETY: ProofStore derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&store).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from ProofStore, deserialization guaranteed to succeed
-        let back: ProofStore =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProofStore = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.is_empty());
     }
 
@@ -2637,10 +2635,9 @@ mod tests {
         store.insert(replay_motif_proof("sr-c", epoch));
 
         // SAFETY: ProofStore derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&store).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from ProofStore, deserialization guaranteed to succeed
-        let back: ProofStore =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ProofStore = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.len(), 3);
     }
 

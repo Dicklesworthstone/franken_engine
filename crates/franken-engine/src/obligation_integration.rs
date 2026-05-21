@@ -682,10 +682,10 @@ mod tests {
             TwoPhaseCategory::EvidenceCommit,
         ] {
             // SAFETY: TwoPhaseCategory derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cat).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid TwoPhaseCategory serialization
             let restored: TwoPhaseCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cat, restored);
         }
     }
@@ -718,10 +718,10 @@ mod tests {
             OperationPhase::Leaked,
         ] {
             // SAFETY: OperationPhase derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&phase).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&phase).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid OperationPhase serialization
             let restored: OperationPhase =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(phase, restored);
         }
     }
@@ -764,10 +764,10 @@ mod tests {
             current_state: RegionState::Closed,
         };
         // SAFETY: ObligationIntegrationError derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ObligationIntegrationError serialization
         let restored: ObligationIntegrationError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -1374,10 +1374,10 @@ mod tests {
             phase: OperationPhase::Phase1Active,
         };
         // SAFETY: TwoPhaseOperation derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&op).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&op).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid TwoPhaseOperation serialization
         let restored: TwoPhaseOperation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(op, restored);
     }
 
@@ -1395,10 +1395,10 @@ mod tests {
             phase: OperationPhase::Phase1Active,
         };
         // SAFETY: ObligationEvent derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ObligationEvent serialization
         let restored: ObligationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1412,10 +1412,10 @@ mod tests {
             description: "leaked buffer".to_string(),
         };
         // SAFETY: LeakRecord derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&leak).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&leak).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid LeakRecord serialization
         let restored: LeakRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(leak, restored);
     }
 
@@ -1427,9 +1427,9 @@ mod tests {
             aborted: 1,
             leaked: 1,
         };
-        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&stats).expect("serialize derived Serialize");
         let restored: CategoryStats =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(stats, restored);
     }
 
@@ -1726,10 +1726,9 @@ mod tests {
     #[test]
     fn leak_policy_serde_roundtrip() {
         for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-            let json =
-                serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
             let restored: LeakPolicy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(policy, restored);
         }
     }
@@ -1855,10 +1854,9 @@ mod tests {
     #[test]
     fn leak_policy_serde_all_variants() {
         for policy in [LeakPolicy::Lab, LeakPolicy::Production] {
-            let json =
-                serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
             let back: LeakPolicy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(policy, back);
         }
     }
@@ -1882,9 +1880,9 @@ mod tests {
                 component: "obligation_integration".to_string(),
                 phase,
             };
-            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&event).expect("serialize derived Serialize");
             let back: ObligationEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(event.phase, back.phase);
         }
     }
@@ -2002,9 +2000,9 @@ mod tests {
             aborted: 2,
             leaked: 1,
         };
-        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&stats).expect("serialize derived Serialize");
         let back: CategoryStats =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(stats.started, back.started);
         assert_eq!(stats.committed, back.committed);
         assert_eq!(stats.aborted, back.aborted);
@@ -2250,9 +2248,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: ObligationIntegrationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }

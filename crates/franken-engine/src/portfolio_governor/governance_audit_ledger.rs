@@ -1702,9 +1702,9 @@ mod tests {
             GovernanceActor::System("gov".to_string()),
             GovernanceActor::Human("operator".to_string()),
         ] {
-            let json = serde_json::to_string(&actor).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&actor).expect("serialize derived Serialize");
             let back: GovernanceActor =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(actor, back);
         }
     }
@@ -1721,9 +1721,9 @@ mod tests {
             GovernanceLedgerError::EmptyLedger,
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let back: GovernanceLedgerError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, back);
         }
     }
@@ -1737,9 +1737,9 @@ mod tests {
             vec!["criterion-a".to_string()],
             vec!["criterion-b".to_string()],
         );
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: GovernanceRationale =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1754,9 +1754,9 @@ mod tests {
                 10,
             ))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: GovernanceLedgerEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1833,18 +1833,18 @@ mod tests {
             cross_initiative_interference_millionths: 50_000,
             operational_burden_millionths: 75_000,
         };
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let back: ScorecardSnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, back);
     }
 
     #[test]
     fn governance_ledger_config_default_serde_stable() {
         let config = GovernanceLedgerConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: GovernanceLedgerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1861,9 +1861,9 @@ mod tests {
             end_time_ns: Some(900),
             override_only: Some(true),
         };
-        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&query).expect("serialize derived Serialize");
         let back: GovernanceLedgerQuery =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(query, back);
     }
 
@@ -1888,9 +1888,9 @@ mod tests {
                 avg_risk_millionths: 150_000,
             }],
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: GovernanceReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1907,9 +1907,9 @@ mod tests {
             avg_confidence_millionths: 900_000,
             avg_risk_millionths: 50_000,
         };
-        let json = serde_json::to_string(&point).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&point).expect("serialize derived Serialize");
         let back: PortfolioHealthPoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(point, back);
     }
 
@@ -1923,9 +1923,9 @@ mod tests {
             timestamp_ns: 9999,
             signature: "sig".into(),
         };
-        let json = serde_json::to_string(&cp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cp).expect("serialize derived Serialize");
         let back: GovernanceLedgerCheckpoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cp, back);
     }
 
@@ -1941,9 +1941,9 @@ mod tests {
             error_code: None,
             timestamp_ns: 42,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: GovernanceLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2057,7 +2057,7 @@ mod tests {
                 50,
             ))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         assert!(json.contains("\"sequence\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"moonshot_id\""));
@@ -2077,7 +2077,7 @@ mod tests {
             vec!["pass-1".to_string()],
             vec!["fail-1".to_string()],
         );
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         assert!(json.contains("\"summary\""));
         assert!(json.contains("\"passed_criteria\""));
         assert!(json.contains("\"failed_criteria\""));
@@ -2097,7 +2097,7 @@ mod tests {
             timestamp_ns: 1000,
             signature: "sig-abc".into(),
         };
-        let json = serde_json::to_string(&cp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cp).expect("serialize derived Serialize");
         assert!(json.contains("\"checkpoint_id\""));
         assert!(json.contains("\"head_hash\""));
         assert!(json.contains("\"entry_count\""));
@@ -2126,9 +2126,9 @@ mod tests {
         ledger
             .append(override_input("rt-3", 30))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         let back: GovernanceAuditLedger =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ledger, back);
         assert_eq!(back.entries().len(), 3);
         assert_eq!(back.checkpoints().len(), 1);

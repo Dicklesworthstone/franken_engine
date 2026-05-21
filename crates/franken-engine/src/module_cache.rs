@@ -4079,7 +4079,7 @@ mod tests {
         for code in &codes {
             let json = serde_json::to_string(code).expect("serde serialization should succeed");
             let decoded: CacheErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&decoded, code);
         }
     }
@@ -4089,7 +4089,7 @@ mod tests {
         let fp = ModuleVersionFingerprint::new(source_hash("serde-test"), 42, 7);
         let json = serde_json::to_string(&fp).expect("serde serialization should succeed");
         let decoded: ModuleVersionFingerprint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, fp);
     }
 
@@ -4108,7 +4108,7 @@ mod tests {
         let snap = cache.snapshot();
         let json = serde_json::to_string(&snap).expect("serde serialization should succeed");
         let decoded: CacheSnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, snap);
     }
 
@@ -4140,7 +4140,7 @@ mod tests {
         );
         let json = serde_json::to_string(&key).expect("serde serialization should succeed");
         let decoded: ModuleCacheKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, key);
     }
 
@@ -4158,7 +4158,7 @@ mod tests {
         };
         let json = serde_json::to_string(&entry).expect("serde serialization should succeed");
         let decoded: ModuleCacheEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, entry);
     }
 
@@ -4172,7 +4172,7 @@ mod tests {
         );
         let json = serde_json::to_string(&req).expect("serde serialization should succeed");
         let decoded: CacheInsertRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, req);
     }
 
@@ -4181,7 +4181,7 @@ mod tests {
         let ctx = CacheContext::new("t1", "d1", "p1");
         let json = serde_json::to_string(&ctx).expect("serde serialization should succeed");
         let decoded: CacheContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, ctx);
     }
 
@@ -4196,7 +4196,7 @@ mod tests {
             .clone();
         let json = serde_json::to_string(&event).expect("serde serialization should succeed");
         let decoded: CacheEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, event);
     }
 
@@ -4212,7 +4212,7 @@ mod tests {
             .unwrap_err();
         let json = serde_json::to_string(&*err).expect("serde serialization should succeed");
         let decoded: CacheError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, *err);
     }
 
@@ -4232,7 +4232,7 @@ mod tests {
         // Snapshot roundtrips through JSON (unlike ModuleCache which has non-string map keys)
         let json = serde_json::to_string(&snap).expect("serde serialization should succeed");
         let decoded: CacheSnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, snap);
         assert_eq!(snap.entries.len(), 1);
         assert!(snap.revoked_modules.contains("mod:revoked"));
@@ -4963,7 +4963,7 @@ mod tests {
         assert_eq!(fp.trust_revision, 0);
         let json = serde_json::to_string(&fp).expect("serde serialization should succeed");
         let decoded: ModuleVersionFingerprint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, fp);
     }
 
@@ -4974,7 +4974,7 @@ mod tests {
         assert_eq!(fp.trust_revision, u64::MAX);
         let json = serde_json::to_string(&fp).expect("serde serialization should succeed");
         let decoded: ModuleVersionFingerprint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, fp);
     }
 
@@ -5089,7 +5089,7 @@ mod tests {
         let snap = cache.snapshot();
         let json = serde_json::to_string(&snap).expect("serde serialization should succeed");
         let decoded: CacheSnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.entries.len(), snap.entries.len());
         assert_eq!(decoded.revoked_modules, snap.revoked_modules);
         assert_eq!(decoded.state_hash, snap.state_hash);
@@ -5119,7 +5119,7 @@ mod tests {
             .clone();
         let json = serde_json::to_string(&event).expect("serde serialization should succeed");
         let decoded: CacheEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.trace_id, "trace-ev-all");
         assert_eq!(decoded.decision_id, "dec-ev-all");
         assert_eq!(decoded.policy_id, "pol-ev-all");
@@ -5697,7 +5697,7 @@ mod tests {
         };
         let json = serde_json::to_string(&verdict).expect("serde serialization should succeed");
         let decoded: AdmissionVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, verdict);
     }
 
@@ -5718,7 +5718,7 @@ mod tests {
         let metrics = simulate_s3fifo_adaptive(&case, &cfg);
         let json = serde_json::to_string(&metrics).expect("serde serialization should succeed");
         let decoded: S3FifoAdaptiveMetrics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.base.total_accesses, metrics.base.total_accesses);
         assert_eq!(decoded.final_small_capacity, metrics.final_small_capacity);
         assert_eq!(decoded.value_admitted_count, metrics.value_admitted_count);
@@ -5729,7 +5729,7 @@ mod tests {
         let cfg = S3FifoAdaptiveConfig::default();
         let json = serde_json::to_string(&cfg).expect("serde serialization should succeed");
         let decoded: S3FifoAdaptiveConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, cfg);
     }
 

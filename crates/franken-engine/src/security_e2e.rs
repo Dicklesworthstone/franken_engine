@@ -1428,7 +1428,7 @@ mod tests {
         assert!(!lines.is_empty());
         for line in &lines {
             let _: serde_json::Value =
-                serde_json::from_str(line).expect("serde deserialization should succeed");
+                serde_json::from_str(line).expect("deserialize known-valid JSON");
         }
 
         // Verify summary

@@ -2164,10 +2164,9 @@ mod tests {
             trace_id: "t".to_string(),
             sent_at_tick: 10,
         };
-        let encoded =
-            serde_json::to_string(&envelope).expect("serde deserialization should succeed");
+        let encoded = serde_json::to_string(&envelope).expect("serialize derived Serialize");
         let decoded: HostcallEnvelope =
-            serde_json::from_str(&encoded).expect("serde deserialization should succeed");
+            serde_json::from_str(&encoded).expect("deserialize known-valid JSON");
         assert_eq!(envelope, decoded);
 
         let event = SessionChannelEvent {
@@ -2188,10 +2187,9 @@ mod tests {
             source_principal: None,
             timestamp_ticks: 12,
         };
-        let encoded_event =
-            serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let encoded_event = serde_json::to_string(&event).expect("serialize derived Serialize");
         let decoded_event: SessionChannelEvent =
-            serde_json::from_str(&encoded_event).expect("serde deserialization should succeed");
+            serde_json::from_str(&encoded_event).expect("deserialize known-valid JSON");
         assert_eq!(event, decoded_event);
     }
 
@@ -2805,9 +2803,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: SessionChannelError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2822,9 +2820,9 @@ mod tests {
             SessionState::Expired,
             SessionState::Closed,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let restored: SessionState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, restored);
         }
     }
@@ -2832,10 +2830,9 @@ mod tests {
     #[test]
     fn sequence_policy_serde_roundtrip() {
         for policy in [SequencePolicy::Strict, SequencePolicy::Monotonic] {
-            let json =
-                serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
             let restored: SequencePolicy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(policy, restored);
         }
     }
@@ -2847,9 +2844,9 @@ mod tests {
             AeadAlgorithm::Aes256Gcm,
             AeadAlgorithm::XChaCha20Poly1305,
         ] {
-            let json = serde_json::to_string(&alg).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&alg).expect("serialize derived Serialize");
             let restored: AeadAlgorithm =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(alg, restored);
         }
     }
@@ -2869,10 +2866,9 @@ mod tests {
             }),
         ];
         for payload in &payloads {
-            let json =
-                serde_json::to_string(payload).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(payload).expect("serialize derived Serialize");
             let restored: ChannelPayload =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*payload, restored);
         }
     }
@@ -2880,18 +2876,18 @@ mod tests {
     #[test]
     fn session_config_serde_roundtrip() {
         let cfg = SessionConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: SessionConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
     #[test]
     fn session_handshake_serde_roundtrip() {
         let hs = handshake("s1", "trace-1", 100);
-        let json = serde_json::to_string(&hs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hs).expect("serialize derived Serialize");
         let restored: SessionHandshake =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hs, restored);
     }
 
@@ -3049,9 +3045,9 @@ mod tests {
             DataPlaneDirection::ExtensionToHost,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: DataPlaneDirection =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -3064,9 +3060,9 @@ mod tests {
             ReplayDropReason::OutOfOrder,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: ReplayDropReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -3124,9 +3120,9 @@ mod tests {
             pending_messages: 42,
             limit: 256,
         };
-        let json = serde_json::to_string(&signal).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&signal).expect("serialize derived Serialize");
         let back: BackpressureSignal =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(signal, back);
     }
 
@@ -3135,9 +3131,9 @@ mod tests {
     #[test]
     fn channel_payload_serde_roundtrip_inline() {
         let payload = ChannelPayload::Inline(vec![1, 2, 3]);
-        let json = serde_json::to_string(&payload).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&payload).expect("serialize derived Serialize");
         let back: ChannelPayload =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(payload, back);
     }
 
@@ -3148,9 +3144,9 @@ mod tests {
             payload_len: 1024,
             payload_hash: ContentHash::compute(b"data"),
         });
-        let json = serde_json::to_string(&payload).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&payload).expect("serialize derived Serialize");
         let back: ChannelPayload =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(payload, back);
     }
 
@@ -3160,9 +3156,9 @@ mod tests {
             pending_messages: 10,
             limit: 100,
         });
-        let json = serde_json::to_string(&payload).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&payload).expect("serialize derived Serialize");
         let back: ChannelPayload =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(payload, back);
     }
 
@@ -3173,9 +3169,9 @@ mod tests {
         let handle = SessionHandle {
             session_id: "sess-123".to_string(),
         };
-        let json = serde_json::to_string(&handle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&handle).expect("serialize derived Serialize");
         let back: SessionHandle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(handle, back);
     }
 
@@ -3305,10 +3301,9 @@ mod tests {
     #[test]
     fn sequence_policy_serde_all_variants() {
         for policy in [SequencePolicy::Strict, SequencePolicy::Monotonic] {
-            let json =
-                serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
             let restored: SequencePolicy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(policy, restored);
         }
     }
@@ -3323,9 +3318,9 @@ mod tests {
             SessionState::Expired,
             SessionState::Closed,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let restored: SessionState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, restored);
         }
     }
@@ -3361,9 +3356,9 @@ mod tests {
             AeadAlgorithm::Aes256Gcm,
             AeadAlgorithm::XChaCha20Poly1305,
         ] {
-            let json = serde_json::to_string(&alg).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&alg).expect("serialize derived Serialize");
             let restored: AeadAlgorithm =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(alg, restored);
         }
     }
@@ -3377,9 +3372,9 @@ mod tests {
             payload_len: 1024,
             payload_hash: ContentHash::compute(b"test-payload"),
         };
-        let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&desc).expect("serialize derived Serialize");
         let restored: SharedPayloadDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(desc, restored);
     }
 
@@ -3391,9 +3386,9 @@ mod tests {
             pending_messages: 200,
             limit: 256,
         };
-        let json = serde_json::to_string(&signal).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&signal).expect("serialize derived Serialize");
         let restored: BackpressureSignal =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(signal, restored);
         assert_eq!(restored.pending_messages, 200);
         assert_eq!(restored.limit, 256);
@@ -3413,9 +3408,9 @@ mod tests {
             trace_id: "t-1".into(),
             sent_at_tick: 100,
         };
-        let json = serde_json::to_string(&envelope).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&envelope).expect("serialize derived Serialize");
         let restored: HostcallEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(envelope, restored);
     }
 
@@ -3434,9 +3429,9 @@ mod tests {
             signature: sign_preimage(&sk, b"test-preimage")
                 .expect("serde deserialization should succeed"),
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let restored: HandshakeRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, restored);
     }
 
@@ -3453,9 +3448,9 @@ mod tests {
             signature: sign_preimage(&sk, b"test-preimage")
                 .expect("serde deserialization should succeed"),
         };
-        let json = serde_json::to_string(&resp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&resp).expect("serialize derived Serialize");
         let restored: HandshakeResponse =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(resp, restored);
     }
 
@@ -3472,9 +3467,9 @@ mod tests {
             timestamp_ticks: 500,
             trace_id: "t-1".into(),
         };
-        let json = serde_json::to_string(&hs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hs).expect("serialize derived Serialize");
         let restored: SessionHandshake =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hs, restored);
         assert_eq!(restored.extension_nonce, 42);
         assert_eq!(restored.host_nonce, 99);
@@ -3502,9 +3497,9 @@ mod tests {
             source_principal: Some("ext-1".into()),
             timestamp_ticks: 100,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: SessionChannelEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -3540,9 +3535,9 @@ mod tests {
     #[test]
     fn session_config_default_serde_preserves_defaults() {
         let config = SessionConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: SessionConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
         assert_eq!(restored.max_lifetime_ticks, 10_000);
         assert_eq!(restored.max_messages, 10_000);
@@ -3615,9 +3610,9 @@ mod tests {
             payload_len: 1024,
             payload_hash: ContentHash::compute(b"shared-payload"),
         };
-        let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&desc).expect("serialize derived Serialize");
         let back: SharedPayloadDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, desc);
     }
 
@@ -3627,9 +3622,9 @@ mod tests {
             pending_messages: 100,
             limit: 50,
         };
-        let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sig).expect("serialize derived Serialize");
         let back: BackpressureSignal =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, sig);
     }
 
@@ -3648,9 +3643,9 @@ mod tests {
             }),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ChannelPayload =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -3665,18 +3660,18 @@ mod tests {
             replay_drop_threshold: 10,
             replay_drop_window_ticks: 500,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: SessionConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
     #[test]
     fn channel_payload_inline_empty() {
         let p = ChannelPayload::Inline(vec![]);
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: ChannelPayload =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, p);
     }
 
@@ -3709,9 +3704,9 @@ mod tests {
             reason: "bad sig".into(),
         };
         let err = SessionChannelError::SignatureFailure(sig_err);
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: SessionChannelError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -3725,9 +3720,9 @@ mod tests {
             AeadAlgorithm::ChaCha20Poly1305,
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&nonce).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&nonce).expect("serialize derived Serialize");
         let restored: DeterministicNonce =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(nonce, restored);
         assert_eq!(restored.as_bytes().len(), 12);
     }

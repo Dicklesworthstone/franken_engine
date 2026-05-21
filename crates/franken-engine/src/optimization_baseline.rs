@@ -836,9 +836,9 @@ mod tests {
     #[test]
     fn env_serde_roundtrip() {
         let env = BenchmarkEnvironment::default_env("test-bench");
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let back: BenchmarkEnvironment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(env, back);
     }
 
@@ -962,9 +962,9 @@ mod tests {
     #[test]
     fn throughput_serde() {
         let t = ThroughputMeasurement::new(500, 2_000_000_000);
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: ThroughputMeasurement =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 
@@ -1016,9 +1016,9 @@ mod tests {
     #[test]
     fn profile_kind_serde() {
         for k in &ProfileKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: ProfileKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1061,9 +1061,9 @@ mod tests {
         let r = BenchmarkResult::new("bench-1", env)
             .with_throughput(ThroughputMeasurement::new(1000, 1_000_000_000))
             .with_memory(MemorySnapshot::empty());
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: BenchmarkResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1216,9 +1216,9 @@ mod tests {
     fn matrix_serde() {
         let mut matrix = OpportunityMatrix::new("m1");
         matrix.add(make_opportunity("a", 100_000, 1, 1));
-        let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&matrix).expect("serialize derived Serialize");
         let back: OpportunityMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(matrix, back);
     }
 
@@ -1296,9 +1296,9 @@ mod tests {
         let mut reg = BaselineRegistry::new();
         let env = BenchmarkEnvironment::default_env("env-1");
         reg.register(BenchmarkResult::new("bench-1", env));
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: BaselineRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, back);
     }
 
@@ -1444,9 +1444,9 @@ mod tests {
             ComparisonDirection::Regression,
             ComparisonDirection::Neutral,
         ] {
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             let back: ComparisonDirection =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, back);
         }
     }
@@ -1460,9 +1460,9 @@ mod tests {
             OpportunityStatus::Implemented,
             OpportunityStatus::Rejected,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: OpportunityStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -1477,9 +1477,9 @@ mod tests {
             total_allocations: 100,
             total_deallocations: 90,
         };
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let back: MemorySnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, back);
     }
 
@@ -1491,18 +1491,17 @@ mod tests {
             samples: 500,
             module_path: "src/lib.rs".to_string(),
         };
-        let json = serde_json::to_string(&hs).expect("serde deserialization should succeed");
-        let back: Hotspot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hs).expect("serialize derived Serialize");
+        let back: Hotspot = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hs, back);
     }
 
     #[test]
     fn significance_threshold_serde_roundtrip() {
         let t = SignificanceThreshold::default_threshold();
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: SignificanceThreshold =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 
@@ -1610,7 +1609,7 @@ mod tests {
     fn profile_kind_serde_all_distinct() {
         let set: std::collections::BTreeSet<String> = ProfileKind::ALL
             .iter()
-            .map(|k| serde_json::to_string(k).expect("serde deserialization should succeed"))
+            .map(|k| serde_json::to_string(k).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(set.len(), 5);
     }
@@ -1623,7 +1622,7 @@ mod tests {
             ComparisonDirection::Neutral,
         ]
         .iter()
-        .map(|d| serde_json::to_string(d).expect("serde deserialization should succeed"))
+        .map(|d| serde_json::to_string(d).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(set.len(), 3);
     }
@@ -1638,7 +1637,7 @@ mod tests {
             OpportunityStatus::Rejected,
         ]
         .iter()
-        .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
+        .map(|s| serde_json::to_string(s).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(set.len(), 5);
     }
@@ -1881,9 +1880,9 @@ mod tests {
             total_allocations: u64::MAX,
             total_deallocations: u64::MAX,
         };
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let back: MemorySnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, back);
     }
 
@@ -2026,9 +2025,9 @@ mod tests {
                 module_path: "alloc/mod.rs".to_string(),
             },
         );
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: ProfileArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -2061,9 +2060,9 @@ mod tests {
             .insert("version".to_string(), "1.0".to_string());
         result.add_profile(ProfileArtifact::new(ProfileKind::SyscallTrace, "full"));
 
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: BenchmarkResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -2073,9 +2072,9 @@ mod tests {
         let mut bc = BaselineComparison::new("b1", "c1");
         bc.add_comparison(compare_metric("lat_p50", 1000, 900, &threshold));
         bc.add_comparison(compare_metric("lat_p99", 2000, 2500, &threshold));
-        let json = serde_json::to_string(&bc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bc).expect("serialize derived Serialize");
         let back: BaselineComparison =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bc, back);
     }
 
@@ -2083,9 +2082,9 @@ mod tests {
     fn metric_comparison_serde_roundtrip() {
         let threshold = SignificanceThreshold::default_threshold();
         let cmp = compare_metric("heap_bytes", 1_000_000, 900_000, &threshold);
-        let json = serde_json::to_string(&cmp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cmp).expect("serialize derived Serialize");
         let back: MetricComparison =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cmp, back);
     }
 

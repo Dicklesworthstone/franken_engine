@@ -1375,10 +1375,10 @@ mod tests {
     fn family_serde_roundtrip() {
         for family in WorkloadFamily::ALL {
             // SAFETY: WorkloadFamily derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(family).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(family).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid WorkloadFamily serialization
             let back: WorkloadFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*family, back);
         }
     }
@@ -1458,10 +1458,10 @@ mod tests {
     fn divergence_serde_roundtrip() {
         let class = DivergenceClass::SemanticDivergence;
         // SAFETY: DivergenceClass derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&class).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid DivergenceClass serialization
         let back: DivergenceClass =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(class, back);
     }
 
@@ -1660,9 +1660,9 @@ mod tests {
     #[test]
     fn corpus_serde_roundtrip() {
         let corpus = build_seed_corpus();
-        let json = serde_json::to_string(&corpus).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&corpus).expect("serialize derived Serialize");
         let back: WorkloadCorpus =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(corpus.specimen_count(), back.specimen_count());
         assert_eq!(corpus.content_hash(), back.content_hash());
     }
@@ -1709,9 +1709,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = GateConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
+        let back: GateConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1921,9 +1920,8 @@ mod tests {
         let gate = WorkloadCorpusGate::with_defaults();
         let corpus = build_seed_corpus();
         let report = gate.evaluate(&corpus);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GateReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
+        let back: GateReport = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report.total_specimens, back.total_specimens);
         assert_eq!(report.families_covered, back.families_covered);
     }
@@ -1949,9 +1947,9 @@ mod tests {
     #[test]
     fn equivalence_result_serde_roundtrip() {
         let result = make_equivalence("s1", BaselineRuntime::NodeJs, DivergenceClass::Identical);
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: EquivalenceResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.specimen_id, back.specimen_id);
         assert_eq!(result.divergence_class, back.divergence_class);
     }
@@ -1959,9 +1957,9 @@ mod tests {
     #[test]
     fn workload_specimen_serde_roundtrip() {
         let specimen = make_specimen("s1", WorkloadFamily::ParseHeavy, InputLanguage::JavaScript);
-        let json = serde_json::to_string(&specimen).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&specimen).expect("serialize derived Serialize");
         let back: WorkloadSpecimen =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(specimen.id, back.id);
         assert_eq!(specimen.family, back.family);
     }
@@ -1977,9 +1975,9 @@ mod tests {
             selection_rationale: "popular package".to_string(),
             content_hash: ContentHash::compute(b"test"),
         };
-        let json = serde_json::to_string(&prov).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&prov).expect("serialize derived Serialize");
         let back: WorkloadProvenance =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(prov, back);
     }
 

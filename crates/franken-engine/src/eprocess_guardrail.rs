@@ -1087,9 +1087,9 @@ mod tests {
             GuardrailState::Suspended,
         ];
         for state in &states {
-            let json = serde_json::to_string(state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(state).expect("serialize derived Serialize");
             let restored: GuardrailState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*state, restored);
         }
     }
@@ -1117,9 +1117,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: GuardrailError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1131,9 +1131,9 @@ mod tests {
             rationale: "addressed".to_string(),
             epoch: SecurityEpoch::from_raw(5),
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: ResetReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
     }
 
@@ -1168,9 +1168,9 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(event).expect("serialize derived Serialize");
             let restored: GuardrailEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*event, restored);
         }
     }
@@ -1182,9 +1182,9 @@ mod tests {
         let ulr = UniversalLikelihoodRatio {
             null_mean_millionths: -500_000,
         };
-        let json = serde_json::to_string(&ulr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ulr).expect("serialize derived Serialize");
         let restored: UniversalLikelihoodRatio =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ulr.null_mean_millionths, restored.null_mean_millionths);
     }
 
@@ -1540,9 +1540,9 @@ mod tests {
             high_ratio_millionths: 5_000_000,
             low_ratio_millionths: 500_000,
         };
-        let json = serde_json::to_string(&lr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lr).expect("serialize derived Serialize");
         let restored: ThresholdLikelihoodRatio =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lr.threshold_millionths, restored.threshold_millionths);
         assert_eq!(lr.high_ratio_millionths, restored.high_ratio_millionths);
     }
@@ -1793,7 +1793,7 @@ mod tests {
         ];
         let json_set: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(
             json_set.len(),
@@ -1826,7 +1826,7 @@ mod tests {
         ];
         let json_set: BTreeSet<String> = errors
             .iter()
-            .map(|e| serde_json::to_string(e).expect("serde deserialization should succeed"))
+            .map(|e| serde_json::to_string(e).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(
             json_set.len(),
@@ -1867,7 +1867,7 @@ mod tests {
         ];
         let json_set: BTreeSet<String> = events
             .iter()
-            .map(|e| serde_json::to_string(e).expect("serde deserialization should succeed"))
+            .map(|e| serde_json::to_string(e).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(
             json_set.len(),
@@ -2221,9 +2221,9 @@ mod tests {
             rationale: String::new(),
             epoch: SecurityEpoch::GENESIS,
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: ResetReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.rationale, "");
     }
 
@@ -2304,9 +2304,9 @@ mod tests {
             observation: 0,
             likelihood_ratio: -1,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: GuardrailEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -2318,9 +2318,9 @@ mod tests {
             threshold: 1,
             blocked_actions: (0..20).map(|i| format!("action-{i}")).collect(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: GuardrailEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -2330,9 +2330,9 @@ mod tests {
         let err = GuardrailError::Suspended {
             guardrail_id: long_id.clone(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: GuardrailError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -2343,9 +2343,9 @@ mod tests {
             rationale: "epoch boundary transition at u64::MAX".into(),
             epoch: SecurityEpoch::from_raw(u64::MAX),
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: ResetReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
     }
 
@@ -2356,9 +2356,9 @@ mod tests {
             high_ratio_millionths: -500_000,
             low_ratio_millionths: -250_000,
         };
-        let json = serde_json::to_string(&lr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lr).expect("serialize derived Serialize");
         let restored: ThresholdLikelihoodRatio =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lr.threshold_millionths, restored.threshold_millionths);
         assert_eq!(lr.high_ratio_millionths, restored.high_ratio_millionths);
         assert_eq!(lr.low_ratio_millionths, restored.low_ratio_millionths);

@@ -1081,9 +1081,9 @@ mod tests {
     #[test]
     fn command_family_serde_roundtrip() {
         for fam in CommandFamily::ALL {
-            let json = serde_json::to_string(fam).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(fam).expect("serialize derived Serialize");
             let back: CommandFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*fam, back);
         }
     }
@@ -1111,9 +1111,8 @@ mod tests {
     #[test]
     fn parity_status_serde_roundtrip() {
         let status = ParityStatus::ArtifactSchemaDrift;
-        let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
-        let back: ParityStatus =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&status).expect("serialize derived Serialize");
+        let back: ParityStatus = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(status, back);
     }
 
@@ -1144,9 +1143,9 @@ mod tests {
         let o = ExecutionOutcome::Timeout {
             elapsed_millis: 5000,
         };
-        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&o).expect("serialize derived Serialize");
         let back: ExecutionOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(o, back);
     }
 
@@ -1227,9 +1226,8 @@ mod tests {
     #[test]
     fn matrix_serde_roundtrip() {
         let matrix = build_seed_matrix();
-        let json = serde_json::to_string(&matrix).expect("serde deserialization should succeed");
-        let back: ParityMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&matrix).expect("serialize derived Serialize");
+        let back: ParityMatrix = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(matrix.case_count(), back.case_count());
         assert_eq!(matrix.content_hash(), back.content_hash());
     }
@@ -1325,9 +1323,9 @@ mod tests {
         let verifier = ShippedPathParityVerifier::with_defaults();
         let matrix = build_seed_matrix();
         let report = verifier.verify(&matrix);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: VerificationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report.total_cases, back.total_cases);
     }
 
@@ -1502,9 +1500,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = VerifierConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: VerifierConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1577,9 +1575,9 @@ mod tests {
     #[test]
     fn input_language_serde_roundtrip() {
         for lang in ParityInputLanguage::ALL {
-            let json = serde_json::to_string(lang).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(lang).expect("serialize derived Serialize");
             let back: ParityInputLanguage =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*lang, back);
         }
     }

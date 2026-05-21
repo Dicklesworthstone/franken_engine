@@ -1026,9 +1026,8 @@ mod tests {
     #[test]
     fn linkage_id_serde_roundtrip() {
         let id = LinkageId::new("link-42");
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: LinkageId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let back: LinkageId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, back);
     }
 
@@ -1039,9 +1038,9 @@ mod tests {
     #[test]
     fn proof_input_ref_serde_roundtrip() {
         let input = make_proof_input("proof-1", 5);
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: ProofInputRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -1067,9 +1066,9 @@ mod tests {
             speedup_millionths: 1_500_000,
             instruction_ratio_millionths: 800_000,
         };
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: PerformanceDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -1084,9 +1083,9 @@ mod tests {
             activation_epoch: test_epoch(3),
             activation_tick: 42,
         };
-        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rs).expect("serialize derived Serialize");
         let back: RollbackState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rs, back);
     }
 
@@ -1122,9 +1121,9 @@ mod tests {
     #[test]
     fn linkage_record_serde_roundtrip() {
         let record = make_linkage("link-1", 5, &["proof-a", "proof-b"]);
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: LinkageRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
     }
 
@@ -1162,9 +1161,9 @@ mod tests {
             old_epoch: test_epoch(1),
             new_epoch: test_epoch(2),
         };
-        let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cause).expect("serialize derived Serialize");
         let back: InvalidationCause =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cause, back);
     }
 
@@ -1936,9 +1935,9 @@ mod tests {
             instructions_executed: 500,
             duration_ticks: 200,
         };
-        let json = serde_json::to_string(&er).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&er).expect("serialize derived Serialize");
         let back: ExecutionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(er, back);
     }
 
@@ -2074,9 +2073,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: LinkageEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let back: LinkageEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2131,9 +2129,9 @@ mod tests {
             LinkageError::Ir3AlreadySpecialized,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: LinkageError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2346,7 +2344,7 @@ mod tests {
         ];
         let mut jsons = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             jsons.insert(json);
         }
         assert_eq!(jsons.len(), 4);
@@ -2367,7 +2365,7 @@ mod tests {
         ];
         let mut jsons = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             jsons.insert(json);
         }
         assert_eq!(jsons.len(), 6);
@@ -2477,7 +2475,7 @@ mod tests {
     #[test]
     fn proof_input_ref_json_field_names() {
         let input = make_proof_input("proof-1", 5);
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         assert!(json.contains("\"proof_id\""));
         assert!(json.contains("\"proof_type\""));
         assert!(json.contains("\"proof_epoch\""));
@@ -2490,7 +2488,7 @@ mod tests {
             speedup_millionths: 1_500_000,
             instruction_ratio_millionths: 800_000,
         };
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         assert!(json.contains("\"speedup_millionths\""));
         assert!(json.contains("\"instruction_ratio_millionths\""));
     }
@@ -2502,7 +2500,7 @@ mod tests {
             activation_epoch: test_epoch(3),
             activation_tick: 42,
         };
-        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rs).expect("serialize derived Serialize");
         assert!(json.contains("\"baseline_ir3_hash\""));
         assert!(json.contains("\"activation_epoch\""));
         assert!(json.contains("\"activation_tick\""));
@@ -2511,7 +2509,7 @@ mod tests {
     #[test]
     fn linkage_record_json_field_names() {
         let record = make_linkage("link-1", 5, &["proof-a"]);
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         assert!(json.contains("\"id\""));
         assert!(json.contains("\"proof_inputs\""));
         assert!(json.contains("\"optimization_class\""));
@@ -2534,7 +2532,7 @@ mod tests {
             outcome: "ok".into(),
             error_code: Some("ERR".into()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2553,7 +2551,7 @@ mod tests {
             instructions_executed: 42,
             duration_ticks: 99,
         };
-        let json = serde_json::to_string(&er).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&er).expect("serialize derived Serialize");
         assert!(json.contains("\"linkage_id\""));
         assert!(json.contains("\"witness_hash\""));
         assert!(json.contains("\"performance_delta\""));
@@ -2724,9 +2722,9 @@ mod tests {
             speedup_millionths: 0,
             instruction_ratio_millionths: 0,
         };
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: PerformanceDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
         assert_eq!(back.speedup_millionths, 0);
     }
@@ -2737,9 +2735,9 @@ mod tests {
             speedup_millionths: u64::MAX,
             instruction_ratio_millionths: u64::MAX,
         };
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: PerformanceDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -2750,9 +2748,9 @@ mod tests {
             activation_epoch: SecurityEpoch::from_raw(u64::MAX),
             activation_tick: u64::MAX,
         };
-        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rs).expect("serialize derived Serialize");
         let back: RollbackState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rs, back);
     }
 
@@ -2764,9 +2762,9 @@ mod tests {
             proof_epoch: test_epoch(1),
             validity_window_ticks: 0,
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: ProofInputRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
         assert_eq!(back.validity_window_ticks, 0);
     }
@@ -2779,9 +2777,9 @@ mod tests {
             proof_epoch: test_epoch(u64::MAX),
             validity_window_ticks: u64::MAX,
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: ProofInputRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -2789,9 +2787,9 @@ mod tests {
     fn linkage_record_empty_id() {
         let record = make_linkage("", 5, &["proof-a"]);
         assert_eq!(record.id.as_str(), "");
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: LinkageRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
     }
 
@@ -2934,9 +2932,9 @@ mod tests {
             instructions_executed: 0,
             duration_ticks: 0,
         };
-        let json = serde_json::to_string(&er).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&er).expect("serialize derived Serialize");
         let back: ExecutionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(er, back);
     }
 
@@ -2952,9 +2950,9 @@ mod tests {
             instructions_executed: u64::MAX,
             duration_ticks: u64::MAX,
         };
-        let json = serde_json::to_string(&er).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&er).expect("serialize derived Serialize");
         let back: ExecutionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(er, back);
     }
 
@@ -2967,9 +2965,9 @@ mod tests {
         let cause = InvalidationCause::ProofRevoked {
             proof_id: "special-char-!@#$%".into(),
         };
-        let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cause).expect("serialize derived Serialize");
         let back: InvalidationCause =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cause, back);
     }
 
@@ -2978,9 +2976,9 @@ mod tests {
         let cause = InvalidationCause::PolicyChange {
             reason: "policy v2 deployed with breaking changes".into(),
         };
-        let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cause).expect("serialize derived Serialize");
         let back: InvalidationCause =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cause, back);
     }
 
@@ -2989,9 +2987,9 @@ mod tests {
         let cause = InvalidationCause::ManualInvalidation {
             operator_id: "ops-team/admin-42".into(),
         };
-        let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cause).expect("serialize derived Serialize");
         let back: InvalidationCause =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cause, back);
     }
 
@@ -3003,9 +3001,9 @@ mod tests {
             instruction_ratio_millionths: 400_000,
         });
         record.execution_count = 42;
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: LinkageRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
         assert_eq!(
             back.performance_delta
@@ -3019,9 +3017,9 @@ mod tests {
     fn linkage_record_inactive_roundtrip() {
         let mut record = make_linkage("link-inactive", 5, &["proof-a"]);
         record.active = false;
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: LinkageRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
         assert!(!back.active);
     }
@@ -3037,9 +3035,8 @@ mod tests {
             outcome: "rejected".into(),
             error_code: Some("LINKAGE_EPOCH_MISMATCH".into()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: LinkageEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let back: LinkageEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -3358,9 +3355,9 @@ mod tests {
                 proof_epoch: test_epoch(1),
                 validity_window_ticks: 100,
             };
-            let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&input).expect("serialize derived Serialize");
             let back: ProofInputRef =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(input, back);
         }
     }
@@ -3380,10 +3377,9 @@ mod tests {
         for oc in &classes {
             let mut record = make_linkage("link-oc", 5, &["proof-a"]);
             record.optimization_class = *oc;
-            let json =
-                serde_json::to_string(&record).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&record).expect("serialize derived Serialize");
             let back: LinkageRecord =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(record, back);
         }
     }

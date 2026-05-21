@@ -674,10 +674,10 @@ mod tests {
     fn size_bounds_serialization_round_trip() {
         let bounds = SizeBounds::default();
         // SAFETY: SizeBounds derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bounds).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid SizeBounds serialization
         let restored: SizeBounds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bounds, restored);
     }
 
@@ -690,10 +690,10 @@ mod tests {
             policy: "top-K by witness_id".to_string(),
         };
         // SAFETY: TruncationMarker derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&marker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&marker).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid TruncationMarker serialization
         let restored: TruncationMarker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(marker, restored);
     }
 
@@ -766,10 +766,10 @@ mod tests {
         ];
         for v in &violations {
             // SAFETY: OrderingViolation derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid OrderingViolation serialization
             let restored: OrderingViolation =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -825,12 +825,10 @@ mod tests {
         let bounds = SizeBounds::default();
         normalize_entry(&mut entry, &bounds);
         // SAFETY: EvidenceEntry derives Serialize and has no non-serializable fields
-        let json_first =
-            serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json_first = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let result2 = normalize_entry(&mut entry, &bounds);
         // SAFETY: EvidenceEntry derives Serialize and has no non-serializable fields
-        let json_second =
-            serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json_second = serde_json::to_string(&entry).expect("serialize derived Serialize");
         assert_eq!(json_first, json_second, "normalize should be idempotent");
         assert_eq!(result2.duplicates_removed, 0);
         assert!(result2.truncations.is_empty());
@@ -1071,10 +1069,10 @@ mod tests {
             max_constraints: 5,
         };
         // SAFETY: SizeBounds derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bounds).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid SizeBounds serialization
         let restored: SizeBounds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bounds, restored);
     }
 
@@ -1147,9 +1145,9 @@ mod tests {
             OrderingViolation::ConstraintsExceedBound { count: 50, max: 32 },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: OrderingViolation =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -1409,10 +1407,10 @@ mod tests {
             policy: "top-K".to_string(),
         };
         // SAFETY: TruncationMarker derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&marker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&marker).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid TruncationMarker serialization
         let restored: TruncationMarker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(marker, restored);
     }
 
@@ -1569,7 +1567,7 @@ mod tests {
         ];
         let mut jsons = std::collections::BTreeSet::new();
         for v in &variants {
-            let j = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let j = serde_json::to_string(v).expect("serialize derived Serialize");
             jsons.insert(j);
         }
         assert_eq!(jsons.len(), 7, "all 7 variants serialize to distinct JSON");
@@ -1584,7 +1582,7 @@ mod tests {
             max_witnesses: 20,
             max_constraints: 5,
         };
-        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bounds).expect("serialize derived Serialize");
         assert!(json.contains("\"max_candidates\""));
         assert!(json.contains("\"max_witnesses\""));
         assert!(json.contains("\"max_constraints\""));
@@ -1598,7 +1596,7 @@ mod tests {
             retained_count: 64,
             policy: "top-K".to_string(),
         };
-        let json = serde_json::to_string(&marker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&marker).expect("serialize derived Serialize");
         assert!(json.contains("\"list_name\""));
         assert!(json.contains("\"original_count\""));
         assert!(json.contains("\"retained_count\""));
@@ -1610,7 +1608,7 @@ mod tests {
         let v = OrderingViolation::CandidatesNotSorted {
             first_unsorted_index: 7,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(json.contains("\"CandidatesNotSorted\""));
         assert!(json.contains("\"first_unsorted_index\""));
         assert!(json.contains("7"));
@@ -1621,7 +1619,7 @@ mod tests {
         let v = OrderingViolation::DuplicateWitnessId {
             witness_id: "w-dup-42".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(json.contains("\"DuplicateWitnessId\""));
         assert!(json.contains("\"witness_id\""));
         assert!(json.contains("w-dup-42"));
@@ -1633,7 +1631,7 @@ mod tests {
             count: 200,
             max: 64,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(json.contains("\"CandidatesExceedBound\""));
         assert!(json.contains("\"count\""));
         assert!(json.contains("\"max\""));
@@ -1812,9 +1810,9 @@ mod tests {
             max_witnesses: usize::MAX,
             max_constraints: usize::MAX,
         };
-        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bounds).expect("serialize derived Serialize");
         let restored: SizeBounds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bounds, restored);
     }
 
@@ -1826,9 +1824,9 @@ mod tests {
             retained_count: 0,
             policy: String::new(),
         };
-        let json = serde_json::to_string(&marker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&marker).expect("serialize derived Serialize");
         let restored: TruncationMarker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(marker, restored);
         // Display still works
         let display = marker.to_string();
@@ -1967,9 +1965,9 @@ mod tests {
             max_witnesses: 0,
             max_constraints: 0,
         };
-        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bounds).expect("serialize derived Serialize");
         let restored: SizeBounds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bounds, restored);
     }
 
@@ -1981,9 +1979,9 @@ mod tests {
             retained_count: 64,
             policy: "top-K \u{2603}".to_string(),
         };
-        let json = serde_json::to_string(&marker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&marker).expect("serialize derived Serialize");
         let restored: TruncationMarker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(marker, restored);
     }
 
@@ -1992,9 +1990,9 @@ mod tests {
         let v = OrderingViolation::CandidatesNotSorted {
             first_unsorted_index: 0,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: OrderingViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2003,9 +2001,9 @@ mod tests {
         let v = OrderingViolation::WitnessesNotSorted {
             first_unsorted_index: usize::MAX,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: OrderingViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2014,9 +2012,9 @@ mod tests {
         let v = OrderingViolation::DuplicateWitnessId {
             witness_id: String::new(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: OrderingViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2024,9 +2022,9 @@ mod tests {
     fn ordering_violation_serde_roundtrip_exceed_bound_equal_count_max() {
         // count == max technically not a violation, but the struct allows it
         let v = OrderingViolation::ConstraintsExceedBound { count: 32, max: 32 };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: OrderingViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2366,10 +2364,10 @@ mod tests {
     fn filtered_candidate_serde_roundtrip() {
         let c = CandidateAction::filtered("terminate", 500_000, "policy-block");
         // SAFETY: CandidateAction derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid CandidateAction serialization
         let restored: CandidateAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, restored);
         assert!(restored.filtered);
         assert_eq!(restored.filter_reason.as_deref(), Some("policy-block"));
@@ -2491,7 +2489,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&bounds).expect("serde deserialization should succeed");
         let restored: SizeBounds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bounds, restored);
     }
 }

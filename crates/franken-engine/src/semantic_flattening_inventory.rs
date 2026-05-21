@@ -574,12 +574,11 @@ mod tests {
         ] {
             // SAFETY: SemanticDomain derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json =
-                serde_json::to_string(&domain).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&domain).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid SemanticDomain,
             // so from_str back to SemanticDomain cannot fail (valid format + matching schema).
             let back: SemanticDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(domain, back);
         }
     }
@@ -596,11 +595,11 @@ mod tests {
         ] {
             // SAFETY: TranslationKind derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid TranslationKind,
             // so from_str back to TranslationKind cannot fail (valid format + matching schema).
             let back: TranslationKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -615,11 +614,11 @@ mod tests {
         ] {
             // SAFETY: FlatteningClassification derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&cls).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cls).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid FlatteningClassification,
             // so from_str back to FlatteningClassification cannot fail (valid format + matching schema).
             let back: FlatteningClassification =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cls, back);
         }
     }
@@ -635,11 +634,11 @@ mod tests {
         ] {
             // SAFETY: FlatteningSeverity derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid FlatteningSeverity,
             // so from_str back to FlatteningSeverity cannot fail (valid format + matching schema).
             let back: FlatteningSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, back);
         }
     }
@@ -674,11 +673,11 @@ mod tests {
         let bp = sample_boundary();
         // SAFETY: BoundaryPoint derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&bp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bp).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid BoundaryPoint,
         // so from_str back to BoundaryPoint cannot fail (valid format + matching schema).
         let back: BoundaryPoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bp, back);
     }
 
@@ -725,11 +724,11 @@ mod tests {
         let occ = sample_occurrence("FLAT-SERDE");
         // SAFETY: FlatteningOccurrence derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&occ).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&occ).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FlatteningOccurrence,
         // so from_str back to FlatteningOccurrence cannot fail (valid format + matching schema).
         let back: FlatteningOccurrence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(occ, back);
     }
 
@@ -962,11 +961,11 @@ mod tests {
         };
         // SAFETY: FlatteningSummary derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FlatteningSummary,
         // so from_str back to FlatteningSummary cannot fail (valid format + matching schema).
         let back: FlatteningSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -976,11 +975,11 @@ mod tests {
         inv.add(sample_occurrence("RND-1"));
         // SAFETY: FlatteningInventory derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FlatteningInventory,
         // so from_str back to FlatteningInventory cannot fail (valid format + matching schema).
         let back: FlatteningInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv, back);
     }
 
@@ -1165,7 +1164,7 @@ mod tests {
         };
         // SAFETY: BoundaryPoint derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&bp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bp).expect("serialize derived Serialize");
         assert!(
             json.contains("null"),
             "None line_hint should serialize as null"
@@ -1173,7 +1172,7 @@ mod tests {
         // SAFETY: JSON was just produced by to_string of a valid BoundaryPoint,
         // so from_str back to BoundaryPoint cannot fail (valid format + matching schema).
         let back: BoundaryPoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bp, back);
     }
 
@@ -1583,7 +1582,7 @@ mod tests {
         // SAFETY: JSON was just produced by to_string_pretty of a valid FlatteningInventory,
         // so from_str back to FlatteningInventory cannot fail (valid format + matching schema).
         let back: FlatteningInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv, back);
         assert_eq!(inv.content_hash(), back.content_hash());
     }
@@ -1765,12 +1764,12 @@ mod tests {
         let inv = FlatteningInventory::new(SecurityEpoch::from_raw(50));
         // SAFETY: FlatteningInventory derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         assert!(json.contains(FLATTENING_SCHEMA_VERSION));
         // SAFETY: JSON was just produced by to_string of a valid FlatteningInventory,
         // so from_str back to FlatteningInventory cannot fail (valid format + matching schema).
         let back: FlatteningInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.schema_version, FLATTENING_SCHEMA_VERSION);
     }
 }

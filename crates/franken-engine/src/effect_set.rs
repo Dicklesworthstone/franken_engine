@@ -252,6 +252,25 @@ impl EffectSet {
     }
 }
 
+impl fmt::Display for EffectSet {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.is_empty() {
+            write!(f, "∅")
+        } else {
+            write!(f, "{{")?;
+            let mut first = true;
+            for effect in self.iter() {
+                if !first {
+                    write!(f, ", ")?;
+                }
+                write!(f, "{}", effect)?;
+                first = false;
+            }
+            write!(f, "}}")
+        }
+    }
+}
+
 /// Function/method node's resolved effect annotation. Pairs the
 /// [`EffectSet`] computed at IR2-lowering time with the [`EffectPolicy`]
 /// that produced it.

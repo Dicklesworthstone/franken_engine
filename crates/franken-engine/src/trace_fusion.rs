@@ -325,8 +325,7 @@ impl FusionGuard {
     pub fn new(kind: FusionGuardKind, side_exit_offset: u32) -> Self {
         // SAFETY: FusionGuardKind derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let kind_bytes =
-            serde_json::to_string(&kind).expect("serde deserialization should succeed");
+        let kind_bytes = serde_json::to_string(&kind).expect("serialize derived Serialize");
         let mut hash_preimage = Vec::with_capacity(kind_bytes.len() + std::mem::size_of::<u32>());
         hash_preimage.extend_from_slice(kind_bytes.as_bytes());
         hash_preimage.extend_from_slice(&side_exit_offset.to_le_bytes());
@@ -2650,11 +2649,10 @@ mod tests {
         let kind = MotifKind::ArithmeticChain;
         // SAFETY: MotifKind derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid MotifKind,
         // so from_str back to MotifKind cannot fail (valid format + matching schema).
-        let decoded: MotifKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let decoded: MotifKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(kind, decoded);
     }
 
@@ -2669,11 +2667,11 @@ mod tests {
         motif.observation_count = 100;
         // SAFETY: FusionMotif derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&motif).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&motif).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FusionMotif,
         // so from_str back to FusionMotif cannot fail (valid format + matching schema).
         let decoded: FusionMotif =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(motif, decoded);
     }
 
@@ -2682,11 +2680,11 @@ mod tests {
         let lineage = proof_lineage();
         // SAFETY: FusionProofLineage derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&lineage).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lineage).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FusionProofLineage,
         // so from_str back to FusionProofLineage cannot fail (valid format + matching schema).
         let decoded: FusionProofLineage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lineage, decoded);
     }
 
@@ -2696,11 +2694,11 @@ mod tests {
         trace.add_instruction(FusedInstruction::passthrough(0, 0, "Add"));
         // SAFETY: FusedTrace derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&trace).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FusedTrace,
         // so from_str back to FusedTrace cannot fail (valid format + matching schema).
         let decoded: FusedTrace =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(trace, decoded);
     }
 
@@ -2709,11 +2707,11 @@ mod tests {
         let policy = FusionPolicy::default();
         // SAFETY: FusionPolicy derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FusionPolicy,
         // so from_str back to FusionPolicy cannot fail (valid format + matching schema).
         let decoded: FusionPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, decoded);
     }
 
@@ -2729,10 +2727,9 @@ mod tests {
             FusionOutcome::MissingProofLineage,
         ];
         for outcome in outcomes {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let decoded: FusionOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, decoded);
         }
     }
@@ -2756,10 +2753,9 @@ mod tests {
             },
         ];
         for reason in reasons {
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             let decoded: FusionDisableReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(reason, decoded);
         }
     }
@@ -2782,9 +2778,9 @@ mod tests {
             },
         ];
         for kind in kinds {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let decoded: FusionGuardKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, decoded);
         }
     }
@@ -2792,9 +2788,9 @@ mod tests {
     #[test]
     fn test_fusion_record_serde() {
         let record = FusionRecord::new("fn_test", test_epoch());
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let decoded: FusionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record.function_id, decoded.function_id);
     }
 
@@ -2805,9 +2801,9 @@ mod tests {
         let entries = arith_entries(4, 200);
         engine.fuse("fn_test", &entries, None);
         let diag = engine.diagnostics();
-        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&diag).expect("serialize derived Serialize");
         let decoded: TraceFusionDiagnostics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(diag, decoded);
     }
 

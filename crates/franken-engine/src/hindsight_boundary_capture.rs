@@ -1506,9 +1506,9 @@ mod tests {
     #[test]
     fn boundary_class_serde_round_trip() {
         for class in &BoundaryClass::ALL {
-            let json = serde_json::to_string(class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(class).expect("serialize derived Serialize");
             let back: BoundaryClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*class, back);
         }
     }
@@ -1522,9 +1522,9 @@ mod tests {
             PrivacyClass::PathDigest,
             PrivacyClass::SecretDigest,
         ] {
-            let json = serde_json::to_string(&pc).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&pc).expect("serialize derived Serialize");
             let back: PrivacyClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(pc, back);
         }
     }
@@ -1536,9 +1536,9 @@ mod tests {
             RedactionTreatment::DigestOnly,
             RedactionTreatment::Omit,
         ] {
-            let json = serde_json::to_string(&rt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&rt).expect("serialize derived Serialize");
             let back: RedactionTreatment =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(rt, back);
         }
     }
@@ -1549,9 +1549,9 @@ mod tests {
             ReplaySufficiency::Sufficient,
             ReplaySufficiency::NeedsEscalation,
         ] {
-            let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&rs).expect("serialize derived Serialize");
             let back: ReplaySufficiency =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(rs, back);
         }
     }
@@ -1681,9 +1681,9 @@ mod tests {
     #[test]
     fn boundary_capture_contract_serde_round_trip() {
         let contract = BoundaryCaptureContract::default_v1();
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         let back: BoundaryCaptureContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(contract, back);
     }
 
@@ -1702,9 +1702,9 @@ mod tests {
     #[test]
     fn boundary_class_serde_roundtrip() {
         for class in BoundaryClass::ALL {
-            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&class).expect("serialize derived Serialize");
             let back: BoundaryClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(class, back);
         }
     }
@@ -2025,9 +2025,9 @@ mod tests {
         let record = session
             .capture_external_policy_read(&ctx, "risk-router", "digest-policy", 7, None)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: BoundaryCaptureRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
     }
 
@@ -2048,9 +2048,9 @@ mod tests {
         );
         log.append(&catalog, request)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&log).expect("serialize derived Serialize");
         let back: BoundaryCaptureLog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(log.records, back.records);
         assert_eq!(log.next_sequence, back.next_sequence);
     }
@@ -2091,7 +2091,7 @@ mod tests {
         for line in &lines {
             // Each line must be valid JSON
             let _: serde_json::Value =
-                serde_json::from_str(line).expect("serde deserialization should succeed");
+                serde_json::from_str(line).expect("deserialize known-valid JSON");
         }
     }
 
@@ -2297,9 +2297,9 @@ mod tests {
             PrivacyClass::PolicyDigest,
             PrivacyClass::HardwareFingerprint,
         ] {
-            let json = serde_json::to_string(&pc).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&pc).expect("serialize derived Serialize");
             let back: PrivacyClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(pc, back);
         }
     }
@@ -2310,9 +2310,9 @@ mod tests {
             privacy_class: PrivacyClass::HardwareFingerprint,
             treatment: RedactionTreatment::Omit,
         };
-        let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&val).expect("serialize derived Serialize");
         let back: FieldRedactionValue =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(val, back);
     }
 
@@ -2467,9 +2467,9 @@ mod tests {
                 .collect(),
             }],
         };
-        let json = serde_json::to_string(&plan).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&plan).expect("serialize derived Serialize");
         let back: MinimalReplayPlan =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(plan, back);
     }
 
@@ -2477,10 +2477,9 @@ mod tests {
     fn boundary_redaction_map_serde_round_trip() {
         let catalog = BoundaryCatalog::default_v1();
         let redaction_map = BoundaryRedactionMap::from_catalog(&catalog);
-        let json =
-            serde_json::to_string(&redaction_map).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&redaction_map).expect("serialize derived Serialize");
         let back: BoundaryRedactionMap =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(redaction_map, back);
     }
 

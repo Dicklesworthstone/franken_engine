@@ -2096,9 +2096,9 @@ mod tests {
         ))
         .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let deserialized: NpmCompatibilityMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, deserialized);
     }
 
@@ -2110,9 +2110,9 @@ mod tests {
             CohortTier::Tier3LongTail,
         ];
         for tier in tiers {
-            let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&tier).expect("serialize derived Serialize");
             let back: CohortTier =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(tier, back);
         }
 
@@ -2130,9 +2130,9 @@ mod tests {
             PackageCategory::Other,
         ];
         for cat in categories {
-            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cat).expect("serialize derived Serialize");
             let back: PackageCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cat, back);
         }
 
@@ -2143,9 +2143,9 @@ mod tests {
             IncompatibilitySeverity::Cosmetic,
         ];
         for sev in severities {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             let back: IncompatibilitySeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, back);
         }
     }
@@ -2280,9 +2280,9 @@ mod tests {
     fn types_only_package_field() {
         let mut pkg = sample_package("types-node", CohortTier::Tier1Critical);
         pkg.types_only = true;
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let back: PackageRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.types_only);
     }
 
@@ -2295,9 +2295,9 @@ mod tests {
             ModuleSystemReq::Unknown,
         ];
         for v in variants {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: ModuleSystemReq =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
             assert!(!v.as_str().is_empty());
         }
@@ -2311,9 +2311,9 @@ mod tests {
             NativeAddonMode::Required,
         ];
         for mode in variants {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let back: NativeAddonMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mode, back);
             assert!(!mode.as_str().is_empty());
         }
@@ -2330,9 +2330,9 @@ mod tests {
             RemediationState::WontFix,
         ];
         for s in states {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: RemediationState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -2347,10 +2347,9 @@ mod tests {
             (PackageTestOutcome::Untested, false),
         ];
         for (outcome, expected_compat) in outcomes {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: PackageTestOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, back);
             assert_eq!(outcome.counts_as_compatible(), expected_compat);
         }
@@ -2373,9 +2372,9 @@ mod tests {
             IncompatibilityRootCause::Other,
         ];
         for cause in causes {
-            let json = serde_json::to_string(&cause).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cause).expect("serialize derived Serialize");
             let back: IncompatibilityRootCause =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cause, back);
             assert!(!cause.as_str().is_empty());
         }
@@ -2390,9 +2389,9 @@ mod tests {
             MatrixVerdict::InsufficientData,
         ];
         for v in verdicts {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: MatrixVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
             assert_eq!(format!("{v}"), v.as_str());
         }
@@ -3066,7 +3065,7 @@ mod tests {
 
         let json = serde_json::to_string_pretty(&m).expect("serde deserialization should succeed");
         let back: NpmCompatibilityMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
         assert_eq!(back.snapshot_epoch, 42);
         assert_eq!(back.packages[0].node_api_deps.len(), 2);
@@ -3094,9 +3093,9 @@ mod tests {
             open_incompatibilities: 8,
             blocker_count: 2,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: CohortSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -3134,9 +3133,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: NpmCompatibilityError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }

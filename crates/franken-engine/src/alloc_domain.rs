@@ -724,11 +724,11 @@ mod tests {
 
         // SAFETY: DomainRegistry derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DomainRegistry,
         // so from_str back to DomainRegistry cannot fail (valid format + matching schema).
         let roundtrip: DomainRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(reg.len(), roundtrip.len());
         assert_eq!(reg.allocation_sequence(), roundtrip.allocation_sequence());
@@ -830,11 +830,11 @@ mod tests {
         for v in &variants {
             // SAFETY: AllocationDomain derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid AllocationDomain,
             // so from_str back to AllocationDomain cannot fail (valid format + matching schema).
             let restored: AllocationDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -850,11 +850,11 @@ mod tests {
         for v in &variants {
             // SAFETY: LifetimeClass derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid LifetimeClass,
             // so from_str back to LifetimeClass cannot fail (valid format + matching schema).
             let restored: LifetimeClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -883,11 +883,11 @@ mod tests {
         for v in &variants {
             // SAFETY: AllocDomainError derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid AllocDomainError,
             // so from_str back to AllocDomainError cannot fail (valid format + matching schema).
             let restored: AllocDomainError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -901,11 +901,11 @@ mod tests {
             .expect("serde deserialization should succeed");
         // SAFETY: DomainBudget derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&budget).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DomainBudget,
         // so from_str back to DomainBudget cannot fail (valid format + matching schema).
         let restored: DomainBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(budget, restored);
     }
 
@@ -918,11 +918,11 @@ mod tests {
         };
         // SAFETY: DomainConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DomainConfig,
         // so from_str back to DomainConfig cannot fail (valid format + matching schema).
         let restored: DomainConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1257,9 +1257,9 @@ mod tests {
         reg.allocate(AllocationDomain::ScratchBuffer, 300)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let restored: DomainRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(restored.total_used(), 600);
         assert_eq!(
@@ -1401,7 +1401,7 @@ mod tests {
         let mut b = DomainBudget::new(1024);
         b.try_reserve(256)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         assert!(json.contains("\"max_bytes\""));
         assert!(json.contains("\"used_bytes\""));
         assert!(json.contains("1024"));
@@ -1415,7 +1415,7 @@ mod tests {
             lifetime: LifetimeClass::SessionScoped,
             budget: DomainBudget::new(512),
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         assert!(json.contains("\"domain\""));
         assert!(json.contains("\"lifetime\""));
         assert!(json.contains("\"budget\""));
@@ -1747,10 +1747,10 @@ mod tests {
     fn budget_serde_zero_capacity_enrichment() {
         let b = DomainBudget::new(0);
         // SAFETY: DomainBudget derives Serialize; writing to an in-memory String cannot fail here.
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         // SAFETY: JSON was produced from the same DomainBudget schema immediately above.
         let restored: DomainBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.max_bytes, 0);
         assert_eq!(restored.used_bytes, 0);
     }
@@ -1762,10 +1762,10 @@ mod tests {
         b.try_reserve(1)
             .expect("serde deserialization should succeed");
         // SAFETY: DomainBudget derives Serialize; writing to an in-memory String cannot fail here.
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         // SAFETY: JSON was produced from the same DomainBudget schema immediately above.
         let restored: DomainBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.max_bytes, u64::MAX);
         assert_eq!(restored.used_bytes, 1);
     }
@@ -1774,10 +1774,10 @@ mod tests {
     fn registry_serde_empty_enrichment() {
         let reg = DomainRegistry::new();
         // SAFETY: DomainRegistry derives Serialize; writing to an in-memory String cannot fail here.
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         // SAFETY: JSON was produced from the same empty DomainRegistry schema immediately above.
         let restored: DomainRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(restored.is_empty());
         assert_eq!(restored.allocation_sequence(), 0);
     }
@@ -1796,10 +1796,10 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // SAFETY: DomainRegistry derives Serialize; writing to an in-memory String cannot fail here.
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         // SAFETY: JSON was produced from the same DomainRegistry schema immediately above.
         let restored: DomainRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(
             restored
                 .get(&AllocationDomain::IrArena)
@@ -1874,9 +1874,9 @@ mod tests {
 
         // Serialize twice independently
         // SAFETY: DomainRegistry derives Serialize; writing to an in-memory String cannot fail here.
-        let json1 = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&reg).expect("serialize derived Serialize");
         // SAFETY: Re-serializing the same valid registry to an in-memory String cannot fail here.
-        let json2 = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&reg).expect("serialize derived Serialize");
         assert_eq!(json1, json2, "deterministic serialization");
     }
 
@@ -2087,10 +2087,10 @@ mod tests {
         ];
         for err in &errors {
             // SAFETY: AllocDomainError derives Serialize; writing to an in-memory String cannot fail here.
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             // SAFETY: JSON was produced from the same AllocDomainError schema immediately above.
             let restored: AllocDomainError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2254,10 +2254,9 @@ mod tests {
                     lifetime: *l,
                     budget: DomainBudget::new(42),
                 };
-                let json =
-                    serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+                let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
                 let restored: DomainConfig =
-                    serde_json::from_str(&json).expect("serde deserialization should succeed");
+                    serde_json::from_str(&json).expect("deserialize known-valid JSON");
                 assert_eq!(cfg, restored);
             }
         }

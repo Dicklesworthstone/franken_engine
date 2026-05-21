@@ -2768,10 +2768,10 @@ mod tests {
             LossMatrixPreset::Permissive,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(preset).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(preset).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: LossMatrixPreset =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*preset, back);
         }
     }
@@ -2791,10 +2791,10 @@ mod tests {
             },
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: ExtensionPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.extension_id, "ext-serde");
         assert_eq!(back.capabilities.len(), 2);
         // SAFETY: get cannot fail for key we just inserted in test
@@ -3343,9 +3343,9 @@ mod tests {
     #[test]
     fn extension_package_empty_metadata_serde() {
         let pkg = simple_package();
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let restored: ExtensionPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pkg.extension_id, restored.extension_id);
         assert!(restored.metadata.is_empty());
     }
@@ -3364,9 +3364,9 @@ mod tests {
             version: "3.0.0".to_string(),
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let restored: ExtensionPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.capabilities.len(), 3);
     }
 
@@ -3463,8 +3463,8 @@ mod tests {
     #[test]
     fn extension_package_serde_deterministic() {
         let pkg = simple_package();
-        let json1 = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&pkg).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         assert_eq!(json1, json2);
     }
 
@@ -4067,7 +4067,7 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         assert!(
             json.contains("\"extension_id\""),
             "missing extension_id field"
@@ -4117,9 +4117,9 @@ mod tests {
             version: "1.0.0".to_string(),
             metadata,
         };
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let restored: ExtensionPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.metadata.len(), 50);
         assert_eq!(
             restored
@@ -4316,9 +4316,9 @@ mod tests {
             version: "1.0.0".to_string(),
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let restored: ExtensionPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.extension_id, pkg.extension_id);
     }
 

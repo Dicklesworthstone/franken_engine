@@ -1026,11 +1026,11 @@ mod tests {
         for kind in ImageKind::ALL {
             // SAFETY: ImageKind derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid ImageKind,
             // so from_str back to ImageKind cannot fail (valid format + matching schema).
             let back: ImageKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1053,9 +1053,9 @@ mod tests {
     #[test]
     fn image_state_serde_roundtrip() {
         for st in ImageState::ALL {
-            let json = serde_json::to_string(st).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(st).expect("serialize derived Serialize");
             let back: ImageState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*st, back);
         }
     }
@@ -1079,9 +1079,9 @@ mod tests {
     #[test]
     fn warm_start_mode_serde() {
         for mode in WarmStartMode::ALL {
-            let json = serde_json::to_string(mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(mode).expect("serialize derived Serialize");
             let back: WarmStartMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*mode, back);
         }
     }
@@ -1100,9 +1100,9 @@ mod tests {
     #[test]
     fn integrity_status_serde() {
         for s in ImageIntegrityStatus::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: ImageIntegrityStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1121,9 +1121,9 @@ mod tests {
     #[test]
     fn eviction_reason_serde() {
         for r in ImageEvictionReason::ALL {
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             let back: ImageEvictionReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, back);
         }
     }
@@ -1139,9 +1139,9 @@ mod tests {
     #[test]
     fn specimen_family_serde() {
         for fam in ImageSpecimenFamily::ALL {
-            let json = serde_json::to_string(fam).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(fam).expect("serialize derived Serialize");
             let back: ImageSpecimenFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*fam, back);
         }
     }
@@ -1165,9 +1165,9 @@ mod tests {
     #[test]
     fn manifest_serde_roundtrip() {
         let m = test_manifest("img-serde");
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: ImageManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -1362,9 +1362,8 @@ mod tests {
     #[test]
     fn policy_serde_roundtrip() {
         let p = test_policy();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: ImagePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
+        let back: ImagePolicy = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1716,9 +1715,9 @@ mod tests {
             evicted_epoch: SecurityEpoch::from_raw(42),
             bytes_freed: 9999,
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: ImageEvictionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
     }
 
@@ -1735,9 +1734,9 @@ mod tests {
             SecurityEpoch::from_raw(10),
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: ImageRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, back);
     }
 

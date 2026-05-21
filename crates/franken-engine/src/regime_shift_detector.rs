@@ -1029,9 +1029,9 @@ mod tests {
     #[test]
     fn test_serde_round_trip_config() {
         let config = make_config();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: RegimeShiftConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1044,9 +1044,9 @@ mod tests {
             ShiftSeverity::Major,
             ShiftSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             let restored: ShiftSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, restored);
         }
     }
@@ -1055,9 +1055,9 @@ mod tests {
     fn test_serde_round_trip_manifest() {
         let engine = make_engine();
         let manifest = RegimeShiftManifest::from_engine(&engine);
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let restored: RegimeShiftManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, restored);
     }
 
@@ -1067,9 +1067,9 @@ mod tests {
             stage: Some(ExecutionStage::Parse),
             reason: "test".to_string(),
         };
-        let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&action).expect("serialize derived Serialize");
         let restored: DowngradeAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(action, restored);
     }
 
@@ -1383,9 +1383,9 @@ mod tests {
         }
 
         let manifest = RegimeShiftManifest::from_engine(&engine);
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let restored: RegimeShiftManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest.summary, restored.summary);
         assert_eq!(
             manifest.recent_certificates.len(),
@@ -1425,9 +1425,9 @@ mod tests {
             MetricKind::Custom,
         ];
         for m in &metrics {
-            let json = serde_json::to_string(m).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(m).expect("serialize derived Serialize");
             let back: MetricKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*m, back);
         }
     }
@@ -1491,9 +1491,9 @@ mod tests {
             },
         ];
         for action in &actions {
-            let json = serde_json::to_string(action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(action).expect("serialize derived Serialize");
             let back: DowngradeAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*action, back);
         }
     }
@@ -1512,9 +1512,9 @@ mod tests {
             cooldown_remaining: 3,
             in_cooldown: true,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: RegimeShiftSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 }

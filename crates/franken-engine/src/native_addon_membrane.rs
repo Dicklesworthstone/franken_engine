@@ -1435,9 +1435,8 @@ mod tests {
     #[test]
     fn addon_abi_serde_roundtrip() {
         for abi in AddonAbi::ALL {
-            let json = serde_json::to_string(abi).expect("serde deserialization should succeed");
-            let back: AddonAbi =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(abi).expect("serialize derived Serialize");
+            let back: AddonAbi = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*abi, back);
         }
     }
@@ -1473,9 +1472,9 @@ mod tests {
     #[test]
     fn handle_kind_serde_roundtrip() {
         for kind in HandleKind::ALL {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: HandleKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1506,9 +1505,9 @@ mod tests {
     #[test]
     fn handle_state_serde_roundtrip() {
         for st in HandleState::ALL {
-            let json = serde_json::to_string(st).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(st).expect("serialize derived Serialize");
             let back: HandleState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*st, back);
         }
     }
@@ -1534,9 +1533,9 @@ mod tests {
     #[test]
     fn crash_containment_serde_roundtrip() {
         for mode in CrashContainmentMode::ALL {
-            let json = serde_json::to_string(mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(mode).expect("serialize derived Serialize");
             let back: CrashContainmentMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*mode, back);
         }
     }
@@ -1590,9 +1589,9 @@ mod tests {
             },
         ];
         for d in &decisions {
-            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(d).expect("serialize derived Serialize");
             let back: RouteDecision =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*d, back);
         }
     }
@@ -1624,9 +1623,9 @@ mod tests {
     #[test]
     fn capability_kind_serde_roundtrip() {
         for cap in CapabilityKind::ALL {
-            let json = serde_json::to_string(cap).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cap).expect("serialize derived Serialize");
             let back: CapabilityKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cap, back);
         }
     }
@@ -1660,9 +1659,9 @@ mod tests {
     #[test]
     fn violation_kind_serde_roundtrip() {
         for kind in ViolationKind::ALL {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: ViolationKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1693,9 +1692,9 @@ mod tests {
     #[test]
     fn membrane_verdict_serde_roundtrip() {
         for v in MembraneVerdict::ALL {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: MembraneVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1723,9 +1722,8 @@ mod tests {
     #[test]
     fn handle_record_serde_roundtrip() {
         let rec = HandleRecord::new(42, HandleKind::BufferHandle, "test", epoch(5));
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
-        let back: HandleRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
+        let back: HandleRecord = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rec, back);
     }
 
@@ -1744,9 +1742,9 @@ mod tests {
     #[test]
     fn membrane_policy_serde_roundtrip() {
         let p = MembranePolicy::default();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: MembranePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1772,9 +1770,9 @@ mod tests {
     #[test]
     fn routing_config_serde_roundtrip() {
         let r = RoutingConfig::default();
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: RoutingConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1800,9 +1798,9 @@ mod tests {
     #[test]
     fn addon_registration_serde_roundtrip() {
         let reg = make_registration("test", AddonAbi::WasiPreview1, &[CapabilityKind::Network]);
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: AddonRegistration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, back);
     }
 
@@ -1820,9 +1818,8 @@ mod tests {
     #[test]
     fn violation_serde_roundtrip() {
         let v = Violation::new(ViolationKind::AbiMismatch, "a", "b", 42);
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: Violation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
+        let back: Violation = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -2535,9 +2532,9 @@ mod tests {
         let e = MembraneError::HandleLimitExceeded {
             detail: "full".into(),
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: MembraneError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -2548,9 +2545,9 @@ mod tests {
         let s = MembraneState::new();
         let policy = default_policy();
         let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: MembraneReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -2706,9 +2703,9 @@ mod tests {
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
             .expect("serde deserialization should succeed");
         s.record_crash("a", "boom", 100);
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: MembraneState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 

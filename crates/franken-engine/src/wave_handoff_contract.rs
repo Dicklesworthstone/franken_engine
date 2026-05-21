@@ -451,11 +451,10 @@ mod tests {
         for wave in [WaveId::Wave0, WaveId::Wave1, WaveId::Wave2, WaveId::Wave3] {
             // SAFETY: WaveId derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&wave).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&wave).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid WaveId,
             // so from_str back to WaveId cannot fail (valid format + matching schema).
-            let back: WaveId =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: WaveId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(wave, back);
         }
     }
@@ -464,8 +463,7 @@ mod tests {
     fn wave_id_serde_uses_snake_case() {
         // SAFETY: WaveId derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json =
-            serde_json::to_string(&WaveId::Wave0).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&WaveId::Wave0).expect("serialize derived Serialize");
         assert_eq!(json, "\"wave0\"");
     }
 
@@ -480,12 +478,11 @@ mod tests {
         ] {
             // SAFETY: RequiredBeadStatus derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid RequiredBeadStatus,
             // so from_str back to RequiredBeadStatus cannot fail (valid format + matching schema).
             let back: RequiredBeadStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(status, back);
         }
     }
@@ -509,11 +506,11 @@ mod tests {
         };
         // SAFETY: WaveCriterion derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid WaveCriterion,
         // so from_str back to WaveCriterion cannot fail (valid format + matching schema).
         let back: WaveCriterion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -561,11 +558,11 @@ mod tests {
         let contract = WaveTransitionContract::baseline(WaveId::Wave3);
         // SAFETY: WaveTransitionContract derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid WaveTransitionContract,
         // so from_str back to WaveTransitionContract cannot fail (valid format + matching schema).
         let back: WaveTransitionContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(contract, back);
     }
 
@@ -587,9 +584,9 @@ mod tests {
     #[test]
     fn handoff_package_serde_roundtrip() {
         let pkg = HandoffPackage::baseline();
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let back: HandoffPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pkg, back);
     }
 
@@ -603,9 +600,9 @@ mod tests {
             bead_status: RequiredBeadStatus::InProgress,
             artifact_ref: "artifacts/a.json".to_string(),
         };
-        let json = serde_json::to_string(&att).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&att).expect("serialize derived Serialize");
         let back: CriterionAttestation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(att, back);
     }
 
@@ -622,9 +619,9 @@ mod tests {
             HandoffValidationErrorCode::CriterionBeadMissing,
         ];
         for code in codes {
-            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&code).expect("serialize derived Serialize");
             let back: HandoffValidationErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(code, back);
         }
     }
@@ -637,9 +634,9 @@ mod tests {
             code: HandoffValidationErrorCode::WeakHandoffPackage,
             message: "score too low".to_string(),
         };
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let back: HandoffValidationFailure =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f, back);
     }
 
@@ -659,9 +656,9 @@ mod tests {
             valid: true,
             failures: Vec::new(),
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: HandoffValidationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -681,9 +678,8 @@ mod tests {
             wave_id: "wave_1".to_string(),
             packet_id: "pkt-1".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: HandoffEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let back: HandoffEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -701,9 +697,8 @@ mod tests {
             wave_id: "wave_0".to_string(),
             packet_id: "pkt-2".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: HandoffEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let back: HandoffEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1278,7 +1273,7 @@ mod tests {
         let variants = [WaveId::Wave0, WaveId::Wave1, WaveId::Wave2, WaveId::Wave3];
         let mut seen = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             assert!(seen.insert(json.clone()), "duplicate JSON for {:?}", v);
         }
         assert_eq!(seen.len(), 4);
@@ -1293,7 +1288,7 @@ mod tests {
         ];
         let mut seen = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             assert!(seen.insert(json.clone()), "duplicate JSON for {:?}", v);
         }
         assert_eq!(seen.len(), 3);
@@ -1311,7 +1306,7 @@ mod tests {
         ];
         let mut seen = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             assert!(seen.insert(json.clone()), "duplicate JSON for {:?}", v);
         }
         assert_eq!(seen.len(), 6);
@@ -1522,9 +1517,9 @@ mod tests {
             required_artifact: "a".to_string(),
             mandatory: false,
         };
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("criterion_id"));
         assert!(obj.contains_key("bead_id"));
@@ -1537,9 +1532,9 @@ mod tests {
     #[test]
     fn wave_transition_contract_json_field_names() {
         let c = WaveTransitionContract::baseline(WaveId::Wave0);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("contract_version"));
         assert!(obj.contains_key("packet_schema_version"));
@@ -1558,9 +1553,9 @@ mod tests {
             bead_status: RequiredBeadStatus::Open,
             artifact_ref: "a".to_string(),
         };
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("criterion_id"));
         assert!(obj.contains_key("bead_id"));
@@ -1572,9 +1567,9 @@ mod tests {
     #[test]
     fn handoff_package_json_field_names() {
         let pkg = HandoffPackage::baseline();
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("packet_id"));
         assert!(obj.contains_key("wave_id"));
@@ -1595,9 +1590,9 @@ mod tests {
             code: HandoffValidationErrorCode::MissingRequiredField,
             message: "msg".to_string(),
         };
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("code"));
         assert!(obj.contains_key("message"));
@@ -1618,9 +1613,9 @@ mod tests {
             valid: true,
             failures: Vec::new(),
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("contract_version"));
         assert!(obj.contains_key("trace_id"));
@@ -1649,9 +1644,9 @@ mod tests {
             wave_id: "w".to_string(),
             packet_id: "pk".to_string(),
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("schema_version"));
         assert!(obj.contains_key("trace_id"));
@@ -1866,9 +1861,9 @@ mod tests {
     fn handoff_package_empty_criteria_attestations_serde_roundtrip() {
         let mut pkg = HandoffPackage::baseline();
         pkg.criteria_attestations.clear();
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let back: HandoffPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pkg, back);
         assert!(back.criteria_attestations.is_empty());
     }
@@ -1878,9 +1873,9 @@ mod tests {
         let mut contract = WaveTransitionContract::baseline(WaveId::Wave2);
         contract.entry_criteria.clear();
         contract.exit_criteria.clear();
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         let back: WaveTransitionContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(contract, back);
     }
 
@@ -1890,9 +1885,9 @@ mod tests {
         for i in 0..100 {
             pkg.changed_beads.push(format!("bd-gen-{}", i));
         }
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let back: HandoffPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pkg, back);
     }
 
@@ -1902,9 +1897,9 @@ mod tests {
         for i in 0..100 {
             pkg.artifact_links.push(format!("artifacts/gen/{}.json", i));
         }
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let back: HandoffPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pkg, back);
     }
 
@@ -1942,7 +1937,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
         let back: HandoffValidationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1951,15 +1946,13 @@ mod tests {
         let contract = WaveTransitionContract::baseline(WaveId::Wave1);
         let pkg = HandoffPackage::baseline();
         let (report, events) = simulate_wave_transition("t", "d", "p", &contract, &pkg);
-        let report_json =
-            serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let report_json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let report_back: HandoffValidationReport =
-            serde_json::from_str(&report_json).expect("serde deserialization should succeed");
+            serde_json::from_str(&report_json).expect("deserialize known-valid JSON");
         assert_eq!(report, report_back);
         for event in &events {
-            let ej = serde_json::to_string(event).expect("serde deserialization should succeed");
-            let eb: HandoffEvent =
-                serde_json::from_str(&ej).expect("serde deserialization should succeed");
+            let ej = serde_json::to_string(event).expect("serialize derived Serialize");
+            let eb: HandoffEvent = serde_json::from_str(&ej).expect("deserialize known-valid JSON");
             assert_eq!(*event, eb);
         }
     }
@@ -1983,9 +1976,9 @@ mod tests {
                 mandatory: true,
             });
         }
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         let back: WaveTransitionContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(contract, back);
     }
 
@@ -2003,9 +1996,9 @@ mod tests {
             wave_id: "w".to_string(),
             packet_id: "pk".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(v["error_code"].is_null());
     }
 
@@ -2023,9 +2016,9 @@ mod tests {
             wave_id: "w".to_string(),
             packet_id: "pk".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(
             v["error_code"]
                 .as_str()
@@ -2043,9 +2036,9 @@ mod tests {
             required_artifact: "artifacts/\u{4e16}\u{754c}.json".to_string(),
             mandatory: true,
         };
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: WaveCriterion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -2355,15 +2348,14 @@ mod tests {
 
     #[test]
     fn wave_id_deserialize_from_raw_json_string() {
-        let w: WaveId =
-            serde_json::from_str("\"wave2\"").expect("serde deserialization should succeed");
+        let w: WaveId = serde_json::from_str("\"wave2\"").expect("deserialize known-valid JSON");
         assert_eq!(w, WaveId::Wave2);
     }
 
     #[test]
     fn required_bead_status_deserialize_from_raw_json_string() {
         let s: RequiredBeadStatus =
-            serde_json::from_str("\"in_progress\"").expect("serde deserialization should succeed");
+            serde_json::from_str("\"in_progress\"").expect("deserialize known-valid JSON");
         assert_eq!(s, RequiredBeadStatus::InProgress);
     }
 

@@ -2121,7 +2121,7 @@ mod tests {
         for tag in SessionPhaseTag::ALL {
             let json = serde_json::to_string(tag).expect("serde serialization should succeed");
             let back: SessionPhaseTag =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*tag, back);
         }
     }
@@ -2250,7 +2250,7 @@ mod tests {
         for t in &triggers {
             let json = serde_json::to_string(t).expect("serde serialization should succeed");
             let back: TransitionTrigger =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, back);
         }
     }
@@ -2320,7 +2320,7 @@ mod tests {
         let ks = make_key_schedule();
         let json = serde_json::to_string(&ks).expect("serde serialization should succeed");
         let back: SessionKeySchedule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ks.session_id, back.session_id);
         assert_eq!(ks.derived_stages.len(), back.derived_stages.len());
     }
@@ -2442,7 +2442,7 @@ mod tests {
         ledger.check_and_record(2, 2, None);
         let json = serde_json::to_string(&ledger).expect("serde serialization should succeed");
         let back: AntiReplayLedger =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.total_accepted(), 2);
         assert_eq!(back.session_id(), "sess");
     }
@@ -2477,7 +2477,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(v).expect("serde serialization should succeed");
             let back: ReplayVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2537,7 +2537,7 @@ mod tests {
         let p = DegradedModePolicy::permissive(DegradedSeverity::PartialMacFailure);
         let json = serde_json::to_string(&p).expect("serde serialization should succeed");
         let back: DegradedModePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p.severity, back.severity);
         assert_eq!(p.allow_readonly_hostcalls, back.allow_readonly_hostcalls);
     }
@@ -2579,7 +2579,7 @@ mod tests {
         for e in &errors {
             let json = serde_json::to_string(e).expect("serde serialization should succeed");
             let back: ProtocolError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }
@@ -2858,7 +2858,7 @@ mod tests {
             .expect("serde serialization should succeed");
         let json = serde_json::to_string(&state).expect("serde serialization should succeed");
         let back: SessionProtocolState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.phase, SessionPhaseTag::Negotiating);
         assert_eq!(back.session_id, "sess-001");
     }

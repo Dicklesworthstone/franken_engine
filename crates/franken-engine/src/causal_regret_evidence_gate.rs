@@ -964,18 +964,18 @@ mod tests {
     #[test]
     fn gate_serde_roundtrip() {
         let gate = CausalRegretEvidenceGate::new();
-        let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gate).expect("serialize derived Serialize");
         let restored: CausalRegretEvidenceGate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(gate, restored);
     }
 
     #[test]
     fn config_serde_roundtrip() {
         let config = CausalRegretGateConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: CausalRegretGateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -986,9 +986,9 @@ mod tests {
         let output = gate
             .evaluate(&input)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&output).expect("serialize derived Serialize");
         let restored: GateOutput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(output, restored);
     }
 
@@ -2059,9 +2059,9 @@ mod tests {
     fn stage_thresholds_serde_roundtrip() {
         for stage in MoonshotStage::all() {
             let t = StageThresholds::for_stage(*stage);
-            let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&t).expect("serialize derived Serialize");
             let restored: StageThresholds =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(t, restored);
         }
     }
@@ -2078,9 +2078,9 @@ mod tests {
             effective_samples: 500,
             artifact_hash: ContentHash::compute(b"test"),
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let restored: EvaluationSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -2095,9 +2095,9 @@ mod tests {
             within_bound: true,
             per_round_regret_millionths: 50,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let restored: RegretSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -2106,9 +2106,9 @@ mod tests {
     #[test]
     fn demotion_history_item_serde_roundtrip() {
         let item = make_demotion(5, DemotionSeverity::Warning);
-        let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&item).expect("serialize derived Serialize");
         let restored: DemotionHistoryItem =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(item, restored);
     }
 
@@ -2127,9 +2127,9 @@ mod tests {
     #[test]
     fn gate_input_serde_roundtrip() {
         let input = basic_input(MoonshotStage::Shadow);
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let restored: GateInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, restored);
     }
 
@@ -2218,9 +2218,9 @@ mod tests {
     #[test]
     fn demotion_history_item_enrichment_serde_roundtrip() {
         let item = make_demotion(5, DemotionSeverity::Critical);
-        let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&item).expect("serialize derived Serialize");
         let back: DemotionHistoryItem =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(item, back);
     }
 
@@ -2265,9 +2265,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: BlockingReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2288,9 +2288,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: CausalRegretGateError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2299,9 +2299,8 @@ mod tests {
     fn gate_input_serde_roundtrip_empty_evaluations() {
         let mut input = basic_input(MoonshotStage::Shadow);
         input.evaluations = Vec::new();
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
-        let back: GateInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
+        let back: GateInput = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 }

@@ -1178,9 +1178,9 @@ mod tests {
             margin_millionths: -58,
         }];
         let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let parsed: OracleReleaseGateReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, parsed);
     }
 
@@ -1190,9 +1190,9 @@ mod tests {
         let evals = vec![evaluate_condition(&conditions[0], 500_000, None, None)];
         let report = build_report(SecurityEpoch::from_raw(1), "rc-1", evals);
         let bundle = build_triage_bundle(&report, &conditions);
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let parsed: TriageBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, parsed);
     }
 
@@ -1287,9 +1287,9 @@ mod tests {
     #[test]
     fn oracle_kind_serde_roundtrip() {
         for kind in OracleKind::all() {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let parsed: OracleKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, parsed);
         }
     }
@@ -1313,9 +1313,9 @@ mod tests {
             ThresholdDirection::AtMost,
             ThresholdDirection::Exactly,
         ] {
-            let json = serde_json::to_string(&dir).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&dir).expect("serialize derived Serialize");
             let parsed: ThresholdDirection =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(dir, parsed);
         }
     }
@@ -1382,9 +1382,9 @@ mod tests {
             GateVerdict::Advisory,
             GateVerdict::Inconclusive,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: GateVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(restored, v);
         }
     }
@@ -1735,9 +1735,9 @@ mod tests {
     fn gate_event_serde_roundtrip() {
         let report = build_report(SecurityEpoch::from_raw(1), "rc-1", vec![]);
         let event = build_gate_event("t-1", "d-1", &report);
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let parsed: OracleReleaseGateEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, parsed);
     }
 
@@ -1756,9 +1756,9 @@ mod tests {
             policy_ref: POLICY_ID.to_string(),
             bead_ref: Some("bd-test".to_string()),
         };
-        let json = serde_json::to_string(&condition).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&condition).expect("serialize derived Serialize");
         let parsed: OracleGateCondition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(condition, parsed);
     }
 
@@ -1769,9 +1769,9 @@ mod tests {
             TriageSeverity::Warning,
             TriageSeverity::Info,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             let parsed: TriageSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, parsed);
         }
     }

@@ -1189,9 +1189,9 @@ mod tests {
     #[test]
     fn phase_serde_roundtrip() {
         for p in AsyncModulePhase::ALL {
-            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(p).expect("serialize derived Serialize");
             let back: AsyncModulePhase =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*p, back);
         }
     }
@@ -1233,9 +1233,9 @@ mod tests {
     #[test]
     fn linkage_kind_serde_roundtrip() {
         for k in LinkageKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: LinkageKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1671,9 +1671,9 @@ mod tests {
         eval.settle_module("b.js")
             .expect("serde deserialization should succeed");
         let result = eval.finalize();
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: AsyncEvalResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -1685,9 +1685,9 @@ mod tests {
             PromiseHandle(1),
             SuspensionContext::TopLevelAwait,
         );
-        let json = serde_json::to_string(&sr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sr).expect("serialize derived Serialize");
         let back: SuspensionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sr, back);
     }
 
@@ -1709,9 +1709,9 @@ mod tests {
             },
             dead_bindings: vec![],
         };
-        let json = serde_json::to_string(&rl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rl).expect("serialize derived Serialize");
         let back: RejectionLinkage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rl, back);
     }
 
@@ -1723,9 +1723,9 @@ mod tests {
     #[test]
     fn async_eval_event_type_serde_roundtrip() {
         for t in AsyncEvalEventType::ALL {
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             let back: AsyncEvalEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, back);
         }
     }
@@ -1760,9 +1760,9 @@ mod tests {
                 },
             },
         ] {
-            let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
             let back: SuspensionContext =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(ctx, back);
         }
     }
@@ -1930,9 +1930,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: AsyncEvalError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2063,9 +2063,9 @@ mod tests {
         s.record_suspension(PromiseHandle(100), SuspensionContext::TopLevelAwait);
         s.record_resumption();
         s.add_pending_dependency("dep.js".into());
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: AsyncModuleState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -2543,9 +2543,9 @@ mod tests {
             max_total_suspensions: 50,
             transitive_rejection_propagation: false,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: AsyncEvalConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -2561,9 +2561,8 @@ mod tests {
             ],
             linkage_kind: LinkageKind::NamespaceImport,
         };
-        let json = serde_json::to_string(&lm).expect("serde deserialization should succeed");
-        let back: LinkedModule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lm).expect("serialize derived Serialize");
+        let back: LinkedModule = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lm, back);
     }
 
@@ -2577,9 +2576,9 @@ mod tests {
             seq: 42,
             detail: "binding=m.js:x".into(),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let back: AsyncEvalWitnessEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 

@@ -1758,12 +1758,11 @@ mod tests {
         for profile in [StressProfile::Balanced, StressProfile::SyntheticContention] {
             // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json =
-                serde_json::to_string(&profile).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&profile).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid StressProfile,
             // so from_str back to StressProfile cannot fail (valid format + matching schema).
             let deserialized: StressProfile =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(deserialized, profile);
         }
     }
@@ -1790,10 +1789,10 @@ mod tests {
             GuardrailState::FallbackEngaged,
         ] {
             // SAFETY: GuardrailState derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid GuardrailState serialization
             let deserialized: GuardrailState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(deserialized, state);
         }
     }
@@ -1826,9 +1825,9 @@ mod tests {
             queue_adjusted_p99_ns: 350,
             queue_adjusted_p999_ns: 450,
         };
-        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bounds).expect("serialize derived Serialize");
         let deserialized: EndToEndLatencyBounds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, bounds);
     }
 
@@ -1844,10 +1843,9 @@ mod tests {
             gc_p99_ns: 800,
             gc_p999_ns: 1200,
         };
-        let json =
-            serde_json::to_string(&decomposition).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decomposition).expect("serialize derived Serialize");
         let deserialized: TailLatencyDecomposition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, decomposition);
     }
 
@@ -1867,9 +1865,9 @@ mod tests {
             shed_count: 5,
             violated_stage_count: 2,
         };
-        let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&status).expect("serialize derived Serialize");
         let deserialized: RuntimeGuardrailStatus =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, status);
     }
 
@@ -1887,9 +1885,9 @@ mod tests {
             env_json: "env.json".to_string(),
             repro_lock: "repro.lock".to_string(),
         };
-        let json = serde_json::to_string(&paths).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&paths).expect("serialize derived Serialize");
         let deserialized: TailLatencyControlPlaneArtifactPaths =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, paths);
     }
 
@@ -1944,9 +1942,9 @@ mod tests {
             report_hash: "abcdef0123456789".to_string(),
             profile: StressProfile::Balanced,
         };
-        let json = serde_json::to_string(&trace_ids).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&trace_ids).expect("serialize derived Serialize");
         let deserialized: TailLatencyControlPlaneTraceIds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, trace_ids);
     }
 
@@ -1963,10 +1961,9 @@ mod tests {
             stage: Some("parse".to_string()),
             detail: Some("p99=100ns".to_string()),
         };
-        let json =
-            serde_json::to_string(&event_full).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event_full).expect("serialize derived Serialize");
         let deserialized: TailLatencyControlPlaneEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, event_full);
     }
 
@@ -1983,12 +1980,12 @@ mod tests {
             stage: None,
             detail: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(!json.contains("stage"));
         assert!(!json.contains("detail"));
         // Roundtrip still works
         let deserialized: TailLatencyControlPlaneEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, event);
     }
 
@@ -2270,7 +2267,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
         let deserialized: TailLatencyControlPlaneReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized.schema_version, report.schema_version);
         assert_eq!(deserialized.profile, report.profile);
         assert_eq!(deserialized.bundle_epoch, report.bundle_epoch);
@@ -2290,10 +2287,9 @@ mod tests {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
             .expect("serde deserialization should succeed");
         let calibration = &report.stage_calibrations[0];
-        let json =
-            serde_json::to_string(calibration).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(calibration).expect("serialize derived Serialize");
         let deserialized: StageQueueCalibration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(&deserialized, calibration);
     }
 
@@ -2327,10 +2323,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         let report_b = build_tail_latency_control_plane_report(StressProfile::Balanced, 99)
             .expect("serde deserialization should succeed");
-        let json_a =
-            serde_json::to_string(&report_a).expect("serde deserialization should succeed");
-        let json_b =
-            serde_json::to_string(&report_b).expect("serde deserialization should succeed");
+        let json_a = serde_json::to_string(&report_a).expect("serialize derived Serialize");
+        let json_b = serde_json::to_string(&report_b).expect("serialize derived Serialize");
         assert_eq!(json_a, json_b);
     }
 

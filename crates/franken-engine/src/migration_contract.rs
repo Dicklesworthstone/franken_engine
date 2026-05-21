@@ -1465,9 +1465,9 @@ mod tests {
             CutoverType::SoftMigration,
             CutoverType::ParallelRun,
         ] {
-            let json = serde_json::to_string(&ct).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&ct).expect("serialize derived Serialize");
             let deser: CutoverType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(ct, deser);
         }
     }
@@ -1475,9 +1475,9 @@ mod tests {
     #[test]
     fn object_class_serde_roundtrip() {
         for oc in ObjectClass::ALL {
-            let json = serde_json::to_string(&oc).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&oc).expect("serialize derived Serialize");
             let deser: ObjectClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(oc, deser);
         }
     }
@@ -1497,9 +1497,9 @@ mod tests {
             MigrationState::RollingBack,
             MigrationState::RolledBack,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let deser: MigrationState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, deser);
         }
     }
@@ -1507,9 +1507,9 @@ mod tests {
     #[test]
     fn migration_declaration_serde_roundtrip() {
         let decl = make_declaration("m-1", CutoverType::HardCutover);
-        let json = serde_json::to_string(&decl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decl).expect("serialize derived Serialize");
         let deser: MigrationDeclaration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decl, deser);
     }
 
@@ -1528,9 +1528,9 @@ mod tests {
             to_version: Some("v2".to_string()),
             timestamp: DeterministicTimestamp(42),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let deser: MigrationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, deser);
     }
 
@@ -1563,9 +1563,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let deser: MigrationContractError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, deser);
         }
     }
@@ -1581,9 +1581,9 @@ mod tests {
             applied_at: DeterministicTimestamp(42),
             checkpoint_seq: 10,
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let deser: AppliedMigrationRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, deser);
     }
 
@@ -1757,7 +1757,7 @@ mod tests {
             runner.set_tick(0);
             run_full_pipeline(&mut runner, "m-1", CutoverType::HardCutover);
             let events = runner.drain_events();
-            serde_json::to_string(&events).expect("serde deserialization should succeed")
+            serde_json::to_string(&events).expect("serialize derived Serialize")
         };
         assert_eq!(run(), run());
     }
@@ -2122,7 +2122,7 @@ mod tests {
             CutoverType::ParallelRun,
         ]
         .iter()
-        .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+        .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(jsons.len(), 3);
     }
@@ -2131,7 +2131,7 @@ mod tests {
     fn object_class_serde_variant_distinct() {
         let jsons: std::collections::BTreeSet<String> = ObjectClass::ALL
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 8);
     }
@@ -2148,7 +2148,7 @@ mod tests {
         ];
         let jsons: std::collections::BTreeSet<String> = all
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 6);
     }
@@ -2170,7 +2170,7 @@ mod tests {
         ];
         let jsons: std::collections::BTreeSet<String> = all
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 11);
     }
@@ -2268,7 +2268,7 @@ mod tests {
     #[test]
     fn migration_declaration_json_field_names() {
         let decl = make_declaration("m-1", CutoverType::HardCutover);
-        let json = serde_json::to_string(&decl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decl).expect("serialize derived Serialize");
         assert!(json.contains("\"migration_id\""));
         assert!(json.contains("\"from_version\""));
         assert!(json.contains("\"to_version\""));
@@ -2295,7 +2295,7 @@ mod tests {
             to_version: Some("v2".to_string()),
             timestamp: DeterministicTimestamp(0),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"component\""));
         assert!(json.contains("\"event\""));
@@ -2312,7 +2312,7 @@ mod tests {
     #[test]
     fn dry_run_result_json_field_names() {
         let dr = passing_dry_run("m-1");
-        let json = serde_json::to_string(&dr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dr).expect("serialize derived Serialize");
         assert!(json.contains("\"migration_id\""));
         assert!(json.contains("\"total_objects\""));
         assert!(json.contains("\"convertible\""));
@@ -2323,7 +2323,7 @@ mod tests {
     #[test]
     fn verification_result_json_field_names() {
         let vr = passing_verification("m-1");
-        let json = serde_json::to_string(&vr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&vr).expect("serialize derived Serialize");
         assert!(json.contains("\"migration_id\""));
         assert!(json.contains("\"objects_checked\""));
         assert!(json.contains("\"discrepancies\""));
@@ -2341,7 +2341,7 @@ mod tests {
             applied_at: DeterministicTimestamp(42),
             checkpoint_seq: 10,
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         assert!(json.contains("\"migration_id\""));
         assert!(json.contains("\"from_version\""));
         assert!(json.contains("\"to_version\""));
@@ -2543,9 +2543,9 @@ mod tests {
             incompatible_across: Vec::new(),
             transition_end_tick: None,
         };
-        let json = serde_json::to_string(&decl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decl).expect("serialize derived Serialize");
         let deser: MigrationDeclaration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decl, deser);
     }
 
@@ -2562,9 +2562,9 @@ mod tests {
             incompatible_across: Vec::new(),
             transition_end_tick: Some(u64::MAX),
         };
-        let json = serde_json::to_string(&decl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decl).expect("serialize derived Serialize");
         let deser: MigrationDeclaration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser.transition_end_tick, Some(u64::MAX));
     }
 
@@ -2675,9 +2675,9 @@ mod tests {
             unconvertible: 10,
             details: vec!["err1".to_string(), "err2".to_string()],
         };
-        let json = serde_json::to_string(&dr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dr).expect("serialize derived Serialize");
         let deser: DryRunResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(dr, deser);
     }
 
@@ -2689,18 +2689,18 @@ mod tests {
             discrepancies: 3,
             details: vec!["mismatch at obj-7".to_string()],
         };
-        let json = serde_json::to_string(&vr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&vr).expect("serialize derived Serialize");
         let deser: VerificationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(vr, deser);
     }
 
     #[test]
     fn migration_declaration_soft_serde_roundtrip() {
         let decl = make_declaration("m-soft", CutoverType::SoftMigration);
-        let json = serde_json::to_string(&decl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decl).expect("serialize derived Serialize");
         let deser: MigrationDeclaration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decl, deser);
         assert_eq!(deser.transition_end_tick, Some(1000));
     }
@@ -2720,25 +2720,25 @@ mod tests {
             to_version: None,
             timestamp: DeterministicTimestamp(0),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let deser: MigrationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, deser);
     }
 
     #[test]
     fn migration_step_serde_roundtrip() {
         for step in MigrationStep::FORWARD_PIPELINE {
-            let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&step).expect("serialize derived Serialize");
             let deser: MigrationStep =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(step, deser);
         }
         // Also test Rollback
         let json = serde_json::to_string(&MigrationStep::Rollback)
             .expect("serde deserialization should succeed");
         let deser: MigrationStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(MigrationStep::Rollback, deser);
     }
 
@@ -2749,9 +2749,9 @@ mod tests {
             discrepancy_count: 42,
             detail: "field mismatch".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let deser: MigrationContractError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, deser);
     }
 
@@ -2761,9 +2761,9 @@ mod tests {
             migration_id: "m-par".to_string(),
             discrepancy_count: 99,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let deser: MigrationContractError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, deser);
     }
 

@@ -939,9 +939,9 @@ mod tests {
     #[test]
     fn execution_wave_serde_roundtrip() {
         for wave in ExecutionWave::ALL {
-            let json = serde_json::to_string(&wave).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&wave).expect("serialize derived Serialize");
             let back: ExecutionWave =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(wave, back);
         }
     }
@@ -996,9 +996,9 @@ mod tests {
             entry_criteria: vec!["c1".to_string()],
             exit_criteria: vec!["c2".to_string()],
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: WavePlanEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1012,9 +1012,9 @@ mod tests {
             renew_before_seconds: 900,
             max_paths_per_claim: 12,
         };
-        let json = serde_json::to_string(&proto).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proto).expect("serialize derived Serialize");
         let back: FileReservationProtocol =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(proto, back);
     }
 
@@ -1027,9 +1027,9 @@ mod tests {
             urgent_poll_interval_seconds: 30,
             ack_required_within_seconds: 300,
         };
-        let json = serde_json::to_string(&proto).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proto).expect("serialize derived Serialize");
         let back: AgentMailProtocol =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(proto, back);
     }
 
@@ -1043,9 +1043,9 @@ mod tests {
             reassign_after_seconds: 2700,
             split_after_seconds: 3600,
         };
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: AntiStallThresholds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 
@@ -1070,10 +1070,9 @@ mod tests {
             AntiStallAction::Split,
         ];
         for action in actions {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let back: AntiStallAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, back);
         }
     }
@@ -1150,9 +1149,9 @@ mod tests {
     #[test]
     fn coordination_event_serde_roundtrip() {
         let event = CoordinationEvent::pass("t", "d", "p", "e");
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: CoordinationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1164,9 +1163,9 @@ mod tests {
             action: AntiStallAction::Warn,
             events: vec![CoordinationEvent::pass("t", "d", "p", "test")],
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: CoordinationDryRunReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1609,9 +1608,9 @@ mod tests {
     #[test]
     fn default_handoff_package_serde_roundtrip() {
         let package = default_wave_handoff_package();
-        let json = serde_json::to_string(&package).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&package).expect("serialize derived Serialize");
         let back: WaveHandoffPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(package, back);
     }
 
@@ -1628,9 +1627,9 @@ mod tests {
     #[test]
     fn default_protocol_serde_roundtrip() {
         let protocol = default_rgc_execution_wave_protocol();
-        let json = serde_json::to_string(&protocol).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&protocol).expect("serialize derived Serialize");
         let back: ExecutionWaveProtocol =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(protocol, back);
     }
 
@@ -1693,10 +1692,9 @@ mod tests {
             },
         ];
         for variant in variants {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: CoordinationValidationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }

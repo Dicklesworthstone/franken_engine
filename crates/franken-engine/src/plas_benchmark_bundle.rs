@@ -1193,10 +1193,9 @@ mod tests {
     #[test]
     fn cohort_serde_roundtrip() {
         for variant in PlasBenchmarkCohort::all() {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: PlasBenchmarkCohort =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1297,9 +1296,9 @@ mod tests {
     #[test]
     fn thresholds_serde_roundtrip() {
         let t = PlasBenchmarkThresholds::default();
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: PlasBenchmarkThresholds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 
@@ -1357,9 +1356,9 @@ mod tests {
     #[test]
     fn sample_serde_roundtrip() {
         let s = sample("ext-1", PlasBenchmarkCohort::Simple);
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: PlasBenchmarkExtensionSample =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -1832,7 +1831,7 @@ mod tests {
             .to_json_pretty()
             .expect("serde deserialization should succeed");
         let back: PlasBenchmarkBundleDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
     }
 
@@ -1914,9 +1913,9 @@ mod tests {
     #[test]
     fn plas_benchmark_cohort_serde_all_variants() {
         for v in PlasBenchmarkCohort::all() {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: PlasBenchmarkCohort =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }

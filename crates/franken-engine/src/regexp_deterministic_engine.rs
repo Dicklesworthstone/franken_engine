@@ -1251,7 +1251,7 @@ pub fn compile_regexp(
         pattern,
         nfa_state_count,
         tier.as_str(),
-        serde_json::to_string(&flags).expect("serde deserialization should succeed"),
+        serde_json::to_string(&flags).expect("serialize derived Serialize"),
         epoch.as_u64()
     );
     let automata_hash = hex_encode(ContentHash::compute(automata_hash_input.as_bytes()).as_bytes());
@@ -1879,10 +1879,9 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
             let ast = make_simple_ast();
             let compiled = compile_regexp("a", &empty_flags, &ast, &config, epoch)
                 .expect("serde deserialization should succeed");
-            let json =
-                serde_json::to_string(&compiled).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&compiled).expect("serialize derived Serialize");
             let deser: CompiledRegExp =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             actual = format!("match={}", compiled == deser);
             if compiled != deser {
                 verdict = RegExpVerdict::Fail;
@@ -1900,7 +1899,7 @@ fn run_single_regexp_specimen(specimen: &RegExpSpecimen) -> RegExpSpecimenEviden
         "evidence:{}:{}:{}",
         specimen.specimen_id,
         actual,
-        serde_json::to_string(&verdict).expect("serde deserialization should succeed"),
+        serde_json::to_string(&verdict).expect("serialize derived Serialize"),
     );
 
     RegExpSpecimenEvidence {
@@ -2502,18 +2501,18 @@ mod tests {
         let flags = BTreeSet::new();
         let compiled = compile_regexp("a", &flags, &ast, &config, epoch)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&compiled).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&compiled).expect("serialize derived Serialize");
         let deser: CompiledRegExp =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(compiled, deser);
     }
 
     #[test]
     fn test_serde_cache() {
         let cache = AutomataCache::new(10);
-        let json = serde_json::to_string(&cache).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cache).expect("serialize derived Serialize");
         let deser: AutomataCache =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser.capacity, 10);
     }
 
@@ -2525,19 +2524,18 @@ mod tests {
         let flags = BTreeSet::new();
         let compiled = compile_regexp("a", &flags, &ast, &config, epoch)
             .expect("serde deserialization should succeed");
-        let json =
-            serde_json::to_string(&compiled.receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&compiled.receipt).expect("serialize derived Serialize");
         let deser: CompilationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(compiled.receipt, deser);
     }
 
     #[test]
     fn test_serde_tail_risk() {
         let risk = TailRiskAssessment::safe();
-        let json = serde_json::to_string(&risk).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&risk).expect("serialize derived Serialize");
         let deser: TailRiskAssessment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(risk, deser);
     }
 

@@ -1237,9 +1237,9 @@ mod tests {
     #[test]
     fn compile_mode_serde_roundtrip() {
         for m in CompileMode::ALL {
-            let json = serde_json::to_string(m).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(m).expect("serialize derived Serialize");
             let back: CompileMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*m, back);
         }
     }
@@ -1269,9 +1269,9 @@ mod tests {
     #[test]
     fn artifact_kind_serde() {
         for k in ArtifactKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: ArtifactKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1293,9 +1293,9 @@ mod tests {
     #[test]
     fn diagnostic_severity_serde() {
         for s in DiagnosticSeverity::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: DiagnosticSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1333,9 +1333,9 @@ mod tests {
     #[test]
     fn compile_surface_serde() {
         for s in CompileSurface::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: CompileSurface =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1365,9 +1365,9 @@ mod tests {
     #[test]
     fn mismatch_kind_serde() {
         for k in MismatchKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: MismatchKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1389,9 +1389,9 @@ mod tests {
     #[test]
     fn verdict_serde() {
         for v in VerificationVerdict::ALL {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: VerificationVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1436,9 +1436,9 @@ mod tests {
     #[test]
     fn diagnostic_serde_roundtrip() {
         let d = make_diagnostic("hello", DiagnosticSeverity::Info);
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: CompileDiagnostic =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -1461,9 +1461,9 @@ mod tests {
     #[test]
     fn artifact_serde_roundtrip() {
         let a = make_artifact(ArtifactKind::BundleManifest, b"manifest");
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let back: CompileArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -1538,9 +1538,9 @@ mod tests {
             vec![make_artifact(ArtifactKind::CompiledOutput, b"code")],
             vec![make_diagnostic("w", DiagnosticSeverity::Warning)],
         );
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: CompileResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1578,9 +1578,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = default_config();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: VerificationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1903,9 +1903,9 @@ mod tests {
             &epoch(),
             0,
         );
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -2010,9 +2010,8 @@ mod tests {
             detail: "size off".into(),
             severity: DiagnosticSeverity::Info,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: Mismatch =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
+        let back: Mismatch = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -2177,9 +2176,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let back: VerificationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }

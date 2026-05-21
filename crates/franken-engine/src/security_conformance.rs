@@ -1434,7 +1434,7 @@ label_sha256 = "{hash}"
             .expect("serde serialization should succeed");
         assert_eq!(json, "\"benign\"");
         let back: SecurityCorpus =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, SecurityCorpus::Benign);
     }
 
@@ -1444,7 +1444,7 @@ label_sha256 = "{hash}"
             .expect("serde serialization should succeed");
         assert_eq!(json, "\"malicious\"");
         let back: SecurityCorpus =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, SecurityCorpus::Malicious);
     }
 
@@ -1479,7 +1479,7 @@ label_sha256 = "{hash}"
         for variant in variants {
             let json = serde_json::to_string(&variant).expect("serde serialization should succeed");
             let back: SecurityAttackTaxonomy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, variant);
             assert_eq!(json.trim_matches('"'), variant.as_str());
         }
@@ -1526,7 +1526,7 @@ label_sha256 = "{hash}"
         for variant in variants {
             let json = serde_json::to_string(&variant).expect("serde serialization should succeed");
             let back: SecurityOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, variant);
             assert_eq!(json.trim_matches('"'), variant.as_str());
         }
@@ -1762,7 +1762,7 @@ label_sha256 = "{hash}"
         let obs = valid_observation();
         let json = serde_json::to_string(&obs).expect("serde serialization should succeed");
         let back: SecurityWorkloadObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.workload_id, obs.workload_id);
         assert_eq!(back.actual_outcome, obs.actual_outcome);
         assert_eq!(back.detection_latency_us, obs.detection_latency_us);
@@ -1789,7 +1789,7 @@ label_sha256 = "{hash}"
         let t = SecurityConformanceThresholds::default();
         let json = serde_json::to_string(&t).expect("serde serialization should succeed");
         let back: SecurityConformanceThresholds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, t);
     }
 
@@ -1834,7 +1834,7 @@ label_sha256 = "{hash}"
         };
         let json = serde_json::to_string(&ci).expect("serde serialization should succeed");
         let back: BinomialConfidenceInterval =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, ci);
     }
 
@@ -2705,7 +2705,7 @@ label_sha256 = "{hash}"
         let label = valid_benign_label();
         let json = serde_json::to_string(&label).expect("serde serialization should succeed");
         let back: SecurityWorkloadLabel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, label);
     }
 
@@ -2714,7 +2714,7 @@ label_sha256 = "{hash}"
         let label = valid_malicious_label();
         let json = serde_json::to_string(&label).expect("serde serialization should succeed");
         let back: SecurityWorkloadLabel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, label);
     }
 
@@ -2809,7 +2809,7 @@ semantic_domain = "security/benign"
         };
         let json = serde_json::to_string(&summary).expect("serde serialization should succeed");
         let back: SecurityConformanceSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, summary);
     }
 

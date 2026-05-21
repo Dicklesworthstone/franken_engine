@@ -1284,9 +1284,9 @@ mod tests {
             FlamegraphKind::DiffCpu,
             FlamegraphKind::DiffAllocation,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let back: FlamegraphKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -1298,9 +1298,9 @@ mod tests {
             stack: "main;foo;bar".to_string(),
             sample_count: 42,
         };
-        let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sample).expect("serialize derived Serialize");
         let back: FoldedStackSample =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sample, back);
     }
 
@@ -1313,9 +1313,9 @@ mod tests {
             candidate_samples: 120,
             delta_samples: 20,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: FlamegraphDiffEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1323,9 +1323,9 @@ mod tests {
     #[test]
     fn flamegraph_metadata_serde_round_trip() {
         let meta = test_metadata();
-        let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&meta).expect("serialize derived Serialize");
         let back: FlamegraphMetadata =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(meta, back);
     }
 
@@ -1333,9 +1333,9 @@ mod tests {
     #[test]
     fn flamegraph_evidence_link_serde_round_trip() {
         let link = test_evidence_link();
-        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&link).expect("serialize derived Serialize");
         let back: FlamegraphEvidenceLink =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(link, back);
     }
 
@@ -1353,9 +1353,9 @@ mod tests {
             artifact_id: Some("art1".to_string()),
             flamegraph_kind: Some("cpu".to_string()),
         };
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
         let back: FlamegraphPipelineEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evt, back);
     }
 
@@ -2051,9 +2051,9 @@ mod tests {
             FlamegraphKind::DiffAllocation,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: FlamegraphKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -2087,9 +2087,9 @@ mod tests {
             stack: "main;foo;bar".to_string(),
             sample_count: 42,
         };
-        let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sample).expect("serialize derived Serialize");
         let back: FoldedStackSample =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, sample);
     }
 
@@ -2101,18 +2101,18 @@ mod tests {
             candidate_samples: 120,
             delta_samples: 20,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: FlamegraphDiffEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, entry);
     }
 
     #[test]
     fn flamegraph_query_default_serde_roundtrip() {
         let query = FlamegraphQuery::default();
-        let json = serde_json::to_string(&query).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&query).expect("serialize derived Serialize");
         let back: FlamegraphQuery =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, query);
         assert!(back.benchmark_run_id.is_none());
         assert!(back.limit.is_none());

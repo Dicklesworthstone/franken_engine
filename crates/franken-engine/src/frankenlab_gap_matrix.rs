@@ -1528,10 +1528,10 @@ mod tests {
     fn lab_surface_kind_serde_roundtrip() {
         for s in LabSurfaceKind::ALL {
             // SAFETY: LabSurfaceKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid LabSurfaceKind serialization
             let s2: LabSurfaceKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, s2);
         }
     }
@@ -1560,10 +1560,10 @@ mod tests {
     fn upstream_capability_serde_roundtrip() {
         for c in UpstreamCapability::ALL {
             // SAFETY: UpstreamCapability derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&c).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid UpstreamCapability serialization
             let c2: UpstreamCapability =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(c, c2);
         }
     }
@@ -1587,10 +1587,9 @@ mod tests {
             GapStatus::Redundant,
         ] {
             // SAFETY: GapStatus derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid GapStatus serialization
-            let s2: GapStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let s2: GapStatus = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, s2);
         }
     }
@@ -1631,9 +1630,9 @@ mod tests {
             MigrationDecision::NoMigration,
             MigrationDecision::Deferred,
         ] {
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             let d2: MigrationDecision =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, d2);
         }
     }
@@ -1683,9 +1682,9 @@ mod tests {
             rationale: "partial coverage".to_string(),
             confidence_millionths: 750_000,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let entry2: GapMatrixEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, entry2);
     }
 
@@ -1876,9 +1875,8 @@ mod tests {
     #[test]
     fn gap_matrix_serde_roundtrip() {
         let m = build_canonical_gap_matrix(SecurityEpoch::from_raw(1));
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let m2: GapMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
+        let m2: GapMatrix = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, m2);
     }
 
@@ -2026,9 +2024,9 @@ mod tests {
             redundant_count: 10,
             overall_coverage_millionths: 450_000,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let s2: GapCoverageSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, s2);
     }
 
@@ -2045,9 +2043,8 @@ mod tests {
             defer: vec![],
             recommendation: "test".to_string(),
         };
-        let json = serde_json::to_string(&plan).expect("serde deserialization should succeed");
-        let p2: MigrationPlan =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&plan).expect("serialize derived Serialize");
+        let p2: MigrationPlan = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(plan, p2);
     }
 }

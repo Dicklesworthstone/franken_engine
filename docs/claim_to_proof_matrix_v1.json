@@ -173,9 +173,9 @@
       "reason": "Promoted to OBSERVED under bd-cixqu.4.4 after D.1 (repro.lock audit), D.2 (backfill: 9/9 OBSERVED rows have repro.lock partners), and D.3 (gate now fail-closed on missing repro.lock per ClaimMatrixError::MissingReproducibilityBundle). Reproducibility bundle at artifacts/reproducibility_bundles/FE-CLAIM-009/ self-attests via env.json + manifest.json + repro.lock per docs/REPRODUCIBILITY_CONTRACT.md.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 213,
+        "end_line": 214,
         "must_contain": "No artifact, no claim.",
-        "start_line": 213
+        "start_line": 214
       },
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },
@@ -433,9 +433,9 @@
       "reason": "Complete lockstep oracle pipeline implemented (I.1-I.4) with Node/Bun runtime integration, divergence classification taxonomy, RGC gate script, replay wrapper, and operator documentation.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 1377,
+        "end_line": 1378,
         "must_contain": "Cross-runtime lockstep oracle",
-        "start_line": 1377
+        "start_line": 1378
       },
       "verification_command": "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci"
     },

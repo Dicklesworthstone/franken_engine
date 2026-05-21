@@ -4333,9 +4333,9 @@ mod tests {
     #[test]
     fn canonical_inventory_serde_roundtrip() {
         let inv = build_canonical_inventory();
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         let inv2: MockInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv, inv2);
     }
 
@@ -4497,9 +4497,9 @@ mod tests {
     #[test]
     fn classification_serde_roundtrip() {
         let c = SeamClassification::MustFixProduction;
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let c2: SeamClassification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, c2);
     }
 
@@ -4511,9 +4511,8 @@ mod tests {
             SeamKind::HardcodedBudget,
             SeamKind::UnguardedMockModule,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let k2: SeamKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
+            let k2: SeamKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, k2);
         }
     }
@@ -4527,9 +4526,9 @@ mod tests {
             SeamSeverity::High,
             SeamSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             let s2: SeamSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, s2);
         }
     }
@@ -4543,9 +4542,9 @@ mod tests {
             RemediationStrategy::AddCfgTestGuard,
             RemediationStrategy::NoAction,
         ] {
-            let json = serde_json::to_string(&rem).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&rem).expect("serialize derived Serialize");
             let r2: RemediationStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(rem, r2);
         }
     }
@@ -4553,9 +4552,9 @@ mod tests {
     #[test]
     fn occurrence_serde_roundtrip() {
         let occ = sample_occurrence("a.rs", 10, SeamClassification::MustFixProduction);
-        let json = serde_json::to_string(&occ).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&occ).expect("serialize derived Serialize");
         let occ2: SeamOccurrence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(occ, occ2);
     }
 
@@ -5235,9 +5234,9 @@ fn prod() { let _ = real_cx(); }
             original_hash: "abc".to_string(),
             rescan_hash: "abc".to_string(),
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: InventoryFreshnessResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 

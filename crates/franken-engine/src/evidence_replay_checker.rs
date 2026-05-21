@@ -1170,10 +1170,10 @@ mod tests {
     fn violation_type_serde_roundtrip() {
         let vt = ReplayViolationType::ChainHashMismatch;
         // SAFETY: ReplayViolationType derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&vt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&vt).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ReplayViolationType serialization
         let back: ReplayViolationType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(vt, back);
     }
 
@@ -1193,10 +1193,9 @@ mod tests {
     fn config_serde_roundtrip() {
         let cfg = ReplayConfig::default();
         // SAFETY: ReplayConfig derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ReplayConfig serialization
-        let back: ReplayConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -1565,10 +1564,9 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let result = checker.replay(&ledger, None);
         // SAFETY: ReplayResult derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ReplayResult serialization
-        let back: ReplayResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ReplayResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -1583,9 +1581,9 @@ mod tests {
             expected: Some("a".to_string()),
             actual: Some("b".to_string()),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ReplayViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1600,9 +1598,8 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: ReplayEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
+        let back: ReplayEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1826,9 +1823,9 @@ mod tests {
             artifact.validation_mode,
             ReplayValidationMode::StructuralOnly
         );
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: ReplayEvidenceArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1965,9 +1962,9 @@ mod tests {
         );
         assert!(!manifest.decision_replay_executed);
         assert_eq!(manifest.outcome_checked_count, 0);
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: ReplayManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
     }
 
@@ -2182,9 +2179,8 @@ mod tests {
         };
         config.allowed_policy_ids.insert("p1".to_string());
         config.allowed_policy_ids.insert("p2".to_string());
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: ReplayConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
+        let back: ReplayConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -2262,7 +2258,7 @@ mod tests {
         let json = serde_json::to_string(&result.diagnostics)
             .expect("serde deserialization should succeed");
         let back: ReplayDiagnostics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.diagnostics, back);
     }
 
@@ -2324,9 +2320,9 @@ mod tests {
     fn checker_serde_roundtrip() {
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         checker.set_epoch(SecurityEpoch::from_raw(42));
-        let json = serde_json::to_string(&checker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&checker).expect("serialize derived Serialize");
         let back: EvidenceReplayChecker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(checker.config(), back.config());
         assert_eq!(checker.events().len(), back.events().len());
     }
@@ -2376,9 +2372,9 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let artifact = checker.replay_and_collect(&ledger, Some(&replay));
         assert!(!artifact.gate_passed);
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: ReplayEvidenceArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -2435,9 +2431,9 @@ mod tests {
             ReplayErrorCode::EpochRegression,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ReplayErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 12);
@@ -2460,9 +2456,9 @@ mod tests {
             ReplayViolationType::EpochRegression,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ReplayViolationType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 12);

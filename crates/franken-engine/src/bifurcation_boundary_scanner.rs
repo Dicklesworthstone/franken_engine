@@ -1333,9 +1333,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = ScannerConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: ScannerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1345,9 +1345,8 @@ mod tests {
         let result = scanner
             .scan()
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: ScanResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
+        let back: ScanResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.artifact_hash, back.artifact_hash);
         assert_eq!(result.parameters_scanned, back.parameters_scanned);
     }
@@ -1370,9 +1369,9 @@ mod tests {
             ScannerError::InvalidRiskBudget { value: -1 },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: ScannerError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1566,9 +1565,9 @@ mod tests {
             ParameterDomain::SafetyBoundary,
             ParameterDomain::Environment,
         ] {
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             let back: ParameterDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, back);
         }
     }
@@ -1587,9 +1586,9 @@ mod tests {
             BifurcationType::Catastrophic,
             BifurcationType::Gradual,
         ] {
-            let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&t).expect("serialize derived Serialize");
             let back: BifurcationType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(t, back);
         }
     }
@@ -1610,9 +1609,9 @@ mod tests {
             },
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let back: ScannerError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, back);
         }
     }
@@ -1624,9 +1623,9 @@ mod tests {
     #[test]
     fn control_parameter_serde_roundtrip() {
         let p = make_param("test", 500_000);
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: ControlParameter =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1643,9 +1642,9 @@ mod tests {
             epoch: crate::security_epoch::SecurityEpoch::from_raw(7),
             record_stability_maps: true,
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: ScannerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1751,7 +1750,7 @@ mod tests {
         let result = scanner
             .scan()
             .expect("serde deserialization should succeed");
-        let j = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(j.contains("\"schema_version\""));
         assert!(j.contains("\"stability_score_millionths\""));
         assert!(j.contains("\"artifact_hash\""));
@@ -1769,7 +1768,7 @@ mod tests {
             trigger_risk_millionths: 700_000,
             rationale: "json-test".to_string(),
         };
-        let j = serde_json::to_string(&action).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&action).expect("serialize derived Serialize");
         assert!(j.contains("\"action_id\""));
         assert!(j.contains("\"trigger_indicator_id\""));
         assert!(j.contains("\"rationale\""));
@@ -1785,7 +1784,7 @@ mod tests {
             regime_after: RegimeLabel::Attack,
             confidence_millionths: 900_000,
         };
-        let j = serde_json::to_string(&bp).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&bp).expect("serialize derived Serialize");
         assert!(j.contains("\"parameter_id\""));
         assert!(j.contains("\"critical_value_millionths\""));
         assert!(j.contains("\"bifurcation_type\""));
@@ -1883,9 +1882,9 @@ mod tests {
             regime: RegimeLabel::Elevated,
             stability_millionths: 200_000,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: StabilityMapEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1900,9 +1899,9 @@ mod tests {
             trend_millionths: 15_000,
             observation_count: 30,
         };
-        let json = serde_json::to_string(&ewi).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ewi).expect("serialize derived Serialize");
         let back: EarlyWarningIndicator =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ewi, back);
     }
 
@@ -1917,9 +1916,9 @@ mod tests {
             trigger_risk_millionths: 800_000,
             rationale: "serde roundtrip test".to_string(),
         };
-        let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&action).expect("serialize derived Serialize");
         let back: PreemptiveAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(action, back);
     }
 
@@ -1931,9 +1930,9 @@ mod tests {
             tick: 42,
             regime: RegimeLabel::Normal,
         };
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         let back: ParameterObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, back);
     }
 
@@ -1947,9 +1946,9 @@ mod tests {
             regime_after: RegimeLabel::Degraded,
             confidence_millionths: 850_000,
         };
-        let json = serde_json::to_string(&bp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bp).expect("serialize derived Serialize");
         let back: BifurcationPoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bp, back);
     }
 
@@ -1960,7 +1959,7 @@ mod tests {
     #[test]
     fn enrichment_json_field_presence_control_parameter() {
         let p = make_param("cp-json", 500_000);
-        let j = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&p).expect("serialize derived Serialize");
         assert!(j.contains("\"id\""));
         assert!(j.contains("\"label\""));
         assert!(j.contains("\"domain\""));
@@ -1979,7 +1978,7 @@ mod tests {
             trend_millionths: 0,
             observation_count: 5,
         };
-        let j = serde_json::to_string(&ewi).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&ewi).expect("serialize derived Serialize");
         assert!(j.contains("\"indicator_id\""));
         assert!(j.contains("\"risk_value_millionths\""));
         assert!(j.contains("\"threshold_millionths\""));

@@ -963,10 +963,9 @@ mod tests {
     #[test]
     fn builtin_family_serde_round_trip() {
         for &family in BuiltinFamily::ALL {
-            let json =
-                serde_json::to_string(&family).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&family).expect("serialize derived Serialize");
             let back: BuiltinFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, family);
         }
     }
@@ -1106,9 +1105,9 @@ mod tests {
     fn selection_vector_serde_round_trip() {
         let mut sv = SelectionVector::new(4);
         sv.mask(2);
-        let json = serde_json::to_string(&sv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sv).expect("serialize derived Serialize");
         let back: SelectionVector =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, sv);
     }
 
@@ -1136,9 +1135,9 @@ mod tests {
     #[test]
     fn scalar_oracle_kind_serde_round_trip() {
         for &kind in ScalarOracleKind::ALL {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let back: ScalarOracleKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, kind);
         }
     }
@@ -1386,10 +1385,9 @@ mod tests {
     #[test]
     fn lane_specimen_family_serde_round_trip() {
         for &family in LaneSpecimenFamily::ALL {
-            let json =
-                serde_json::to_string(&family).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&family).expect("serialize derived Serialize");
             let back: LaneSpecimenFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, family);
         }
     }
@@ -1421,9 +1419,8 @@ mod tests {
     #[test]
     fn lane_contract_serde_round_trip() {
         let c = LaneContract::new();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: LaneContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
+        let back: LaneContract = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, c);
     }
 

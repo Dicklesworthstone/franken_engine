@@ -1465,9 +1465,9 @@ mod tests {
     #[test]
     fn serde_element_kind_round_trip() {
         for kind in ElementKind::ALL {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: ElementKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1475,9 +1475,9 @@ mod tests {
     #[test]
     fn serde_typed_array_kind_round_trip() {
         for kind in TypedArrayKind::ALL {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: TypedArrayKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1485,9 +1485,9 @@ mod tests {
     #[test]
     fn serde_deopt_reason_round_trip() {
         for reason in DeoptReason::ALL {
-            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(reason).expect("serialize derived Serialize");
             let back: DeoptReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*reason, back);
         }
     }
@@ -1509,18 +1509,18 @@ mod tests {
             current_mode: ArrayStorageMode::FastDouble,
         };
         let cert = certify_fast_lane(&profile, &config);
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let back: FastLaneCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, back);
     }
 
     #[test]
     fn serde_evidence_manifest_round_trip() {
         let manifest = run_fast_lane_evidence();
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: FastLaneEvidenceManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
     }
 

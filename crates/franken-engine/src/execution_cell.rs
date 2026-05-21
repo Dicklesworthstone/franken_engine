@@ -1133,9 +1133,9 @@ mod tests {
     #[test]
     fn cell_kind_serde_roundtrip() {
         for kind in [CellKind::Extension, CellKind::Session, CellKind::Delegate] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let restored: CellKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, restored);
         }
     }
@@ -1190,9 +1190,9 @@ mod tests {
             current: RegionState::Running,
             attempted: "finalize".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: CellError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -1680,9 +1680,9 @@ mod tests {
             region_state: RegionState::Running,
             budget_consumed_ms: 1,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: CellEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1701,9 +1701,9 @@ mod tests {
             region_state: RegionState::Running,
             budget_consumed_ms: 0,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: CellEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
         assert_eq!(restored.error_code.as_deref(), Some("budget_exhausted"));
     }
@@ -1739,9 +1739,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: CellError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2014,9 +2014,9 @@ mod tests {
             budget_consumed_ms: 2,
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: LifecycleEvidenceEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
     }
 
@@ -2037,9 +2037,9 @@ mod tests {
             budget_consumed_ms: 2,
             evidence_entries_emitted: 1,
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: CellCloseReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
@@ -2829,9 +2829,9 @@ mod tests {
             budget_consumed_ms: 2,
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: LifecycleEvidenceEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
         assert_eq!(
             restored.error_code.as_deref(),
@@ -2862,9 +2862,9 @@ mod tests {
             budget_consumed_ms: 2,
             metadata,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: LifecycleEvidenceEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
         assert_eq!(restored.metadata.len(), 2);
         assert_eq!(restored.metadata["publisher"], "acme-corp");
@@ -2930,9 +2930,9 @@ mod tests {
         assert_eq!(report.budget_consumed_ms, 42);
 
         // Serde preserves all fields
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: CellCloseReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(restored.drain_timeout_escalated);
         assert_eq!(restored.close_reason, "BudgetExhausted");
     }

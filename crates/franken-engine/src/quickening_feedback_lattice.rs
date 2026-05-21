@@ -898,9 +898,9 @@ mod tests {
             QuickeningLevel::Hot,
             QuickeningLevel::Quickened,
         ] {
-            let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&level).expect("serialize derived Serialize");
             let back: QuickeningLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(level, back);
         }
     }
@@ -940,9 +940,9 @@ mod tests {
     fn type_feedback_slot_serde() {
         let mut slot = TypeFeedbackSlot::new(5, 0);
         slot.record(ObservedType::String);
-        let json = serde_json::to_string(&slot).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&slot).expect("serialize derived Serialize");
         let back: TypeFeedbackSlot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(slot, back);
     }
 
@@ -1089,9 +1089,9 @@ mod tests {
     #[test]
     fn superinstruction_catalog_serde() {
         let catalog = SuperInstructionCatalog::default();
-        let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&catalog).expect("serialize derived Serialize");
         let back: SuperInstructionCatalog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(catalog, back);
     }
 
@@ -1271,9 +1271,9 @@ mod tests {
         let mut profile = QuickeningProfile::new("fn_serde");
         profile.record_execution(0, "add");
         profile.record_type(0, "add", 0, ObservedType::Integer);
-        let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&profile).expect("serialize derived Serialize");
         let back: QuickeningProfile =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(profile.function_id, back.function_id);
         assert_eq!(profile.total_executions, back.total_executions);
     }
@@ -1292,9 +1292,9 @@ mod tests {
         let policy = QuickeningPolicy::default();
         let profile = QuickeningProfile::new("fn_decision_serde");
         let decision = QuickeningDecision::build(&profile, &policy, vec![], vec![]);
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: QuickeningDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
     }
 
@@ -1335,10 +1335,9 @@ mod tests {
             ObservedType::BigInt,
         ];
         for variant in &all {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let back: ObservedType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*variant, back, "roundtrip failed for {variant}");
         }
     }
@@ -1456,9 +1455,9 @@ mod tests {
     #[test]
     fn quickening_policy_serde_roundtrip() {
         let policy = QuickeningPolicy::default();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let back: QuickeningPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, back);
     }
 
@@ -1661,9 +1660,9 @@ mod tests {
         fb.quickened_opcode = Some("fast_load_const".to_string());
         fb.deopt_count = 3;
 
-        let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fb).expect("serialize derived Serialize");
         let back: InstructionFeedback =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fb, back);
     }
 
@@ -1714,9 +1713,9 @@ mod tests {
             requires_monomorphic_ic: true,
             estimated_speedup_millionths: 1_600_000,
         };
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: SuperInstructionPattern =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -2072,9 +2071,9 @@ mod tests {
             execution_count: 999,
             advanced: true,
         };
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: QuickeningTransition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 
@@ -2086,9 +2085,9 @@ mod tests {
             fused_opcode: "load_prop_and_add".into(),
             estimated_speedup_millionths: 1_300_000,
         };
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: SuperInstructionCandidate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -2104,9 +2103,9 @@ mod tests {
             total_deopts: 5,
             evaluation_epoch: 7,
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: QuickeningSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -2348,9 +2347,9 @@ mod tests {
         slot.record(ObservedType::Integer);
         assert_eq!(slot.observation_count, 4);
         assert_eq!(slot.observed_types.len(), 3);
-        let json = serde_json::to_string(&slot).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&slot).expect("serialize derived Serialize");
         let back: TypeFeedbackSlot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(slot, back);
         assert_eq!(back.observation_count, 4);
         assert_eq!(back.observed_types.len(), 3);
@@ -2541,9 +2540,9 @@ mod tests {
         fb.quickened_opcode = Some("fast_complex_op".to_string());
         fb.deopt_count = 7;
         fb.level = QuickeningLevel::Quickened;
-        let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fb).expect("serialize derived Serialize");
         let back: InstructionFeedback =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fb, back);
         assert_eq!(back.type_slots.len(), 2);
         assert_eq!(back.type_slots[0].observed_types.len(), 1);
@@ -2699,9 +2698,9 @@ mod tests {
         profile.evaluate_all(&policy);
         profile.evaluate_all(&policy);
         profile.record_deopt(4, &policy);
-        let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&profile).expect("serialize derived Serialize");
         let back: QuickeningProfile =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(profile.function_id, back.function_id);
         assert_eq!(profile.total_executions, back.total_executions);
         assert_eq!(profile.total_deopts, back.total_deopts);
@@ -2757,9 +2756,9 @@ mod tests {
             estimated_speedup_millionths: 1_300_000,
         }];
         let decision = QuickeningDecision::build(&profile, &policy, transitions, candidates);
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: QuickeningDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
         assert_eq!(back.transitions.len(), 2);
         assert_eq!(back.superinstruction_candidates.len(), 1);
@@ -2915,9 +2914,9 @@ mod tests {
             total_deopts: 0,
             evaluation_epoch: 0,
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: QuickeningSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 

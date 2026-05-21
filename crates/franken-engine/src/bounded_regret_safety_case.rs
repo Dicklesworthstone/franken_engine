@@ -1021,9 +1021,9 @@ mod tests {
     #[test]
     fn policy_serde_roundtrip() {
         for p in AdaptivePolicy::ALL {
-            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(p).expect("serialize derived Serialize");
             let back: AdaptivePolicy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*p, back);
         }
     }
@@ -1054,9 +1054,9 @@ mod tests {
     #[test]
     fn override_type_serde() {
         for t in OperatorOverrideType::ALL {
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             let back: OperatorOverrideType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, back);
         }
     }
@@ -1088,9 +1088,8 @@ mod tests {
     #[test]
     fn bound_serde_roundtrip() {
         let b = moderate_bound();
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
-        let back: RegretBound =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
+        let back: RegretBound = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(b, back);
     }
 
@@ -1231,9 +1230,9 @@ mod tests {
         let mut a = RegretAccounting::new(moderate_bound());
         a.record_step(5_000);
         a.record_step(60_000);
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let back: RegretAccounting =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -1268,9 +1267,9 @@ mod tests {
     #[test]
     fn override_serde_roundtrip() {
         let o = sample_override(OperatorOverrideType::LockTier);
-        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&o).expect("serialize derived Serialize");
         let back: OperatorOverride =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(o, back);
     }
 
@@ -1319,9 +1318,9 @@ mod tests {
             evidence_epoch: 5,
             min_epoch: 10,
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: SafetyCaseError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1405,9 +1404,9 @@ mod tests {
             },
             overrides_active: 1,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: SafetyCaseVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1439,9 +1438,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = SafetyCaseConfig::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: SafetyCaseConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1708,9 +1707,9 @@ mod tests {
         let mut a = RegretAccounting::new(moderate_bound());
         a.record_step(3_000);
         let r = report(&a, &[], &SafetyCaseConfig::default(), epoch());
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: SafetyCaseReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1796,9 +1795,9 @@ mod tests {
             regret_within_bound: true,
             policy_stable: true,
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: BenchmarkEligibility =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1812,9 +1811,8 @@ mod tests {
             policy_active: AdaptivePolicy::Moderate,
             was_violation: false,
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: RegretEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
+        let back: RegretEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1830,9 +1828,9 @@ mod tests {
             violations_count: 2,
             within_budget: true,
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: RegretSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 

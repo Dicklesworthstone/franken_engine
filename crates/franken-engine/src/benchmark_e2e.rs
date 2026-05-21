@@ -2891,8 +2891,7 @@ pub fn write_evidence_artifacts(
             "peak_extensions_alive": m.peak_extensions_alive,
             "correctness_digest": m.correctness_digest,
         });
-        evidence_lines
-            .push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
+        evidence_lines.push(serde_json::to_string(&entry).expect("serialize derived Serialize"));
     }
     for r in &result.regressions {
         let entry = serde_json::json!({
@@ -2905,8 +2904,7 @@ pub fn write_evidence_artifacts(
             "blocked": r.blocked,
             "blockers": r.blockers,
         });
-        evidence_lines
-            .push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
+        evidence_lines.push(serde_json::to_string(&entry).expect("serialize derived Serialize"));
     }
     for evt in &result.events {
         let entry = serde_json::json!({
@@ -2920,8 +2918,7 @@ pub fn write_evidence_artifacts(
             "family": evt.family,
             "profile": evt.profile,
         });
-        evidence_lines
-            .push(serde_json::to_string(&entry).expect("serde deserialization should succeed"));
+        evidence_lines.push(serde_json::to_string(&entry).expect("serialize derived Serialize"));
     }
     fs::write(&evidence_path, evidence_lines.join("\n") + "\n")?;
 
@@ -2939,7 +2936,7 @@ pub fn write_evidence_artifacts(
                 "error_code": evt.error_code,
             })
         })
-        .map(|entry| serde_json::to_string(&entry).expect("serde deserialization should succeed"))
+        .map(|entry| serde_json::to_string(&entry).expect("serialize derived Serialize"))
         .collect::<Vec<_>>();
     fs::write(&events_path, event_lines.join("\n") + "\n")?;
 
@@ -4548,7 +4545,7 @@ mod tests {
         // Each line should be valid JSON
         for line in &lines {
             let _: serde_json::Value =
-                serde_json::from_str(line).expect("serde deserialization should succeed");
+                serde_json::from_str(line).expect("deserialize known-valid JSON");
         }
 
         // Verify benchmark env manifest

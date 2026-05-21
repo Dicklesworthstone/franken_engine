@@ -1235,9 +1235,9 @@ mod tests {
     #[test]
     fn capability_serde_roundtrip() {
         for cap in CategoryShiftCapability::ALL {
-            let json = serde_json::to_string(&cap).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cap).expect("serialize derived Serialize");
             let back: CategoryShiftCapability =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, cap);
         }
     }
@@ -1532,7 +1532,7 @@ mod tests {
             .to_json_pretty()
             .expect("serde deserialization should succeed");
         let _parsed: serde_json::Value =
-            serde_json::from_str(&json_str).expect("serde deserialization should succeed");
+            serde_json::from_str(&json_str).expect("deserialize known-valid JSON");
     }
 
     #[test]
@@ -1685,9 +1685,9 @@ mod tests {
     #[test]
     fn category_shift_claim_serde_roundtrip() {
         let c = claim(CategoryShiftCapability::PlasSignedWitnesses);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: CategoryShiftClaim =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.claim_id, c.claim_id);
         assert_eq!(back.capability, c.capability);
     }
@@ -1695,9 +1695,9 @@ mod tests {
     #[test]
     fn methodology_section_serde_roundtrip() {
         let m = methodology();
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: MethodologySection =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.summary, m.summary);
     }
 
@@ -1709,9 +1709,9 @@ mod tests {
             approved: true,
             notes: "all good".to_string(),
         };
-        let json = serde_json::to_string(&review).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&review).expect("serialize derived Serialize");
         let back: PeerReviewSignoff =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.approved);
     }
 
@@ -1724,9 +1724,9 @@ mod tests {
             meets_floor: true,
             meets_target: true,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: DimensionPublicationSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.raw_score_millionths, 500_000);
         assert!(back.meets_target);
     }
@@ -1737,9 +1737,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let entries = generate_log_entries("trace-1", &report);
         for entry in &entries {
-            let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(entry).expect("serialize derived Serialize");
             let back: CategoryShiftReportLogEntry =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back.trace_id, "trace-1");
         }
     }

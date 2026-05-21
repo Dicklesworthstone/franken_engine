@@ -1015,9 +1015,8 @@ mod tests {
     #[test]
     fn wave_serde_roundtrip() {
         for w in [Wave::ReadyNow, Wave::ReadyNext, Wave::Gated] {
-            let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-            let back: Wave =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&w).expect("serialize derived Serialize");
+            let back: Wave = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, w);
         }
     }
@@ -1065,9 +1064,9 @@ mod tests {
     #[test]
     fn signals_serde_roundtrip() {
         let s = CrossCuttingSignals::default();
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: CrossCuttingSignals =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, s);
     }
 
@@ -1103,9 +1102,8 @@ mod tests {
     #[test]
     fn task_node_serde_roundtrip() {
         let t = make_task("t1", &["dep1"]);
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let back: TaskNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
+        let back: TaskNode = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.task_id, t.task_id);
         assert_eq!(back.depends_on, t.depends_on);
     }
@@ -1218,9 +1216,9 @@ mod tests {
     #[test]
     fn risk_budget_serde_roundtrip() {
         let b = SwarmRiskBudget::default();
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         let back: SwarmRiskBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, b);
     }
 
@@ -1243,9 +1241,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = ControlLoopConfig::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: ControlLoopConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, c);
     }
 
@@ -1303,9 +1301,9 @@ mod tests {
             count: 5000,
             max: 4096,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: ControlLoopError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, err);
     }
 
@@ -1873,9 +1871,9 @@ mod tests {
                 vec!["ev-001".to_string()],
             )
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: QueueArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.epoch, artifact.epoch);
         assert_eq!(back.queue.len(), artifact.queue.len());
         assert_eq!(back.evidence_ids, artifact.evidence_ids);
@@ -1896,9 +1894,9 @@ mod tests {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&ctrl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctrl).expect("serialize derived Serialize");
         let back: SwarmControlLoop =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.task_count(), 1);
     }
 
@@ -2105,9 +2103,8 @@ mod tests {
             wave: Wave::ReadyNow,
             open_blocker_count: 0,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: QueueEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
+        let back: QueueEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -2119,9 +2116,9 @@ mod tests {
             new_rank: 1,
             reason: "dependency resolved".into(),
         };
-        let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&delta).expect("serialize derived Serialize");
         let back: RationaleDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(delta, back);
     }
 
@@ -2133,9 +2130,8 @@ mod tests {
             unassigned: true,
             severity: BottleneckSeverity::Critical,
         };
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
-        let back: Bottleneck =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
+        let back: Bottleneck = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(b, back);
     }
 
@@ -2148,9 +2144,9 @@ mod tests {
             BottleneckSeverity::Critical,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: BottleneckSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2175,9 +2171,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ControlLoopError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }

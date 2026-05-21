@@ -2011,8 +2011,7 @@ mod tests {
         ] {
             let json =
                 serde_json::to_string(&variant).expect("serde deserialization should succeed");
-            let back: DecisionVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: DecisionVerdict = serde_json::from_str(&json).expect("parse valid string");
             assert_eq!(variant, back);
         }
     }
@@ -2041,8 +2040,7 @@ mod tests {
     fn decision_request_serde_round_trip() {
         let req = request(42);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DecisionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionRequest = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(req, back);
     }
 
@@ -2150,8 +2148,7 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: AdapterEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdapterEvent = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(event, back);
     }
 
@@ -2231,8 +2228,7 @@ mod tests {
             error_code: Some("DG_TIMEOUT".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: AdapterEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdapterEvent = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(event, back);
         assert_eq!(back.error_code.as_deref(), Some("DG_TIMEOUT"));
     }
@@ -2590,8 +2586,7 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: AdapterEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdapterEvent = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
     }
@@ -2760,8 +2755,7 @@ mod tests {
     fn decision_verdict_serde_roundtrip_deny() {
         let v = DecisionVerdict::Deny;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: DecisionVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionVerdict = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(v, back);
     }
 
@@ -2769,8 +2763,7 @@ mod tests {
     fn decision_verdict_serde_roundtrip_timeout() {
         let v = DecisionVerdict::Timeout;
         let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: DecisionVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionVerdict = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(v, back);
     }
 
@@ -2863,8 +2856,7 @@ mod tests {
     fn decision_request_json_field_names_stable_keys() {
         let req = request(800);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let value: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let value: serde_json::Value = serde_json::from_str(&json).expect("parse valid string");
         let obj = value
             .as_object()
             .expect("serde deserialization should succeed");
@@ -2963,8 +2955,7 @@ mod tests {
             ci_width_milli: 1,
         };
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DecisionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionRequest = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(req, back);
     }
 
@@ -3025,8 +3016,7 @@ mod tests {
     fn decision_request_roundtrip_seed_zero() {
         let req = request(0);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DecisionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionRequest = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(req, back);
     }
 
@@ -3034,8 +3024,7 @@ mod tests {
     fn decision_request_roundtrip_large_seed() {
         let req = request(u64::MAX / 2);
         let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
-        let back: DecisionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DecisionRequest = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(req, back);
     }
 
@@ -3051,8 +3040,7 @@ mod tests {
             error_code: Some("rt_ec".to_string()),
         };
         let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: AdapterEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: AdapterEvent = serde_json::from_str(&json).expect("parse valid string");
         assert_eq!(event, back);
     }
 

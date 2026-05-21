@@ -1468,10 +1468,10 @@ mod tests {
             .with_detail("detail")
             .with_minimized_repro_command("cmd");
         // SAFETY: BehaviorEquivalenceObservation derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid BehaviorEquivalenceObservation serialization
         let back: BehaviorEquivalenceObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, back);
     }
 
@@ -1484,10 +1484,10 @@ mod tests {
             &[shipped_observation("w1").with_output_equivalence(false)],
         );
         // SAFETY: BehaviorEquivalenceReport derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid BehaviorEquivalenceReport serialization
         let back: BehaviorEquivalenceReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1740,11 +1740,10 @@ mod tests {
     fn evidence_surface_serde_roundtrip() {
         for surface in [EvidenceSurface::ShippedPath, EvidenceSurface::LibraryOnly] {
             // SAFETY: EvidenceSurface derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&surface).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&surface).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid EvidenceSurface serialization
             let back: EvidenceSurface =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(surface, back);
         }
     }
@@ -1761,11 +1760,10 @@ mod tests {
         ];
         for variant in variants {
             // SAFETY: BehaviorEquivalenceClass derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid BehaviorEquivalenceClass serialization
             let back: BehaviorEquivalenceClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1778,10 +1776,10 @@ mod tests {
             PublicationDisposition::Blocked,
         ] {
             // SAFETY: PublicationDisposition derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&disp).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&disp).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid PublicationDisposition serialization
             let back: PublicationDisposition =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(disp, back);
         }
     }
@@ -1799,10 +1797,10 @@ mod tests {
         ];
         for hint in hints {
             // SAFETY: OwnerRouteHint derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&hint).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&hint).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid OwnerRouteHint serialization
             let back: OwnerRouteHint =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(hint, back);
         }
     }
@@ -1813,10 +1811,10 @@ mod tests {
         let record = build_record(&obs);
         assert!(record.owner_route.is_some());
         // SAFETY: BenchmarkParityVerdictRecord derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid BenchmarkParityVerdictRecord serialization
         let back: BenchmarkParityVerdictRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
     }
 
@@ -1825,18 +1823,18 @@ mod tests {
         let obs = shipped_observation("w1");
         let record = build_record(&obs);
         assert!(record.owner_route.is_none());
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: BenchmarkParityVerdictRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
     }
 
     #[test]
     fn observation_serde_roundtrip_without_minimized_repro() {
         let obs = shipped_observation("w1").with_detail("no repro");
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         let back: BehaviorEquivalenceObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, back);
         assert!(back.minimized_repro_command.is_none());
     }
@@ -1856,7 +1854,7 @@ mod tests {
             "owner_hint": "runtime_semantics"
         }"#;
         let obs: BehaviorEquivalenceObservation =
-            serde_json::from_str(json).expect("serde deserialization should succeed");
+            serde_json::from_str(json).expect("deserialize known-valid JSON");
         assert!(obs.minimized_repro_command.is_none());
     }
 
@@ -2138,9 +2136,9 @@ mod tests {
     fn observation_with_unicode_detail() {
         let obs = shipped_observation("unicode_test").with_detail("divergence \u{1F4A5} detected");
         let record = build_record(&obs);
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: BenchmarkParityVerdictRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.detail, "divergence \u{1F4A5} detected");
     }
 

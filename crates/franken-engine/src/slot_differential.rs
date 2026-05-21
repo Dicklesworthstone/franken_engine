@@ -910,7 +910,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     fn make_slot_id(name: &str) -> SlotId {
-        SlotId::new(name).expect("serde deserialization should succeed")
+        SlotId::new(name).expect("constructor with valid inputs")
     }
 
     fn make_output(
@@ -2040,9 +2040,9 @@ mod tests {
             DivergenceClass::ResourceDivergence,
             DivergenceClass::BenignImprovement,
         ] {
-            let json = serde_json::to_string(class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(class).expect("serialize derived Serialize");
             let back: DivergenceClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, class);
         }
     }
@@ -2053,18 +2053,17 @@ mod tests {
             workload_count: 10,
             improvement_count: 3,
         };
-        let json = serde_json::to_string(&ready).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ready).expect("serialize derived Serialize");
         let back: PromotionReadiness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, ready);
     }
 
     #[test]
     fn serde_cell_output_roundtrip() {
         let out = make_output("hello", 42, 256, &[SlotCapability::ReadSource]);
-        let json = serde_json::to_string(&out).expect("serde deserialization should succeed");
-        let back: CellOutput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&out).expect("serialize derived Serialize");
+        let back: CellOutput = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, out);
     }
 
@@ -2078,9 +2077,9 @@ mod tests {
             outcome: DifferentialOutcome::Match,
             divergence_class: None,
         };
-        let json = serde_json::to_string(&wr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&wr).expect("serialize derived Serialize");
         let back: WorkloadResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, wr);
     }
 
@@ -2099,9 +2098,9 @@ mod tests {
                 improvement_count: 0,
             },
         );
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let back: SlotDifferentialEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.verdicts.len(), 1);
     }
 
@@ -2113,9 +2112,9 @@ mod tests {
             emit_repro_artifacts: false,
             epoch: SecurityEpoch::from_raw(7),
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: DifferentialConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
@@ -2133,9 +2132,9 @@ mod tests {
             duration_diff_us: 0,
             artifact_hash: ContentHash::compute(b"hash"),
         };
-        let json = serde_json::to_string(&repro).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&repro).expect("serialize derived Serialize");
         let back: DivergenceRepro =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.slot_id, repro.slot_id);
     }
 
@@ -2153,9 +2152,9 @@ mod tests {
             capability_diff: vec![],
             resource_diff: "none".to_string(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: WorkloadLogEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.trace_id, "trace-1");
     }
 
@@ -2169,9 +2168,9 @@ mod tests {
             WorkloadCategory::Adversarial,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: WorkloadCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2180,9 +2179,9 @@ mod tests {
     fn differential_outcome_serde_all_variants() {
         let variants = [DifferentialOutcome::Match, DifferentialOutcome::Diverge];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: DifferentialOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2209,9 +2208,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: SlotDifferentialError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }

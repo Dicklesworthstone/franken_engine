@@ -871,7 +871,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn test_config() -> ConvergenceSloConfig {
-        let temp_dir = TempDir::new().expect("serde deserialization should succeed");
+        let temp_dir = TempDir::new().expect("constructor with valid inputs");
         ConvergenceSloConfig {
             max_convergence_time_ms: 500,
             artifacts_directory: temp_dir.path().to_path_buf(),

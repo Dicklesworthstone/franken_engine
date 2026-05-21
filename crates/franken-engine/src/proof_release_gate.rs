@@ -947,9 +947,9 @@ mod tests {
             GateFailureCode::LoggingArtifactsStale,
             GateFailureCode::LoggingArtifactsUncorrelated,
         ] {
-            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&code).expect("serialize derived Serialize");
             let back: GateFailureCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, code);
         }
     }
@@ -975,9 +975,9 @@ mod tests {
             max_logging_artifact_age_ns: 1_200_000_000_000,
             require_trace_correlated_logging: false,
         };
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: ReleaseGateThresholds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, t);
     }
 
@@ -1176,19 +1176,18 @@ mod tests {
     #[test]
     fn optimization_proof_artifact_serde() {
         let artifact = ok_artifact("inline");
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: OptimizationProofArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, artifact);
     }
 
     #[test]
     fn proof_chain_bundle_serde() {
         let input = base_input();
-        let json =
-            serde_json::to_string(&input.bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input.bundle).expect("serialize derived Serialize");
         let back: ProofChainBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, input.bundle);
     }
 
@@ -1196,9 +1195,9 @@ mod tests {
     fn promotion_decision_artifact_serde() {
         let input = base_input();
         let decision = evaluate_release_gate(&input, &ReleaseGateThresholds::default());
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: PromotionDecisionArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, decision);
     }
 
@@ -1209,9 +1208,8 @@ mod tests {
             optimization_pass: Some("inline".to_string()),
             detail: "missing artifact".to_string(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
-        let back: GateFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
+        let back: GateFinding = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, finding);
     }
 
@@ -1567,9 +1565,9 @@ mod tests {
     #[test]
     fn release_gate_input_serde() {
         let input = base_input();
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: ReleaseGateInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, input);
     }
 
@@ -1578,9 +1576,9 @@ mod tests {
         let input = base_input();
         let decision = evaluate_release_gate(&input, &ReleaseGateThresholds::default());
         for log in &decision.logs {
-            let json = serde_json::to_string(log).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(log).expect("serialize derived Serialize");
             let back: ProofGateLogEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, log);
         }
     }
@@ -1651,9 +1649,9 @@ mod tests {
             logging_artifact_max_age_ns: 1_000_000_000,
             trace_correlated_logging: true,
         };
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let back: TestEvidenceBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, back);
     }
 
@@ -1761,7 +1759,7 @@ mod tests {
             optimization_pass: None,
             detail: "exceeded".to_string(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         assert!(json.contains("\"code\""));
         assert!(json.contains("\"optimization_pass\""));
         assert!(json.contains("\"detail\""));
@@ -1771,8 +1769,7 @@ mod tests {
     fn enrichment_proof_gate_log_event_json_field_names() {
         let input = base_input();
         let decision = evaluate_release_gate(&input, &ReleaseGateThresholds::default());
-        let json =
-            serde_json::to_string(&decision.logs[0]).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision.logs[0]).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -1790,7 +1787,7 @@ mod tests {
     #[test]
     fn enrichment_release_gate_thresholds_json_field_names() {
         let t = ReleaseGateThresholds::default();
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         assert!(json.contains("\"max_replay_multiplier_millionths\""));
         assert!(json.contains("\"min_unit_coverage_millionths\""));
         assert!(json.contains("\"min_mutation_score_millionths\""));
@@ -1959,9 +1956,9 @@ mod tests {
     fn enrichment_release_gate_input_without_evidence_serde() {
         let mut input = base_input();
         input.test_evidence = None;
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: ReleaseGateInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, input);
         assert!(back.test_evidence.is_none());
         assert!(json.contains("\"test_evidence\":null"));

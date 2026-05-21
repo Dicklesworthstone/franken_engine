@@ -950,18 +950,17 @@ mod tests {
     #[test]
     fn serde_probe() {
         let p = make_probe("p1", ProbeDomain::Compiler, MILLION, 10, 100, &["a", "b"]);
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let p2: CandidateProbe =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
+        let p2: CandidateProbe = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, p2);
     }
 
     #[test]
     fn serde_budget() {
         let b = ObservabilityBudget::normal();
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         let b2: ObservabilityBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(b, b2);
     }
 
@@ -969,9 +968,8 @@ mod tests {
     fn serde_schedule() {
         let u = make_universe_with_probes();
         let s = build_schedule(&u, OperatingMode::Normal, ObservabilityBudget::normal());
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let s2: ProbeSchedule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
+        let s2: ProbeSchedule = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, s2);
     }
 
@@ -979,9 +977,9 @@ mod tests {
     fn serde_optimization_result() {
         let u = make_universe_with_probes();
         let result = greedy_submodular_select(&u, &ObservabilityBudget::normal());
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let r2: OptimizationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, r2);
     }
 
@@ -990,9 +988,9 @@ mod tests {
         let u = make_universe_with_probes();
         let result = greedy_submodular_select(&u, &ObservabilityBudget::normal());
         let cert = build_approximation_certificate(&result, &ObservabilityBudget::normal());
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let c2: ApproximationCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, c2);
     }
 
@@ -1000,9 +998,9 @@ mod tests {
     fn serde_manifest() {
         let u = make_universe_with_probes();
         let m = MultiModeManifest::build(&u);
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let m2: MultiModeManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, m2);
     }
 
@@ -1092,7 +1090,7 @@ mod tests {
         ];
         let json_set: std::collections::BTreeSet<String> = domains
             .iter()
-            .map(|d| serde_json::to_string(d).expect("serde deserialization should succeed"))
+            .map(|d| serde_json::to_string(d).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(json_set.len(), domains.len());
     }
@@ -1105,10 +1103,9 @@ mod tests {
             ProbeGranularity::Fine,
             ProbeGranularity::Trace,
         ] {
-            let json =
-                serde_json::to_string(&granularity).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&granularity).expect("serialize derived Serialize");
             let back: ProbeGranularity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(granularity, back);
         }
     }
@@ -1168,9 +1165,9 @@ mod tests {
         let budget = ObservabilityBudget::normal();
         let result = greedy_submodular_select(&u, &budget);
         let ledger = ProbeUtilityLedger::from_optimization(&u, &result);
-        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         let back: ProbeUtilityLedger =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ledger, back);
     }
 
@@ -1225,7 +1222,7 @@ mod tests {
     #[test]
     fn enrichment_json_field_presence_candidate_probe() {
         let p = make_probe("jp", ProbeDomain::Scheduler, 300_000, 55, 4096, &["evt_a"]);
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         assert!(json.contains("\"name\""));
         assert!(json.contains("\"domain\""));
         assert!(json.contains("\"granularity\""));
@@ -1240,7 +1237,7 @@ mod tests {
     fn enrichment_json_field_presence_probe_schedule() {
         let u = make_universe_with_probes();
         let s = build_schedule(&u, OperatingMode::Degraded, ObservabilityBudget::degraded());
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         assert!(json.contains("\"mode\""));
         assert!(json.contains("\"selected_probe_ids\""));
         assert!(json.contains("\"total_latency_micros\""));
@@ -1255,7 +1252,7 @@ mod tests {
         let u = make_universe_with_probes();
         let result = greedy_submodular_select(&u, &ObservabilityBudget::normal());
         let cert = build_approximation_certificate(&result, &ObservabilityBudget::normal());
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         assert!(json.contains("\"algorithm\""));
         assert!(json.contains("\"optimality_bound_millionths\""));
         assert!(json.contains("\"actual_utility_millionths\""));
@@ -1275,9 +1272,9 @@ mod tests {
             ProbeDesignError::InvalidBudget("budget too small".to_string()),
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: ProbeDesignError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1400,9 +1397,8 @@ mod tests {
         p.metadata
             .insert("owner".to_string(), "team-obs".to_string());
         p.metadata.insert("version".to_string(), "3".to_string());
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let p2: CandidateProbe =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
+        let p2: CandidateProbe = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(
             p2.metadata
                 .get("owner")

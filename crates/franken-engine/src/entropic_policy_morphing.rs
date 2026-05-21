@@ -1688,36 +1688,36 @@ mod tests {
     #[test]
     fn morphing_config_serde_roundtrip() {
         let config = MorphingConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: MorphingConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
     #[test]
     fn policy_profile_serde_roundtrip() {
         let p = make_anchor_profile();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: PolicyProfile =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
     #[test]
     fn transition_budget_serde_roundtrip() {
         let b = TransitionBudget::with_defaults(SecurityEpoch::from_raw(42));
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         let back: TransitionBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(b, back);
     }
 
     #[test]
     fn inventory_serde_roundtrip() {
         let inv = run_morphing_corpus();
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         let back: MorphingEvidenceInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv, back);
     }
 
@@ -1913,9 +1913,9 @@ mod tests {
             MorphingRejection::SourceAbstention,
             MorphingRejection::NoTargetProfile,
         ] {
-            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&r).expect("serialize derived Serialize");
             let back: MorphingRejection =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(r, back);
         }
     }
@@ -1926,15 +1926,15 @@ mod tests {
             distance_millionths: 100_000,
             new_entropy_millionths: 500_000,
         };
-        let json = serde_json::to_string(&applied).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&applied).expect("serialize derived Serialize");
         let back: MorphingOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(applied, back);
 
         let noop = MorphingOutcome::NoOp;
-        let json = serde_json::to_string(&noop).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&noop).expect("serialize derived Serialize");
         let back: MorphingOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(noop, back);
     }
 
@@ -1987,9 +1987,9 @@ mod tests {
     #[test]
     fn morphing_verdict_serde() {
         for v in [MorphingVerdict::Pass, MorphingVerdict::Fail] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: MorphingVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }
@@ -2025,9 +2025,8 @@ mod tests {
             },
             evidence_hash: "abc123".into(),
         };
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let back: MorphingStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
+        let back: MorphingStep = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, back);
     }
 
@@ -2368,9 +2367,9 @@ mod tests {
         let mut m = make_test_morpher(1);
         m.current_regime = RegimeLabel::Classified(Regime::Normal);
         m.morph(RegimeLabel::Classified(Regime::Elevated));
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: EntropicPolicyMorpher =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -2378,9 +2377,9 @@ mod tests {
     fn morphing_summary_serde_roundtrip() {
         let m = make_test_morpher(1);
         let s = m.summary();
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: MorphingSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -2399,9 +2398,9 @@ mod tests {
             MorphingExpectedOutcome::BudgetExhausted,
             MorphingExpectedOutcome::InterpolationUsed,
         ] {
-            let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&o).expect("serialize derived Serialize");
             let back: MorphingExpectedOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(o, back);
         }
     }
@@ -2414,9 +2413,9 @@ mod tests {
             family: MorphingSpecimenFamily::Transition,
             expected_outcome: MorphingExpectedOutcome::Applied,
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: MorphingSpecimen =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -2431,9 +2430,9 @@ mod tests {
             verdict: Some("pass".to_string()),
             detail: Some("all good".to_string()),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let back: MorphingEvidenceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -2457,9 +2456,9 @@ mod tests {
                 commands_txt: "cmds.txt".to_string(),
             },
         };
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: MorphingRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
     }
 

@@ -859,7 +859,7 @@ pub fn write_esm_cjs_parity_evidence_bundle(
     let events_path = output_dir.join("esm_cjs_parity_evidence_events.jsonl");
     let events_jsonl: String = events
         .iter()
-        .map(|e| serde_json::to_string(e).expect("serde deserialization should succeed"))
+        .map(|e| serde_json::to_string(e).expect("serialize derived Serialize"))
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(&events_path, &events_jsonl)?;
@@ -1037,18 +1037,18 @@ mod tests {
     #[test]
     fn specimen_serde_roundtrip() {
         let corpus = esm_cjs_parity_corpus();
-        let json = serde_json::to_string(&corpus).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&corpus).expect("serialize derived Serialize");
         let decoded: Vec<EsmCjsParitySpecimen> =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(corpus, decoded);
     }
 
     #[test]
     fn evidence_serde_roundtrip() {
         let inv = run_esm_cjs_parity_corpus();
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         let decoded: EsmCjsParityEvidenceInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv, decoded);
     }
 
@@ -1075,9 +1075,9 @@ mod tests {
                 commands_txt: "commands.txt".into(),
             },
         };
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let decoded: EsmCjsParityRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, decoded);
     }
 
@@ -1092,9 +1092,9 @@ mod tests {
             verdict: Some("pass".into()),
             detail: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let decoded: EsmCjsParityEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, decoded);
     }
 
@@ -1206,10 +1206,9 @@ mod tests {
             EsmCjsCompatibilityDisposition::Degraded,
             EsmCjsCompatibilityDisposition::Unsupported,
         ] {
-            let json =
-                serde_json::to_string(&disposition).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&disposition).expect("serialize derived Serialize");
             let decoded: EsmCjsCompatibilityDisposition =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(disposition, decoded);
             assert_eq!(json, format!("\"{}\"", disposition.as_str()));
         }
@@ -1218,9 +1217,9 @@ mod tests {
     #[test]
     fn remediation_guidance_serde_roundtrip() {
         let guidance = remediation_guidance("guidance-code", "fix the boundary");
-        let json = serde_json::to_string(&guidance).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&guidance).expect("serialize derived Serialize");
         let decoded: EsmCjsRemediationGuidance =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(guidance, decoded);
     }
 
@@ -1278,10 +1277,9 @@ mod tests {
             ModuleGraphTopology::Mixed,
         ];
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let decoded: ModuleGraphTopology =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*variant, decoded);
             // Verify snake_case rename.
             assert_eq!(json, format!("\"{}\"", variant.as_str()));
@@ -1297,10 +1295,9 @@ mod tests {
             InteropDirection::Bidirectional,
         ];
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let decoded: InteropDirection =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*variant, decoded);
             assert_eq!(json, format!("\"{}\"", variant.as_str()));
         }
@@ -1317,10 +1314,9 @@ mod tests {
             EsmCjsActualOutcome::OtherFailure,
         ];
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let decoded: EsmCjsActualOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*variant, decoded);
             assert_eq!(json, format!("\"{}\"", variant.as_str()));
         }
@@ -1336,10 +1332,9 @@ mod tests {
             EsmCjsExpectedOutcome::ParseFailure,
         ];
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let decoded: EsmCjsExpectedOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*variant, decoded);
             assert_eq!(json, format!("\"{}\"", variant.as_str()));
         }
@@ -1362,9 +1357,9 @@ mod tests {
             ),
             error_detail: Some("something went wrong".into()),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let decoded: EsmCjsParitySpecimenEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, decoded);
 
         // Also test with error_detail = None.
@@ -1372,9 +1367,9 @@ mod tests {
             error_detail: None,
             ..ev
         };
-        let json2 = serde_json::to_string(&ev_none).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&ev_none).expect("serialize derived Serialize");
         let decoded2: EsmCjsParitySpecimenEvidence =
-            serde_json::from_str(&json2).expect("serde deserialization should succeed");
+            serde_json::from_str(&json2).expect("deserialize known-valid JSON");
         assert_eq!(ev_none, decoded2);
     }
 
@@ -1717,9 +1712,9 @@ mod tests {
             events_jsonl: "events.jsonl".into(),
             commands_txt: "commands.txt".into(),
         };
-        let json = serde_json::to_string(&paths).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&paths).expect("serialize derived Serialize");
         let decoded: EsmCjsParityArtifactPaths =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(paths, decoded);
     }
 
@@ -1734,9 +1729,9 @@ mod tests {
             verdict: None,
             detail: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let decoded: EsmCjsParityEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, decoded);
     }
 

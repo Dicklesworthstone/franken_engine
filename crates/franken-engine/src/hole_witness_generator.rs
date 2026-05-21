@@ -1153,18 +1153,17 @@ mod tests {
     #[test]
     fn witness_kind_serde_roundtrip() {
         let kind = WitnessProgramKind::AsyncGenerator;
-        let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
         let back: WitnessProgramKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(kind, back);
     }
 
     #[test]
     fn hole_surface_serde_roundtrip() {
         let surf = HoleSurface::Module;
-        let json = serde_json::to_string(&surf).expect("serde deserialization should succeed");
-        let back: HoleSurface =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&surf).expect("serialize derived Serialize");
+        let back: HoleSurface = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(surf, back);
     }
 
@@ -1212,9 +1211,9 @@ mod tests {
     #[test]
     fn hole_reference_serde_roundtrip() {
         let hole = make_hole("test", HoleSurface::Runtime, 500_000);
-        let json = serde_json::to_string(&hole).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hole).expect("serialize derived Serialize");
         let back: HoleReference =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hole, back);
     }
 
@@ -1299,9 +1298,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let cfg = GeneratorConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: GeneratorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -1636,9 +1635,9 @@ mod tests {
             hole_id: "h1".into(),
             reason: "timeout".into(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: GeneratorError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1699,9 +1698,9 @@ mod tests {
         let report =
             generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
         let summary = report_summary(&report);
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: ReportSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -1711,9 +1710,9 @@ mod tests {
         let cfg = default_config();
         let report =
             generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: GenerationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 }

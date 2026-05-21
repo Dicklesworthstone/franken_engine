@@ -2070,9 +2070,9 @@ mod tests {
             },
         ];
         for src in sources {
-            let json = serde_json::to_string(&src).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&src).expect("serialize derived Serialize");
             let decoded: PolicySource =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(src, decoded);
         }
     }
@@ -2472,9 +2472,9 @@ mod tests {
     #[test]
     fn test_audit_export_format_serde() {
         for fmt in AuditExportFormat::all() {
-            let json = serde_json::to_string(fmt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(fmt).expect("serialize derived Serialize");
             let decoded: AuditExportFormat =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*fmt, decoded);
         }
     }
@@ -2667,9 +2667,9 @@ mod tests {
     #[test]
     fn test_compliance_framework_serde() {
         let fw = ComplianceFramework::Custom("special_framework".to_string());
-        let json = serde_json::to_string(&fw).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fw).expect("serialize derived Serialize");
         let decoded: ComplianceFramework =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fw, decoded);
     }
 
@@ -2907,9 +2907,9 @@ mod tests {
     #[test]
     fn test_hook_type_serde() {
         for h in GovernanceHookType::all() {
-            let json = serde_json::to_string(h).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(h).expect("serialize derived Serialize");
             let decoded: GovernanceHookType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*h, decoded);
         }
     }
@@ -2951,9 +2951,9 @@ mod tests {
     #[test]
     fn test_hook_result_serde() {
         let r = GovernanceHookResult::pass(GovernanceHookType::AuditExport, "exported", ts(99));
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let decoded: GovernanceHookResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, decoded);
     }
 
@@ -3200,9 +3200,9 @@ mod tests {
         let err = GovernanceError::PolicySchemaViolation {
             constraint: "version must be non-zero".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let decoded: GovernanceError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, decoded);
     }
 
@@ -3218,9 +3218,9 @@ mod tests {
             },
             toml_policy(),
         );
-        let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&art).expect("serialize derived Serialize");
         let decoded: PolicyArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(art, decoded);
     }
 
@@ -3230,9 +3230,9 @@ mod tests {
         let (bundle, _) =
             generate_compliance_bundle(ComplianceFramework::Soc2, ts(0), ts(100), entries, ts(200))
                 .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let decoded: ComplianceEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, decoded);
     }
 
@@ -3247,9 +3247,9 @@ mod tests {
             ts(2000),
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         let decoded: ComplianceEvidenceContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(contract, decoded);
     }
 
@@ -3259,9 +3259,9 @@ mod tests {
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         let result = export_audit_evidence(req, entries, ts(200))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let decoded: AuditExportResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, decoded);
     }
 
@@ -3284,9 +3284,9 @@ mod tests {
             attributes: BTreeMap::new(),
             timestamp: ts(42),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let decoded: GovernanceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, decoded);
     }
 
@@ -3425,9 +3425,9 @@ mod tests {
     #[test]
     fn test_diagnostic_severity_serde() {
         for sev in DiagnosticSeverity::all() {
-            let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(sev).expect("serialize derived Serialize");
             let decoded: DiagnosticSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*sev, decoded);
         }
     }
@@ -3471,9 +3471,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let decoded: GovernanceError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, decoded);
         }
         assert_eq!(errors.len(), 10);
@@ -3487,9 +3487,9 @@ mod tests {
             message: "deprecated field".to_string(),
             span: Some((10, 20)),
         };
-        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&diag).expect("serialize derived Serialize");
         let decoded: PolicyDiagnostic =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(diag, decoded);
 
         // Also test with None span.
@@ -3499,9 +3499,9 @@ mod tests {
             message: "hint".to_string(),
             span: None,
         };
-        let json2 = serde_json::to_string(&diag2).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&diag2).expect("serialize derived Serialize");
         let decoded2: PolicyDiagnostic =
-            serde_json::from_str(&json2).expect("serde deserialization should succeed");
+            serde_json::from_str(&json2).expect("deserialize known-valid JSON");
         assert_eq!(diag2, decoded2);
     }
 
@@ -3518,9 +3518,9 @@ mod tests {
             BTreeSet::new(),
         );
         assert!(result.is_success());
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let decoded: PolicyCompilationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, decoded);
     }
 
@@ -3537,9 +3537,9 @@ mod tests {
             BTreeSet::new(),
         );
         assert!(!result.is_success());
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let decoded: PolicyCompilationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, decoded);
     }
 
@@ -3554,9 +3554,9 @@ mod tests {
             max_export_entries: 42,
             frameworks: vec![ComplianceFramework::Soc2],
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let decoded: GovernancePipelineConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, decoded);
     }
 
@@ -3573,9 +3573,9 @@ mod tests {
             requester: "auditor".to_string(),
             correlation_id: Some("CORR-001".to_string()),
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let decoded: AuditExportRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, decoded);
     }
 
@@ -3596,9 +3596,9 @@ mod tests {
             evidence_entry_ids: vec![eid],
             gaps: vec![],
         };
-        let json = serde_json::to_string(&ctrl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctrl).expect("serialize derived Serialize");
         let decoded: ComplianceControl =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctrl, decoded);
     }
 
@@ -3607,9 +3607,9 @@ mod tests {
         let mut attrs = BTreeMap::new();
         attrs.insert("key".to_string(), "value".to_string());
         let entry = make_entry("policy_update", 42);
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let decoded: EvidenceEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, decoded);
     }
 
@@ -3739,9 +3739,9 @@ mod tests {
     #[test]
     fn governance_pipeline_config_default_serde_roundtrip() {
         let config = GovernancePipelineConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let decoded: GovernancePipelineConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, decoded);
     }
 
@@ -4069,9 +4069,9 @@ mod tests {
             ComplianceFramework::Custom("my_fw".to_string()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let decoded: ComplianceFramework =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, decoded);
         }
     }
@@ -4161,9 +4161,9 @@ mod tests {
         };
         assert!(!ctrl.satisfied);
         assert_eq!(ctrl.gaps.len(), 2);
-        let json = serde_json::to_string(&ctrl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctrl).expect("serialize derived Serialize");
         let decoded: ComplianceControl =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctrl, decoded);
     }
 

@@ -2259,9 +2259,9 @@ mod tests {
             TokenKind::TwoCharOperator,
             TokenKind::Punctuation,
         ];
-        let json = serde_json::to_string(&kinds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&kinds).expect("serialize derived Serialize");
         let back: Vec<TokenKind> =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(kinds, back);
     }
 
@@ -2269,18 +2269,16 @@ mod tests {
     fn lexer_output_serde_round_trip() {
         let output =
             lex("var x = 42;", &scalar_config()).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
-        let back: LexerOutput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&output).expect("serialize derived Serialize");
+        let back: LexerOutput = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(output, back);
     }
 
     #[test]
     fn lexer_config_serde_round_trip() {
         let config = LexerConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: LexerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
+        let back: LexerConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -2292,9 +2290,9 @@ mod tests {
         };
         let result = DifferentialLexer::lex(b"a + b", &config)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: DifferentialResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -2566,9 +2564,9 @@ mod tests {
             input_len: 5,
             schema_version: LexerSchemaVersion::V1,
         };
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: LexerArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -2591,9 +2589,9 @@ mod tests {
     #[test]
     fn lexer_schema_version_serde_roundtrip() {
         let v = LexerSchemaVersion::V1;
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: LexerSchemaVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, v);
     }
 
@@ -2601,9 +2599,9 @@ mod tests {
     fn lexer_mode_serde_all_variants() {
         let variants = [LexerMode::Swar, LexerMode::Scalar, LexerMode::Differential];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: LexerMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -2617,9 +2615,9 @@ mod tests {
             SwarFeatureGate::RequireNeon,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: SwarFeatureGate =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -2633,9 +2631,9 @@ mod tests {
             ArchFamily::Other,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ArchFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -2675,9 +2673,9 @@ mod tests {
             SwarDisableReason::TokenBudgetExceeded,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: SwarDisableReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -2697,9 +2695,9 @@ mod tests {
             LexerError::InternalError("test error".into()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: LexerError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }

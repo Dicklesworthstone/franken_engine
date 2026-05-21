@@ -1293,9 +1293,9 @@ mod tests {
     #[test]
     fn test_strategy_serde_roundtrip() {
         for s in SynthesisStrategy::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: SynthesisStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1347,9 +1347,9 @@ mod tests {
     #[test]
     fn test_kind_serde_roundtrip() {
         for k in ProgramKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: ProgramKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1386,9 +1386,9 @@ mod tests {
     #[test]
     fn test_denial_reason_serde_roundtrip() {
         for r in SynthesisDenialReason::ALL {
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             let back: SynthesisDenialReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, back);
         }
     }
@@ -1478,9 +1478,9 @@ mod tests {
             SynthesisError::InternalError("test msg".into()),
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let back: SynthesisError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }
@@ -1571,9 +1571,9 @@ mod tests {
         let mut c = SynthesisConstraint::new(256, 4096, 300_000);
         c.require_feature("import");
         c.forbid_pattern("eval");
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: SynthesisConstraint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1808,9 +1808,9 @@ mod tests {
     #[test]
     fn test_candidate_serde() {
         let c = make_candidate("c1", ProgramKind::PlainJs, SynthesisStrategy::GrammarGuided);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: SynthesizedCandidate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1960,9 +1960,9 @@ mod tests {
         let c = make_candidate("c1", ProgramKind::PlainJs, SynthesisStrategy::GrammarGuided);
         let batch =
             build_batch(test_epoch(), vec![c]).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&batch).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&batch).expect("serialize derived Serialize");
         let back: SynthesisBatch =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(batch, back);
     }
 
@@ -2153,9 +2153,9 @@ mod tests {
         let batch =
             build_batch(test_epoch(), vec![c1]).expect("serde deserialization should succeed");
         let receipt = build_receipt(&batch, 1);
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: SynthesisReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 

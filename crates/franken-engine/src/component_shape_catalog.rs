@@ -1599,18 +1599,17 @@ mod tests {
     #[test]
     fn serde_roundtrip_prop_flow_kind() {
         let val = PropFlowKind::Computed;
-        let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-        let back: PropFlowKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&val).expect("serialize derived Serialize");
+        let back: PropFlowKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(val, back);
     }
 
     #[test]
     fn serde_roundtrip_purity_class() {
         let val = RenderPurityClass::ConditionallyPure;
-        let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&val).expect("serialize derived Serialize");
         let back: RenderPurityClass =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(val, back);
     }
 
@@ -1624,9 +1623,9 @@ mod tests {
             PropFlowKind::Rendered,
         ));
         shape.compute_evidence_hash();
-        let json = serde_json::to_string(&shape).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&shape).expect("serialize derived Serialize");
         let back: ComponentShape =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(shape, back);
     }
 
@@ -1638,9 +1637,9 @@ mod tests {
             purity_ratio_fp: 600_000,
             ..Default::default()
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: CatalogSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -1655,9 +1654,9 @@ mod tests {
             receipt_hash: "abc123".to_string(),
             component_hashes: vec![("Comp".to_string(), "hash".to_string())],
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: CatalogReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -1674,10 +1673,9 @@ mod tests {
             ImpurityReason::NonDeterministic,
             ImpurityReason::InsufficientEvidence,
         ] {
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             let back: ImpurityReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(reason, back);
         }
     }
@@ -1691,9 +1689,8 @@ mod tests {
             total_hooks: 6,
             ..Default::default()
         };
-        let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
-        let back: HookProfile =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&profile).expect("serialize derived Serialize");
+        let back: HookProfile = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(profile, back);
     }
 

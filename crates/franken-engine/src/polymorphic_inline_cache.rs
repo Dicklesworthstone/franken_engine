@@ -915,11 +915,11 @@ mod tests {
         for kind in IcSiteKind::ALL {
             // SAFETY: IcSiteKind derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid IcSiteKind,
             // so from_str back to IcSiteKind cannot fail (valid format + matching schema).
             let back: IcSiteKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -950,11 +950,11 @@ mod tests {
         for state in IcSiteState::ALL {
             // SAFETY: IcSiteState derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(state).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid IcSiteState,
             // so from_str back to IcSiteState cannot fail (valid format + matching schema).
             let back: IcSiteState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*state, back);
         }
     }
@@ -1064,11 +1064,11 @@ mod tests {
         p.record_access(42, &IcPolicyConfig::default());
         // SAFETY: IcSiteProfile derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid IcSiteProfile,
         // so from_str back to IcSiteProfile cannot fail (valid format + matching schema).
         let back: IcSiteProfile =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1107,9 +1107,9 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for v in BailoutVerdict::ALL {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: BailoutVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1129,9 +1129,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = IcPolicyConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: IcPolicyConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1192,9 +1192,9 @@ mod tests {
         p.record_access(42, &IcPolicyConfig::default());
         let config = IcPolicyConfig::default();
         let decision = decide_bailout(&p, &config, epoch());
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: BailoutDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
     }
 
@@ -1268,9 +1268,8 @@ mod tests {
             42,
             1,
         );
-        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
-        let back: IcReplayLog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&log).expect("serialize derived Serialize");
+        let back: IcReplayLog = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(log, back);
     }
 
@@ -1369,9 +1368,9 @@ mod tests {
     #[test]
     fn specimen_family_serde_roundtrip() {
         for fam in PicSpecimenFamily::ALL {
-            let json = serde_json::to_string(fam).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(fam).expect("serialize derived Serialize");
             let back: PicSpecimenFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*fam, back);
         }
     }
@@ -1381,9 +1380,9 @@ mod tests {
     #[test]
     fn pic_verdict_serde_roundtrip() {
         for v in [PicVerdict::Pass, PicVerdict::Fail] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: PicVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }

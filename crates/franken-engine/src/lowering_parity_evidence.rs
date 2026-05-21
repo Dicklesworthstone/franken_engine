@@ -438,10 +438,9 @@ mod tests {
             ParityVerdict::LoweringLeadsParser,
             ParityVerdict::OpenGap,
         ] {
-            let json =
-                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&verdict).expect("serialize derived Serialize");
             let back: ParityVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, verdict);
         }
     }
@@ -456,9 +455,9 @@ mod tests {
             verdict: ParityVerdict::Covered,
             diagnostic_code: "FE-TEST-0001".to_string(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let back: ParityFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, finding);
     }
 
@@ -473,9 +472,9 @@ mod tests {
             verdict: Some("covered".to_string()),
             detail: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ParityEvidenceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
@@ -630,9 +629,9 @@ mod tests {
     #[test]
     fn inventory_serde_roundtrip() {
         let inventory = parity_evidence_inventory();
-        let json = serde_json::to_string(&inventory).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inventory).expect("serialize derived Serialize");
         let deserialized: ParityEvidenceInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inventory, deserialized);
     }
 
@@ -828,7 +827,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed");
         let back: ParityEvidenceRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.schema_version, manifest.schema_version);
         assert_eq!(back.finding_count, manifest.finding_count);
         assert_eq!(back.contract_satisfied, manifest.contract_satisfied);
@@ -849,10 +848,9 @@ mod tests {
             ParityVerdict::LoweringLeadsParser,
             ParityVerdict::OpenGap,
         ] {
-            let json =
-                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&verdict).expect("serialize derived Serialize");
             let back: ParityVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(verdict, back);
         }
     }
@@ -867,7 +865,7 @@ mod tests {
             ParityVerdict::OpenGap,
         ] {
             let json: String = serde_json::from_str(
-                &serde_json::to_string(&verdict).expect("serde deserialization should succeed"),
+                &serde_json::to_string(&verdict).expect("serialize derived Serialize"),
             )
             .expect("serde deserialization should succeed");
             assert_eq!(json, verdict.as_str());
@@ -936,9 +934,9 @@ mod tests {
             verdict: Some("covered".to_string()),
             detail: Some("test detail".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ParityEvidenceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -952,9 +950,9 @@ mod tests {
             lowering_status: "resolved".to_string(),
             verdict: ParityVerdict::Covered,
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let back: ParityFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(finding, back);
     }
 
@@ -986,9 +984,9 @@ mod tests {
             events_jsonl: "events.jsonl".to_string(),
             commands_txt: "commands.txt".to_string(),
         };
-        let json = serde_json::to_string(&paths).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&paths).expect("serialize derived Serialize");
         let back: ParityEvidenceArtifactPaths =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(paths, back);
     }
 
@@ -1317,9 +1315,9 @@ mod tests {
         let inv = parity_evidence_inventory();
         let events = generate_events(&inv);
         for event in &events {
-            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(event).expect("serialize derived Serialize");
             let _parsed: serde_json::Value =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
         }
     }
 
@@ -1444,9 +1442,9 @@ mod tests {
             verdict: None,
             detail: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let val: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(val["site_id"].is_null());
         assert!(val["verdict"].is_null());
         assert!(val["detail"].is_null());
@@ -1499,7 +1497,7 @@ mod tests {
         let manifest_json = fs::read_to_string(&artifacts.run_manifest_path)
             .expect("serde deserialization should succeed");
         let manifest: ParityEvidenceRunManifest =
-            serde_json::from_str(&manifest_json).expect("serde deserialization should succeed");
+            serde_json::from_str(&manifest_json).expect("deserialize known-valid JSON");
         assert!(manifest.trace_id.starts_with("parity-evidence-"));
         assert!(
             manifest
@@ -1519,7 +1517,7 @@ mod tests {
         let manifest_json = fs::read_to_string(&artifacts.run_manifest_path)
             .expect("serde deserialization should succeed");
         let manifest: ParityEvidenceRunManifest =
-            serde_json::from_str(&manifest_json).expect("serde deserialization should succeed");
+            serde_json::from_str(&manifest_json).expect("deserialize known-valid JSON");
         // Paths should be relative filenames, not absolute paths
         assert!(
             !manifest
@@ -1601,9 +1599,9 @@ mod tests {
                 commands_txt: "commands.txt".to_string(),
             },
         };
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: ParityEvidenceRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
     }
 

@@ -1278,9 +1278,9 @@ mod tests {
     #[test]
     fn test_target_serde_roundtrip() {
         for target in PromotionTarget::ALL {
-            let json = serde_json::to_string(target).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(target).expect("serialize derived Serialize");
             let back: PromotionTarget =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*target, back);
         }
     }
@@ -1306,10 +1306,9 @@ mod tests {
     #[test]
     fn test_strength_serde_roundtrip() {
         for strength in LawStrength::ALL {
-            let json =
-                serde_json::to_string(strength).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(strength).expect("serialize derived Serialize");
             let back: LawStrength =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*strength, back);
         }
     }
@@ -1342,9 +1341,9 @@ mod tests {
     #[test]
     fn test_status_serde_roundtrip() {
         for status in PromotionStatus::ALL {
-            let json = serde_json::to_string(status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(status).expect("serialize derived Serialize");
             let back: PromotionStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*status, back);
         }
     }
@@ -1391,9 +1390,8 @@ mod tests {
     #[test]
     fn test_accepted_law_serde_roundtrip() {
         let law = test_law();
-        let json = serde_json::to_string(&law).expect("serde deserialization should succeed");
-        let back: AcceptedLaw =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&law).expect("serialize derived Serialize");
+        let back: AcceptedLaw = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(law, back);
     }
 
@@ -1427,9 +1425,8 @@ mod tests {
     fn test_rewrite_rule_serde_roundtrip() {
         let law = test_law();
         let rule = RewriteRule::from_law("rw-001", &law, "p", "r", "g", 1_100_000);
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let back: RewriteRule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
+        let back: RewriteRule = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rule, back);
     }
 
@@ -1462,9 +1459,8 @@ mod tests {
     #[test]
     fn test_rewrite_pack_serde_roundtrip() {
         let pack = RewritePack::new("pack-001", test_epoch());
-        let json = serde_json::to_string(&pack).expect("serde deserialization should succeed");
-        let back: RewritePack =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pack).expect("serialize derived Serialize");
+        let back: RewritePack = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pack, back);
     }
 
@@ -1499,9 +1495,9 @@ mod tests {
     fn test_synthesis_seed_serde_roundtrip() {
         let law = test_law();
         let seed = SynthesisSeed::from_law("syn-001", &law, "t", vec!["a".into()], "p");
-        let json = serde_json::to_string(&seed).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&seed).expect("serialize derived Serialize");
         let back: SynthesisSeed =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(seed, back);
     }
 
@@ -1547,9 +1543,9 @@ mod tests {
     fn test_atlas_entry_serde_roundtrip() {
         let law = test_law();
         let entry = SupportAtlasEntry::from_law("ae-001", &law, "d", 500_000);
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: SupportAtlasEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1609,9 +1605,9 @@ mod tests {
     fn test_frontier_entry_serde_roundtrip() {
         let law = test_law();
         let entry = FrontierEntry::from_law("f-001", &law, "r", 200_000);
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: FrontierEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1707,9 +1703,9 @@ mod tests {
             test_epoch(),
             "test",
         );
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: PromotionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -1819,9 +1815,9 @@ mod tests {
         let mut pipeline = PromotionPipeline::new("pipe-001", test_epoch());
         let law = test_law();
         pipeline.promote_to_rewrite(&law, "p", "r", "g", MILLION);
-        let json = serde_json::to_string(&pipeline).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pipeline).expect("serialize derived Serialize");
         let back: PromotionPipeline =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pipeline, back);
     }
 
@@ -1864,9 +1860,9 @@ mod tests {
             covered_domains: 2,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: PromotionSummaryReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 

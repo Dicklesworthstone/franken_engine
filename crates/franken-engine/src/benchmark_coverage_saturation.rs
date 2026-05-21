@@ -1455,9 +1455,9 @@ mod tests {
     #[test]
     fn workload_family_serde_roundtrip() {
         for f in WorkloadFamily::ALL {
-            let json = serde_json::to_string(f).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(f).expect("serialize derived Serialize");
             let back: WorkloadFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*f, back);
         }
     }
@@ -1511,9 +1511,9 @@ mod tests {
     #[test]
     fn coverage_status_serde_roundtrip() {
         for s in CoverageStatus::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: CoverageStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1537,9 +1537,9 @@ mod tests {
     #[test]
     fn representativeness_metric_serde_roundtrip() {
         for m in RepresentativenessMetric::ALL {
-            let json = serde_json::to_string(m).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(m).expect("serialize derived Serialize");
             let back: RepresentativenessMetric =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*m, back);
         }
     }
@@ -1651,9 +1651,9 @@ mod tests {
             42,
             &["ffi", "handle"],
         );
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: BenchmarkEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1791,9 +1791,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = default_config();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: SaturationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1834,9 +1834,9 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for v in SaturationVerdict::ALL {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: SaturationVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }

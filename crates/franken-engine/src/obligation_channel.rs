@@ -725,9 +725,9 @@ mod tests {
             state: ObligationState::Committed,
             resolution_evidence_hash: Some("h".to_string()),
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let restored: ObligationRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, restored);
     }
 
@@ -741,18 +741,18 @@ mod tests {
             resolution_type: Some("commit".to_string()),
             evidence_hash: Some("h".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: ObligationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
     #[test]
     fn channel_config_serialization_round_trip() {
         let config = ChannelConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: ChannelConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -768,9 +768,9 @@ mod tests {
             ObligationState::Aborted,
             ObligationState::Leaked,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let restored: ObligationState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, restored);
         }
     }
@@ -785,9 +785,9 @@ mod tests {
             AbortReason::Custom("custom-reason".to_string()),
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(reason).expect("serialize derived Serialize");
             let restored: AbortReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*reason, restored);
         }
     }
@@ -941,9 +941,9 @@ mod tests {
             ObligationError::Leaked { obligation_id: 3 },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: ObligationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1154,7 +1154,7 @@ mod tests {
             state: ObligationState::Pending,
             resolution_evidence_hash: None,
         };
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         assert!(json.contains("\"obligation_id\""));
         assert!(json.contains("\"created_at_tick\""));
         assert!(json.contains("\"creator_trace_id\""));
@@ -1172,7 +1172,7 @@ mod tests {
             resolution_type: None,
             evidence_hash: None,
         };
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"channel_id\""));
         assert!(json.contains("\"obligation_id\""));
@@ -1313,9 +1313,8 @@ mod tests {
     #[test]
     fn abort_reason_custom_long_string_serde() {
         let reason = AbortReason::Custom("a".repeat(1000));
-        let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
-        let back: AbortReason =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
+        let back: AbortReason = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reason, back);
     }
 
@@ -1353,9 +1352,9 @@ mod tests {
             max_pending: 50,
             lab_mode: true,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: ChannelConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -1368,9 +1367,9 @@ mod tests {
             state: ObligationState::Pending,
             resolution_evidence_hash: None,
         };
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let back: ObligationRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rec, back);
     }
 
@@ -1579,9 +1578,8 @@ mod tests {
     #[test]
     fn abort_reason_serde_custom_special_chars() {
         let reason = AbortReason::Custom("special: \"chars\" \n\t".into());
-        let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
-        let back: AbortReason =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
+        let back: AbortReason = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reason, back);
     }
 
@@ -1590,9 +1588,9 @@ mod tests {
         let err = ObligationError::Backpressure {
             max_pending: usize::MAX,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: ObligationError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1687,18 +1685,18 @@ mod tests {
     #[test]
     fn obligation_error_not_found_zero_id_serde() {
         let err = ObligationError::NotFound { obligation_id: 0 };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: ObligationError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
     #[test]
     fn obligation_state_serde_leaked() {
         let state = ObligationState::Leaked;
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let back: ObligationState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(state, back);
     }
 

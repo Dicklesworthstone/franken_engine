@@ -1320,7 +1320,7 @@ mod tests {
         let json = serde_json::to_string(&BoundaryKind::Fold)
             .expect("serde deserialization should succeed");
         let deserialized: BoundaryKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, BoundaryKind::Fold);
     }
 
@@ -1329,7 +1329,7 @@ mod tests {
         let json = serde_json::to_string(&BoundaryKind::Cusp)
             .expect("serde deserialization should succeed");
         let deserialized: BoundaryKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, BoundaryKind::Cusp);
     }
 
@@ -1344,10 +1344,9 @@ mod tests {
             BoundaryKind::CliffEdge,
         ];
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let deserialized: BoundaryKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&deserialized, variant);
         }
     }
@@ -1362,10 +1361,9 @@ mod tests {
             PhaseRegion::RobustLoss,
         ];
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let deserialized: PhaseRegion =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&deserialized, variant);
         }
     }
@@ -1859,9 +1857,9 @@ mod tests {
             WitnessError::InternalError("test".to_string()),
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let deserialized: WitnessError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&deserialized, err);
         }
     }

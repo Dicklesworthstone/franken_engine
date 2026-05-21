@@ -1789,11 +1789,10 @@ mod tests {
             ModuleFeature::PackageJsonFields,
         ] {
             // SAFETY: ModuleFeature derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ModuleFeature serialization
             let back: ModuleFeature =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1806,11 +1805,10 @@ mod tests {
             CompatibilityRuntime::Bun,
         ] {
             // SAFETY: CompatibilityRuntime derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid CompatibilityRuntime serialization
             let back: CompatibilityRuntime =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1823,11 +1821,10 @@ mod tests {
             CompatibilityMode::BunCompat,
         ] {
             // SAFETY: CompatibilityMode derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid CompatibilityMode serialization
             let back: CompatibilityMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1845,11 +1842,10 @@ mod tests {
             CompatibilityMatrixErrorCode::ObservationMismatch,
         ] {
             // SAFETY: CompatibilityMatrixErrorCode derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid CompatibilityMatrixErrorCode serialization
             let back: CompatibilityMatrixErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -2448,11 +2444,10 @@ mod tests {
     fn reference_runtime_serde_round_trip() {
         for variant in [ReferenceRuntime::Node, ReferenceRuntime::Bun] {
             // SAFETY: ReferenceRuntime derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ReferenceRuntime serialization
             let back: ReferenceRuntime =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -2461,10 +2456,9 @@ mod tests {
     fn explicit_shim_serde_round_trip() {
         let shim = valid_shim(CompatibilityMode::NodeCompat);
         // SAFETY: ExplicitShim derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&shim).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&shim).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ExplicitShim serialization
-        let back: ExplicitShim =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ExplicitShim = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(shim, back);
     }
 
@@ -2478,10 +2472,10 @@ mod tests {
             migration_guidance: "wrap in try/catch".to_string(),
         };
         // SAFETY: DivergencePolicy derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid DivergencePolicy serialization
         let back: DivergencePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, back);
     }
 
@@ -2489,10 +2483,10 @@ mod tests {
     fn compatibility_matrix_entry_serde_round_trip() {
         let entry = valid_entry("case-serde");
         // SAFETY: CompatibilityMatrixEntry derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid CompatibilityMatrixEntry serialization
         let back: CompatibilityMatrixEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -2500,10 +2494,10 @@ mod tests {
     fn compatibility_context_serde_round_trip() {
         let ctx = context();
         // SAFETY: CompatibilityContext derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid CompatibilityContext serialization
         let back: CompatibilityContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctx, back);
     }
 
@@ -2516,10 +2510,10 @@ mod tests {
             "ok",
         );
         // SAFETY: CompatibilityObservation derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid CompatibilityObservation serialization
         let back: CompatibilityObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, back);
     }
 
@@ -2531,10 +2525,10 @@ mod tests {
             event: None,
         };
         // SAFETY: CompatibilityMatrixError derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid CompatibilityMatrixError serialization
         let back: CompatibilityMatrixError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 

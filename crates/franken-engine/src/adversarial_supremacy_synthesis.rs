@@ -1104,11 +1104,11 @@ mod tests {
         for s in SynthesisStrategy::ALL {
             // SAFETY: SynthesisStrategy derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid SynthesisStrategy,
             // so from_str back to SynthesisStrategy cannot fail (valid format + matching schema).
             let back: SynthesisStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1149,11 +1149,11 @@ mod tests {
         for s in CounterexampleSeverity::ALL {
             // SAFETY: CounterexampleSeverity derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid CounterexampleSeverity,
             // so from_str back to CounterexampleSeverity cannot fail (valid format + matching schema).
             let back: CounterexampleSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1193,11 +1193,11 @@ mod tests {
         for v in FalsificationVerdict::ALL {
             // SAFETY: FalsificationVerdict derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid FalsificationVerdict,
             // so from_str back to FalsificationVerdict cannot fail (valid format + matching schema).
             let back: FalsificationVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1236,11 +1236,11 @@ mod tests {
         for a in WorkloadArchetype::ALL {
             // SAFETY: WorkloadArchetype derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(a).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(a).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid WorkloadArchetype,
             // so from_str back to WorkloadArchetype cannot fail (valid format + matching schema).
             let back: WorkloadArchetype =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*a, back);
         }
     }
@@ -1822,9 +1822,9 @@ mod tests {
             epoch(),
         );
         let receipt = DecisionReceipt::from_result(&result);
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -1835,11 +1835,11 @@ mod tests {
         let w = default_workload();
         // SAFETY: SyntheticWorkload derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&w).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid SyntheticWorkload,
         // so from_str back to SyntheticWorkload cannot fail (valid format + matching schema).
         let back: SyntheticWorkload =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(w, back);
     }
 
@@ -1850,9 +1850,9 @@ mod tests {
         let w = default_workload();
         let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&ce).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ce).expect("serialize derived Serialize");
         let back: Counterexample =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ce, back);
     }
 
@@ -1868,9 +1868,9 @@ mod tests {
             &config,
             epoch(),
         );
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: FalsificationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 }

@@ -821,9 +821,9 @@ mod tests {
     #[test]
     fn test_class_serde_roundtrip() {
         for class in TestClass::ALL {
-            let json = serde_json::to_string(class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(class).expect("serialize derived Serialize");
             let back: TestClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*class, back);
         }
     }
@@ -860,10 +860,9 @@ mod tests {
     #[test]
     fn test_surface_serde_roundtrip() {
         for surface in TestSurface::ALL {
-            let json =
-                serde_json::to_string(surface).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(surface).expect("serialize derived Serialize");
             let back: TestSurface =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*surface, back);
         }
     }
@@ -888,9 +887,9 @@ mod tests {
     #[test]
     fn provenance_serde_roundtrip() {
         let p = ProvenanceLevel::Captured;
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: ProvenanceLevel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -972,9 +971,9 @@ mod tests {
     #[test]
     fn contract_serde_roundtrip() {
         let c = DeterminismContract::strict();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: DeterminismContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1035,9 +1034,8 @@ mod tests {
     #[test]
     fn fixture_serde_roundtrip() {
         let f = make_fixture("serde-001", TestClass::Edge);
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: FixtureEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f, back);
     }
 
@@ -1164,9 +1162,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         r.register(make_fixture("sr2", TestClass::Adversarial))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: FixtureRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1229,9 +1227,8 @@ mod tests {
             owner_agent: "SilverLake".to_string(),
             fixture_ids: BTreeSet::from(["r1".to_string(), "r2".to_string()]),
         });
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: OwnershipMap =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
+        let back: OwnershipMap = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -1262,10 +1259,9 @@ mod tests {
             TestOutcome::Timeout,
             TestOutcome::Flake,
         ] {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: TestOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, back);
         }
     }
@@ -1289,9 +1285,9 @@ mod tests {
     #[test]
     fn execution_record_serde_roundtrip() {
         let r = make_record("f1", TestOutcome::Pass);
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: TestExecutionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1391,9 +1387,9 @@ mod tests {
             make_record("b", TestOutcome::Fail),
         ];
         let s = TestSuiteSummary::from_records(&records);
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: TestSuiteSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -1412,9 +1408,9 @@ mod tests {
     #[test]
     fn registry_error_serde_roundtrip() {
         let e = RegistryError::DuplicateFixtureId("test".to_string());
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: RegistryError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1565,9 +1561,9 @@ mod tests {
             field: "seed".to_string(),
             message: "missing".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ContractViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1669,9 +1665,9 @@ mod tests {
             ProvenanceLevel::Captured,
             ProvenanceLevel::Synthesized,
         ] {
-            let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&p).expect("serialize derived Serialize");
             let back: ProvenanceLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(p, back);
         }
     }
@@ -1842,9 +1838,8 @@ mod tests {
     fn fixture_tags_deterministic_ordering() {
         let mut f = make_fixture("tags-001", TestClass::Core);
         f.tags = BTreeSet::from(["alpha".to_string(), "beta".to_string(), "gamma".to_string()]);
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: FixtureEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f.tags, back.tags);
         let tags_vec: Vec<_> = back.tags.iter().collect();
         assert_eq!(tags_vec, vec!["alpha", "beta", "gamma"]);
@@ -1854,9 +1849,8 @@ mod tests {
     fn fixture_empty_surfaces() {
         let mut f = make_fixture("no-surface", TestClass::Core);
         f.surfaces = BTreeSet::new();
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: FixtureEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.surfaces.is_empty());
     }
 
@@ -1865,9 +1859,8 @@ mod tests {
         let mut f = make_fixture("all-surfaces", TestClass::Core);
         f.surfaces = TestSurface::ALL.iter().copied().collect();
         assert_eq!(f.surfaces.len(), 8);
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: FixtureEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f.surfaces, back.surfaces);
     }
 
@@ -1958,9 +1951,9 @@ mod tests {
             f.tags = BTreeSet::from([format!("tag-{}", i % 3)]);
             r.register(f).expect("serde deserialization should succeed");
         }
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: FixtureRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -2063,9 +2056,9 @@ mod tests {
         let mut r = make_record("seeded", TestOutcome::Pass);
         r.seed = Some(42);
         r.test_class = TestClass::Adversarial;
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: TestExecutionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.seed, Some(42));
         assert_eq!(back.test_class, TestClass::Adversarial);
     }
@@ -2074,9 +2067,9 @@ mod tests {
     fn execution_record_with_notes() {
         let mut r = make_record("noted", TestOutcome::Fail);
         r.notes = "Known flaky on CI".to_string();
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: TestExecutionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.notes, "Known flaky on CI");
     }
 
@@ -2085,9 +2078,9 @@ mod tests {
         for surface in TestSurface::ALL {
             let mut r = make_record(&format!("surf-{}", surface.as_str()), TestOutcome::Pass);
             r.surface = *surface;
-            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&r).expect("serialize derived Serialize");
             let back: TestExecutionRecord =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back.surface, *surface);
         }
     }
@@ -2214,9 +2207,9 @@ mod tests {
             }
         }
         let s = TestSuiteSummary::from_records(&records);
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: TestSuiteSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -2243,9 +2236,9 @@ mod tests {
             RegistryError::InvalidFixture("broken".to_string()),
         ];
         for e in errors {
-            let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&e).expect("serialize derived Serialize");
             let back: RegistryError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(e, back);
         }
     }
@@ -2327,9 +2320,8 @@ mod tests {
     fn fixture_id_derivation_stability_across_serde() {
         let f = make_fixture("stability-check", TestClass::Adversarial);
         let id_before = f.derive_id().expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
-        let back: FixtureEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
+        let back: FixtureEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let id_after = back
             .derive_id()
             .expect("serde deserialization should succeed");

@@ -1309,9 +1309,9 @@ mod tests {
             MorselSize::Large,
             MorselSize::Huge,
         ] {
-            let json = serde_json::to_string(&size).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&size).expect("serialize derived Serialize");
             let decoded: MorselSize =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(size, decoded);
         }
     }
@@ -1325,9 +1325,9 @@ mod tests {
             CallbackFenceKind::ThrowingCallback,
             CallbackFenceKind::MutatingCallback,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let decoded: CallbackFenceKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, decoded);
         }
     }
@@ -1339,9 +1339,9 @@ mod tests {
             CliffBehavior::NarrowLane,
             CliffBehavior::PaddedLane,
         ] {
-            let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&b).expect("serialize derived Serialize");
             let decoded: CliffBehavior =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(b, decoded);
         }
     }
@@ -1355,9 +1355,9 @@ mod tests {
             MorselOutcome::AbortedKillSwitch,
             MorselOutcome::Skipped,
         ] {
-            let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&o).expect("serialize derived Serialize");
             let decoded: MorselOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(o, decoded);
         }
     }
@@ -1370,9 +1370,9 @@ mod tests {
             MorselSize::Medium,
             CallbackFenceKind::PureCallback,
         );
-        let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&k).expect("serialize derived Serialize");
         let decoded: MorselKernelDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(k, decoded);
     }
 
@@ -1380,9 +1380,9 @@ mod tests {
     fn test_diagnostics_serde() {
         let engine = MorselKernelEngine::new(epoch(1));
         let diag = engine.diagnostics();
-        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&diag).expect("serialize derived Serialize");
         let decoded: MorselKernelDiagnostics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(diag, decoded);
     }
 
@@ -1788,9 +1788,9 @@ mod tests {
         ks.add_family(BuiltinFamily::JsonParse);
         ks.engage("serde test", epoch(6));
 
-        let json = serde_json::to_string(&ks).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ks).expect("serialize derived Serialize");
         let decoded: KillSwitch =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ks.engaged, decoded.engaged);
         assert_eq!(ks.reason, decoded.reason);
         assert_eq!(ks.affected_families, decoded.affected_families);
@@ -1804,9 +1804,9 @@ mod tests {
             behavior: CliffBehavior::PaddedLane,
             min_parallel_length: 512,
         };
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let decoded: CliffPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, decoded);
     }
 
@@ -1819,9 +1819,9 @@ mod tests {
             lane_width: LaneWidth::Lane16,
             is_tail: true,
         };
-        let json = serde_json::to_string(&part).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&part).expect("serialize derived Serialize");
         let decoded: MorselPartition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(part, decoded);
     }
 
@@ -1833,9 +1833,9 @@ mod tests {
             flushed_effects: true,
             callback_invocations: 42,
         };
-        let json = serde_json::to_string(&fence).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fence).expect("serialize derived Serialize");
         let decoded: CallbackFence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fence, decoded);
     }
 
@@ -1850,9 +1850,9 @@ mod tests {
                 None,
             )
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let decoded: KernelExecutionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt.receipt_id, decoded.receipt_id);
         assert_eq!(receipt.receipt_hash, decoded.receipt_hash);
         assert_eq!(receipt.family, decoded.family);
@@ -1862,9 +1862,9 @@ mod tests {
     #[test]
     fn test_catalog_serde_roundtrip() {
         let catalog = MorselKernelCatalog::with_defaults();
-        let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&catalog).expect("serialize derived Serialize");
         let decoded: MorselKernelCatalog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(catalog.kernel_count(), decoded.kernel_count());
         // Verify lookup still works after deserialization
         let k = decoded
@@ -2219,9 +2219,9 @@ mod tests {
             }],
             epoch: epoch(1),
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let decoded: MorselExecutionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, decoded);
     }
 

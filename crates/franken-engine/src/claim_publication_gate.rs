@@ -826,9 +826,9 @@ mod tests {
     #[test]
     fn surface_serde_round_trip() {
         for s in &ALL_SURFACES {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let deser: PublicationSurface =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, deser);
         }
     }
@@ -848,9 +848,9 @@ mod tests {
             },
         ];
         for d in &decisions {
-            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(d).expect("serialize derived Serialize");
             let deser: GateDecision =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*d, deser);
         }
     }
@@ -866,9 +866,9 @@ mod tests {
             domain: "compatibility".to_string(),
             statement: "ES2024 strict mode".to_string(),
         };
-        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&claim).expect("serialize derived Serialize");
         let deser: PublishableClaim =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(claim, deser);
     }
 
@@ -881,9 +881,9 @@ mod tests {
             blocks_surfaces: vec![PublicationSurface::Ga],
             remediation: "bd-1lsy.4.9".to_string(),
         };
-        let json = serde_json::to_string(&gap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gap).expect("serialize derived Serialize");
         let deser: FrontierGapDisclosure =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(gap, deser);
     }
 
@@ -895,9 +895,8 @@ mod tests {
             surface: PublicationSurface::Supremacy,
             description: "stale evidence".to_string(),
         };
-        let json = serde_json::to_string(&flag).expect("serde deserialization should succeed");
-        let deser: RiskFlag =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&flag).expect("serialize derived Serialize");
+        let deser: RiskFlag = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(flag, deser);
     }
 
@@ -910,9 +909,9 @@ mod tests {
         )];
         let eval =
             evaluate_publication_gate(&verdicts, &[], &default_config(), 42).expect("evaluate");
-        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eval).expect("serialize derived Serialize");
         let deser: PublicationGateEvaluation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eval, deser);
     }
 
@@ -1202,9 +1201,9 @@ mod tests {
     #[test]
     fn default_config_serde_round_trip() {
         let config = default_config();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let deser: SurfaceRoutingConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, deser);
     }
 
@@ -1363,9 +1362,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let deser: PublicationGateError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, deser);
         }
     }
@@ -1839,9 +1838,9 @@ mod tests {
             "shipped_fact",
             42,
         );
-        let json = serde_json::to_string(&av).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&av).expect("serialize derived Serialize");
         let deser: AnnotatedVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(av, deser);
     }
 
@@ -1856,9 +1855,9 @@ mod tests {
             frontier_gap_count: 2,
             risk_flag_count: 4,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let deser: PublicationGateSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, deser);
     }
 
@@ -1869,10 +1868,9 @@ mod tests {
             RiskSeverity::Warning,
             RiskSeverity::Critical,
         ] {
-            let json =
-                serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&severity).expect("serialize derived Serialize");
             let deser: RiskSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(severity, deser);
         }
     }
@@ -1884,9 +1882,9 @@ mod tests {
             PublicationTier::ScopedObserved,
             PublicationTier::FrontierAmbition,
         ] {
-            let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&tier).expect("serialize derived Serialize");
             let deser: PublicationTier =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(tier, deser);
         }
     }

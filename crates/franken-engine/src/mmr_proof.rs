@@ -1013,11 +1013,10 @@ mod tests {
             .expect("serde deserialization should succeed");
         // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid MmrProof,
         // so from_str back to MmrProof cannot fail (valid format + matching schema).
-        let restored: MmrProof =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: MmrProof = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(proof, restored);
     }
 
@@ -1036,11 +1035,11 @@ mod tests {
         for err in &errors {
             // SAFETY: ProofError derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid ProofError,
             // so from_str back to ProofError cannot fail (valid format + matching schema).
             let restored: ProofError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1123,11 +1122,11 @@ mod tests {
         for pt in [ProofType::Inclusion, ProofType::Consistency] {
             // SAFETY: ProofType derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&pt).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid ProofType,
             // so from_str back to ProofType cannot fail (valid format + matching schema).
             let restored: ProofType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(pt, restored);
         }
     }
@@ -1140,9 +1139,9 @@ mod tests {
             expected: ContentHash::compute(b"expected"),
             computed: ContentHash::compute(b"computed"),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: ProofError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -1153,9 +1152,9 @@ mod tests {
             new_length: 20,
             reason: "test consistency".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: ProofError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -1204,10 +1203,10 @@ mod tests {
             .expect("serde deserialization should succeed");
         // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json1 = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&proof).expect("serialize derived Serialize");
         // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json2 = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert_eq!(json1, json2);
     }
 
@@ -1373,7 +1372,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         for field in [
             "proof_type",
             "marker_index",
@@ -1495,9 +1494,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let back: ProofError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }
@@ -1642,7 +1641,7 @@ mod tests {
         let proof = mmr
             .inclusion_proof(0)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"proof_type\""));
     }
 
@@ -1652,7 +1651,7 @@ mod tests {
         let proof = mmr
             .inclusion_proof(0)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"epoch_id\""));
     }
 
@@ -1662,7 +1661,7 @@ mod tests {
         let proof = mmr
             .inclusion_proof(1)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"stream_length\""));
     }
 
@@ -1672,7 +1671,7 @@ mod tests {
         let proof = mmr
             .inclusion_proof(1)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"proof_hashes\""));
     }
 
@@ -1682,7 +1681,7 @@ mod tests {
         let proof = mmr
             .inclusion_proof(1)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"root_hash\""));
     }
 
@@ -1692,7 +1691,7 @@ mod tests {
         let proof = mmr
             .inclusion_proof(1)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"marker_index\""));
     }
 
@@ -1905,9 +1904,8 @@ mod tests {
         let proof = mmr
             .consistency_proof(4)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
-        let restored: MmrProof =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
+        let restored: MmrProof = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(proof, restored);
     }
 
@@ -1919,9 +1917,8 @@ mod tests {
             .inclusion_proof(0)
             .expect("serde deserialization should succeed");
         assert_eq!(proof.epoch_id, 42);
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
-        let restored: MmrProof =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
+        let restored: MmrProof = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.epoch_id, 42);
     }
 
@@ -1932,27 +1929,26 @@ mod tests {
             .inclusion_proof(7)
             .expect("serde deserialization should succeed");
         assert_eq!(proof.stream_length, 13);
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
-        let restored: MmrProof =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
+        let restored: MmrProof = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.stream_length, 13);
     }
 
     #[test]
     fn proof_type_inclusion_serde_roundtrip_is_inclusion() {
         let pt = ProofType::Inclusion;
-        let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pt).expect("serialize derived Serialize");
         let restored: ProofType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, ProofType::Inclusion);
     }
 
     #[test]
     fn proof_type_consistency_serde_roundtrip_is_consistency() {
         let pt = ProofType::Consistency;
-        let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pt).expect("serialize derived Serialize");
         let restored: ProofType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, ProofType::Consistency);
     }
 

@@ -1211,9 +1211,8 @@ mod tests {
     #[test]
     fn lease_id_serialization_round_trip() {
         let id = LeaseId::from_raw(42);
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let restored: LeaseId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let restored: LeaseId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, restored);
     }
 
@@ -1230,9 +1229,8 @@ mod tests {
             renewal_count: 2,
             status: LeaseStatus::Active,
         };
-        let json = serde_json::to_string(&lease).expect("serde deserialization should succeed");
-        let restored: Lease =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lease).expect("serialize derived Serialize");
+        let restored: Lease = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lease, restored);
     }
 
@@ -1249,9 +1247,9 @@ mod tests {
             event: "grant".to_string(),
             renewal_count: 0,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: LeaseEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1268,9 +1266,9 @@ mod tests {
             LeaseError::EmptyHolder,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: LeaseError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1289,9 +1287,9 @@ mod tests {
             },
         ];
         for action in &actions {
-            let json = serde_json::to_string(action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(action).expect("serialize derived Serialize");
             let restored: EscalationAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*action, restored);
         }
     }
@@ -1469,9 +1467,8 @@ mod tests {
         let lease = store
             .get(&id)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(lease).expect("serde deserialization should succeed");
-        let restored: Lease =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(lease).expect("serialize derived Serialize");
+        let restored: Lease = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*lease, restored);
     }
 
@@ -1509,9 +1506,8 @@ mod tests {
             lease_epoch: SecurityEpoch::from_raw(1),
             current_epoch: SecurityEpoch::from_raw(3),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: LeaseError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let back: LeaseError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1646,9 +1642,8 @@ mod tests {
             renewal_count: 0,
             status: LeaseStatus::Expired,
         };
-        let json = serde_json::to_string(&lease).expect("serde deserialization should succeed");
-        let back: Lease =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lease).expect("serialize derived Serialize");
+        let back: Lease = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.status, LeaseStatus::Expired);
     }
 
@@ -1665,9 +1660,8 @@ mod tests {
             renewal_count: 3,
             status: LeaseStatus::Released,
         };
-        let json = serde_json::to_string(&lease).expect("serde deserialization should succeed");
-        let back: Lease =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lease).expect("serialize derived Serialize");
+        let back: Lease = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.status, LeaseStatus::Released);
         assert_eq!(back.renewal_count, 3);
     }
@@ -1679,9 +1673,9 @@ mod tests {
             LeaseType::Operation,
             LeaseType::Session,
         ] {
-            let json = serde_json::to_string(&lt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&lt).expect("serialize derived Serialize");
             let back: LeaseType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(lt, back);
         }
     }
@@ -1693,10 +1687,9 @@ mod tests {
             LeaseStatus::Expired,
             LeaseStatus::Released,
         ] {
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             let back: LeaseStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(status, back);
         }
     }
@@ -1807,7 +1800,7 @@ mod tests {
             renewal_count: 5,
             status: LeaseStatus::Active,
         };
-        let json = serde_json::to_string(&lease).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lease).expect("serialize derived Serialize");
         for field in [
             "lease_id",
             "holder",
@@ -1836,7 +1829,7 @@ mod tests {
             event: "grant".to_string(),
             renewal_count: 0,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         for field in [
             "lease_id",
             "holder",

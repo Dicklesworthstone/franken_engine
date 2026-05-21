@@ -627,7 +627,7 @@ mod tests {
         ];
         entries.sort();
 
-        let arr = SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
         assert_eq!(arr.len(), 2);
         // Verify sorted order.
         assert!(arr.entries()[0].signer.as_bytes() < arr.entries()[1].signer.as_bytes());
@@ -691,8 +691,7 @@ mod tests {
         let obj = test_obj();
 
         let entries = vec![SignerSignature::new(vk1.clone(), sign_with(&sk1, &obj))];
-        let mut arr =
-            SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let mut arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
 
         let err = arr
             .insert(SignerSignature::new(vk1, sign_with(&sk1, &obj)))
@@ -758,7 +757,7 @@ mod tests {
         let obj = test_obj();
 
         let entries = vec![SignerSignature::new(vk1.clone(), sign_with(&sk1, &obj))];
-        let arr = SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
 
         assert!(arr.contains_signer(&vk1));
         assert!(!arr.contains_signer(&vk2));
@@ -857,7 +856,7 @@ mod tests {
         let obj = test_obj();
 
         let entries = vec![SignerSignature::new(vk1.clone(), sign_with(&sk1, &obj))];
-        let arr = SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
 
         let err = arr.verify_quorum(0, &[vk1], |_, _| Ok(())).unwrap_err();
         assert!(matches!(err, MultiSigError::ZeroQuorumThreshold));
@@ -899,9 +898,9 @@ mod tests {
         let arr = SortedSignatureArray::from_unsorted(entries)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&arr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&arr).expect("serialize derived Serialize");
         let restored: SortedSignatureArray =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(arr, restored);
         // Verify still sorted.
@@ -1053,9 +1052,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: MultiSigError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1072,9 +1071,9 @@ mod tests {
             invalid_signers: vec![],
             unauthorized_signers: vec![],
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: QuorumResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1088,9 +1087,9 @@ mod tests {
             },
             trace_id: "t-ser".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: MultiSigEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1112,9 +1111,9 @@ mod tests {
         let obj = test_obj();
         let sig = sign_with(&sk, &obj);
         let ss = SignerSignature::new(vk, sig);
-        let json = serde_json::to_string(&ss).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ss).expect("serialize derived Serialize");
         let restored: SignerSignature =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ss, restored);
     }
 
@@ -1143,9 +1142,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: MultiSigEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -1199,7 +1198,7 @@ mod tests {
         let (sk, vk) = make_sig_pair(1);
         let obj = test_obj();
         let entries = vec![SignerSignature::new(vk.clone(), sign_with(&sk, &obj))];
-        let arr = SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
         assert_eq!(arr.len(), 1);
         assert!(!arr.is_empty());
         assert!(arr.contains_signer(&vk));
@@ -1306,7 +1305,7 @@ mod tests {
         let preimage = obj.preimage_bytes();
 
         let entries = vec![SignerSignature::new(vk.clone(), sign_with(&sk, &obj))];
-        let arr = SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
 
         let result = arr
             .verify_quorum(1, &[vk], |vk_ref, sig| {
@@ -1326,7 +1325,7 @@ mod tests {
         let preimage = obj.preimage_bytes();
 
         let entries = vec![SignerSignature::new(vk1.clone(), sign_with(&sk1, &obj))];
-        let arr = SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
 
         // Authorized list has only vk_other; vk1 is unauthorized.
         let err = arr
@@ -1641,7 +1640,7 @@ mod tests {
             invalid_signers: vec![],
             unauthorized_signers: vec![],
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(json.contains("\"quorum_met\""));
         assert!(json.contains("\"valid_count\""));
         assert!(json.contains("\"invalid_count\""));
@@ -1655,7 +1654,7 @@ mod tests {
             event_type: MultiSigEventType::ArrayCreated { signer_count: 2 },
             trace_id: "t-json".into(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"event_type\""));
         assert!(json.contains("\"trace_id\""));
     }
@@ -1665,7 +1664,7 @@ mod tests {
         let (sk, vk) = make_sig_pair(1);
         let obj = test_obj();
         let ss = SignerSignature::new(vk, sign_with(&sk, &obj));
-        let json = serde_json::to_string(&ss).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ss).expect("serialize derived Serialize");
         assert!(json.contains("\"signer\""));
         assert!(json.contains("\"signature\""));
     }
@@ -1701,7 +1700,7 @@ mod tests {
         let (_, vk_absent) = make_sig_pair(99);
         let obj = test_obj();
         let entries = vec![SignerSignature::new(vk1, sign_with(&sk1, &obj))];
-        let arr = SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
         assert!(!arr.contains_signer(&vk_absent));
     }
 
@@ -1774,9 +1773,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: MultiSigError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1806,9 +1805,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: MultiSigEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1855,7 +1854,7 @@ mod tests {
         let (sk1, vk1) = make_sig_pair(1);
         let obj = test_obj();
         let entries = vec![SignerSignature::new(vk1, sign_with(&sk1, &obj))];
-        let arr = SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
         assert!(!arr.is_empty());
     }
 
@@ -1871,7 +1870,7 @@ mod tests {
             SignerSignature::new(vk3, sign_with(&sk3, &obj)),
         ];
         entries.sort();
-        let arr = SortedSignatureArray::new(entries).expect("serde deserialization should succeed");
+        let arr = SortedSignatureArray::new(entries).expect("constructor with valid inputs");
         let keys = arr.signer_keys();
         assert_eq!(keys.len(), 3);
         // All keys should be unique

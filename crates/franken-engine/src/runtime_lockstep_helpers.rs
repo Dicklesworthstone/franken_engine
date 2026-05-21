@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use chrono::Utc;
+use chrono::{SecondsFormat, Utc};
 
 use crate::frx_lockstep_oracle::{
     FrxLockstepRunContext, RuntimeBenchmarkResult, create_runtime_benchmark_trace,

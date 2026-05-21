@@ -1235,11 +1235,11 @@ mod tests {
         let snap = TsconfigSnapshot::default();
         // SAFETY: TsconfigSnapshot derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid TsconfigSnapshot,
         // so from_str back to TsconfigSnapshot cannot fail (valid format + matching schema).
         let rt: TsconfigSnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, rt);
     }
 
@@ -1299,11 +1299,11 @@ mod tests {
         };
         // SAFETY: TsResolutionReplayEntry derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid TsResolutionReplayEntry,
         // so from_str back to TsResolutionReplayEntry cannot fail (valid format + matching schema).
         let rt: TsResolutionReplayEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, rt);
     }
 
@@ -1377,9 +1377,9 @@ mod tests {
     fn test_replay_index_serde() {
         let index =
             TsResolutionReplayIndex::build(Vec::new(), "h", TsModuleResolutionMode::Bundler, "t");
-        let json = serde_json::to_string(&index).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&index).expect("serialize derived Serialize");
         let rt: TsResolutionReplayIndex =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(index, rt);
     }
 
@@ -1597,9 +1597,9 @@ mod tests {
             },
             generated_at_utc: "t".into(),
         });
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let rt: TsExecutionManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, rt);
     }
 
@@ -2142,9 +2142,9 @@ mod tests {
     #[test]
     fn test_replay_validation_status_serde_roundtrip() {
         for status in ReplayValidationStatus::ALL {
-            let json = serde_json::to_string(status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(status).expect("serialize derived Serialize");
             let rt: ReplayValidationStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*status, rt);
         }
     }
@@ -2152,9 +2152,9 @@ mod tests {
     #[test]
     fn test_manifest_feature_family_serde_roundtrip() {
         for family in ManifestFeatureFamily::ALL {
-            let json = serde_json::to_string(family).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(family).expect("serialize derived Serialize");
             let rt: ManifestFeatureFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*family, rt);
         }
     }
@@ -2166,9 +2166,9 @@ mod tests {
         let fail_json = serde_json::to_string(&ManifestVerdict::Fail)
             .expect("serde deserialization should succeed");
         let pass_rt: ManifestVerdict =
-            serde_json::from_str(&pass_json).expect("serde deserialization should succeed");
+            serde_json::from_str(&pass_json).expect("deserialize known-valid JSON");
         let fail_rt: ManifestVerdict =
-            serde_json::from_str(&fail_json).expect("serde deserialization should succeed");
+            serde_json::from_str(&fail_json).expect("deserialize known-valid JSON");
         assert_eq!(pass_rt, ManifestVerdict::Pass);
         assert_eq!(fail_rt, ManifestVerdict::Fail);
     }
@@ -2181,9 +2181,9 @@ mod tests {
             compiler_options_hash: "sha256:opts".into(),
             normalization_applied: true,
         };
-        let json = serde_json::to_string(&lineage).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lineage).expect("serialize derived Serialize");
         let rt: NormalizationLineage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lineage, rt);
     }
 
@@ -2196,9 +2196,9 @@ mod tests {
             drift_class: TsResolutionDriftClass::CandidateOrderMismatch,
             replay_index_hash: Some("sha256:idx".into()),
         };
-        let json = serde_json::to_string(&lineage).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lineage).expect("serialize derived Serialize");
         let rt: ResolutionLineage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lineage, rt);
     }
 
@@ -2210,9 +2210,9 @@ mod tests {
             ir2_hash: None,
             ir3_hash: Some("sha256:ir3".into()),
         };
-        let json = serde_json::to_string(&lineage).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lineage).expect("serialize derived Serialize");
         let rt: IrPipelineLineage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lineage, rt);
     }
 
@@ -2223,9 +2223,9 @@ mod tests {
             ReplayValidationStatus::PathMismatch,
             ReplayValidationStatus::UnexpectedFailure,
         ]);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let rt: ReplayValidationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, rt);
     }
 
@@ -2236,9 +2236,9 @@ mod tests {
             feature_family: ManifestFeatureFamily::ReplayIndex,
             verdict: ManifestVerdict::Pass,
         };
-        let json = serde_json::to_string(&evidence).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evidence).expect("serialize derived Serialize");
         let rt: ManifestSpecimenEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evidence, rt);
     }
 

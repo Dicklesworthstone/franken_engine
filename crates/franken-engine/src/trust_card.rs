@@ -1153,9 +1153,9 @@ mod tests {
             RiskTrend::Stable,
             RiskTrend::Degrading,
         ] {
-            let json = serde_json::to_string(&trend).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&trend).expect("serialize derived Serialize");
             let restored: RiskTrend =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(trend, restored);
         }
     }
@@ -1178,10 +1178,9 @@ mod tests {
             RecommendedAction::Restrict,
             RecommendedAction::Remove,
         ] {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let restored: RecommendedAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, restored);
         }
     }
@@ -1191,9 +1190,9 @@ mod tests {
     #[test]
     fn card_format_serde_roundtrip() {
         for fmt in [CardFormat::Json, CardFormat::Text, CardFormat::Compact] {
-            let json = serde_json::to_string(&fmt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&fmt).expect("serialize derived Serialize");
             let restored: CardFormat =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(fmt, restored);
         }
     }
@@ -1234,9 +1233,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: TrustCardError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1684,7 +1683,7 @@ mod tests {
 
         let json_str = TrustCardGenerator::format_card(&card, CardFormat::Json);
         let parsed: serde_json::Value =
-            serde_json::from_str(&json_str).expect("serde deserialization should succeed");
+            serde_json::from_str(&json_str).expect("deserialize known-valid JSON");
         assert!(parsed.is_object());
     }
 
@@ -1727,9 +1726,9 @@ mod tests {
             .generate(&graph, "ext-1", SecurityEpoch::from_raw(1), 10_000_000_000)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&card).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&card).expect("serialize derived Serialize");
         let restored: TrustCard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(card, restored);
     }
 
@@ -1787,9 +1786,9 @@ mod tests {
             new_recommendation: RecommendedAction::Review,
             change_summary: "trust degraded".into(),
         };
-        let json = serde_json::to_string(&diff).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&diff).expect("serialize derived Serialize");
         let restored: TrustCardDiff =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(diff, restored);
     }
 
@@ -1820,9 +1819,9 @@ mod tests {
             triggering_evidence_summary: "ev-1".into(),
             timestamp_ns: 5_000_000_000,
         };
-        let json = serde_json::to_string(&notif).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&notif).expect("serialize derived Serialize");
         let restored: UpdateNotification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(notif, restored);
     }
 
@@ -2110,8 +2109,8 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
 
-        let json1 = serde_json::to_string(&card1).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&card2).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&card1).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&card2).expect("serialize derived Serialize");
         assert_eq!(
             json1, json2,
             "identical inputs must produce identical cards"
@@ -2195,9 +2194,9 @@ mod tests {
     #[test]
     fn generator_config_serde_roundtrip() {
         let config = GeneratorConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: GeneratorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -2246,9 +2245,8 @@ mod tests {
             description: "unverified publisher identity".into(),
             contribution: 20,
         };
-        let json = serde_json::to_string(&driver).expect("serde deserialization should succeed");
-        let back: RiskDriver =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&driver).expect("serialize derived Serialize");
+        let back: RiskDriver = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(driver, back);
     }
 
@@ -2261,9 +2259,9 @@ mod tests {
             most_recent_ns: Some(9_000_000_000),
             most_recent_description: Some("behavioral observation".into()),
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: EvidenceSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -2276,9 +2274,9 @@ mod tests {
             most_recent_ns: None,
             most_recent_description: None,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: EvidenceSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -2290,9 +2288,9 @@ mod tests {
             dependency_risk: 500_000,
             has_provenance_gap: false,
         };
-        let json = serde_json::to_string(&prov).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&prov).expect("serialize derived Serialize");
         let back: ProvenanceSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(prov, back);
     }
 
@@ -2305,9 +2303,9 @@ mod tests {
             timestamp_ns: 5_000_000_000,
             operator_override: false,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: TrustHistoryEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -2318,9 +2316,9 @@ mod tests {
             confidence: 700_000,
             rationale: "anomalous behavior detected".into(),
         };
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let back: Recommendation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rec, back);
     }
 

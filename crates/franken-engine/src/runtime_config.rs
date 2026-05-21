@@ -974,18 +974,16 @@ mod tests {
     fn toml_roundtrip_default() {
         let config = RuntimeConfig::default();
         let toml_str = toml::to_string(&config).expect("serde deserialization should succeed");
-        let restored: RuntimeConfig =
-            toml::from_str(&toml_str).expect("serde deserialization should succeed");
+        let restored: RuntimeConfig = toml::from_str(&toml_str).expect("parse valid string");
         assert_eq!(config, restored);
     }
 
     #[test]
     fn json_roundtrip_default() {
         let config = RuntimeConfig::default();
-        let json_str =
-            serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json_str = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: RuntimeConfig =
-            serde_json::from_str(&json_str).expect("serde deserialization should succeed");
+            serde_json::from_str(&json_str).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 

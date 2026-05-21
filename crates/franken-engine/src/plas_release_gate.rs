@@ -1009,10 +1009,9 @@ mod tests {
             PlasActivationMode::AuditOnly,
             PlasActivationMode::Disabled,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: PlasActivationMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1082,10 +1081,9 @@ mod tests {
             PlasReleaseGateFailureCode::RevocationEscrowEventMissing,
             PlasReleaseGateFailureCode::AmbientAuthorityDetected,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: PlasReleaseGateFailureCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1113,9 +1111,9 @@ mod tests {
         let err = PlasReleaseGateError::InvalidInput {
             detail: "test".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: PlasReleaseGateError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1149,9 +1147,9 @@ mod tests {
             deterministic_replay: true,
             replay_trace_id: "t1".to_string(),
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: PlasEscrowReplayEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1396,9 +1394,9 @@ mod tests {
             receipt_id: Some("r-1".to_string()),
             detail: "not active".to_string(),
         };
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let back: PlasReleaseGateFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f, back);
     }
 
@@ -1418,9 +1416,9 @@ mod tests {
             receipt_id: None,
             capability: Some("net.connect".to_string()),
         };
-        let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&le).expect("serialize derived Serialize");
         let back: PlasReleaseGateLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(le, back);
     }
 
@@ -1431,9 +1429,9 @@ mod tests {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
         let artifact = evaluate_plas_release_gate(&input, &trust_anchors())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: PlasReleaseGateDecisionArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1442,9 +1440,9 @@ mod tests {
     #[test]
     fn input_serde_roundtrip() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: PlasReleaseGateInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -1453,9 +1451,9 @@ mod tests {
     #[test]
     fn trust_anchors_serde_roundtrip() {
         let ta = trust_anchors();
-        let json = serde_json::to_string(&ta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ta).expect("serialize derived Serialize");
         let back: PlasReleaseGateTrustAnchors =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ta, back);
     }
 
@@ -1464,9 +1462,9 @@ mod tests {
     #[test]
     fn cohort_extension_serde_roundtrip() {
         let ext = minimal_extension(1, PlasActivationMode::Active);
-        let json = serde_json::to_string(&ext).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ext).expect("serialize derived Serialize");
         let back: PlasCohortExtension =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ext, back);
     }
 
@@ -1575,9 +1573,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: PlasReleaseGateError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1613,9 +1611,9 @@ mod tests {
             deterministic_replay: false,
             replay_trace_id: "t1".into(),
         };
-        let json = serde_json::to_string(&evidence).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evidence).expect("serialize derived Serialize");
         let back: PlasEscrowReplayEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evidence, back);
         assert!(!back.deterministic_replay);
     }
@@ -1630,9 +1628,9 @@ mod tests {
             grants: Vec::new(),
             revocations: Vec::new(),
         };
-        let json = serde_json::to_string(&ext).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ext).expect("serialize derived Serialize");
         let back: PlasCohortExtension =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ext, back);
         assert!(back.manifest_capabilities.is_empty());
         assert!(back.active_capabilities.is_empty());
@@ -1646,9 +1644,9 @@ mod tests {
             receipt_id: None,
             detail: "ambient authority".into(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let back: PlasReleaseGateFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(finding, back);
         assert!(back.receipt_id.is_none());
     }
@@ -1667,9 +1665,9 @@ mod tests {
             receipt_id: None,
             capability: None,
         };
-        let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&le).expect("serialize derived Serialize");
         let back: PlasReleaseGateLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(le, back);
         assert!(back.error_code.is_none());
         assert!(back.extension_id.is_none());
@@ -1691,9 +1689,9 @@ mod tests {
             receipt_id: Some("rcpt".into()),
             capability: Some("cap".into()),
         };
-        let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&le).expect("serialize derived Serialize");
         let back: PlasReleaseGateLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(le, back);
     }
 
@@ -1720,7 +1718,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(json, "\"audit_only\"");
         let back: PlasActivationMode =
-            serde_json::from_str("\"audit_only\"").expect("serde deserialization should succeed");
+            serde_json::from_str("\"audit_only\"").expect("deserialize known-valid JSON");
         assert_eq!(back, PlasActivationMode::AuditOnly);
     }
 
@@ -1817,7 +1815,7 @@ mod tests {
             deterministic_replay: true,
             replay_trace_id: "t1".into(),
         };
-        let j = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&e).expect("serialize derived Serialize");
         assert!(j.contains("\"receipt_id\""));
         assert!(j.contains("\"replay_decision_kind\""));
         assert!(j.contains("\"replay_outcome\""));
@@ -1834,7 +1832,7 @@ mod tests {
             receipt_id: Some("r-1".into()),
             detail: "ambient".into(),
         };
-        let j = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&f).expect("serialize derived Serialize");
         assert!(j.contains("\"code\""));
         assert!(j.contains("\"extension_id\""));
         assert!(j.contains("\"receipt_id\""));
@@ -1855,7 +1853,7 @@ mod tests {
             receipt_id: Some("rcpt".into()),
             capability: Some("cap".into()),
         };
-        let j = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&le).expect("serialize derived Serialize");
         assert!(j.contains("\"trace_id\""));
         assert!(j.contains("\"decision_id\""));
         assert!(j.contains("\"policy_id\""));
@@ -2032,7 +2030,7 @@ mod tests {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
         let artifact = evaluate_plas_release_gate(&input, &trust_anchors())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"cohort_id\""));
         assert!(json.contains("\"pass\""));
@@ -2047,7 +2045,7 @@ mod tests {
     #[test]
     fn enrichment_input_json_field_names() {
         let input = make_input(vec![minimal_extension(1, PlasActivationMode::Active)]);
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -2058,7 +2056,7 @@ mod tests {
     #[test]
     fn enrichment_trust_anchors_json_field_names() {
         let ta = trust_anchors();
-        let json = serde_json::to_string(&ta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ta).expect("serialize derived Serialize");
         assert!(json.contains("\"witness_verification_key\""));
         assert!(json.contains("\"transparency_log_verification_key\""));
     }
@@ -2072,7 +2070,7 @@ mod tests {
             "activation_mode": "active"
         }"#;
         let ext: PlasCohortExtension =
-            serde_json::from_str(json).expect("serde deserialization should succeed");
+            serde_json::from_str(json).expect("deserialize known-valid JSON");
         assert_eq!(ext.activation_mode, PlasActivationMode::Active);
         assert!(ext.manifest_capabilities.is_empty());
         assert!(ext.active_capabilities.is_empty());

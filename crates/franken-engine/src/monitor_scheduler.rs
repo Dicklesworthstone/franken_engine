@@ -926,10 +926,10 @@ mod tests {
         ];
         for kind in &kinds {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: ProbeKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, restored);
         }
     }
@@ -938,10 +938,10 @@ mod tests {
     fn probe_config_serialization_round_trip() {
         let config = health_probe("h1");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ProbeConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -965,10 +965,10 @@ mod tests {
             }],
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ScheduleResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -984,10 +984,10 @@ mod tests {
         ];
         for err in &errors {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: SchedulerError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1005,10 +1005,10 @@ mod tests {
             last_success: true,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ProbeState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(state, restored);
     }
 
@@ -1016,10 +1016,10 @@ mod tests {
     fn scheduler_config_serde_roundtrip() {
         let config = test_config();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: SchedulerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1034,10 +1034,10 @@ mod tests {
             skip_reason: None,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&dec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dec).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ScheduleDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(dec, restored);
     }
 
@@ -1516,10 +1516,10 @@ mod tests {
         let mut sched = test_scheduler();
         let result = sched.schedule(Regime::Normal);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ScheduleResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1832,10 +1832,10 @@ mod tests {
             .relevance_overrides
             .insert("elevated:health_check".to_string(), 2_000_000);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: SchedulerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
         assert_eq!(restored.relevance_overrides.len(), 2);
     }
@@ -1853,10 +1853,10 @@ mod tests {
             skip_reason: Some("budget exhausted (remaining: 500000, cost: 3000000)".to_string()),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&dec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dec).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ScheduleDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(dec, restored);
     }
 

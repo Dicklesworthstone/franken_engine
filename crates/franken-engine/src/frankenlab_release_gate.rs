@@ -649,11 +649,11 @@ mod tests {
         for kind in GateKind::all() {
             // SAFETY: GateKind derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid GateKind,
             // so from_str back to GateKind cannot fail (valid format + matching schema).
             let restored: GateKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, restored);
         }
     }
@@ -727,11 +727,11 @@ mod tests {
         for v in verdicts {
             // SAFETY: GateVerdict derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid GateVerdict,
             // so from_str back to GateVerdict cannot fail (valid format + matching schema).
             let restored: GateVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -760,11 +760,11 @@ mod tests {
         ] {
             // SAFETY: OverallVerdict derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid OverallVerdict,
             // so from_str back to OverallVerdict cannot fail (valid format + matching schema).
             let restored: OverallVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -793,11 +793,11 @@ mod tests {
         };
         // SAFETY: GateConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid GateConfig,
         // so from_str back to GateConfig cannot fail (valid format + matching schema).
         let restored: GateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
@@ -930,9 +930,9 @@ mod tests {
         let mut cx = mock_cx(500_000);
         let report = runner.run(&mut cx);
 
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: GateReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
@@ -947,9 +947,9 @@ mod tests {
         let mut cx = mock_cx(500_000);
         let report = runner.run(&mut cx);
 
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let parsed: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         // Verify key fields exist for CI consumption
         assert!(parsed.get("seed").is_some());
@@ -971,9 +971,9 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: GateEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -982,9 +982,9 @@ mod tests {
     #[test]
     fn gate_result_serde_roundtrip() {
         let result = GateResult::pass(GateKind::FrankenlabScenarios, 10);
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: GateResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1221,9 +1221,9 @@ mod tests {
             outcome: "fail".to_string(),
             error_code: Some("replay_divergence".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: GateEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
         assert_eq!(restored.error_code.as_deref(), Some("replay_divergence"));
     }
@@ -1290,9 +1290,9 @@ mod tests {
             20,
             18,
         );
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: GateResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1302,9 +1302,9 @@ mod tests {
             GateKind::ObligationResolution,
             "harness unavailable".to_string(),
         );
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: GateResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1474,7 +1474,7 @@ mod tests {
     #[test]
     fn gate_result_json_field_presence() {
         let r = GateResult::pass(GateKind::FrankenlabScenarios, 3);
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         assert!(json.contains("\"kind\""));
         assert!(json.contains("\"verdict\""));
         assert!(json.contains("\"checks_performed\""));
@@ -1491,7 +1491,7 @@ mod tests {
             outcome: "pass".into(),
             error_code: Some("E01".into()),
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         assert!(json.contains("\"component\""));
         assert!(json.contains("\"gate\""));
         assert!(json.contains("\"event\""));
@@ -1509,7 +1509,7 @@ mod tests {
         });
         let mut cx = mock_cx(500_000);
         let report = runner.run(&mut cx);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         assert!(json.contains("\"seed\""));
         assert!(json.contains("\"gates\""));
         assert!(json.contains("\"overall_verdict\""));
@@ -1595,7 +1595,7 @@ mod tests {
     #[test]
     fn enrichment_config_json_field_presence() {
         let cfg = GateConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         for field in &[
             "seed",
             "timeout_ticks",

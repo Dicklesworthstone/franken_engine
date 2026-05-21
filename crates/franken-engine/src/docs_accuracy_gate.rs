@@ -860,11 +860,10 @@ mod tests {
         let s = DocSource::OperatorDocs;
         // SAFETY: DocSource derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DocSource,
         // so from_str back to DocSource cannot fail (valid format + matching schema).
-        let back: DocSource =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DocSource = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -903,11 +902,10 @@ mod tests {
         let d = DriftClass::BrokenExample;
         // SAFETY: DriftClass derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DriftClass,
         // so from_str back to DriftClass cannot fail (valid format + matching schema).
-        let back: DriftClass =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DriftClass = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -1014,9 +1012,9 @@ mod tests {
     #[test]
     fn inventory_serde_roundtrip() {
         let inv = build_seed_inventory();
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         let back: DocsAccuracyInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv.surface_count(), back.surface_count());
         assert_eq!(inv.content_hash(), back.content_hash());
     }
@@ -1092,9 +1090,8 @@ mod tests {
         let gate = DocsAccuracyGate::with_defaults();
         let inv = build_seed_inventory();
         let report = gate.evaluate(&inv);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GateReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
+        let back: GateReport = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report.total_surfaces, back.total_surfaces);
     }
 
@@ -1109,9 +1106,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = GateConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: GateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
+        let back: GateConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1160,9 +1156,9 @@ mod tests {
             planned_support: true,
             tracking_bead: Some("bd-future".to_string()),
         };
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: UnsupportedSurfaceContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 }

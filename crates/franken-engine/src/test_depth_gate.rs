@@ -878,9 +878,9 @@ mod tests {
     #[test]
     fn coverage_kind_serde_roundtrip() {
         for kind in CoverageKind::ALL {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: CoverageKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -947,9 +947,9 @@ mod tests {
             min_coverage_millionths: 850_000,
             hard_gate: true,
         };
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: CoverageTarget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 
@@ -1039,9 +1039,9 @@ mod tests {
     #[test]
     fn mutation_tier_serde_roundtrip() {
         for tier in MutationTier::ALL {
-            let json = serde_json::to_string(tier).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(tier).expect("serialize derived Serialize");
             let back: MutationTier =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*tier, back);
         }
     }
@@ -1108,9 +1108,9 @@ mod tests {
             hard_gate: true,
             critical_modules: BTreeSet::from(["ir_contract".to_string(), "lowering".to_string()]),
         };
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: MutationPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1203,9 +1203,9 @@ mod tests {
     #[test]
     fn failure_mode_serde_roundtrip() {
         for fm in FailureMode::ALL {
-            let json = serde_json::to_string(fm).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(fm).expect("serialize derived Serialize");
             let back: FailureMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*fm, back);
         }
     }
@@ -1261,9 +1261,9 @@ mod tests {
     #[test]
     fn obligation_serde_roundtrip() {
         let o = FailureModeObligation::for_surface(TestSurface::Security);
-        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&o).expect("serialize derived Serialize");
         let back: FailureModeObligation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(o, back);
     }
 
@@ -1330,9 +1330,9 @@ mod tests {
     #[test]
     fn regression_policy_serde_roundtrip() {
         let p = RegressionPolicy::strict();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: RegressionPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1355,10 +1355,9 @@ mod tests {
     #[test]
     fn gate_outcome_serde_roundtrip() {
         for outcome in [GateOutcome::Pass, GateOutcome::Warn, GateOutcome::Block] {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: GateOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, back);
         }
     }
@@ -1390,9 +1389,9 @@ mod tests {
     #[test]
     fn default_config_serde_roundtrip() {
         let cfg = DepthGateConfig::default_config();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: DepthGateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -1573,9 +1572,8 @@ mod tests {
         let cfg = DepthGateConfig::default_config();
         let metrics = make_failing_metrics(TestSurface::Security);
         let result = cfg.evaluate_surface(&metrics, None, None);
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let back: GateResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
+        let back: GateResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -1589,9 +1587,9 @@ mod tests {
             make_failing_metrics(TestSurface::Security),
         ];
         let summary = cfg.evaluate_all(&metrics, &BTreeMap::new(), &BTreeMap::new());
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: DepthGateSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -1619,9 +1617,9 @@ mod tests {
     #[test]
     fn observed_metrics_serde_roundtrip() {
         let m = make_passing_metrics(TestSurface::Compiler);
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: ObservedMetrics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -1631,9 +1629,9 @@ mod tests {
             field: "test".to_string(),
             message: "msg".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: DepthGateViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1644,9 +1642,9 @@ mod tests {
             required: 2,
             observed: 0,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: FailureModeMissing =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -1717,9 +1715,9 @@ mod tests {
             RegressionDirection::Increase,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: RegressionDirection =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }

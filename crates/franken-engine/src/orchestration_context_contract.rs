@@ -1349,16 +1349,16 @@ mod tests {
     #[test]
     fn serde_context_roundtrip() {
         let ctx = root_ctx("serde-ctx", 5000);
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         let restored: CanonicalContextDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctx, restored);
     }
 
     #[test]
     fn serde_origin_snake_case() {
         let origin = ContextOrigin::CleanupCarve;
-        let json = serde_json::to_string(&origin).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&origin).expect("serialize derived Serialize");
         assert_eq!(json, "\"cleanup_carve\"");
     }
 
@@ -1369,9 +1369,9 @@ mod tests {
             remaining_ms: 100,
             requested_ms: 200,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: ContextError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -1454,10 +1454,9 @@ mod tests {
             ContextOrigin::CellClose,
             ContextOrigin::Replay,
         ] {
-            let json =
-                serde_json::to_string(&origin).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&origin).expect("serialize derived Serialize");
             let back: ContextOrigin =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(origin, back);
         }
     }
@@ -1483,9 +1482,9 @@ mod tests {
             ContextState::Released,
             ContextState::Cancelled,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let back: ContextState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, back);
         }
     }
@@ -1510,9 +1509,9 @@ mod tests {
             MockSeamClassification::FalsePositive,
             MockSeamClassification::UnderInvestigation,
         ] {
-            let json = serde_json::to_string(&cls).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cls).expect("serialize derived Serialize");
             let back: MockSeamClassification =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cls, back);
         }
     }
@@ -1570,9 +1569,9 @@ mod tests {
     #[test]
     fn derivation_rule_serde() {
         let rule = default_rule();
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
         let back: DerivationRule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rule, back);
     }
 
@@ -1596,9 +1595,9 @@ mod tests {
             &rule,
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: DerivationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1646,9 +1645,9 @@ mod tests {
     fn validation_report_serde() {
         let rule = default_rule();
         let report = validate_threading(&[], &[], &[], &rule, epoch(1));
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: ValidationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 

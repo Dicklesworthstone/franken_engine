@@ -1778,9 +1778,8 @@ mod tests {
     #[test]
     fn serde_roundtrip_threat_class() {
         let tc = make_threat("t1", ThreatCategory::CapabilityEscalation, MILLION);
-        let json = serde_json::to_string(&tc).expect("serde deserialization should succeed");
-        let back: ThreatClass =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tc).expect("serialize derived Serialize");
+        let back: ThreatClass = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tc, back);
     }
 
@@ -1797,9 +1796,9 @@ mod tests {
             max_payoff_millionths: 200_000,
             worst_exploit: None,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: TailRiskMetrics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -1810,18 +1809,17 @@ mod tests {
         let decision = gate
             .evaluate("rc-1", &campaigns)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
-        let back: GateDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
+        let back: GateDecision = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
     }
 
     #[test]
     fn serde_roundtrip_config() {
         let config = TailGateConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: TailGateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -2069,7 +2067,7 @@ mod tests {
     #[test]
     fn json_fields_threat_class() {
         let tc = make_threat("t-json", ThreatCategory::SupplyChain, MILLION);
-        let json = serde_json::to_string(&tc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tc).expect("serialize derived Serialize");
         assert!(json.contains("\"id\""));
         assert!(json.contains("\"label\""));
         assert!(json.contains("\"category\""));
@@ -2090,7 +2088,7 @@ mod tests {
             max_payoff_millionths: 90_000,
             worst_exploit: None,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         assert!(json.contains("\"threat_class_id\""));
         assert!(json.contains("\"observation_count\""));
         assert!(json.contains("\"var_millionths\""));
@@ -2111,7 +2109,7 @@ mod tests {
             e_value_millionths: 2_000_000,
             budget_exceeded: false,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         assert!(json.contains("\"epoch\""));
         assert!(json.contains("\"threat_class_id\""));
         assert!(json.contains("\"cvar_millionths\""));
@@ -2130,9 +2128,9 @@ mod tests {
             e_value_millionths: 5_000_000,
             budget_exceeded: true,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: RiskLedgerEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -2198,9 +2196,8 @@ mod tests {
         tc.related_exploits.insert("exploit-a".to_string());
         tc.related_exploits.insert("exploit-b".to_string());
         tc.related_exploits.insert("exploit-c".to_string());
-        let json = serde_json::to_string(&tc).expect("serde deserialization should succeed");
-        let back: ThreatClass =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tc).expect("serialize derived Serialize");
+        let back: ThreatClass = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tc, back);
         assert_eq!(back.related_exploits.len(), 3);
     }
@@ -2218,9 +2215,9 @@ mod tests {
             max_payoff_millionths: 9_000_000,
             worst_exploit: Some("capability-leak-via-proxy".to_string()),
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: TailRiskMetrics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
         assert_eq!(
             back.worst_exploit.as_deref(),
@@ -2250,9 +2247,9 @@ mod tests {
             ],
             evidence_hash: ContentHash::compute(b"serde-pb"),
         };
-        let json = serde_json::to_string(&playbook).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&playbook).expect("serialize derived Serialize");
         let back: RollbackPlaybook =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(playbook, back);
     }
 
@@ -2264,27 +2261,26 @@ mod tests {
             automated: true,
             action: Some(LaneAction::RouteTo(LaneId("quarantine".to_string()))),
         };
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
         let back: MitigationStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, back);
     }
 
     #[test]
     fn serde_roundtrip_campaign_enrichment() {
         let campaign = make_campaign("c-serde", "t1", vec![10_000; 200]);
-        let json = serde_json::to_string(&campaign).expect("serde deserialization should succeed");
-        let back: Campaign =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&campaign).expect("serialize derived Serialize");
+        let back: Campaign = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(campaign, back);
     }
 
     #[test]
     fn serde_roundtrip_gate_enrichment() {
         let gate = default_gate();
-        let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gate).expect("serialize derived Serialize");
         let back: CatastrophicTailTournamentGate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.threat_class_count(), 1);
         assert_eq!(back.evaluation_count(), 0);
     }
@@ -2323,9 +2319,9 @@ mod tests {
             },
         ];
         for err in &variants {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: TailGateError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -2337,9 +2333,9 @@ mod tests {
             GateVerdict::Fail,
             GateVerdict::Inconclusive,
         ] {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: GateVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2355,9 +2351,9 @@ mod tests {
             ThreatCategory::TimingChannel,
         ];
         for cat in &categories {
-            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cat).expect("serialize derived Serialize");
             let back: ThreatCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cat, back);
         }
     }

@@ -1401,9 +1401,9 @@ mod tests {
             FailureType::CxCorrupted,
             FailureType::CancellationDeadlock,
         ] {
-            let json = serde_json::to_string(&ft).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&ft).expect("serialize derived Serialize");
             let parsed: FailureType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(ft, parsed);
         }
     }
@@ -1466,10 +1466,9 @@ mod tests {
             },
         ];
         for action in actions {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let parsed: SafeModeAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, parsed);
         }
     }
@@ -1487,9 +1486,9 @@ mod tests {
             outcome: "safe_mode_active".to_string(),
             error_code: Some("cx_corrupted".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let parsed: SafeModeEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, parsed);
     }
 
@@ -1561,9 +1560,9 @@ mod tests {
             component: "c".to_string(),
             sequence: 0,
         });
-        let json = serde_json::to_string(&rb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rb).expect("serialize derived Serialize");
         let parsed: EvidenceRingBuffer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed.total_written(), 1);
     }
@@ -2127,10 +2126,9 @@ mod tests {
             SafeModeStatus::Active,
             SafeModeStatus::Recovering,
         ] {
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             let parsed: SafeModeStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(status, parsed);
         }
     }
@@ -2146,9 +2144,9 @@ mod tests {
             component: "safe_mode_fallback".to_string(),
             sequence: 42,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let parsed: RingBufferEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, parsed);
     }
 
@@ -2473,9 +2471,9 @@ mod tests {
             AttestationHealth::EvidenceExpired,
             AttestationHealth::EvidenceUnavailable,
         ] {
-            let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&h).expect("serialize derived Serialize");
             let parsed: AttestationHealth =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(h, parsed);
         }
     }
@@ -2502,9 +2500,9 @@ mod tests {
             ActionTier::Standard,
             ActionTier::LowImpact,
         ] {
-            let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&tier).expect("serialize derived Serialize");
             let parsed: ActionTier =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(tier, parsed);
         }
     }
@@ -2589,10 +2587,9 @@ mod tests {
             AutonomousAction::EvidenceCollection,
             AutonomousAction::MetricsEmission,
         ] {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let parsed: AutonomousAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, parsed);
         }
     }
@@ -2622,9 +2619,9 @@ mod tests {
     #[test]
     fn attestation_action_request_serde_roundtrip() {
         let req = attestation_request(AutonomousAction::Terminate, 42);
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let parsed: AttestationActionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, parsed);
     }
 
@@ -2652,9 +2649,9 @@ mod tests {
             AttestationFallbackState::Degraded,
             AttestationFallbackState::Restoring,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let parsed: AttestationFallbackState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, parsed);
         }
     }
@@ -2672,9 +2669,9 @@ mod tests {
     #[test]
     fn attestation_fallback_config_serde_roundtrip() {
         let config = AttestationFallbackConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let parsed: AttestationFallbackConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, parsed);
     }
 
@@ -3021,9 +3018,9 @@ mod tests {
             error_code: None,
             detail: "detail".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let parsed: AttestationFallbackEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, parsed);
     }
 
@@ -3040,9 +3037,9 @@ mod tests {
             queued_at_ns: 12345,
             status: "attestation-pending".to_string(),
         };
-        let json = serde_json::to_string(&queued).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&queued).expect("serialize derived Serialize");
         let parsed: QueuedAttestationDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(queued, parsed);
     }
 
@@ -3054,9 +3051,9 @@ mod tests {
             attestation_status: "valid".to_string(),
             warning: Some("test warning".to_string()),
         };
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let parsed: AttestationFallbackDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, parsed);
     }
 
@@ -3069,9 +3066,9 @@ mod tests {
             challenge_required: true,
             sandbox_required: false,
         };
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let parsed: AttestationFallbackDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, parsed);
     }
 
@@ -3085,9 +3082,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let receipt = &mgr.transition_receipts()[0];
-        let json = serde_json::to_string(receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(receipt).expect("serialize derived Serialize");
         let parsed: AttestationTransitionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, &parsed);
         parsed
             .verify()

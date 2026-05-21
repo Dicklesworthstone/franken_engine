@@ -1544,9 +1544,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let cfg = test_config();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: SynthesisConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
@@ -1780,7 +1780,7 @@ mod tests {
         let json = serde_json::to_string(&counterexamples[0])
             .expect("serde deserialization should succeed");
         let restored: SynthesizedCounterexample =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(counterexamples[0].conflict_id, restored.conflict_id);
         assert_eq!(
             counterexamples[0].property_violated,
@@ -1828,9 +1828,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let d = &synth.diagnostics()[0];
-        let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(d).expect("serialize derived Serialize");
         let restored: ConflictDiagnostic =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d.conflict_id, restored.conflict_id);
     }
 
@@ -2286,9 +2286,9 @@ mod tests {
             merge_ordering: vec!["step-1".to_string()],
             input_state: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&scenario).expect("serialize derived Serialize");
         let restored: ConcreteScenario =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(scenario, restored);
     }
 
@@ -2301,9 +2301,9 @@ mod tests {
             final_size: 8,
             is_fixed_point: true,
         };
-        let json = serde_json::to_string(&min).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&min).expect("serialize derived Serialize");
         let restored: MinimalityEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(min, restored);
     }
 
@@ -2317,9 +2317,9 @@ mod tests {
             evidence_description: "test".to_string(),
             convergence_steps: Some(100),
         };
-        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ci).expect("serialize derived Serialize");
         let restored: ControllerInterference =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ci, restored);
     }
 
@@ -2342,9 +2342,9 @@ mod tests {
             .values()
             .next()
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(entry).expect("serialize derived Serialize");
         let restored: RegressionEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry.entry_id, restored.entry_id);
     }
 
@@ -2358,9 +2358,9 @@ mod tests {
             timescale_millionths: 1_000_000,
             timescale_statement: "reads every 1s; writes every 1s".to_string(),
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: ControllerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
@@ -2371,9 +2371,9 @@ mod tests {
             target_node: "n1".to_string(),
             new_value: "union".to_string(),
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: PolicyMutation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -2401,9 +2401,9 @@ mod tests {
     #[test]
     fn synthesizer_serde_roundtrip() {
         let synth = CounterexampleSynthesizer::new(test_config());
-        let json = serde_json::to_string(&synth).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&synth).expect("serialize derived Serialize");
         let restored: CounterexampleSynthesizer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(synth.synthesis_count(), restored.synthesis_count());
     }
 
@@ -2499,9 +2499,9 @@ mod tests {
             SynthesisError::CompilerFailure("compile".to_string()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: SynthesisError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -2536,9 +2536,9 @@ mod tests {
             SynthesisOutcome::Partial,
             SynthesisOutcome::Incomplete,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: SynthesisOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -2551,9 +2551,9 @@ mod tests {
             SynthesisStrategy::Mutation,
             SynthesisStrategy::TimeBounded,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: SynthesisStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -2565,9 +2565,9 @@ mod tests {
             InterferenceKind::Oscillation,
             InterferenceKind::TimescaleConflict,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: InterferenceKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -2582,9 +2582,9 @@ mod tests {
             MutationKind::RemoveConstraint,
             MutationKind::DuplicateNode,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: MutationKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -2621,9 +2621,9 @@ mod tests {
             shared_metrics: vec!["m1".to_string()],
             timescale_separation_millionths: 50_000,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: ControllerInterferenceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 

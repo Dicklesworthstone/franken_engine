@@ -488,9 +488,9 @@ mod tests {
     #[test]
     fn baseline_engine_serde_round_trip() {
         for e in [BaselineEngine::Node, BaselineEngine::Bun] {
-            let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&e).expect("serialize derived Serialize");
             let back: BaselineEngine =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(e, back);
         }
     }
@@ -920,9 +920,9 @@ mod tests {
     #[test]
     fn benchmark_case_serde_round_trip() {
         let c = test_case("w1", 3000.0, 1000.0);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: BenchmarkCase =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c.workload_id, back.workload_id);
         assert!((c.throughput_franken_tps - back.throughput_franken_tps).abs() < 1e-10);
     }
@@ -930,9 +930,9 @@ mod tests {
     #[test]
     fn publication_context_serde_round_trip() {
         let ctx = test_context();
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         let back: PublicationContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctx, back);
     }
 
@@ -943,9 +943,9 @@ mod tests {
             native_slots: 10,
             total_slots: 20,
         };
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: NativeCoveragePoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -960,9 +960,9 @@ mod tests {
             outcome: "o".into(),
             error_code: None,
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: BenchmarkPublicationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -971,9 +971,9 @@ mod tests {
         let input = test_gate_input();
         let decision = evaluate_publication_gate(&input, &test_context())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: PublicationGateDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision.publish_allowed, back.publish_allowed);
         assert!((decision.score_vs_node - back.score_vs_node).abs() < 1e-10);
     }
@@ -984,8 +984,7 @@ mod tests {
     fn case_defaults_from_json() {
         let json =
             r#"{"workload_id":"w","throughput_franken_tps":100.0,"throughput_baseline_tps":50.0}"#;
-        let c: BenchmarkCase =
-            serde_json::from_str(json).expect("serde deserialization should succeed");
+        let c: BenchmarkCase = serde_json::from_str(json).expect("deserialize known-valid JSON");
         assert!(c.behavior_equivalent);
         assert!(c.latency_envelope_ok);
         assert!(c.error_envelope_ok);
@@ -1097,9 +1096,9 @@ mod tests {
     #[test]
     fn publication_gate_input_serde_roundtrip() {
         let input = test_gate_input();
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: PublicationGateInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input.node_cases.len(), back.node_cases.len());
         assert_eq!(input.bun_cases.len(), back.bun_cases.len());
         assert_eq!(
@@ -1171,7 +1170,7 @@ mod tests {
     #[test]
     fn benchmark_case_json_field_names() {
         let c = test_case("check-fields", 1000.0, 500.0);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         assert!(json.contains("\"workload_id\""));
         assert!(json.contains("\"throughput_franken_tps\""));
         assert!(json.contains("\"throughput_baseline_tps\""));
@@ -1184,7 +1183,7 @@ mod tests {
     #[test]
     fn publication_context_json_field_names() {
         let ctx = PublicationContext::new("t-1", "d-1", "p-1");
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -1195,7 +1194,7 @@ mod tests {
         let input = test_gate_input();
         let decision = evaluate_publication_gate(&input, &test_context())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         assert!(json.contains("\"score_vs_node\""));
         assert!(json.contains("\"score_vs_bun\""));
         assert!(json.contains("\"publish_allowed\""));
@@ -1213,9 +1212,9 @@ mod tests {
             baseline: "bun".into(),
             workload_id: "dup-w".into(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: BenchmarkDenominatorError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1508,9 +1507,9 @@ mod tests {
             BenchmarkDenominatorError::SerializationFailure("test-err".into()),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: BenchmarkDenominatorError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back, "serde roundtrip failed for {v}");
         }
     }
@@ -1520,9 +1519,9 @@ mod tests {
     #[test]
     fn benchmark_case_weighted_serde_roundtrip() {
         let c = test_case_weighted("sw-1", 7000.0, 1000.0, 0.75);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: BenchmarkCase =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
         assert_eq!(back.weight, Some(0.75));
     }
@@ -1538,9 +1537,9 @@ mod tests {
             outcome: "fail".into(),
             error_code: Some("FE-BENCH-1007".into()),
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: BenchmarkPublicationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
         assert_eq!(back.error_code.as_deref(), Some("FE-BENCH-1007"));
     }
@@ -1955,7 +1954,7 @@ mod tests {
             native_slots: 10,
             total_slots: 20,
         };
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         assert!(json.contains("\"recorded_at_utc\""));
         assert!(json.contains("\"native_slots\""));
         assert!(json.contains("\"total_slots\""));

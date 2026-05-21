@@ -1918,9 +1918,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = ReplayEngineConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: ReplayEngineConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1938,9 +1938,8 @@ mod tests {
             },
             min_decisions: 10,
         };
-        let json = serde_json::to_string(&scope).expect("serde deserialization should succeed");
-        let back: ReplayScope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&scope).expect("serialize derived Serialize");
+        let back: ReplayScope = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(scope, back);
     }
 
@@ -1959,9 +1958,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: ReplayEngineError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1976,9 +1975,9 @@ mod tests {
             .compare(&[trace], &[alt], &default_scope(), None)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: ReplayComparisonResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.artifact_hash, back.artifact_hash);
         assert_eq!(result.total_decisions, back.total_decisions);
     }
@@ -2231,9 +2230,9 @@ mod tests {
     #[test]
     fn alternate_policy_serde_roundtrip() {
         let ap = make_alternate_policy("test-pol", "test description");
-        let json = serde_json::to_string(&ap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ap).expect("serialize derived Serialize");
         let back: AlternatePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ap, back);
     }
 
@@ -2247,9 +2246,9 @@ mod tests {
             test_passed: Some(false),
             sensitivity_bound_millionths: 100_000,
         };
-        let json = serde_json::to_string(&card).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&card).expect("serialize derived Serialize");
         let back: AssumptionCard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(card, back);
     }
 
@@ -2266,9 +2265,9 @@ mod tests {
             diverged: true,
             regime: "default".to_string(),
         };
-        let json = serde_json::to_string(&dc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dc).expect("serialize derived Serialize");
         let back: DecisionComparison =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(dc, back);
     }
 
@@ -2282,9 +2281,9 @@ mod tests {
             safety_status: EnvelopeStatus::Safe,
             rationale: "good policy".to_string(),
         };
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let back: Recommendation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rec, back);
     }
 
@@ -2415,9 +2414,9 @@ mod tests {
     #[test]
     fn engine_serde_roundtrip() {
         let engine = default_engine();
-        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         let back: CounterfactualReplayEngine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(engine.replay_count(), back.replay_count());
         assert_eq!(
             engine.config().baseline_policy_id,
@@ -2512,9 +2511,9 @@ mod tests {
             AssumptionCategory::TemporalStability,
         ];
         for cat in &categories {
-            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cat).expect("serialize derived Serialize");
             let back: AssumptionCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cat, back);
         }
     }
@@ -2565,9 +2564,9 @@ mod tests {
             }],
             artifact_hash: ContentHash::compute(b"report"),
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: PolicyComparisonReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -2675,9 +2674,9 @@ mod tests {
             test_passed: None,
             sensitivity_bound_millionths: 100_000,
         };
-        let json = serde_json::to_string(&card).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&card).expect("serialize derived Serialize");
         let back: AssumptionCard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(card, back);
         assert!(back.test_passed.is_none());
     }
@@ -2702,9 +2701,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(engine.replay_count(), 2);
 
-        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         let back: CounterfactualReplayEngine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.replay_count(), 2);
     }
 
@@ -2832,9 +2831,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: ReplayEngineError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }

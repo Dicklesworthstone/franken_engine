@@ -1873,12 +1873,11 @@ mod tests {
         ] {
             // SAFETY: Test262WaiverReason derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid Test262WaiverReason,
             // so from_str back to Test262WaiverReason cannot fail (valid format + matching schema).
             let back: Test262WaiverReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, reason);
         }
     }
@@ -2095,12 +2094,11 @@ mod tests {
         ] {
             // SAFETY: Test262Outcome derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid Test262Outcome,
             // so from_str back to Test262Outcome cannot fail (valid format + matching schema).
             let back: Test262Outcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, outcome);
         }
     }
@@ -2113,10 +2111,9 @@ mod tests {
             Test262ObservedOutcome::Timeout,
             Test262ObservedOutcome::Crash,
         ] {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: Test262ObservedOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, outcome);
         }
     }
@@ -2466,36 +2463,36 @@ reason_code = "harness_gap"
     #[test]
     fn pin_set_serde_round_trip() {
         let pin = valid_pin();
-        let json = serde_json::to_string(&pin).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pin).expect("serialize derived Serialize");
         let back: Test262PinSet =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, pin);
     }
 
     #[test]
     fn profile_serde_round_trip() {
         let profile = valid_profile();
-        let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&profile).expect("serialize derived Serialize");
         let back: Test262Profile =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, profile);
     }
 
     #[test]
     fn waiver_set_serde_round_trip() {
         let ws = valid_waiver_set();
-        let json = serde_json::to_string(&ws).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ws).expect("serialize derived Serialize");
         let back: Test262WaiverSet =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, ws);
     }
 
     #[test]
     fn runner_config_serde_round_trip() {
         let cfg = Test262RunnerConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: Test262RunnerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
@@ -3047,8 +3044,7 @@ reason_code = "harness_gap"
 
         let dir = std::env::temp_dir().join("franken_t262_evidence_test");
         let _ = fs::remove_dir_all(&dir);
-        let collector =
-            Test262EvidenceCollector::new(&dir).expect("serde deserialization should succeed");
+        let collector = Test262EvidenceCollector::new(&dir).expect("constructor with valid inputs");
         let artifacts = collector
             .collect(&result, &hwm)
             .expect("serde deserialization should succeed");
@@ -3378,7 +3374,7 @@ unknown_field = "value"
         let pin = valid_pin();
         let bytes = canonical_json_bytes(&pin).expect("serde deserialization should succeed");
         let back: Test262PinSet =
-            serde_json::from_slice(&bytes).expect("serde deserialization should succeed");
+            serde_json::from_slice(&bytes).expect("deserialize known-valid JSON");
         assert_eq!(back, pin);
     }
 
@@ -3400,9 +3396,9 @@ unknown_field = "value"
             error_detail: None,
             worker_index: 0,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: Test262LogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
@@ -3425,9 +3421,9 @@ unknown_field = "value"
             env_fingerprint: "ef".to_string(),
             pass_regression_warning: None,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: Test262RunSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, summary);
     }
 
@@ -3441,9 +3437,9 @@ unknown_field = "value"
             acknowledgement_required: true,
             acknowledged: false,
         };
-        let json = serde_json::to_string(&warning).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&warning).expect("serialize derived Serialize");
         let back: Test262PassRegressionWarning =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, warning);
     }
 
@@ -3458,11 +3454,11 @@ unknown_field = "value"
         };
         // SAFETY: Test262CollectedArtifacts derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&arts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&arts).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid Test262CollectedArtifacts,
         // so from_str back to Test262CollectedArtifacts cannot fail (valid format + matching schema).
         let back: Test262CollectedArtifacts =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, arts);
     }
 
@@ -3524,11 +3520,11 @@ unknown_field = "value"
         };
         // SAFETY: Test262ObservedResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid Test262ObservedResult,
         // so from_str back to Test262ObservedResult cannot fail (valid format + matching schema).
         let back: Test262ObservedResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, obs);
     }
 
@@ -3543,11 +3539,11 @@ unknown_field = "value"
         };
         // SAFETY: DeterministicWorkerAssignment derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&wa).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&wa).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DeterministicWorkerAssignment,
         // so from_str back to DeterministicWorkerAssignment cannot fail (valid format + matching schema).
         let back: DeterministicWorkerAssignment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, wa);
     }
 
@@ -3562,11 +3558,11 @@ unknown_field = "value"
         };
         // SAFETY: Test262ProfileInclude derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&inc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inc).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid Test262ProfileInclude,
         // so from_str back to Test262ProfileInclude cannot fail (valid format + matching schema).
         let back: Test262ProfileInclude =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inc, back);
     }
 
@@ -3579,11 +3575,11 @@ unknown_field = "value"
         };
         // SAFETY: Test262ProfileExclude derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&exc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&exc).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid Test262ProfileExclude,
         // so from_str back to Test262ProfileExclude cannot fail (valid format + matching schema).
         let back: Test262ProfileExclude =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(exc, back);
     }
 }

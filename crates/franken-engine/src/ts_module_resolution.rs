@@ -2055,10 +2055,10 @@ mod tests {
             TsModuleResolutionMode::Bundler,
         ] {
             // SAFETY: TsModuleResolutionMode derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid TsModuleResolutionMode serialization
             let back: TsModuleResolutionMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mode, back);
         }
     }
@@ -2067,10 +2067,10 @@ mod tests {
     fn request_style_serde_roundtrip() {
         for style in [TsRequestStyle::Import, TsRequestStyle::Require] {
             // SAFETY: TsRequestStyle derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&style).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&style).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid TsRequestStyle serialization
             let back: TsRequestStyle =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(style, back);
         }
     }
@@ -2115,9 +2115,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = TsModuleResolutionConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: TsModuleResolutionConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -2186,9 +2186,9 @@ mod tests {
             message: "not found".to_string(),
             traces: vec![],
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: TsModuleResolutionError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -2200,7 +2200,7 @@ mod tests {
             project_root: "/a/b/../c".to_string(),
             ..Default::default()
         });
-        let json = serde_json::to_string(&resolver).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&resolver).expect("serialize derived Serialize");
         assert!(json.contains("/a/c"));
     }
 
@@ -2579,9 +2579,9 @@ mod tests {
             detail: "test detail".to_string(),
             candidate: Some("/a/b.ts".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: TsResolutionTraceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2645,9 +2645,9 @@ mod tests {
     #[test]
     fn drift_report_serde_roundtrip() {
         let report = classify_resolution_drift(&["a".to_string()], &["b".to_string()]);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: TsResolutionDriftReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -2817,9 +2817,9 @@ mod tests {
             selected_condition: Some("import".to_string()),
             traces: vec![],
         };
-        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
         let back: TsModuleResolutionOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(outcome, back);
     }
 
@@ -2827,9 +2827,9 @@ mod tests {
     fn resolver_serde_roundtrip() {
         let mut resolver = default_resolver();
         resolver.register_file("/project/src/a.ts");
-        let json = serde_json::to_string(&resolver).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&resolver).expect("serialize derived Serialize");
         let back: DeterministicTsModuleResolver =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(resolver, back);
     }
 
@@ -2851,9 +2851,9 @@ mod tests {
                 drift_report: "d.json".to_string(),
             },
         };
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: TsResolutionRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
     }
 
@@ -2923,9 +2923,9 @@ mod tests {
             TsResolutionDriftClass::ExtraTarget,
             TsResolutionDriftClass::FullMismatch,
         ] {
-            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&class).expect("serialize derived Serialize");
             let back: TsResolutionDriftClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(class, back);
         }
     }

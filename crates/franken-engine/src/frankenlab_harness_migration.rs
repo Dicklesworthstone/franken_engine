@@ -742,10 +742,9 @@ mod tests {
             MigrationStatus::Verified,
             MigrationStatus::Deferred,
         ] {
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             let round: MigrationStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(status, round);
         }
     }
@@ -828,9 +827,9 @@ mod tests {
         entry.local_oracles.insert("safety".to_owned());
         entry.bridge_oracles.insert("determinism".to_owned());
         entry.mark_migrated("upstream");
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let round: ScenarioMigrationEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, round);
     }
 
@@ -877,9 +876,9 @@ mod tests {
     fn containment_entry_serde_roundtrip() {
         let entry =
             ContainmentTestEntry::new(ContainmentTestKind::MockSeamAbsence, "tests/orch.rs", 8);
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let round: ContainmentTestEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, round);
     }
 
@@ -960,7 +959,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&reg).expect("serde deserialization should succeed");
         let round: HarnessMigrationRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, round);
     }
 
@@ -1011,7 +1010,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
         let round: HarnessMigrationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);
     }
 
@@ -1065,9 +1064,9 @@ mod tests {
         let mut entry = OracleMigrationEntry::bridged("safety");
         entry.add_scenario("startup");
         entry.mark_cross_validated();
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let round: OracleMigrationEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, round);
     }
 
@@ -1091,9 +1090,9 @@ mod tests {
     #[test]
     fn lifecycle_scenario_id_serde_all() {
         for id in LifecycleScenarioId::ALL {
-            let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&id).expect("serialize derived Serialize");
             let back: LifecycleScenarioId =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(id, back);
         }
     }
@@ -1108,9 +1107,9 @@ mod tests {
     #[test]
     fn containment_test_kind_serde_all() {
         for kind in ContainmentTestKind::ALL {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let back: ContainmentTestKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }

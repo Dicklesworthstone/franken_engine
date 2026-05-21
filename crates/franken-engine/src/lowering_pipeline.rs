@@ -8747,11 +8747,9 @@ mod tests {
 
         assert_eq!(first, second);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let first_json =
-            serde_json::to_string(&first).expect("serde deserialization should succeed");
+        let first_json = serde_json::to_string(&first).expect("serialize derived Serialize");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let second_json =
-            serde_json::to_string(&second).expect("serde deserialization should succeed");
+        let second_json = serde_json::to_string(&second).expect("serialize derived Serialize");
         assert_eq!(first_json, second_json);
     }
 
@@ -8843,10 +8841,10 @@ mod tests {
     fn lowering_context_serde_roundtrip() {
         let ctx = LoweringContext::new("t", "d", "p");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let parsed: LoweringContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctx, parsed);
     }
 
@@ -8864,10 +8862,10 @@ mod tests {
             error_code: Some("FE-LOWER-0001".to_string()),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let parsed: LoweringEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, parsed);
     }
 
@@ -8881,10 +8879,10 @@ mod tests {
             detail: "detail".to_string(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&check).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let parsed: InvariantCheck =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(check, parsed);
     }
 
@@ -8903,9 +8901,9 @@ mod tests {
                 detail: "ok".to_string(),
             }],
         };
-        let json = serde_json::to_string(&witness).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&witness).expect("serialize derived Serialize");
         let parsed: PassWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(witness, parsed);
     }
 
@@ -8920,9 +8918,9 @@ mod tests {
             input_op_count: 10,
             output_op_count: 15,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let parsed: IsomorphismLedgerEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, parsed);
     }
 
@@ -10293,9 +10291,9 @@ mod tests {
             required_declassifications: vec![],
             runtime_checkpoints: vec![],
         };
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: Ir2FlowProofArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -10304,9 +10302,9 @@ mod tests {
         let ctx = LoweringContext::new("t", "d", "p");
         let ir0 = script_ir0();
         let output = lower_ir0_to_ir3(&ir0, &ctx).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&output).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&output).expect("serialize derived Serialize");
         let back: LoweringPipelineOutput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(output, back);
     }
 
@@ -10333,9 +10331,9 @@ mod tests {
                 output_op_count: 4,
             },
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: LoweringPassResult<String> =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -12619,9 +12617,9 @@ mod tests {
             capability: Some("hostcall.invoke".to_string()),
             proof_method: ProofMethod::StaticAnalysis,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: FlowProofArtifactEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -12635,9 +12633,9 @@ mod tests {
             reason: "lattice violation".to_string(),
             error_code: "FE-LOWER-IFC-0001".to_string(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: DeniedFlowArtifactEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -12655,9 +12653,9 @@ mod tests {
             receipt_linkage_required: true,
             replay_command_hint: REQUIRED_DECLASSIFICATION_REPLAY_COMMAND_HINT.to_string(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: RequiredDeclassificationArtifactEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -12673,9 +12671,9 @@ mod tests {
             capability: Some("hostcall.invoke".to_string()),
             reason: "dynamic_capability".to_string(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: RuntimeCheckpointArtifactEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -12700,9 +12698,9 @@ mod tests {
             capability: Some("ifc.check_flow".to_string()),
             reason: "checkpoint serde roundtrip test".to_string(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: RuntimeCheckpointArtifactEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 

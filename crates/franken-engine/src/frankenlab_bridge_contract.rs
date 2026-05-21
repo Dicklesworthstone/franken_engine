@@ -1321,9 +1321,9 @@ mod tests {
             BridgeMode::LocalWithUpstreamValidation,
             BridgeMode::LocalOnly,
         ] {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let round: BridgeMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mode, round);
         }
     }
@@ -1353,9 +1353,9 @@ mod tests {
     #[test]
     fn bridge_seam_serde_roundtrip() {
         for seam in BridgeSeam::ALL {
-            let json = serde_json::to_string(&seam).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&seam).expect("serialize derived Serialize");
             let round: BridgeSeam =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(seam, round);
         }
     }
@@ -1410,9 +1410,9 @@ mod tests {
         m.add_fault("panic", 100);
         m.add_oracle("safety");
         m.add_cancellation("r1", 50);
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let round: ScenarioManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, round);
     }
 
@@ -1450,9 +1450,9 @@ mod tests {
             test_content_hash(b"f"),
             7,
         );
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let round: TraceCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, round);
     }
 
@@ -1536,9 +1536,9 @@ mod tests {
     #[test]
     fn fault_category_serde_roundtrip() {
         for cat in FaultCategory::ALL {
-            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cat).expect("serialize derived Serialize");
             let round: FaultCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cat, round);
         }
     }
@@ -1605,9 +1605,9 @@ mod tests {
     #[test]
     fn policy_serde_roundtrip() {
         let policy = BridgeContractPolicy::strict(test_epoch());
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let round: BridgeContractPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, round);
     }
 
@@ -1811,7 +1811,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
         let round: BridgeContractReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);
     }
 
@@ -1865,9 +1865,9 @@ mod tests {
     #[test]
     fn type_mapping_registry_serde_roundtrip() {
         let reg = BridgeTypeMappingRegistry::with_defaults();
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let round: BridgeTypeMappingRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, round);
     }
 

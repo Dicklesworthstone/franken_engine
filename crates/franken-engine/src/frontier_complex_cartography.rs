@@ -1291,9 +1291,9 @@ mod tests {
             SimplexDimension::HigherDim(10),
         ];
         for dim in &dims {
-            let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(dim).expect("serialize derived Serialize");
             let back: SimplexDimension =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*dim, back);
         }
     }
@@ -1373,9 +1373,8 @@ mod tests {
     #[test]
     fn test_simplex_serde_roundtrip() {
         let s = make_edge("e01", "x", "y", 500_000);
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: Simplex =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
+        let back: Simplex = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -1477,9 +1476,9 @@ mod tests {
     fn test_frontier_complex_serde_roundtrip() {
         let complex = build_complex(standard_complex_simplices())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&complex).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&complex).expect("serialize derived Serialize");
         let back: FrontierComplex =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(complex, back);
     }
 
@@ -1532,9 +1531,9 @@ mod tests {
             killer_simplex: Some("t012".to_string()),
             persistence_millionths: 400_000,
         };
-        let json = serde_json::to_string(&pair).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pair).expect("serialize derived Serialize");
         let back: PersistencePair =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pair, back);
     }
 
@@ -1622,9 +1621,9 @@ mod tests {
         let complex = build_complex(standard_complex_simplices())
             .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&diagram).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&diagram).expect("serialize derived Serialize");
         let back: PersistenceDiagram =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(diagram, back);
     }
 
@@ -1772,9 +1771,9 @@ mod tests {
             HoleSignificance::Structural,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: HoleSignificance =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1829,9 +1828,8 @@ mod tests {
             content_hash: ContentHash::compute(b""),
         };
         h.seal();
-        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let back: FrontierHole =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&h).expect("serialize derived Serialize");
+        let back: FrontierHole = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(h, back);
     }
 
@@ -1871,9 +1869,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(1), &diagram, 50_000, 100);
-        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
-        let back: HoleLedger =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
+        let back: HoleLedger = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ledger, back);
     }
 
@@ -2051,9 +2048,9 @@ mod tests {
         let diagram = compute_persistence(&complex).expect("serde deserialization should succeed");
         let ledger = build_hole_ledger(SecurityEpoch::from_raw(1), &diagram, 50_000, 100);
         let summary = ledger_summary(&ledger);
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: LedgerSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -2115,9 +2112,9 @@ mod tests {
             CartographyError::InternalError("test".to_string()),
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let back: CartographyError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }

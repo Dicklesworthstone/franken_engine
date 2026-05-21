@@ -1511,7 +1511,7 @@ mod tests {
     #[test]
     fn workload_class_serde_is_snake_case() {
         let json = serde_json::to_string(&ObservabilityWorkloadClass::DispatchSensitive)
-            .expect("serde deserialization should succeed");
+            .expect("serialize derived Serialize");
         assert_eq!(json, "\"dispatch_sensitive\"");
     }
 
@@ -1572,7 +1572,7 @@ mod tests {
     #[test]
     fn mode_serde_is_snake_case() {
         let json = serde_json::to_string(&ObservabilityMode::ExactShadow)
-            .expect("serde deserialization should succeed");
+            .expect("serialize derived Serialize");
         assert_eq!(json, "\"exact_shadow\"");
     }
 
@@ -1797,7 +1797,7 @@ mod tests {
         let temp = unique_temp_path(&base);
         let name = temp
             .file_name()
-            .expect("serde deserialization should succeed")
+            .expect("temporary path has file name")
             .to_string_lossy();
         assert!(name.starts_with('.'));
         assert!(name.contains("report.json"));
@@ -1809,8 +1809,8 @@ mod tests {
         let base = PathBuf::from("/tmp/artifacts/report.json");
         let temp = unique_temp_path(&base);
         assert_eq!(
-            temp.parent().expect("serde deserialization should succeed"),
-            base.parent().expect("serde deserialization should succeed")
+            temp.parent().expect("path has parent directory"),
+            base.parent().expect("path has parent directory")
         );
     }
 
@@ -1968,18 +1968,18 @@ mod tests {
     fn canonical_json_bytes_produces_valid_json() {
         let surface = make_surface(true, true);
         let bytes = canonical_json_bytes(&surface, Path::new("/tmp/test.json"))
-            .expect("serde deserialization should succeed");
+            .expect("canonical JSON byte serialization");
         let _parsed: serde_json::Value =
-            serde_json::from_slice(&bytes).expect("serde deserialization should succeed");
+            serde_json::from_slice(&bytes).expect("deserialize known-valid JSON");
     }
 
     #[test]
     fn canonical_json_bytes_deterministic() {
         let surface = make_surface(false, false);
         let a = canonical_json_bytes(&surface, Path::new("/tmp/a.json"))
-            .expect("serde deserialization should succeed");
+            .expect("canonical JSON byte serialization");
         let b = canonical_json_bytes(&surface, Path::new("/tmp/b.json"))
-            .expect("serde deserialization should succeed");
+            .expect("canonical JSON byte serialization");
         assert_eq!(a, b);
     }
 

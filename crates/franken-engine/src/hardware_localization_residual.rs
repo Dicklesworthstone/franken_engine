@@ -1265,9 +1265,9 @@ mod tests {
     #[test]
     fn hardware_feature_serde_roundtrip() {
         for f in HardwareFeature::ALL {
-            let json = serde_json::to_string(f).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(f).expect("serialize derived Serialize");
             let back: HardwareFeature =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*f, back);
         }
     }
@@ -1313,9 +1313,9 @@ mod tests {
     #[test]
     fn microarch_family_serde_roundtrip() {
         for f in MicroarchFamily::ALL {
-            let json = serde_json::to_string(f).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(f).expect("serialize derived Serialize");
             let back: MicroarchFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*f, back);
         }
     }
@@ -1376,9 +1376,9 @@ mod tests {
     #[test]
     fn residual_category_serde_roundtrip() {
         for c in ResidualCategory::ALL {
-            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(c).expect("serialize derived Serialize");
             let back: ResidualCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*c, back);
         }
     }
@@ -1571,9 +1571,9 @@ mod tests {
             PromotionVerdict::InsufficientEvidence,
             PromotionVerdict::Rejected,
         ] {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: PromotionVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1992,9 +1992,9 @@ mod tests {
         board.add_entry(algo_dominant_entry(MicroarchFamily::Zen4));
         board.add_entry(algo_dominant_entry(MicroarchFamily::GravitonArm));
         let report = board.generate_report();
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: LocalizationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 

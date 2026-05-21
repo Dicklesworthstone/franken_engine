@@ -860,10 +860,10 @@ mod tests {
     fn test_mutation_contract_serde() {
         let c = MutationContract::Accumulator;
         // SAFETY: MutationContract derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid MutationContract serialization
         let back: MutationContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1257,10 +1257,10 @@ mod tests {
         ];
         for o in &outcomes {
             // SAFETY: WorkloadOutcome derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(o).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(o).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid WorkloadOutcome serialization
             let decoded: WorkloadOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*o, decoded);
         }
     }
@@ -1347,10 +1347,10 @@ mod tests {
             "test description",
         );
         // SAFETY: WorkloadScenario derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&scenario).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid WorkloadScenario serialization
         let decoded: WorkloadScenario =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(scenario, decoded);
     }
 
@@ -1368,10 +1368,10 @@ mod tests {
         };
         result.seal();
         // SAFETY: ScenarioResult derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ScenarioResult serialization
         let decoded: ScenarioResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, decoded);
     }
 
@@ -1417,10 +1417,10 @@ mod tests {
     fn test_suite_serde_roundtrip() {
         let suite = build_canonical_pure_suite();
         // SAFETY: WorkloadSuite derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&suite).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid WorkloadSuite serialization
         let decoded: WorkloadSuite =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(suite, decoded);
     }
 
@@ -1429,9 +1429,9 @@ mod tests {
     #[test]
     fn test_report_serde_roundtrip() {
         let report = franken_engine_stdlib_verification_manifest();
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let decoded: VerificationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, decoded);
     }
 
@@ -1479,9 +1479,9 @@ mod tests {
             observed_mutation: "array.push".into(),
             severity: 2,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let decoded: MutationViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, decoded);
     }
 

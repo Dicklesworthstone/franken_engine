@@ -1602,9 +1602,8 @@ mod tests {
     #[test]
     fn key_role_serde_roundtrip() {
         for role in KeyRole::ALL {
-            let json = serde_json::to_string(role).expect("serde deserialization should succeed");
-            let back: KeyRole =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(role).expect("serialize derived Serialize");
+            let back: KeyRole = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*role, back);
         }
     }
@@ -1618,9 +1617,9 @@ mod tests {
             KeyStatus::Revoked,
             KeyStatus::Expired,
         ] {
-            let json = serde_json::to_string(status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(status).expect("serialize derived Serialize");
             let back: KeyStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*status, back);
         }
     }
@@ -1653,9 +1652,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: KeyRoleError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1729,18 +1728,18 @@ mod tests {
     #[test]
     fn encryption_public_key_serde_roundtrip() {
         let pk = EncryptionPublicKey::from_bytes([0x42; 32]);
-        let json = serde_json::to_string(&pk).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pk).expect("serialize derived Serialize");
         let back: EncryptionPublicKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pk, back);
     }
 
     #[test]
     fn encryption_private_key_serde_roundtrip() {
         let sk = EncryptionPrivateKey::from_bytes([0x99; 32]);
-        let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sk).expect("serialize derived Serialize");
         let back: EncryptionPrivateKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sk.as_bytes(), back.as_bytes());
     }
 
@@ -1757,9 +1756,8 @@ mod tests {
             epoch,
             0,
         );
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: RoleKeyEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
+        let back: RoleKeyEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1998,10 +1996,10 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         // SAFETY: OwnerKeyBundle derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid OwnerKeyBundle serialization
         let back: OwnerKeyBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle.sequence, back.sequence);
         assert_eq!(bundle.epoch, back.epoch);
     }
@@ -2038,10 +2036,9 @@ mod tests {
     fn key_role_serde_all_variants() {
         for role in KeyRole::ALL {
             // SAFETY: KeyRole derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(role).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(role).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid KeyRole serialization
-            let back: KeyRole =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: KeyRole = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*role, back);
         }
     }
@@ -2087,11 +2084,10 @@ mod tests {
             KeyStatus::Expired,
         ] {
             // SAFETY: KeyStatus derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid KeyStatus serialization
             let back: KeyStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(status, back);
         }
     }
@@ -2125,18 +2121,18 @@ mod tests {
     #[test]
     fn encryption_public_key_bytes_serde_roundtrip() {
         let pk = EncryptionPublicKey::from_bytes([0x01; 32]);
-        let json = serde_json::to_string(&pk).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pk).expect("serialize derived Serialize");
         let back: EncryptionPublicKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pk, back);
     }
 
     #[test]
     fn encryption_private_key_bytes_serde_roundtrip() {
         let sk = EncryptionPrivateKey::from_bytes([0x99; 32]);
-        let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sk).expect("serialize derived Serialize");
         let back: EncryptionPrivateKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sk, back);
     }
 

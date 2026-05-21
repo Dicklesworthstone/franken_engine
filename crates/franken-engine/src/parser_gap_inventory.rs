@@ -848,9 +848,9 @@ mod tests {
     #[test]
     fn parser_gap_stage_serde_round_trip() {
         for stage in [ParserGapStage::Ir0ToIr1, ParserGapStage::Ir1ToIr3] {
-            let json = serde_json::to_string(&stage).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&stage).expect("serialize derived Serialize");
             let back: ParserGapStage =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, stage);
             assert!(!stage.as_str().is_empty());
         }
@@ -863,10 +863,9 @@ mod tests {
             ParserGapRemediationStatus::OpenPlaceholder,
             ParserGapRemediationStatus::Resolved,
         ] {
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             let back: ParserGapRemediationStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, status);
             assert!(!status.as_str().is_empty());
         }
@@ -920,9 +919,9 @@ mod tests {
     #[test]
     fn parser_gap_site_id_serde_round_trip() {
         for site in ParserGapSiteId::ALL {
-            let json = serde_json::to_string(&site).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&site).expect("serialize derived Serialize");
             let back: ParserGapSiteId =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, site);
         }
     }
@@ -1035,9 +1034,9 @@ mod tests {
             diagnostic_code: Some("FE-TEST-0001".to_string()),
             detail: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ParserGapInventoryEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
@@ -1061,9 +1060,9 @@ mod tests {
                 commands_txt: "commands.txt".to_string(),
             },
         };
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: ParserGapInventoryRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, manifest);
     }
 
@@ -1326,9 +1325,9 @@ mod tests {
     #[test]
     fn parser_gap_inventory_serde_roundtrip() {
         let inventory = parser_gap_inventory();
-        let json = serde_json::to_string(&inventory).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inventory).expect("serialize derived Serialize");
         let back: ParserGapInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.schema_version, inventory.schema_version);
         assert_eq!(back.sites.len(), inventory.sites.len());
     }
@@ -1684,10 +1683,9 @@ mod tests {
             ParserGapSiteId::BinaryNonArithmeticAddPlaceholder,
         ]);
 
-        let json =
-            serde_json::to_string(&test_inventory).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&test_inventory).expect("serialize derived Serialize");
         let deserialized: ParserGapInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(deserialized.open_placeholder_site_count(), 2);
         assert_eq!(deserialized.sites.len(), 6);

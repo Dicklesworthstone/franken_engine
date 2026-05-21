@@ -1246,9 +1246,9 @@ mod tests {
                 false_action_cost: 50,
             },
         );
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: DecomposedLossMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -1505,9 +1505,9 @@ mod tests {
     #[test]
     fn attacker_model_serialization_round_trip() {
         let m = sample_attacker_model();
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: AttackerCostModel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -1558,9 +1558,9 @@ mod tests {
     #[test]
     fn containment_model_serialization_round_trip() {
         let m = sample_containment_model();
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: ContainmentCostModel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -1678,9 +1678,9 @@ mod tests {
             cascade_probability: 250_000,
             growth_rate_per_sec: 100_000,
         };
-        let json = serde_json::to_string(&br).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&br).expect("serialize derived Serialize");
         let restored: BlastRadiusEstimate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(br, restored);
     }
 
@@ -1768,9 +1768,9 @@ mod tests {
     #[test]
     fn model_inputs_serialization_round_trip() {
         let m = sample_model_inputs();
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: TrustEconomicsModelInputs =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -1820,9 +1820,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: TrustEconomicsError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1833,8 +1833,8 @@ mod tests {
     fn deterministic_serialization() {
         let m1 = sample_model_inputs();
         let m2 = sample_model_inputs();
-        let json1 = serde_json::to_string(&m1).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&m2).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&m1).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&m2).expect("serialize derived Serialize");
         assert_eq!(json1, json2, "identical inputs must produce identical JSON");
     }
 
@@ -1949,9 +1949,9 @@ mod tests {
             RoiAlertLevel::Profitable,
             RoiAlertLevel::HighlyProfitable,
         ] {
-            let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&level).expect("serialize derived Serialize");
             let back: RoiAlertLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(level, back);
         }
     }
@@ -1959,9 +1959,8 @@ mod tests {
     #[test]
     fn roi_trend_serde_roundtrip() {
         for trend in [RoiTrend::Falling, RoiTrend::Stable, RoiTrend::Rising] {
-            let json = serde_json::to_string(&trend).expect("serde deserialization should succeed");
-            let back: RoiTrend =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&trend).expect("serialize derived Serialize");
+            let back: RoiTrend = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(trend, back);
         }
     }
@@ -1975,9 +1974,8 @@ mod tests {
             containment_cost: 400,
             false_action_cost: 500,
         };
-        let json = serde_json::to_string(&sl).expect("serde deserialization should succeed");
-        let back: SubLoss =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sl).expect("serialize derived Serialize");
+        let back: SubLoss = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sl, back);
     }
 
@@ -1990,9 +1988,8 @@ mod tests {
             operator_burden: 400,
             reversibility_cost: 500,
         };
-        let json = serde_json::to_string(&ac).expect("serde deserialization should succeed");
-        let back: ActionCost =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ac).expect("serialize derived Serialize");
+        let back: ActionCost = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ac, back);
     }
 
@@ -2260,9 +2257,9 @@ mod tests {
             evasion_delta: 100_000,
             justification: "test justification".into(),
         };
-        let json = serde_json::to_string(&adj).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&adj).expect("serialize derived Serialize");
         let back: StrategyCostAdjustment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(adj, back);
     }
 
@@ -2315,9 +2312,9 @@ mod tests {
     #[test]
     fn attacker_roi_assessment_serde_roundtrip() {
         let a = AttackerRoiAssessment::new("ext-z", 1_500_000, &[1_000_000, 1_500_000]);
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let back: AttackerRoiAssessment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -2329,9 +2326,9 @@ mod tests {
             AttackerRoiAssessment::new("ext-a", 2_500_000, &[2_000_000, 2_500_000]),
         );
         let summary = summarize_fleet_roi(&assessments);
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: FleetRoiSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 

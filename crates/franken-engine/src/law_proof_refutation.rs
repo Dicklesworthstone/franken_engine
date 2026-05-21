@@ -1018,10 +1018,9 @@ mod tests {
     #[test]
     fn strategy_serde_roundtrip() {
         for strategy in ProofStrategy::ALL {
-            let json =
-                serde_json::to_string(strategy).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(strategy).expect("serialize derived Serialize");
             let back: ProofStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*strategy, back);
         }
     }
@@ -1064,10 +1063,9 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for verdict in ProofVerdict::ALL {
-            let json =
-                serde_json::to_string(verdict).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(verdict).expect("serialize derived Serialize");
             let back: ProofVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*verdict, back);
         }
     }
@@ -1099,9 +1097,9 @@ mod tests {
     #[test]
     fn refutation_reason_serde_roundtrip() {
         for reason in RefutationReason::ALL {
-            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(reason).expect("serialize derived Serialize");
             let back: RefutationReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*reason, back);
         }
     }
@@ -1163,9 +1161,9 @@ mod tests {
             witness_hash: ContentHash::compute(b"placeholder"),
         };
         w.recompute_hash();
-        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&w).expect("serialize derived Serialize");
         let back: RefutationWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(w, back);
     }
 
@@ -1232,9 +1230,8 @@ mod tests {
             attempt_hash: ContentHash::compute(b"placeholder"),
         };
         a.recompute_hash();
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let back: ProofAttempt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
+        let back: ProofAttempt = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -1316,9 +1313,9 @@ mod tests {
             ProofStrategy::DifferentialReplay,
             test_epoch(),
         ));
-        let json = serde_json::to_string(&archive).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&archive).expect("serialize derived Serialize");
         let back: CounterexampleArchive =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(archive, back);
     }
 
@@ -1388,9 +1385,9 @@ mod tests {
             result_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: ProofCampaignResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1499,9 +1496,9 @@ mod tests {
             ProofRefutationPipeline::new(ProofCampaignConfig::default(), test_epoch());
         let candidate = test_candidate("law-serde", CandidateKind::Invariant, 800_000);
         pipeline.run_campaign(&candidate);
-        let json = serde_json::to_string(&pipeline).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pipeline).expect("serialize derived Serialize");
         let back: ProofRefutationPipeline =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pipeline, back);
     }
 
@@ -1604,9 +1601,9 @@ mod tests {
                 detail: "x".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let back: ProofRefutationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, back);
         }
     }

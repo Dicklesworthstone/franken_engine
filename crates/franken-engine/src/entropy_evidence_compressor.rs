@@ -847,10 +847,10 @@ mod tests {
         est.observe(1);
         est.observe(0);
         // SAFETY: EntropyEstimator serialization is infallible for well-formed internal state
-        let json = serde_json::to_string(&est).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&est).expect("serialize derived Serialize");
         // SAFETY: deserializing our own freshly serialized JSON data cannot fail
         let restored: EntropyEstimator =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(est, restored);
     }
 
@@ -923,10 +923,10 @@ mod tests {
         let est = EntropyEstimator::new();
         let ss = SufficientStatistic::from_estimator(&est, 0, 0, ContentHash::compute(b"empty"));
         // SAFETY: SufficientStatistic serialization is infallible for well-formed internal state
-        let json = serde_json::to_string(&ss).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ss).expect("serialize derived Serialize");
         // SAFETY: deserializing our own freshly serialized JSON data cannot fail
         let restored: SufficientStatistic =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ss, restored);
     }
 
@@ -1086,9 +1086,9 @@ mod tests {
         est.observe(1);
         let coder =
             ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&coder).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         let restored: ArithmeticCoder =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(coder, restored);
     }
 
@@ -1106,9 +1106,9 @@ mod tests {
             compression_ratio_millionths: 160_000,
             content_hash: ContentHash::compute(b"test"),
         };
-        let json = serde_json::to_string(&ce).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ce).expect("serialize derived Serialize");
         let restored: CompressedEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ce, restored);
     }
 
@@ -1151,9 +1151,9 @@ mod tests {
             symbol_count: 100,
             certificate_hash: ContentHash::compute(b"cert"),
         };
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let restored: CompressionCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, restored);
     }
 
@@ -1443,9 +1443,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: EntropyError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1628,7 +1628,7 @@ mod tests {
     fn enrichment_json_fields_entropy_estimator() {
         let mut est = EntropyEstimator::new();
         est.observe(7);
-        let json = serde_json::to_string(&est).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&est).expect("serialize derived Serialize");
         assert!(json.contains("\"frequencies\""));
         assert!(json.contains("\"total_count\""));
         assert!(json.contains("\"alphabet_size\""));
@@ -1639,7 +1639,7 @@ mod tests {
         let mut est = EntropyEstimator::new();
         est.observe(0);
         let ss = SufficientStatistic::from_estimator(&est, 0, 0, ContentHash::compute(b"f"));
-        let json = serde_json::to_string(&ss).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ss).expect("serialize derived Serialize");
         assert!(json.contains("\"symbol_counts\""));
         assert!(json.contains("\"cumulative_llr_millionths\""));
         assert!(json.contains("\"is_fisher_sufficient\""));
@@ -1661,7 +1661,7 @@ mod tests {
             symbol_count: 100,
             certificate_hash: ContentHash::compute(b"fld"),
         };
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         assert!(json.contains("\"entropy_millibits_per_symbol\""));
         assert!(json.contains("\"shannon_lower_bound_bits\""));
         assert!(json.contains("\"kraft_satisfied\""));
@@ -1677,9 +1677,8 @@ mod tests {
         let err = EntropyError::DecodeError {
             message: "unexpected EOF at offset 42".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: EntropyError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let back: EntropyError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1931,7 +1930,7 @@ mod tests {
             compression_ratio_millionths: 200_000,
             content_hash: ContentHash::compute(b"fs"),
         };
-        let json = serde_json::to_string(&ce).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ce).expect("serialize derived Serialize");
         for field in &[
             "schema",
             "compressed_data",
@@ -1955,7 +1954,7 @@ mod tests {
         est.observe(0);
         let coder =
             ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&coder).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         for field in &["frequency_table", "total_frequency", "alphabet_size"] {
             assert!(
                 json.contains(&format!("\"{field}\"")),
@@ -1970,7 +1969,7 @@ mod tests {
         est.observe(0);
         est.observe(1);
         let ss = SufficientStatistic::from_estimator(&est, 500, 1000, ContentHash::compute(b"ss"));
-        let json = serde_json::to_string(&ss).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ss).expect("serialize derived Serialize");
         for field in &[
             "symbol_counts",
             "total_count",
@@ -2010,7 +2009,7 @@ mod tests {
         ];
         let jsons: std::collections::BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(
             jsons.len(),
@@ -2405,9 +2404,9 @@ mod tests {
         }
         let coder =
             ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&coder).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         let restored: ArithmeticCoder =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(coder, restored);
         assert_eq!(restored.alphabet_size, 10);
     }
@@ -2426,10 +2425,9 @@ mod tests {
         let compressed = coder
             .encode(&symbols)
             .expect("serde deserialization should succeed");
-        let json =
-            serde_json::to_string(&compressed).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&compressed).expect("serialize derived Serialize");
         let restored: CompressedEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(compressed, restored);
     }
 
@@ -2572,13 +2570,12 @@ mod tests {
             ContentHash::compute(b"all"),
         );
 
-        let est_json = serde_json::to_string(&est).expect("serde deserialization should succeed");
-        let coder_json =
-            serde_json::to_string(&coder).expect("serde deserialization should succeed");
+        let est_json = serde_json::to_string(&est).expect("serialize derived Serialize");
+        let coder_json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         let compressed_json =
-            serde_json::to_string(&compressed).expect("serde deserialization should succeed");
-        let cert_json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
-        let ss_json = serde_json::to_string(&ss).expect("serde deserialization should succeed");
+            serde_json::to_string(&compressed).expect("serialize derived Serialize");
+        let cert_json = serde_json::to_string(&cert).expect("serialize derived Serialize");
+        let ss_json = serde_json::to_string(&ss).expect("serialize derived Serialize");
 
         assert_eq!(
             est,

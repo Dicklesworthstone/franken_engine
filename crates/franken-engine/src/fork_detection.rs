@@ -1739,9 +1739,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: ForkError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1763,9 +1763,9 @@ mod tests {
             existing_was_accepted: true,
             acknowledged: false,
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: ForkIncidentReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
@@ -1778,9 +1778,9 @@ mod tests {
             },
             trace_id: "t-1".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: ForkEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1791,9 +1791,9 @@ mod tests {
             trigger_seq: Some(5),
             unacknowledged_count: 2,
         };
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let restored: SafeModeState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(state, restored);
     }
 
@@ -2124,9 +2124,9 @@ mod tests {
             fork_seq: 10,
             resolution_seq: 5,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: ForkError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -2426,9 +2426,9 @@ mod tests {
             epoch: SecurityEpoch::GENESIS,
             accepted: true,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: CheckpointHistoryEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
     }
 
@@ -2439,10 +2439,9 @@ mod tests {
             SafeModeStartupSource::CliFlag,
             SafeModeStartupSource::EnvironmentVariable,
         ] {
-            let json =
-                serde_json::to_string(&source).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&source).expect("serialize derived Serialize");
             let restored: SafeModeStartupSource =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(source, restored);
         }
     }
@@ -2450,10 +2449,9 @@ mod tests {
     #[test]
     fn safe_mode_restrictions_serde_roundtrip() {
         let restrictions = SafeModeRestrictions::conservative();
-        let json =
-            serde_json::to_string(&restrictions).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&restrictions).expect("serialize derived Serialize");
         let restored: SafeModeRestrictions =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restrictions, restored);
     }
 
@@ -2462,9 +2460,9 @@ mod tests {
         let err = SafeModeStartupError::MissingField {
             field: "trace_id".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: SafeModeStartupError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -2564,9 +2562,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ForkError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2677,9 +2675,9 @@ mod tests {
             zone: "zone-a".to_string(),
             checkpoint_seq: 42,
         };
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
         let back: ForkEventType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evt, back);
     }
 
@@ -2694,9 +2692,8 @@ mod tests {
             },
             trace_id: "t-42".to_string(),
         };
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
-        let back: ForkEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
+        let back: ForkEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evt, back);
     }
 
@@ -2719,9 +2716,9 @@ mod tests {
             existing_was_accepted: true,
             acknowledged: false,
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: ForkIncidentReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -2744,9 +2741,9 @@ mod tests {
             trigger_seq: Some(42),
             unacknowledged_count: 3,
         };
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let back: SafeModeState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(state, back);
     }
 
@@ -3394,9 +3391,9 @@ mod tests {
         };
         let artifact =
             evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: SafeModeStartupArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -3412,9 +3409,9 @@ mod tests {
         };
         let artifact =
             evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: SafeModeExitCheckArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -3429,9 +3426,9 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: Some("FE-TEST".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: SafeModeStartupEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -3446,9 +3443,9 @@ mod tests {
             cli_safe_mode: true,
             environment: env,
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: SafeModeStartupInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -3462,9 +3459,9 @@ mod tests {
             pending_quarantines: 1,
             evidence_ledger_flushed: false,
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: SafeModeExitCheckInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -3563,9 +3560,9 @@ mod tests {
     #[test]
     fn safe_mode_state_serde_roundtrip_default() {
         let state = SafeModeState::default();
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let back: SafeModeState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, state);
         assert!(!back.active);
         assert!(back.trigger_seq.is_none());
@@ -3578,9 +3575,9 @@ mod tests {
             trigger_seq: Some(42),
             unacknowledged_count: 3,
         };
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let back: SafeModeState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, state);
     }
 
@@ -3613,9 +3610,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ForkEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -3629,9 +3626,8 @@ mod tests {
             },
             trace_id: "trace-abc".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: ForkEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let back: ForkEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
@@ -4449,9 +4445,9 @@ mod tests {
     #[test]
     fn safe_mode_restrictions_normal_serde_roundtrip() {
         let r = SafeModeRestrictions::normal();
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: SafeModeRestrictions =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
         assert!(!back.all_extensions_sandboxed);
     }
@@ -4521,9 +4517,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let exported = detector.export_state();
-        let json = serde_json::to_string(exported).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(exported).expect("serialize derived Serialize");
         let back: BTreeMap<String, ZoneState> =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.len(), 2);
         assert!(back.contains_key("zone-j1"));
         assert!(back.contains_key("zone-j2"));
@@ -4547,9 +4543,9 @@ mod tests {
             outcome: "normal".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: SafeModeStartupEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
     }
@@ -4562,9 +4558,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(2),
             accepted: false,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: CheckpointHistoryEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
         assert!(!back.accepted);
     }
@@ -4586,9 +4582,9 @@ mod tests {
             existing_was_accepted: false,
             acknowledged: true,
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: ForkIncidentReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
         assert!(back.acknowledged);
         assert!(!back.existing_was_accepted);

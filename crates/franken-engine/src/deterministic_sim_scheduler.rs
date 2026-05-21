@@ -695,9 +695,9 @@ mod tests {
     #[test]
     fn test_sim_event_kind_serde_roundtrip() {
         for kind in &SimEventKind::ALL {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: SimEventKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -736,9 +736,9 @@ mod tests {
     #[test]
     fn test_sim_priority_serde_roundtrip() {
         for p in &SimPriority::ALL {
-            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(p).expect("serialize derived Serialize");
             let back: SimPriority =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*p, back);
         }
     }
@@ -769,9 +769,9 @@ mod tests {
     #[test]
     fn test_scheduler_policy_serde_roundtrip() {
         let p = SchedulerPolicy::default();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: SchedulerPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1078,9 +1078,8 @@ mod tests {
             kind: SimEventKind::GcPause,
             priority: SimPriority::Idle,
         });
-        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
-        let back: SimReplayLog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&log).expect("serialize derived Serialize");
+        let back: SimReplayLog = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(log, back);
     }
 
@@ -1115,9 +1114,8 @@ mod tests {
             source_label: "timer-test".to_string(),
             deterministic_seed: 12345,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: SimEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let back: SimEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1320,9 +1318,9 @@ mod tests {
         sched.schedule(SimEventKind::CacheMiss, SimPriority::Normal, 1, "y", 2);
         let summary = sched.run_to_completion();
 
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: SimRunSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary.total_events, back.total_events);
         assert_eq!(summary.total_ticks, back.total_ticks);
         assert_eq!(summary.content_hash, back.content_hash);
@@ -1340,9 +1338,8 @@ mod tests {
             microtasks_drained: 1,
             pending_count: 5,
         };
-        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
-        let back: TickOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
+        let back: TickOutcome = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(outcome, back);
     }
 
@@ -1361,9 +1358,9 @@ mod tests {
             SimSpecimenFamily::MixedPriority,
         ];
         for fam in &families {
-            let json = serde_json::to_string(fam).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(fam).expect("serialize derived Serialize");
             let back: SimSpecimenFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*fam, back);
         }
     }

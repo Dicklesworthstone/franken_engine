@@ -994,8 +994,7 @@ pub fn build_deopt_witness(
 
     let witness_id = format!("dw_{}_{}", cert.site.site_id, transform_kind);
     // SAFETY: DeoptTrigger enum derives Serialize and BTreeSet serialization cannot fail
-    let triggers_str =
-        serde_json::to_string(&triggers).expect("serde deserialization should succeed");
+    let triggers_str = serde_json::to_string(&triggers).expect("serialize derived Serialize");
     let hash_input = format!(
         "witness:{}:{}:{}:{}",
         witness_id, transform_kind, triggers_str, cert.certificate_hash
@@ -2531,10 +2530,10 @@ mod tests {
     fn transform_kind_serde_roundtrip() {
         for kind in TransformKind::ALL {
             // SAFETY: TransformKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid TransformKind serialization
             let back: TransformKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -2553,10 +2552,10 @@ mod tests {
         ];
         for t in &types {
             // SAFETY: ScalarFieldType derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ScalarFieldType serialization
             let back: ScalarFieldType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, back);
         }
     }
@@ -2565,11 +2564,10 @@ mod tests {
     fn deopt_trigger_serde_roundtrip() {
         for trigger in DeoptTrigger::ALL {
             // SAFETY: DeoptTrigger derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(trigger).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(trigger).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid DeoptTrigger serialization
             let back: DeoptTrigger =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*trigger, back);
         }
     }
@@ -2590,10 +2588,10 @@ mod tests {
         ];
         for r in &reasons {
             // SAFETY: TransformDenialReason derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid TransformDenialReason serialization
             let back: TransformDenialReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, back);
         }
     }
@@ -2608,10 +2606,10 @@ mod tests {
         ];
         for s in &scopes {
             // SAFETY: RegionScope derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid RegionScope serialization
             let back: RegionScope =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -2627,10 +2625,10 @@ mod tests {
         ];
         for k in &kinds {
             // SAFETY: SideEffectKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid SideEffectKind serialization
             let back: SideEffectKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -2674,10 +2672,10 @@ mod tests {
             estimated_bytes_saved: 64,
         };
         // SAFETY: TransformOutcome derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid TransformOutcome serialization
         let back: TransformOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(outcome, back);
     }
 
@@ -2697,9 +2695,9 @@ mod tests {
             epoch: test_epoch(),
             summary_hash: "hash".to_string(),
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: TransformSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 

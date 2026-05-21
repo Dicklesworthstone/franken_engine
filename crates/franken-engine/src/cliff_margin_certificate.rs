@@ -1836,9 +1836,8 @@ mod tests {
     #[test]
     fn test_gate_domain_serde_roundtrip() {
         let domain = GateDomain::Supremacy;
-        let json = serde_json::to_string(&domain).expect("serde deserialization should succeed");
-        let back: GateDomain =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&domain).expect("serialize derived Serialize");
+        let back: GateDomain = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(domain, back);
     }
 
@@ -1850,9 +1849,9 @@ mod tests {
             good_proximity(),
             Some(valid_escape_plan()),
         );
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let back: CliffMarginCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert.certificate_id, back.certificate_id);
         assert_eq!(cert.certificate_hash, back.certificate_hash);
     }
@@ -1860,9 +1859,8 @@ mod tests {
     #[test]
     fn test_escape_plan_serde_roundtrip() {
         let plan = valid_escape_plan();
-        let json = serde_json::to_string(&plan).expect("serde deserialization should succeed");
-        let back: EscapePlan =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&plan).expect("serialize derived Serialize");
+        let back: EscapePlan = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(plan.plan_id, back.plan_id);
         assert_eq!(plan.actions.len(), back.actions.len());
     }
@@ -1875,9 +1873,9 @@ mod tests {
             CertificateVerdict::Blocked,
             CertificateVerdict::InsufficientEvidence,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: CertificateVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }
@@ -1888,9 +1886,9 @@ mod tests {
         let cert = make_cert(GateDomain::Autotuning, good_claim(), good_proximity(), None);
         gate.evaluate(&cert);
         let receipt = &gate.receipts[0];
-        let json = serde_json::to_string(receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(receipt).expect("serialize derived Serialize");
         let back: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt.receipt_id, back.receipt_id);
         assert_eq!(receipt.verdict, back.verdict);
     }
@@ -1901,9 +1899,9 @@ mod tests {
         let cert = make_cert(GateDomain::Autotuning, good_claim(), good_proximity(), None);
         gate.evaluate(&cert);
         let manifest = CliffMarginManifest::from_gate(&gate);
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: CliffMarginManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest.schema_version, back.schema_version);
         assert_eq!(manifest.manifest_hash, back.manifest_hash);
     }

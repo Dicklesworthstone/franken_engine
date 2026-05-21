@@ -1677,9 +1677,9 @@ mod tests {
             LifecycleState::Updating(RolloutPhase::Default),
             LifecycleState::RollingBack,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let deser: LifecycleState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, deser);
         }
     }
@@ -1687,9 +1687,9 @@ mod tests {
     #[test]
     fn rollout_phase_serde_roundtrip() {
         for phase in RolloutPhase::ALL {
-            let json = serde_json::to_string(&phase).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&phase).expect("serialize derived Serialize");
             let deser: RolloutPhase =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(phase, deser);
         }
     }
@@ -1701,10 +1701,9 @@ mod tests {
             TransitionTrigger::Auto,
             TransitionTrigger::CrashLoop,
         ] {
-            let json =
-                serde_json::to_string(&trigger).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&trigger).expect("serialize derived Serialize");
             let deser: TransitionTrigger =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(trigger, deser);
         }
     }
@@ -1718,9 +1717,9 @@ mod tests {
             activated_at: DeterministicTimestamp(100),
             health_check_passed_at: DeterministicTimestamp(101),
         };
-        let json = serde_json::to_string(&pin).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pin).expect("serialize derived Serialize");
         let deser: KnownGoodPin =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pin, deser);
     }
 
@@ -1740,9 +1739,9 @@ mod tests {
             trigger: Some("manual".to_string()),
             timestamp: DeterministicTimestamp(42),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let deser: LifecycleEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, deser);
     }
 
@@ -1778,9 +1777,9 @@ mod tests {
             },
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let deser: LifecycleError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, deser);
         }
     }
@@ -1788,9 +1787,9 @@ mod tests {
     #[test]
     fn ephemeral_secret_serde_roundtrip() {
         let secret = EphemeralSecret::new("key1", vec![0xAA, 0xBB, 0xCC]);
-        let json = serde_json::to_string(&secret).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&secret).expect("serialize derived Serialize");
         let deser: EphemeralSecret =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(secret.key_name, deser.key_name);
         assert_eq!(secret.value(), deser.value());
     }
@@ -1818,18 +1817,18 @@ mod tests {
     #[test]
     fn component_descriptor_serde_roundtrip() {
         let desc = test_descriptor("comp-a", "1.0.0");
-        let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&desc).expect("serialize derived Serialize");
         let deser: ComponentDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(desc, deser);
     }
 
     #[test]
     fn activation_validation_serde_roundtrip() {
         let val = passing_validation("comp-a", "1.0.0");
-        let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&val).expect("serialize derived Serialize");
         let deser: ActivationValidation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(val, deser);
     }
 
@@ -2050,9 +2049,9 @@ mod tests {
             injected_keys: vec!["key1".to_string(), "key2".to_string()],
             timestamp: DeterministicTimestamp(42),
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let deser: SecretInjectionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, deser);
     }
 
@@ -2063,9 +2062,9 @@ mod tests {
         let mut det = CrashLoopDetector::new(5, 100);
         det.record_crash(10);
         det.record_crash(20);
-        let json = serde_json::to_string(&det).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&det).expect("serialize derived Serialize");
         let deser: CrashLoopDetector =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(det, deser);
     }
 
@@ -2074,9 +2073,9 @@ mod tests {
     #[test]
     fn lifecycle_config_serde_roundtrip() {
         let config = LifecycleConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let deser: LifecycleConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, deser);
     }
 
@@ -2283,7 +2282,7 @@ mod tests {
                 .expect("serde deserialization should succeed");
             let events = ctrl.drain_events();
             // SAFETY: LifecycleEvent derives Serialize and has no non-serializable fields
-            serde_json::to_string(&events).expect("serde deserialization should succeed")
+            serde_json::to_string(&events).expect("serialize derived Serialize")
         };
         assert_eq!(run(), run());
     }
@@ -2617,9 +2616,9 @@ mod tests {
             LifecycleState::RollingBack,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let deser: LifecycleState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, deser);
         }
     }
@@ -2627,9 +2626,9 @@ mod tests {
     #[test]
     fn rollout_phase_serde_all_variants() {
         for p in &RolloutPhase::ALL {
-            let json = serde_json::to_string(p).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(p).expect("serialize derived Serialize");
             let deser: RolloutPhase =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*p, deser);
         }
     }
@@ -2642,9 +2641,9 @@ mod tests {
             TransitionTrigger::CrashLoop,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let deser: TransitionTrigger =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, deser);
         }
     }
@@ -2655,9 +2654,9 @@ mod tests {
             expected: RolloutPhase::Canary,
             actual: RolloutPhase::Shadow,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let deser: LifecycleError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, deser);
     }
 
@@ -2697,9 +2696,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let deser: LifecycleError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, deser);
         }
     }
@@ -2749,9 +2748,9 @@ mod tests {
             trigger: Some("manual".to_string()),
             timestamp: DeterministicTimestamp(100),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let deser: LifecycleEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, deser);
     }
 
@@ -2764,9 +2763,9 @@ mod tests {
             passed: true,
             detail: "ok".to_string(),
         };
-        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&check).expect("serialize derived Serialize");
         let deser: PreActivationCheck =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(check, deser);
     }
 

@@ -967,9 +967,9 @@ mod tests {
         let mut acc = test_accountant();
         acc.consume(100_000, 10_000, "op1", 2_000_000_000)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&acc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&acc).expect("serialize derived Serialize");
         let decoded: BudgetAccountant =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(acc, decoded);
     }
 
@@ -986,9 +986,9 @@ mod tests {
             closed_at_ns: 10_000_000_000,
             composition_method: CompositionMethod::Basic,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let decoded: EpochSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, decoded);
     }
 
@@ -1004,9 +1004,9 @@ mod tests {
             timestamp_ns: 2_000_000_000,
             description: "test".into(),
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let decoded: BudgetConsumption =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, decoded);
     }
 
@@ -1015,8 +1015,8 @@ mod tests {
         let a1 = test_accountant();
         let a2 = test_accountant();
         assert_eq!(
-            serde_json::to_string(&a1).expect("serde deserialization should succeed"),
-            serde_json::to_string(&a2).expect("serde deserialization should succeed")
+            serde_json::to_string(&a1).expect("serialize derived Serialize"),
+            serde_json::to_string(&a2).expect("serialize derived Serialize")
         );
     }
 
@@ -1048,9 +1048,9 @@ mod tests {
         let err = AccountantError::InvalidConsumption {
             reason: "test".into(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let decoded: AccountantError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, decoded);
     }
 
@@ -1211,10 +1211,10 @@ mod tests {
             exhausted: false,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&fc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fc).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let decoded: BudgetForecast =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fc, decoded);
     }
 
@@ -1222,10 +1222,10 @@ mod tests {
     fn accountant_config_serde_roundtrip() {
         let cfg = test_config();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let decoded: AccountantConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, decoded);
     }
 
@@ -1242,9 +1242,9 @@ mod tests {
             created_at_ns: 42,
             exhausted: false,
         };
-        let json = serde_json::to_string(&eb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eb).expect("serialize derived Serialize");
         let decoded: EpochBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eb, decoded);
     }
 
@@ -1368,7 +1368,7 @@ mod tests {
     #[test]
     fn zone_preserved_in_accountant() {
         let acc = test_accountant();
-        let json = serde_json::to_string(&acc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&acc).expect("serialize derived Serialize");
         assert!(json.contains("zone-A"));
     }
 
@@ -1477,7 +1477,7 @@ mod tests {
                 .expect("serde deserialization should succeed");
             acc.consume(200_000, 20_000, "op2", 3_000_000_000)
                 .expect("serde deserialization should succeed");
-            serde_json::to_string(&acc).expect("serde deserialization should succeed")
+            serde_json::to_string(&acc).expect("serialize derived Serialize")
         };
         assert_eq!(run(), run());
     }
@@ -1579,9 +1579,8 @@ mod tests {
             created_at_ns: 42,
             exhausted: false,
         };
-        let json = serde_json::to_string(&eb).expect("serde deserialization should succeed");
-        let back: EpochBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eb).expect("serialize derived Serialize");
+        let back: EpochBudget = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eb, back);
     }
 
@@ -1597,9 +1596,9 @@ mod tests {
             timestamp_ns: 99_000,
             description: "serde-test".to_string(),
         };
-        let json = serde_json::to_string(&bc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bc).expect("serialize derived Serialize");
         let back: BudgetConsumption =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bc, back);
     }
 
@@ -1613,9 +1612,9 @@ mod tests {
             estimated_remaining_operations: 15,
             exhausted: true,
         };
-        let json = serde_json::to_string(&fc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fc).expect("serialize derived Serialize");
         let back: BudgetForecast =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fc, back);
     }
 
@@ -1632,9 +1631,8 @@ mod tests {
             closed_at_ns: 5_000,
             composition_method: CompositionMethod::ZeroCdp,
         };
-        let json = serde_json::to_string(&es).expect("serde deserialization should succeed");
-        let back: EpochSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&es).expect("serialize derived Serialize");
+        let back: EpochSummary = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(es, back);
     }
 
@@ -1658,9 +1656,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: AccountantError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }

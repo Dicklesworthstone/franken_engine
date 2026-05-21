@@ -1112,9 +1112,9 @@ mod tests {
     #[test]
     fn axis_serde_roundtrip() {
         for a in ConformanceAxis::ALL {
-            let json = serde_json::to_string(a).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(a).expect("serialize derived Serialize");
             let back: ConformanceAxis =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*a, back);
         }
     }
@@ -1161,9 +1161,9 @@ mod tests {
     #[test]
     fn result_serde() {
         let r = ConformanceResult::new(ConformanceAxis::Ordering, 50, 50, 500_000);
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: ConformanceResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1192,9 +1192,9 @@ mod tests {
     #[test]
     fn drop_category_serde() {
         for c in ReplayDropCategory::ALL {
-            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(c).expect("serialize derived Serialize");
             let back: ReplayDropCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*c, back);
         }
     }
@@ -1239,9 +1239,9 @@ mod tests {
     #[test]
     fn drop_entry_serde() {
         let e = ReplayDropEntry::new(ReplayDropCategory::AuthenticationFailure, 3, 200, 50_000);
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: ReplayDropEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1280,9 +1280,9 @@ mod tests {
     #[test]
     fn degraded_kind_serde() {
         for k in DegradedModeKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: DegradedModeKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1329,9 +1329,9 @@ mod tests {
     #[test]
     fn policy_serde() {
         let p = DegradedModePolicy::for_kind(DegradedModeKind::PartialFunctionality);
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: DegradedModePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1386,9 +1386,9 @@ mod tests {
     #[test]
     fn claim_delta_serde() {
         let d = ObservabilityClaimDelta::new("claim-7", 800_000, 810_000, 50_000);
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: ObservabilityClaimDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -1436,9 +1436,9 @@ mod tests {
     #[test]
     fn config_serde() {
         let c = GovernanceConfig::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: GovernanceConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1483,9 +1483,9 @@ mod tests {
     #[test]
     fn verdict_serde() {
         for v in GovernanceVerdict::ALL {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: GovernanceVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1729,9 +1729,9 @@ mod tests {
         let mut eval = GovernanceEvaluator::with_defaults();
         all_axes_passing(&mut eval);
         let receipt = eval.evaluate(epoch());
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: GovernanceReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 

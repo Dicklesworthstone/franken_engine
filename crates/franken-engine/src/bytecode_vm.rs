@@ -1470,9 +1470,8 @@ mod tests {
                 Instruction::Return { src: r(0) },
             ],
         };
-        let json = serde_json::to_string(&program).expect("serde deserialization should succeed");
-        let restored: Program =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&program).expect("serialize derived Serialize");
+        let restored: Program = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(program, restored);
     }
 
@@ -1491,11 +1490,11 @@ mod tests {
             },
         ];
         for error in &errors {
-            let json = serde_json::to_string(error).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(error).expect("serialize derived Serialize");
             assert!(!json.is_empty());
             // Verify JSON parses as valid
             let _: serde_json::Value =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
         }
     }
 
@@ -1508,9 +1507,9 @@ mod tests {
             Value::Object(ObjectId(7)),
         ];
         for val in &values {
-            let json = serde_json::to_string(val).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(val).expect("serialize derived Serialize");
             let restored: Value =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*val, restored);
         }
     }
@@ -2528,9 +2527,9 @@ mod tests {
             Instruction::Return { src: r(0) },
         ];
         for instr in &instructions {
-            let json = serde_json::to_string(instr).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(instr).expect("serialize derived Serialize");
             let back: Instruction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*instr, back);
         }
     }
@@ -2615,9 +2614,9 @@ mod tests {
         ];
 
         for (err, variant) in errors.iter().zip(variants) {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let payload: serde_json::Value =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             if let Some(object) = payload.as_object() {
                 assert!(
                     object.contains_key(variant),
@@ -2651,9 +2650,9 @@ mod tests {
         let report = vm
             .execute(&program)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: ExecutionReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -2912,9 +2911,9 @@ mod tests {
             hits: 10,
             misses: 2,
         };
-        let json = serde_json::to_string(&stats).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&stats).expect("serialize derived Serialize");
         let back: InlineCacheStats =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(stats, back);
     }
 
@@ -2927,9 +2926,9 @@ mod tests {
             hits: 100,
             misses: 3,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: InlineCacheEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -2946,9 +2945,8 @@ mod tests {
             error_code: None,
             cache_hit: Some(true),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let back: VmEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let back: VmEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 

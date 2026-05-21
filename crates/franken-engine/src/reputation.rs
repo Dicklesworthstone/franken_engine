@@ -1586,9 +1586,9 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&graph).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&graph).expect("serialize derived Serialize");
         let restored: ReputationGraph =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(restored.extension_count(), 1);
         assert_eq!(restored.evidence_count(), 1);
@@ -1609,9 +1609,9 @@ mod tests {
             timestamp_ns: 5_000_000_000,
             epoch: SecurityEpoch::from_raw(2),
         };
-        let json = serde_json::to_string(&tt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tt).expect("serialize derived Serialize");
         let restored: TrustTransition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tt, restored);
     }
 
@@ -1641,9 +1641,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: ReputationGraphError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1755,9 +1755,9 @@ mod tests {
     #[test]
     fn trust_level_serde_roundtrip_all_variants() {
         for level in &TrustLevel::ALL {
-            let json = serde_json::to_string(level).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(level).expect("serialize derived Serialize");
             let back: TrustLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*level, back);
         }
     }
@@ -1774,9 +1774,9 @@ mod tests {
             EvidenceType::OperatorAssessment,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: EvidenceType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1792,9 +1792,9 @@ mod tests {
             EvidenceSource::BuildProvenance,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: EvidenceSource =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1807,9 +1807,9 @@ mod tests {
             IncidentSeverity::High,
             IncidentSeverity::Critical,
         ] {
-            let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(sev).expect("serialize derived Serialize");
             let back: IncidentSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*sev, back);
         }
     }
@@ -1822,9 +1822,9 @@ mod tests {
             ResolutionStatus::Resolved,
             ResolutionStatus::FalsePositive,
         ] {
-            let json = serde_json::to_string(status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(status).expect("serialize derived Serialize");
             let back: ResolutionStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*status, back);
         }
     }
@@ -1842,9 +1842,9 @@ mod tests {
             has_provenance_gap: true,
             gap_descriptions: vec!["missing attestation".into()],
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: ProvenanceRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
     }
 
@@ -1859,9 +1859,9 @@ mod tests {
             dependency_risk_score: 300_000,
             publisher_trust_score: Some(750_000),
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: TrustLookupResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -1872,9 +1872,9 @@ mod tests {
             transitively_affected: BTreeSet::new(),
             trust_degradations: vec![],
         };
-        let json = serde_json::to_string(&impact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&impact).expect("serialize derived Serialize");
         let back: RevocationImpact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(impact, back);
     }
 
@@ -1889,9 +1889,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(3),
             timestamp_ns: 1_000,
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: OperatorOverrideInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.extension_id, "ext-1");
         assert_eq!(back.new_level, TrustLevel::Provisional);
     }
@@ -2059,9 +2059,8 @@ mod tests {
             },
         ];
         for edge in &edges {
-            let json = serde_json::to_string(edge).expect("serde deserialization should succeed");
-            let back: EdgeType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(edge).expect("serialize derived Serialize");
+            let back: EdgeType = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*edge, back);
         }
     }
@@ -2234,7 +2233,7 @@ mod tests {
     fn trust_level_serde_all_distinct() {
         let jsons: BTreeSet<String> = TrustLevel::ALL
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(
             jsons.len(),
@@ -2256,7 +2255,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 7);
     }
@@ -2273,7 +2272,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 6);
     }
@@ -2288,7 +2287,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 4);
     }
@@ -2368,7 +2367,7 @@ mod tests {
     #[test]
     fn extension_node_field_names() {
         let ext = test_extension("ext-field", "pub-field");
-        let json = serde_json::to_string(&ext).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ext).expect("serialize derived Serialize");
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"package_name\""));
         assert!(json.contains("\"version\""));
@@ -2382,7 +2381,7 @@ mod tests {
     #[test]
     fn publisher_node_field_names() {
         let pub_node = test_publisher("pub-fields");
-        let json = serde_json::to_string(&pub_node).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pub_node).expect("serialize derived Serialize");
         assert!(json.contains("\"publisher_id\""));
         assert!(json.contains("\"identity_attestation\""));
         assert!(json.contains("\"published_count\""));
@@ -2393,7 +2392,7 @@ mod tests {
     #[test]
     fn evidence_node_field_names() {
         let ev = test_evidence("ev-fields");
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         assert!(json.contains("\"evidence_id\""));
         assert!(json.contains("\"evidence_type\""));
         assert!(json.contains("\"source\""));
@@ -2414,7 +2413,7 @@ mod tests {
             has_provenance_gap: false,
             gap_descriptions: vec![],
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"publisher_verified\""));
         assert!(json.contains("\"build_attested\""));
@@ -2438,7 +2437,7 @@ mod tests {
             timestamp_ns: 0,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let json = serde_json::to_string(&tt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tt).expect("serialize derived Serialize");
         assert!(json.contains("\"transition_id\""));
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"old_level\""));
@@ -2606,9 +2605,9 @@ mod tests {
             current_trust_level: TrustLevel::Unknown,
             dependencies: BTreeSet::new(),
         };
-        let json = serde_json::to_string(&ext).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ext).expect("serialize derived Serialize");
         let back: ExtensionNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ext, back);
     }
 
@@ -2621,9 +2620,9 @@ mod tests {
             trust_score: 0,
             first_published_ns: 0,
         };
-        let json = serde_json::to_string(&pub_node).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pub_node).expect("serialize derived Serialize");
         let back: PublisherNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.trust_score, 0);
     }
 
@@ -2636,9 +2635,9 @@ mod tests {
             trust_score: 1_000_000,
             first_published_ns: u64::MAX,
         };
-        let json = serde_json::to_string(&pub_node).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pub_node).expect("serialize derived Serialize");
         let back: PublisherNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.published_count, u64::MAX);
         assert_eq!(back.first_published_ns, u64::MAX);
     }
@@ -2654,9 +2653,9 @@ mod tests {
             has_provenance_gap: true,
             gap_descriptions: vec!["no source".into()],
         };
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: ProvenanceRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.attestation_source.is_none());
         assert!(back.has_provenance_gap);
     }
@@ -2672,9 +2671,9 @@ mod tests {
             dependency_risk_score: 0,
             publisher_trust_score: None,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: TrustLookupResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.last_transition.is_none());
         assert!(back.publisher_trust_score.is_none());
     }
@@ -2689,9 +2688,8 @@ mod tests {
             resolution_status: ResolutionStatus::FalsePositive,
             timestamp_ns: 0,
         };
-        let json = serde_json::to_string(&incident).expect("serde deserialization should succeed");
-        let back: IncidentNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&incident).expect("serialize derived Serialize");
+        let back: IncidentNode = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.affected_extensions.is_empty());
         assert!(back.containment_actions.is_empty());
     }
@@ -2779,9 +2777,8 @@ mod tests {
             resolution_status: ResolutionStatus::Contained,
             timestamp_ns: 9_000_000_000,
         };
-        let json = serde_json::to_string(&incident).expect("serde deserialization should succeed");
-        let back: IncidentNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&incident).expect("serialize derived Serialize");
+        let back: IncidentNode = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(incident, back);
     }
 
@@ -2796,9 +2793,8 @@ mod tests {
             linked_decision_ids: vec!["dec-a".into(), "dec-b".into()],
             epoch: SecurityEpoch::from_raw(5),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: EvidenceNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
+        let back: EvidenceNode = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -2816,9 +2812,9 @@ mod tests {
             timestamp_ns: 10_000_000_000,
             epoch: SecurityEpoch::from_raw(10),
         };
-        let json = serde_json::to_string(&tt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tt).expect("serialize derived Serialize");
         let back: TrustTransition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tt, back);
         assert!(back.operator_override);
         assert_eq!(
@@ -2845,9 +2841,9 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(3),
             }],
         };
-        let json = serde_json::to_string(&impact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&impact).expect("serialize derived Serialize");
         let back: RevocationImpact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(impact, back);
         assert_eq!(back.directly_affected.len(), 2);
         assert_eq!(back.transitively_affected.len(), 2);
@@ -2865,9 +2861,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(7),
             timestamp_ns: 8_888_888_888,
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: OperatorOverrideInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.extension_id, "ext-full");
         assert_eq!(back.new_level, TrustLevel::Established);
         assert_eq!(back.evidence_ids.len(), 3);
@@ -3184,7 +3180,7 @@ mod tests {
             resolution_status: ResolutionStatus::Resolved,
             timestamp_ns: 0,
         };
-        let json = serde_json::to_string(&incident).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&incident).expect("serialize derived Serialize");
         assert!(json.contains("\"incident_id\""));
         assert!(json.contains("\"severity\""));
         assert!(json.contains("\"affected_extensions\""));

@@ -954,11 +954,10 @@ mod tests {
 
         // Verify exported artifact can be serialized.
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json =
-            serde_json::to_string(exported[0]).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(exported[0]).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: RecoveryArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.artifact_type, ArtifactType::ForcedReconciliation);
     }
 
@@ -1005,10 +1004,10 @@ mod tests {
         ];
         for t in &types {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: ArtifactType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, restored);
         }
     }
@@ -1040,10 +1039,10 @@ mod tests {
         ];
         for t in &triggers {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: RecoveryTrigger =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, restored);
         }
     }
@@ -1073,9 +1072,9 @@ mod tests {
             },
         ];
         for e in &elements {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let restored: ProofElement =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, restored);
         }
     }
@@ -1083,9 +1082,9 @@ mod tests {
     #[test]
     fn recovery_artifact_serialization_round_trip() {
         let artifact = build_valid_artifact();
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let restored: RecoveryArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, restored);
     }
 
@@ -1101,9 +1100,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let restored: VerificationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, restored);
         }
     }
@@ -1117,9 +1116,9 @@ mod tests {
             },
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: RecoveryVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -1207,12 +1206,12 @@ mod tests {
         };
         // SAFETY: OperatorAction derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&action).expect("serialize derived Serialize");
 
         // SAFETY: JSON was just produced by to_string of a valid OperatorAction,
         // so from_str back to OperatorAction cannot fail (valid format + matching schema).
         let restored: OperatorAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(action, restored);
     }
 
@@ -1227,9 +1226,9 @@ mod tests {
             epoch_id: 1,
             event: "artifact_created".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: RecoveryEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1239,9 +1238,9 @@ mod tests {
             expected: ContentHash::compute(b"expected"),
             computed: ContentHash::compute(b"computed"),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: VerificationError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 

@@ -906,9 +906,9 @@ mod tests {
             duration_ms: 0,
             trace_id: "test-trace".to_string(),
         };
-        let json = serde_json::to_string(&evidence).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evidence).expect("serialize derived Serialize");
         let restored: TransitionEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evidence, restored);
     }
 
@@ -937,9 +937,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: BarrierError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -952,9 +952,9 @@ mod tests {
             op_kind: CriticalOpKind::RemoteOperation,
             trace_id: "t-123".to_string(),
         };
-        let json = serde_json::to_string(&guard).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&guard).expect("serialize derived Serialize");
         let restored: EpochGuard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(guard, restored);
     }
 
@@ -967,9 +967,9 @@ mod tests {
             BarrierState::Draining,
             BarrierState::Finalizing,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let restored: BarrierState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, restored);
         }
     }
@@ -984,9 +984,9 @@ mod tests {
             CriticalOpKind::RevocationCheck,
             CriticalOpKind::RemoteOperation,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let restored: CriticalOpKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, restored);
         }
     }
@@ -1029,9 +1029,9 @@ mod tests {
     #[test]
     fn barrier_config_serialization_round_trip() {
         let config = BarrierConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: BarrierConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1207,9 +1207,9 @@ mod tests {
             duration_ms: 42,
             trace_id: "t-forced".to_string(),
         };
-        let json = serde_json::to_string(&evidence).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evidence).expect("serialize derived Serialize");
         let restored: TransitionEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evidence, restored);
     }
 
@@ -1439,9 +1439,9 @@ mod tests {
     #[test]
     fn barrier_config_deterministic_serde_roundtrip() {
         let cfg = BarrierConfig::deterministic();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: BarrierConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
         assert!(restored.deterministic);
         assert_eq!(restored.drain_timeout_ms, 0);
@@ -1975,8 +1975,7 @@ mod tests {
         ];
         let mut json_strs = std::collections::BTreeSet::new();
         for s in &states {
-            json_strs
-                .insert(serde_json::to_string(s).expect("serde deserialization should succeed"));
+            json_strs.insert(serde_json::to_string(s).expect("serialize derived Serialize"));
         }
         assert_eq!(json_strs.len(), 3);
     }
@@ -1993,8 +1992,7 @@ mod tests {
         ];
         let mut json_strs = std::collections::BTreeSet::new();
         for k in &kinds {
-            json_strs
-                .insert(serde_json::to_string(k).expect("serde deserialization should succeed"));
+            json_strs.insert(serde_json::to_string(k).expect("serialize derived Serialize"));
         }
         assert_eq!(json_strs.len(), 6);
     }
@@ -2022,8 +2020,7 @@ mod tests {
         ];
         let mut json_strs = std::collections::BTreeSet::new();
         for e in &errors {
-            json_strs
-                .insert(serde_json::to_string(e).expect("serde deserialization should succeed"));
+            json_strs.insert(serde_json::to_string(e).expect("serialize derived Serialize"));
         }
         assert_eq!(json_strs.len(), 5);
     }
@@ -2143,9 +2140,9 @@ mod tests {
             op_kind: CriticalOpKind::DecisionEval,
             trace_id: "a/b/c:complex-trace-id_123".to_string(),
         };
-        let json = serde_json::to_string(&guard).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&guard).expect("serialize derived Serialize");
         let restored: EpochGuard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.trace_id, "a/b/c:complex-trace-id_123");
     }
 
@@ -2409,9 +2406,9 @@ mod tests {
             drain_timeout_ms: 999_999,
             deterministic: false,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: BarrierConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
@@ -2434,9 +2431,9 @@ mod tests {
                 op_kind: *kind,
                 trace_id: format!("serde-{i}"),
             };
-            let json = serde_json::to_string(&guard).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&guard).expect("serialize derived Serialize");
             let restored: EpochGuard =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(guard, restored);
         }
     }
@@ -2462,9 +2459,9 @@ mod tests {
                 duration_ms: i as u64 * 10,
                 trace_id: format!("reason-{i}"),
             };
-            let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
             let restored: TransitionEvidence =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(ev, restored);
         }
     }
@@ -2480,9 +2477,9 @@ mod tests {
                 current_epoch: SecurityEpoch::from_raw(1),
                 state,
             };
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let restored: BarrierError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, restored);
         }
     }

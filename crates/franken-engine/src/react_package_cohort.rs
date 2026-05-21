@@ -1720,7 +1720,7 @@ mod tests {
         for pkg in ReactPackage::ALL {
             let json = serde_json::to_string(pkg).expect("serde serialization should succeed");
             let back: ReactPackage =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*pkg, back);
         }
     }
@@ -1755,7 +1755,7 @@ mod tests {
         for cond in ExportCondition::ALL {
             let json = serde_json::to_string(cond).expect("serde serialization should succeed");
             let back: ExportCondition =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cond, back);
         }
     }
@@ -1781,7 +1781,7 @@ mod tests {
         for fmt in ModuleFormat::ALL {
             let json = serde_json::to_string(fmt).expect("serde serialization should succeed");
             let back: ModuleFormat =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*fmt, back);
         }
     }
@@ -2238,7 +2238,7 @@ mod tests {
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde serialization should succeed");
             let back: CohortError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -2497,7 +2497,7 @@ mod tests {
         let report = validate_cohort(&matrix);
         let json = serde_json::to_string(&report).expect("serde serialization should succeed");
         let back: CohortValidationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -2615,8 +2615,7 @@ mod tests {
     fn test_full_matrix_serde_roundtrip() {
         let matrix = franken_engine_react_cohort_manifest();
         let json = serde_json::to_string(&matrix).expect("serde serialization should succeed");
-        let back: CohortMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: CohortMatrix = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(matrix, back);
     }
 

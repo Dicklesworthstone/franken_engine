@@ -1959,10 +1959,10 @@ mod tests {
         .expect("create");
 
         // SAFETY: DemotionReceipt derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid DemotionReceipt serialization
         let restored: DemotionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
     }
 
@@ -1972,10 +1972,10 @@ mod tests {
         policy.block_candidate("blocked-digest".to_string());
 
         // SAFETY: DemotionPolicy derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid DemotionPolicy serialization
         let restored: DemotionPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
     }
 
@@ -1989,10 +1989,10 @@ mod tests {
         monitor.process_observation(&obs);
 
         // SAFETY: AutoDemotionMonitor derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&monitor).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&monitor).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid AutoDemotionMonitor serialization
         let restored: AutoDemotionMonitor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(monitor, restored);
     }
 
@@ -2171,11 +2171,10 @@ mod tests {
         ];
         for reason in reasons {
             // SAFETY: DemotionReason derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid DemotionReason serialization
             let back: DemotionReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(reason, back);
         }
     }
@@ -2218,10 +2217,10 @@ mod tests {
         ];
         for err in errors {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: DemotionError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, back);
         }
     }
@@ -2235,10 +2234,10 @@ mod tests {
             summary: "divergent output".to_string(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&item).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: DemotionEvidenceItem =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(item, back);
     }
 
@@ -2319,10 +2318,10 @@ mod tests {
         ];
         for obs in &observations {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(obs).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(obs).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: MonitoringObservation =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&restored, obs);
         }
     }
@@ -2335,10 +2334,10 @@ mod tests {
             sustained_duration_ns: 5_000_000_000,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pt).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: PerformanceThreshold =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, pt);
     }
 
@@ -2469,10 +2468,10 @@ mod tests {
             }],
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&te).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&te).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: TriggerEvaluation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(te, restored);
     }
 
@@ -2484,10 +2483,10 @@ mod tests {
             observations_processed: 10,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&or).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&or).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ObservationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(or, restored);
     }
 
@@ -2495,10 +2494,10 @@ mod tests {
     fn auto_demotion_monitor_serde_roundtrip() {
         let monitor = test_monitor();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&monitor).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&monitor).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: AutoDemotionMonitor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(monitor, restored);
     }
 
@@ -2676,9 +2675,9 @@ mod tests {
             },
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(reason).expect("serialize derived Serialize");
             let back: DemotionReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*reason, back);
         }
     }
@@ -2692,10 +2691,9 @@ mod tests {
             DemotionSeverity::Warning,
             DemotionSeverity::Critical,
         ] {
-            let json =
-                serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&severity).expect("serialize derived Serialize");
             let back: DemotionSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(severity, back);
         }
     }
@@ -2718,9 +2716,9 @@ mod tests {
             collected_at_ns: 123_456_789,
             summary: "Found 3 output differences".into(),
         };
-        let json = serde_json::to_string(&item).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&item).expect("serialize derived Serialize");
         let back: DemotionEvidenceItem =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(item, back);
     }
 
@@ -2762,9 +2760,9 @@ mod tests {
     #[test]
     fn enrichment_demotion_policy_serde_roundtrip() {
         let policy = test_policy();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let back: DemotionPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, back);
     }
 
@@ -2930,9 +2928,9 @@ mod tests {
         assert!(monitor.process_observation(&obs).trigger_fired);
         assert!(monitor.is_demotion_triggered());
 
-        let json = serde_json::to_string(&monitor).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&monitor).expect("serialize derived Serialize");
         let restored: AutoDemotionMonitor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(restored.is_demotion_triggered());
         assert_eq!(restored.latest_risk_millionths(), 900_000);
         assert_eq!(restored.observations_processed(), 1);
@@ -3246,10 +3244,10 @@ mod tests {
 
         // Serde roundtrip preserves all evidence
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: DemotionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.evidence.len(), 3);
     }
 
@@ -3675,9 +3673,9 @@ mod tests {
     #[test]
     fn receipt_id_differs_by_slot() {
         // SAFETY: Test-only unwrap with valid slot ID string
-        let slot_a = SlotId::new("parser").expect("serde deserialization should succeed");
+        let slot_a = SlotId::new("parser").expect("constructor with valid inputs");
         // SAFETY: Test-only unwrap with valid slot ID string
-        let slot_b = SlotId::new("interpreter").expect("serde deserialization should succeed");
+        let slot_b = SlotId::new("interpreter").expect("constructor with valid inputs");
         // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_a =
             DemotionReceipt::derive_receipt_id(&slot_a, "native", "delegate", 1_000_000_000, "z")

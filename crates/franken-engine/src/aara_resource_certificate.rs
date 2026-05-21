@@ -965,10 +965,10 @@ mod tests {
     fn dimension_serde_roundtrip() {
         for dim in ResourceDimension::ALL {
             // SAFETY: ResourceDimension derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(dim).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ResourceDimension serialization
             let back: ResourceDimension =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*dim, back);
         }
     }
@@ -1084,10 +1084,10 @@ mod tests {
             vec![],
         );
         // SAFETY: EffectSummary derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid EffectSummary serialization
         let back: EffectSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -1138,11 +1138,10 @@ mod tests {
             AbstentionReason::BudgetExhausted,
         ] {
             // SAFETY: AbstentionReason derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid AbstentionReason serialization
             let back: AbstentionReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(reason, back);
         }
     }
@@ -1176,10 +1175,10 @@ mod tests {
             AssumptionKind::BoundedInputSize,
         ] {
             // SAFETY: AssumptionKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid AssumptionKind serialization
             let back: AssumptionKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -1257,10 +1256,10 @@ mod tests {
             vec![("start", 3 * MILLION), ("end", MILLION)],
         );
         // SAFETY: SymbolicPotential derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&pot).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pot).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid SymbolicPotential serialization
         let back: SymbolicPotential =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pot, back);
     }
 
@@ -1315,10 +1314,10 @@ mod tests {
     fn bound_serde_roundtrip() {
         let bound = test_bound(ResourceDimension::HostcallCount, 100 * MILLION, 980_000);
         // SAFETY: ResourceBound derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&bound).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bound).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ResourceBound serialization
         let back: ResourceBound =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bound, back);
     }
 
@@ -1344,10 +1343,10 @@ mod tests {
             CertificateVerdict::Violated,
         ] {
             // SAFETY: CertificateVerdict derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid CertificateVerdict serialization
             let back: CertificateVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }
@@ -1504,10 +1503,10 @@ mod tests {
             vec![],
         );
         // SAFETY: ResourceCertificate derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ResourceCertificate serialization
         let back: ResourceCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, back);
     }
 
@@ -1612,10 +1611,10 @@ mod tests {
     fn bundle_serde_roundtrip() {
         let bundle = CertificateBundle::build("serde", test_epoch(), vec![]);
         // SAFETY: CertificateBundle derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from CertificateBundle, deserialization guaranteed to succeed
         let back: CertificateBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, back);
     }
 
@@ -1653,10 +1652,9 @@ mod tests {
     fn effect_entry_serde_roundtrip() {
         let entry = test_effect_entry(EffectKind::Allocation, "fn:test:1", 5 * MILLION);
         // SAFETY: EffectEntry derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from EffectEntry, deserialization guaranteed to succeed
-        let back: EffectEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EffectEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1666,10 +1664,10 @@ mod tests {
     fn assumption_serde_roundtrip() {
         let a = test_assumption("no_eval", AssumptionKind::NoEval);
         // SAFETY: CertificateAssumption derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from CertificateAssumption, deserialization guaranteed to succeed
         let back: CertificateAssumption =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -1679,10 +1677,10 @@ mod tests {
     fn abstention_point_serde_roundtrip() {
         let abs = test_abstention("fn:test:eval", AbstentionReason::DynamicCodeGen);
         // SAFETY: AbstentionPoint derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&abs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&abs).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from AbstentionPoint, deserialization guaranteed to succeed
         let back: AbstentionPoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(abs, back);
     }
 }

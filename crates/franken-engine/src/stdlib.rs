@@ -2389,7 +2389,7 @@ fn build_collection_trace(
     mutated_keys: Vec<String>,
     events: Vec<CollectionMutationEvent>,
 ) -> CollectionMutationTrace {
-    let seed = serde_json::to_string(&events).expect("serde deserialization should succeed");
+    let seed = serde_json::to_string(&events).expect("serialize derived Serialize");
     let digest = hex::encode(Sha256::digest(
         format!(
             "{}|{}|{}|{}|{}|{}",
@@ -3788,8 +3788,8 @@ fn build_string_representation_receipt(
             segment_count,
             flatten_required,
             flatten_budget_exhausted,
-            serde_json::to_string(&kind).expect("serde deserialization should succeed"),
-            serde_json::to_string(&observation_mode).expect("serde deserialization should succeed"),
+            serde_json::to_string(&kind).expect("serialize derived Serialize"),
+            serde_json::to_string(&observation_mode).expect("serialize derived Serialize"),
             view_eligible
         )
         .as_bytes(),
@@ -6888,18 +6888,18 @@ mod tests {
             expected_max: 1,
             got: 0,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: StdlibError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
     #[test]
     fn test_array_method_result_serde_roundtrip() {
         let result = ArrayMethodResult::NewArray(vec![JsValue::Int(FP_SCALE)]);
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: ArrayMethodResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -6907,9 +6907,9 @@ mod tests {
     fn test_global_environment_serde_roundtrip() {
         let mut heap = ObjectHeap::new();
         let env = install_stdlib(&mut heap);
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let restored: GlobalEnvironment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(env.registry.len(), restored.registry.len());
         assert_eq!(env.global_object, restored.global_object);
     }
@@ -7214,10 +7214,9 @@ mod tests {
         let eligibility =
             require_string_fast_path_eligibility(StringFastPathConsumer::Cache, Some(receipt_a))
                 .expect("serde deserialization should succeed");
-        let serialized =
-            serde_json::to_string(&eligibility).expect("serde deserialization should succeed");
+        let serialized = serde_json::to_string(&eligibility).expect("serialize derived Serialize");
         let round_trip: StringFastPathEligibility =
-            serde_json::from_str(&serialized).expect("serde deserialization should succeed");
+            serde_json::from_str(&serialized).expect("deserialize known-valid JSON");
         assert_eq!(round_trip, eligibility);
     }
 

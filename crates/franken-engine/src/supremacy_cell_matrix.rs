@@ -445,7 +445,7 @@ mod tests {
         let bytes = fs::read(path).expect("read supremacy cell matrix fixture");
         // SAFETY: Test fixture file is guaranteed to contain valid JSON for SupremacyCellMatrix.
         // from_slice only fails on malformed JSON or schema mismatch (impossible with controlled test fixture).
-        serde_json::from_slice(&bytes).expect("serde deserialization should succeed")
+        serde_json::from_slice(&bytes).expect("deserialize known-valid JSON")
     }
 
     #[test]
@@ -578,10 +578,9 @@ mod tests {
             WorkloadFamily::MemoryPressure,
         ];
         for family in families {
-            let json =
-                serde_json::to_string(&family).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&family).expect("serialize derived Serialize");
             let back: WorkloadFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(family, back);
         }
     }
@@ -595,9 +594,9 @@ mod tests {
             MeasurementFamily::Memory,
             MeasurementFamily::TailLatency,
         ] {
-            let json = serde_json::to_string(&mf).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mf).expect("serialize derived Serialize");
             let back: MeasurementFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mf, back);
         }
     }
@@ -612,9 +611,9 @@ mod tests {
             EntryMode::NativeReactClient,
             EntryMode::MixedPackage,
         ] {
-            let json = serde_json::to_string(&em).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&em).expect("serialize derived Serialize");
             let back: EntryMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(em, back);
         }
     }
@@ -622,9 +621,9 @@ mod tests {
     #[test]
     fn warm_state_serde_round_trip() {
         for ws in [WarmState::Cold, WarmState::Warm, WarmState::Mixed] {
-            let json = serde_json::to_string(&ws).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&ws).expect("serialize derived Serialize");
             let back: WarmState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(ws, back);
         }
     }
@@ -639,9 +638,9 @@ mod tests {
             InterferenceProfile::TailStress,
             InterferenceProfile::MemoryContention,
         ] {
-            let json = serde_json::to_string(&ip).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&ip).expect("serialize derived Serialize");
             let back: InterferenceProfile =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(ip, back);
         }
     }
@@ -656,9 +655,9 @@ mod tests {
             SharedResource::MemoryBandwidth,
             SharedResource::WorkerThreads,
         ] {
-            let json = serde_json::to_string(&sr).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sr).expect("serialize derived Serialize");
             let back: SharedResource =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sr, back);
         }
     }
@@ -674,9 +673,8 @@ mod tests {
             TailAxis::HydrationNs,
             TailAxis::GcPauseNs,
         ] {
-            let json = serde_json::to_string(&ta).expect("serde deserialization should succeed");
-            let back: TailAxis =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&ta).expect("serialize derived Serialize");
+            let back: TailAxis = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(ta, back);
         }
     }
@@ -935,9 +933,9 @@ mod tests {
     #[test]
     fn artifact_serde_round_trip() {
         let art = load_fixture();
-        let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&art).expect("serialize derived Serialize");
         let back: SupremacyCellMatrixArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(art, back);
     }
 
@@ -950,9 +948,9 @@ mod tests {
             compatibility_notes: "n/a".to_string(),
             changed_at_utc: "2026-01-01T00:00:00Z".to_string(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: ChangelogEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 

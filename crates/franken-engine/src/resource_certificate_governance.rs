@@ -1709,11 +1709,11 @@ mod tests {
         for dim in ResourceDimension::all() {
             // SAFETY: ResourceDimension derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(dim).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid ResourceDimension,
             // so from_str back to ResourceDimension cannot fail (valid format + matching schema).
             let back: ResourceDimension =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*dim, back);
         }
     }
@@ -1731,9 +1731,9 @@ mod tests {
             GovernanceVerdict::MultipleViolations,
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: GovernanceVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1741,9 +1741,9 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_publication_policy() {
         let strict = PublicationPolicy::strict();
-        let json = serde_json::to_string(&strict).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&strict).expect("serialize derived Serialize");
         let back: PublicationPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(strict, back);
     }
 
@@ -1757,9 +1757,9 @@ mod tests {
             100,
             DEFAULT_MAX_UTILISATION_MILLIONTHS,
         );
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: CertificateEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1769,9 +1769,9 @@ mod tests {
         eval.add_certificate(ResourceDimension::CpuTime, "w1".into(), 1000, 500, 50);
         eval.add_regression(ResourceDimension::HeapMemory, "w1".into(), 1000, 1010);
         let receipt = eval.evaluate(epoch());
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: GovernanceReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -1992,9 +1992,9 @@ mod tests {
             2_010_000,
             2_000_000,
         );
-        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eval).expect("serialize derived Serialize");
         let back: GovernanceEvaluator =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eval, back);
     }
 

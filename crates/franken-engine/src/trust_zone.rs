@@ -835,8 +835,8 @@ mod tests {
     fn hierarchy_serialization_is_deterministic_for_same_inputs() {
         let a = ZoneHierarchy::standard("maintainer", 5).expect("hierarchy A");
         let b = ZoneHierarchy::standard("maintainer", 5).expect("hierarchy B");
-        let json_a = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let json_b = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json_a = serde_json::to_string(&a).expect("serialize derived Serialize");
+        let json_b = serde_json::to_string(&b).expect("serialize derived Serialize");
         assert_eq!(json_a, json_b);
     }
 
@@ -864,9 +864,9 @@ mod tests {
     #[test]
     fn trust_zone_class_serde_roundtrip() {
         for class in TrustZoneClass::ORDERED {
-            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&class).expect("serialize derived Serialize");
             let back: TrustZoneClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, class);
         }
     }
@@ -974,9 +974,9 @@ mod tests {
         let err = TrustZoneError::ZoneMissing {
             zone_name: "test".into(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: TrustZoneError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, err);
     }
 
@@ -1125,9 +1125,9 @@ mod tests {
             ZoneEventType::ZoneTransition,
         ] {
             let json =
-                serde_json::to_string(&event_type).expect("serde deserialization should succeed");
+                serde_json::to_string(&event_type).expect("serialize derived Serialize");
             let back: ZoneEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, event_type);
         }
     }
@@ -1142,9 +1142,9 @@ mod tests {
             ZoneEventOutcome::Denied,
         ] {
             let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+                serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: ZoneEventOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, outcome);
         }
     }
@@ -1159,9 +1159,9 @@ mod tests {
             .assign_entity("ext-1", "community", "t")
             .expect("serde deserialization should succeed");
         for event in hierarchy.events() {
-            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(event).expect("serialize derived Serialize");
             let back: ZoneEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, event);
         }
     }
@@ -1171,18 +1171,18 @@ mod tests {
         let req = ZoneCreateRequest::new("team", TrustZoneClass::Team, 5, "admin")
             .with_parent("private")
             .with_declared_ceiling(capset(&[RuntimeCapability::VmDispatch]));
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: ZoneCreateRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, req);
     }
 
     #[test]
     fn zone_transition_request_serde_roundtrip() {
         let req = ZoneTransitionRequest::new("ext-1", "team", "t", "p", "d", true);
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: ZoneTransitionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, req);
     }
 
@@ -1193,9 +1193,9 @@ mod tests {
         let zone = hierarchy
             .zone("team")
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(zone).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(zone).expect("serialize derived Serialize");
         let back: TrustZone =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(&back, zone);
     }
 
@@ -1355,9 +1355,9 @@ mod tests {
     #[test]
     fn zone_hierarchy_serde_roundtrip() {
         let hierarchy = ZoneHierarchy::standard("admin", 1).expect("build hierarchy");
-        let json = serde_json::to_string(&hierarchy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hierarchy).expect("serialize derived Serialize");
         let back: ZoneHierarchy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hierarchy, back);
     }
 
@@ -1402,9 +1402,9 @@ mod tests {
         let zone = hierarchy
             .zone("owner")
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(zone).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(zone).expect("serialize derived Serialize");
         let back: TrustZone =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*zone, back);
     }
 
@@ -1565,7 +1565,7 @@ mod tests {
         let mut jsons = BTreeSet::new();
         for class in TrustZoneClass::ORDERED {
             jsons.insert(
-                serde_json::to_string(&class).expect("serde deserialization should succeed"),
+                serde_json::to_string(&class).expect("serialize derived Serialize"),
             );
         }
         assert_eq!(jsons.len(), 4);
@@ -1580,7 +1580,7 @@ mod tests {
         ];
         let mut jsons = BTreeSet::new();
         for v in variants {
-            jsons.insert(serde_json::to_string(&v).expect("serde deserialization should succeed"));
+            jsons.insert(serde_json::to_string(&v).expect("serialize derived Serialize"));
         }
         assert_eq!(jsons.len(), 3);
     }
@@ -1596,7 +1596,7 @@ mod tests {
         ];
         let mut jsons = BTreeSet::new();
         for v in variants {
-            jsons.insert(serde_json::to_string(&v).expect("serde deserialization should succeed"));
+            jsons.insert(serde_json::to_string(&v).expect("serialize derived Serialize"));
         }
         assert_eq!(jsons.len(), 5);
     }
@@ -1631,7 +1631,7 @@ mod tests {
         ];
         let mut jsons = BTreeSet::new();
         for v in &variants {
-            jsons.insert(serde_json::to_string(v).expect("serde deserialization should succeed"));
+            jsons.insert(serde_json::to_string(v).expect("serialize derived Serialize"));
         }
         assert_eq!(jsons.len(), 6);
     }
@@ -1782,9 +1782,9 @@ mod tests {
         let zone = hierarchy
             .zone("owner")
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(zone).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(zone).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("zone_id"));
         assert!(obj.contains_key("zone_name"));
@@ -1802,9 +1802,9 @@ mod tests {
         let req = ZoneCreateRequest::new("z", TrustZoneClass::Team, 1, "a")
             .with_parent("p")
             .with_declared_ceiling(capset(&[RuntimeCapability::VmDispatch]));
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("zone_name"));
         assert!(obj.contains_key("class"));
@@ -1818,9 +1818,9 @@ mod tests {
     #[test]
     fn zone_transition_request_json_field_names() {
         let req = ZoneTransitionRequest::new("e", "z", "t", "p", "d", true);
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("entity_id"));
         assert!(obj.contains_key("to_zone_name"));
@@ -1838,9 +1838,9 @@ mod tests {
             ZoneEventType::Assignment,
             ZoneEventOutcome::Assigned,
         );
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
@@ -1859,9 +1859,9 @@ mod tests {
     #[test]
     fn zone_hierarchy_json_field_names() {
         let hierarchy = ZoneHierarchy::new("default");
-        let json = serde_json::to_string(&hierarchy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hierarchy).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = v.as_object().expect("serde deserialization should succeed");
         assert!(obj.contains_key("zones"));
         assert!(obj.contains_key("assignments"));
@@ -2087,9 +2087,9 @@ mod tests {
         hierarchy
             .assign_entity("ext-3", "private", "t3")
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&hierarchy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hierarchy).expect("serialize derived Serialize");
         let back: ZoneHierarchy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hierarchy, back);
     }
 
@@ -2103,9 +2103,9 @@ mod tests {
         hierarchy
             .enforce_ceiling("community", &capset(&[RuntimeCapability::VmDispatch]), "t2")
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&hierarchy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hierarchy).expect("serialize derived Serialize");
         let back: ZoneHierarchy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hierarchy, back);
     }
 
@@ -2138,9 +2138,9 @@ mod tests {
             },
         ];
         for err in &variants {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: TrustZoneError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, err);
         }
     }
@@ -2160,18 +2160,18 @@ mod tests {
             from_zone: Some("community".into()),
             to_zone: Some("private".into()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ZoneEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
     #[test]
     fn zone_event_minimal_fields_serde_roundtrip() {
         let event = ZoneEvent::base("t", ZoneEventType::Assignment, ZoneEventOutcome::Pass);
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ZoneEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
@@ -2412,8 +2412,8 @@ mod tests {
             .expect("serde deserialization should succeed");
         b.assign_entity("ext-1", "community", "t1")
             .expect("serde deserialization should succeed");
-        let json_a = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let json_b = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json_a = serde_json::to_string(&a).expect("serialize derived Serialize");
+        let json_b = serde_json::to_string(&b).expect("serialize derived Serialize");
         assert_eq!(json_a, json_b);
     }
 }

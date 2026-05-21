@@ -1007,9 +1007,9 @@ mod tests {
     #[test]
     fn source_serde_roundtrip() {
         for source in &NondeterminismSource::ALL {
-            let json = serde_json::to_string(source).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(source).expect("serialize derived Serialize");
             let back: NondeterminismSource =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*source, back);
         }
     }
@@ -1068,9 +1068,9 @@ mod tests {
             100,
             "router",
         );
-        let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&trace).expect("serialize derived Serialize");
         let back: NondeterminismTrace =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(trace, back);
     }
 
@@ -1375,9 +1375,9 @@ mod tests {
         let mut fc = FailoverController::with_defaults();
         fc.record_failover(FailoverReason::Manual, "a", "b", 100, true)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&fc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fc).expect("serialize derived Serialize");
         let back: FailoverController =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fc, back);
     }
 
@@ -1405,9 +1405,9 @@ mod tests {
             FailoverReason::Manual,
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(reason).expect("serialize derived Serialize");
             let back: FailoverReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*reason, back);
         }
     }
@@ -1527,9 +1527,9 @@ mod tests {
             vec![1, 2, 3],
         ));
         bundle.finalise();
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let back: IncidentBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, back);
     }
 
@@ -1660,9 +1660,8 @@ mod tests {
     #[test]
     fn artifact_kind_serde() {
         let kind = ArtifactKind::DivergenceReport;
-        let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-        let back: ArtifactKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
+        let back: ArtifactKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(kind, back);
     }
 
@@ -1777,9 +1776,9 @@ mod tests {
             DivergenceSeverity::Warning,
             DivergenceSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: DivergenceSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -1829,9 +1828,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: ReplayError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1845,9 +1844,9 @@ mod tests {
             ReplayMode::BestEffort,
             ReplayMode::Validate,
         ] {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let back: ReplayMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mode, back);
         }
     }
@@ -1864,9 +1863,9 @@ mod tests {
             FailoverError::Halted,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: FailoverError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1880,10 +1879,9 @@ mod tests {
             FailoverStrategy::ImmediateBaseline,
             FailoverStrategy::Halt,
         ] {
-            let json =
-                serde_json::to_string(&strategy).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&strategy).expect("serialize derived Serialize");
             let back: FailoverStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(strategy, back);
         }
     }
@@ -2294,7 +2292,7 @@ mod tests {
     fn serde_nondeterminism_source_variant_strings_distinct() {
         let jsons: std::collections::BTreeSet<String> = NondeterminismSource::ALL
             .iter()
-            .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
+            .map(|s| serde_json::to_string(s).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), NondeterminismSource::ALL.len());
     }
@@ -2307,7 +2305,7 @@ mod tests {
             ReplayMode::Validate,
         ]
         .iter()
-        .map(|m| serde_json::to_string(m).expect("serde deserialization should succeed"))
+        .map(|m| serde_json::to_string(m).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(jsons.len(), 3);
     }
@@ -2320,7 +2318,7 @@ mod tests {
             DivergenceSeverity::Critical,
         ]
         .iter()
-        .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
+        .map(|s| serde_json::to_string(s).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(jsons.len(), 3);
     }
@@ -2333,7 +2331,7 @@ mod tests {
             FailoverStrategy::Halt,
         ]
         .iter()
-        .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
+        .map(|s| serde_json::to_string(s).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(jsons.len(), 3);
     }
@@ -2347,7 +2345,7 @@ mod tests {
             IncidentSeverity::Critical,
         ]
         .iter()
-        .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
+        .map(|s| serde_json::to_string(s).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(jsons.len(), 4);
     }
@@ -2365,7 +2363,7 @@ mod tests {
             ArtifactKind::DivergenceReport,
         ]
         .iter()
-        .map(|k| serde_json::to_string(k).expect("serde deserialization should succeed"))
+        .map(|k| serde_json::to_string(k).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(jsons.len(), 8);
     }
@@ -2481,9 +2479,8 @@ mod tests {
             virtual_ts: 12345,
             component: "api-proxy".to_string(),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: TraceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
+        let back: TraceEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -2497,9 +2494,9 @@ mod tests {
             virtual_ts: 500,
             severity: DivergenceSeverity::Critical,
         };
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: ReplayDivergence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -2512,9 +2509,8 @@ mod tests {
         eng.replay_next(NondeterminismSource::TimerRead, &[2])
             .expect("serde deserialization should succeed");
         assert_eq!(eng.divergence_count(), 1);
-        let json = serde_json::to_string(&eng).expect("serde deserialization should succeed");
-        let back: ReplayEngine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eng).expect("serialize derived Serialize");
+        let back: ReplayEngine = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eng, back);
     }
 
@@ -2532,18 +2528,18 @@ mod tests {
             virtual_ts: 777,
             success: true,
         };
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let back: FailoverRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rec, back);
     }
 
     #[test]
     fn serde_roundtrip_incident_artifact() {
         let art = IncidentArtifact::new("perf", ArtifactKind::PerformanceMetrics, vec![9, 8, 7]);
-        let json = serde_json::to_string(&art).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&art).expect("serialize derived Serialize");
         let back: IncidentArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(art, back);
     }
 
@@ -2555,9 +2551,9 @@ mod tests {
                 .with_decisions(true)
                 .with_failovers(false)
                 .with_divergences(true);
-        let json = serde_json::to_string(&bb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bb).expect("serialize derived Serialize");
         let back: IncidentBundleBuilder =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bb, back);
     }
 
@@ -2573,9 +2569,8 @@ mod tests {
             component: String::new(),
         };
         let id = ev.derive_id();
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: TraceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
+        let back: TraceEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
         assert_eq!(id, back.derive_id());
     }
@@ -2585,9 +2580,9 @@ mod tests {
         let mut trace = NondeterminismTrace::new("max-vts");
         trace.capture(NondeterminismSource::TimerRead, vec![1], u64::MAX, "clk");
         assert_eq!(trace.events[0].virtual_ts, u64::MAX);
-        let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&trace).expect("serialize derived Serialize");
         let back: NondeterminismTrace =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(trace, back);
     }
 
@@ -2751,9 +2746,8 @@ mod tests {
     #[test]
     fn replay_error_trace_not_finalised_serde() {
         let err = ReplayError::TraceNotFinalised;
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: ReplayError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let back: ReplayError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 

@@ -2077,9 +2077,9 @@ mod tests {
             PromiseState::Rejected(js_str("err")),
         ];
         for state in &states {
-            let json = serde_json::to_string(state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(state).expect("serialize derived Serialize");
             let back: PromiseState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, state);
         }
     }
@@ -2100,9 +2100,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: PromiseError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, err);
         }
     }
@@ -2115,9 +2115,8 @@ mod tests {
             result_promise: PromiseHandle(1),
             label: Label::Internal,
         };
-        let json = serde_json::to_string(&task).expect("serde deserialization should succeed");
-        let back: Microtask =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&task).expect("serialize derived Serialize");
+        let back: Microtask = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, task);
     }
 
@@ -2126,9 +2125,8 @@ mod tests {
         let mut clock = VirtualClock::new();
         clock.advance_to(12345);
         clock.register_timer();
-        let json = serde_json::to_string(&clock).expect("serde deserialization should succeed");
-        let back: VirtualClock =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&clock).expect("serialize derived Serialize");
+        let back: VirtualClock = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, clock);
     }
 
@@ -2456,9 +2454,8 @@ mod tests {
             registration_seq: 7,
             label: Label::Internal,
         };
-        let json = serde_json::to_string(&task).expect("serde deserialization should succeed");
-        let back: Macrotask =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&task).expect("serialize derived Serialize");
+        let back: Macrotask = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, task);
     }
 
@@ -2478,9 +2475,9 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(event).expect("serialize derived Serialize");
             let back: WitnessEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, event);
         }
     }
@@ -2517,9 +2514,9 @@ mod tests {
     fn reaction_kind_serde_roundtrip() {
         let variants = [ReactionKind::Fulfill, ReactionKind::Reject];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ReactionKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -2532,9 +2529,9 @@ mod tests {
             MacrotaskSource::IoCompletion,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: MacrotaskSource =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -2542,9 +2539,8 @@ mod tests {
     #[test]
     fn virtual_clock_serde_new_roundtrip() {
         let clock = VirtualClock::new();
-        let json = serde_json::to_string(&clock).expect("serde deserialization should succeed");
-        let back: VirtualClock =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&clock).expect("serialize derived Serialize");
+        let back: VirtualClock = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.now_ms(), 0);
     }
 
@@ -2583,9 +2579,9 @@ mod tests {
     #[test]
     fn promise_handle_serde_roundtrip() {
         let handle = PromiseHandle(99);
-        let json = serde_json::to_string(&handle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&handle).expect("serialize derived Serialize");
         let back: PromiseHandle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, handle);
     }
 
@@ -2758,9 +2754,9 @@ mod tests {
             propagated: true,
             affected_module_count: 3,
         };
-        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
         let back: ExceptionRejectionOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(outcome, back);
     }
 
@@ -2773,9 +2769,9 @@ mod tests {
             module_specifier: None,
             seq: 42,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ExceptionRejectionWitnessEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2788,9 +2784,9 @@ mod tests {
             ExceptionBoundaryKind::MicrotaskReaction,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ExceptionBoundaryKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, &back);
         }
     }

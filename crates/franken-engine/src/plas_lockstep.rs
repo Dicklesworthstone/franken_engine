@@ -534,10 +534,9 @@ mod tests {
             LockstepRuntime::Node,
             LockstepRuntime::Bun,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: LockstepRuntime =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -624,9 +623,9 @@ mod tests {
     #[test]
     fn observation_serde_roundtrip() {
         let o = obs(LockstepRuntime::Bun);
-        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&o).expect("serialize derived Serialize");
         let back: RuntimeObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(o, back);
     }
 
@@ -665,9 +664,9 @@ mod tests {
             allow_state_digest_mismatch: true,
             allowed_error_codes: ["err1"].iter().map(|s| s.to_string()).collect(),
         };
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: RuntimeTolerance =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 
@@ -707,10 +706,9 @@ mod tests {
             LockstepFailureClass::CapabilityGap,
             LockstepFailureClass::PlatformDivergence,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: LockstepFailureClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -730,9 +728,9 @@ mod tests {
         let err = PlasLockstepError::InvalidCase {
             detail: "test".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: PlasLockstepError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1286,9 +1284,9 @@ mod tests {
             semantic_match: false,
             mismatch_fields: vec!["output_digest".to_string()],
         };
-        let json = serde_json::to_string(&cmp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cmp).expect("serialize derived Serialize");
         let back: RuntimeComparison =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cmp, back);
     }
 
@@ -1305,9 +1303,9 @@ mod tests {
             outcome: "pass".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&le).expect("serialize derived Serialize");
         let back: PlasLockstepLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(le, back);
     }
 
@@ -1317,9 +1315,9 @@ mod tests {
     fn evaluation_serde_roundtrip() {
         let c = make_case();
         let eval = evaluate_plas_lockstep_case(c).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eval).expect("serialize derived Serialize");
         let back: PlasLockstepEvaluation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eval, back);
     }
 
@@ -1328,9 +1326,9 @@ mod tests {
     #[test]
     fn case_serde_roundtrip() {
         let c = make_case();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: PlasLockstepCase =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1344,9 +1342,9 @@ mod tests {
                 ..Default::default()
             },
         );
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: PlasLockstepCase =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 }

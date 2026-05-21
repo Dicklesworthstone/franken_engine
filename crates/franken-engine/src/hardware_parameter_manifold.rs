@@ -1151,9 +1151,9 @@ mod tests {
     #[test]
     fn domain_serde_roundtrip() {
         for d in HardwareAxisDomain::ALL {
-            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(d).expect("serialize derived Serialize");
             let back: HardwareAxisDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*d, back);
         }
     }
@@ -1228,9 +1228,8 @@ mod tests {
     #[test]
     fn axis_serde_roundtrip() {
         let a = sample_axis();
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let back: HardwareAxis =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
+        let back: HardwareAxis = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -1291,9 +1290,9 @@ mod tests {
     #[test]
     fn fingerprint_serde_roundtrip() {
         let fp = sample_fingerprint("fp1", 8_000_000, 50_000_000);
-        let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fp).expect("serialize derived Serialize");
         let back: HardwareFingerprint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fp, back);
     }
 
@@ -1333,9 +1332,9 @@ mod tests {
         let r = SymmetryReason::ExpertAnnotation {
             note: "same gen".into(),
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: SymmetryReason =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1379,9 +1378,9 @@ mod tests {
             left_level: "avx2".into(),
             right_level: "neon".into(),
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: SymmetryRefusal =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1462,9 +1461,9 @@ mod tests {
                 note: "test".into(),
             },
         );
-        let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&class).expect("serialize derived Serialize");
         let back: SymmetryClass =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(class, back);
     }
 
@@ -1511,9 +1510,9 @@ mod tests {
     #[test]
     fn obligation_status_serde() {
         for s in ObligationStatus::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: ObligationStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1732,9 +1731,9 @@ mod tests {
     fn graph_serde_roundtrip() {
         let mut g = sample_graph();
         g.generate_obligations();
-        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&g).expect("serialize derived Serialize");
         let back: ObligationGraph =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(g, back);
     }
 
@@ -1803,9 +1802,9 @@ mod tests {
         let mut g = sample_graph();
         g.generate_obligations();
         let r = ObligationReport::from_graph(&g, epoch());
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: ObligationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 

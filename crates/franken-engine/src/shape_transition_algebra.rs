@@ -589,7 +589,7 @@ pub fn emit_shape_lattice_bundle(
     let event_lines = bundle
         .trace_events
         .iter()
-        .map(|event| serde_json::to_string(event).expect("serde deserialization should succeed"))
+        .map(|event| serde_json::to_string(event).expect("serialize derived Serialize"))
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(
@@ -2124,9 +2124,9 @@ mod tests {
     #[test]
     fn serde_round_trip_cell_state() {
         let state = super::PropertyCellState::Stable;
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let back: super::PropertyCellState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(state, back);
     }
 
@@ -2147,9 +2147,9 @@ mod tests {
             ],
             total_hits: 15,
         };
-        let json = serde_json::to_string(&ic).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ic).expect("serialize derived Serialize");
         let back: super::InlineCacheState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ic, back);
     }
 
@@ -2161,9 +2161,9 @@ mod tests {
             super::InlineCacheState::Uninitialised,
             1,
         );
-        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&w).expect("serialize derived Serialize");
         let back: super::ShapeGuardWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(w, back);
     }
 
@@ -2180,9 +2180,9 @@ mod tests {
             hit_rate_millionths: 909_091,
             witness_count: 2,
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: super::InlineCacheSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -2588,9 +2588,9 @@ mod tests {
             transition_kind: TransitionKind::AddProperty,
             property_key: Some("x".into()),
         };
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
         let back: super::LineageStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, back);
     }
 
@@ -2603,9 +2603,9 @@ mod tests {
             property_key: Some("x".into()),
             invalidated_assumption_count: 1,
         };
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
         let back: super::DeoptEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evt, back);
     }
 
@@ -2615,9 +2615,9 @@ mod tests {
             target_shape_id: 42,
             source_shape_ids: vec![1, 2, 3],
         };
-        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&w).expect("serialize derived Serialize");
         let back: super::ConvergenceWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(w, back);
     }
 
@@ -2632,9 +2632,9 @@ mod tests {
             expected_shape_count: 2,
             expected_transition_count: 1,
         };
-        let json = serde_json::to_string(&specimen).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&specimen).expect("serialize derived Serialize");
         let back: super::ShapeTransitionSpecimen =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(specimen.label, back.label);
     }
 }

@@ -1132,7 +1132,7 @@ mod tests {
                 mnemonic: format!("instr_{i}"),
             })
             .collect();
-        InstructionCostGraph::new(nodes).expect("serde deserialization should succeed")
+        InstructionCostGraph::new(nodes).expect("constructor with valid inputs")
     }
 
     #[test]
@@ -1173,7 +1173,7 @@ mod tests {
                 mnemonic: "sink".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let cpr = graph
             .critical_path_length()
             .expect("serde deserialization should succeed");
@@ -1294,7 +1294,7 @@ mod tests {
                 mnemonic: "d".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
@@ -1343,7 +1343,7 @@ mod tests {
                 mnemonic: "sink".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
@@ -1384,7 +1384,7 @@ mod tests {
                 mnemonic: "producer_zero_cost".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
@@ -1466,7 +1466,7 @@ mod tests {
             register_pressure: 10,
             mnemonic: "heavy".into(),
         }];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let analyzer = RegisterPressureAnalyzer { pressure_limit: 4 };
         let report = analyzer.analyze(&graph);
 
@@ -1483,9 +1483,9 @@ mod tests {
             TropicalWeight::INFINITY,
             TropicalWeight::finite(42),
         ] {
-            let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&w).expect("serialize derived Serialize");
             let restored: TropicalWeight =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(w, restored);
         }
     }
@@ -1495,9 +1495,9 @@ mod tests {
         let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: TropicalMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -1508,9 +1508,8 @@ mod tests {
         let schedule = optimizer
             .schedule(&graph)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&schedule).expect("serde deserialization should succeed");
-        let restored: Schedule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&schedule).expect("serialize derived Serialize");
+        let restored: Schedule = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(schedule, restored);
     }
 
@@ -1525,9 +1524,9 @@ mod tests {
             apsp_hash: ContentHash::compute(b"apsp"),
             is_exact: true,
         };
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let restored: OptimalityCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, restored);
     }
 
@@ -1539,9 +1538,9 @@ mod tests {
             total_nodes: 6,
             elimination_ratio_millionths: 333_333,
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: DeadCodeReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
@@ -1588,7 +1587,7 @@ mod tests {
                 mnemonic: "b".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let optimizer = ScheduleOptimizer::default();
         let result = optimizer.schedule(&graph);
         assert!(matches!(result, Err(TropicalError::CycleInDag { .. })));
@@ -1622,7 +1621,7 @@ mod tests {
                 mnemonic: "join".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let schedule = ScheduleOptimizer::default()
             .schedule(&graph)
             .expect("serde deserialization should succeed");
@@ -1701,7 +1700,7 @@ mod tests {
                 mnemonic: format!("task_{i}"),
             })
             .collect();
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
@@ -1760,9 +1759,9 @@ mod tests {
             register_pressure: None,
             certificate: None,
         };
-        let json = serde_json::to_string(&witness).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&witness).expect("serialize derived Serialize");
         let restored: TropicalPassWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(witness, restored);
     }
 
@@ -1778,7 +1777,7 @@ mod tests {
             register_pressure: 1,
             mnemonic: "only".into(),
         }];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
@@ -1825,9 +1824,9 @@ mod tests {
             TropicalError::NodeOutOfBounds { index: 10, size: 5 },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: TropicalError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -1841,9 +1840,9 @@ mod tests {
             ScheduleQuality::Heuristic,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ScheduleQuality =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -1851,9 +1850,9 @@ mod tests {
     #[test]
     fn schedule_optimizer_default_serde_roundtrip() {
         let opt = ScheduleOptimizer::default();
-        let json = serde_json::to_string(&opt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&opt).expect("serialize derived Serialize");
         let back: ScheduleOptimizer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.max_approximation_ratio_millionths, 1_000_000);
     }
 
@@ -1867,9 +1866,9 @@ mod tests {
             register_pressure: 3,
             mnemonic: "load".into(),
         };
-        let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&node).expect("serialize derived Serialize");
         let back: InstructionNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, node);
     }
 
@@ -1881,9 +1880,9 @@ mod tests {
             critical_sink: 5,
             apsp_hash: ContentHash::compute(b"test-apsp"),
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CriticalPathResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, result);
     }
 
@@ -1897,9 +1896,9 @@ mod tests {
             estimated_spills: 0,
             node_count: 10,
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: RegisterPressureReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, report);
     }
 
@@ -2039,7 +2038,7 @@ mod tests {
                 mnemonic: "b".into(),
             },
         ];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         assert_eq!(graph.peak_register_pressure(), 7);
         assert_eq!(graph.total_register_pressure(), 10);
     }
@@ -2066,7 +2065,7 @@ mod tests {
             register_pressure: 8,
             mnemonic: "exact".into(),
         }];
-        let graph = InstructionCostGraph::new(nodes).expect("serde deserialization should succeed");
+        let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let analyzer = RegisterPressureAnalyzer { pressure_limit: 8 };
         let report = analyzer.analyze(&graph);
         assert!(!report.exceeds_limit);
@@ -2110,9 +2109,9 @@ mod tests {
                 is_exact: true,
             }),
         };
-        let json = serde_json::to_string(&witness).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&witness).expect("serialize derived Serialize");
         let back: TropicalPassWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, witness);
         assert!(back.dead_code.is_some());
         assert!(back.register_pressure.is_some());

@@ -1387,12 +1387,12 @@ mod tests {
         for action in &ContainmentAction::ALL {
             // SAFETY: ContainmentAction derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(action).expect("serialize derived Serialize");
 
             // SAFETY: JSON was just produced by to_string of a valid ContainmentAction,
             // so from_str back to ContainmentAction cannot fail (valid format + matching schema).
             let restored: ContainmentAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*action, restored);
         }
     }
@@ -1438,11 +1438,11 @@ mod tests {
         let m = LossMatrix::balanced();
         // SAFETY: LossMatrix derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid LossMatrix,
         // so from_str back to LossMatrix cannot fail (valid format + matching schema).
         let restored: LossMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -1688,11 +1688,11 @@ mod tests {
         let decision = selector.select(&uncertain_posterior());
         // SAFETY: ActionDecision derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid ActionDecision,
         // so from_str back to ActionDecision cannot fail (valid format + matching schema).
         let restored: ActionDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, restored);
     }
 
@@ -1702,11 +1702,11 @@ mod tests {
         selector.select(&uncertain_posterior());
         // SAFETY: ExpectedLossSelector derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&selector).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&selector).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid ExpectedLossSelector,
         // so from_str back to ExpectedLossSelector cannot fail (valid format + matching schema).
         let restored: ExpectedLossSelector =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(selector.decisions_made(), restored.decisions_made());
     }
 
@@ -1721,7 +1721,7 @@ mod tests {
         // SAFETY: JSON was just produced by to_string of a valid DecisionExplanation,
         // so from_str back to DecisionExplanation cannot fail (valid format + matching schema).
         let restored: DecisionExplanation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision.explanation, restored);
     }
 
@@ -2020,11 +2020,11 @@ mod tests {
         let entry = le(ContainmentAction::Allow, RiskState::Benign, 0);
         // SAFETY: LossEntry derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid LossEntry,
         // so from_str back to LossEntry cannot fail (valid format + matching schema).
         let restored: LossEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
     }
 
@@ -2266,11 +2266,11 @@ mod tests {
             .expect("scoring should succeed");
         // SAFETY: RuntimeDecisionScore derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&score).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScore,
         // so from_str back to RuntimeDecisionScore cannot fail (valid format + matching schema).
         let restored: RuntimeDecisionScore =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(score, restored);
         // Verify new fields survive roundtrip.
         assert_eq!(score.borderline_decision, restored.borderline_decision);
@@ -2336,11 +2336,11 @@ mod tests {
         ] {
             // SAFETY: AlienRiskAlertLevel derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&level).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid AlienRiskAlertLevel,
             // so from_str back to AlienRiskAlertLevel cannot fail (valid format + matching schema).
             let back: AlienRiskAlertLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(level, back);
         }
     }
@@ -2372,11 +2372,11 @@ mod tests {
         for err in &errors {
             // SAFETY: RuntimeDecisionScoringError derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScoringError,
             // so from_str back to RuntimeDecisionScoringError cannot fail (valid format + matching schema).
             let back: RuntimeDecisionScoringError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -2413,11 +2413,11 @@ mod tests {
         };
         // SAFETY: DecisionConfidenceInterval derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ci).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DecisionConfidenceInterval,
         // so from_str back to DecisionConfidenceInterval cannot fail (valid format + matching schema).
         let back: DecisionConfidenceInterval =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ci, back);
     }
 
@@ -2436,11 +2436,11 @@ mod tests {
         };
         // SAFETY: CandidateActionScore derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&score).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid CandidateActionScore,
         // so from_str back to CandidateActionScore cannot fail (valid format + matching schema).
         let back: CandidateActionScore =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(score, back);
     }
 
@@ -2459,11 +2459,11 @@ mod tests {
         };
         // SAFETY: RuntimeDecisionScoreEvent derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScoreEvent,
         // so from_str back to RuntimeDecisionScoreEvent cannot fail (valid format + matching schema).
         let back: RuntimeDecisionScoreEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2484,11 +2484,11 @@ mod tests {
         };
         // SAFETY: AlienRiskEnvelope derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&envelope).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&envelope).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid AlienRiskEnvelope,
         // so from_str back to AlienRiskEnvelope cannot fail (valid format + matching schema).
         let back: AlienRiskEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(envelope, back);
     }
 
@@ -2537,12 +2537,11 @@ mod tests {
         };
         // SAFETY: DecisionExplanation derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json =
-            serde_json::to_string(&explanation).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&explanation).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DecisionExplanation,
         // so from_str back to DecisionExplanation cannot fail (valid format + matching schema).
         let back: DecisionExplanation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(explanation, back);
     }
 
@@ -2574,11 +2573,10 @@ mod tests {
         };
         // SAFETY: LossEntry derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid LossEntry,
         // so from_str back to LossEntry cannot fail (valid format + matching schema).
-        let back: LossEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LossEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -2860,11 +2858,11 @@ mod tests {
         let input = sample_runtime_input(uncertain_posterior());
         // SAFETY: RuntimeDecisionScoringInput derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScoringInput,
         // so from_str back to RuntimeDecisionScoringInput cannot fail (valid format + matching schema).
         let back: RuntimeDecisionScoringInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -2879,11 +2877,11 @@ mod tests {
             .expect("serde deserialization should succeed");
         // SAFETY: RuntimeDecisionScore derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&score).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid RuntimeDecisionScore,
         // so from_str back to RuntimeDecisionScore cannot fail (valid format + matching schema).
         let back: RuntimeDecisionScore =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(score, back);
     }
 

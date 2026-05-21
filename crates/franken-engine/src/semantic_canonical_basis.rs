@@ -945,9 +945,9 @@ mod tests {
     #[test]
     fn artifact_family_serde_roundtrip() {
         for fam in ArtifactFamily::ALL {
-            let json = serde_json::to_string(fam).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(fam).expect("serialize derived Serialize");
             let back: ArtifactFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*fam, back);
         }
     }
@@ -977,9 +977,9 @@ mod tests {
     #[test]
     fn transformation_serde_roundtrip() {
         for t in EquivalenceTransformation::ALL {
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             let back: EquivalenceTransformation =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, back);
         }
     }
@@ -1032,9 +1032,9 @@ mod tests {
             left_epoch: 10,
             right_epoch: 20,
         };
-        let json = serde_json::to_string(&reason).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
         let back: RefusalReason =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reason, back);
     }
 
@@ -1126,9 +1126,9 @@ mod tests {
             }],
             test_epoch(),
         );
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: IdentificationRefusal =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1137,9 +1137,8 @@ mod tests {
     #[test]
     fn orbit_step_serde_roundtrip() {
         let step = make_orbit_step(0, EquivalenceTransformation::AlphaRenaming);
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let back: OrbitStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
+        let back: OrbitStep = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, back);
     }
 
@@ -1200,9 +1199,9 @@ mod tests {
                 EquivalenceTransformation::ScopeFlattening,
             )],
         );
-        let json = serde_json::to_string(&orbit).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&orbit).expect("serialize derived Serialize");
         let back: OrbitReduction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(orbit, back);
     }
 
@@ -1246,9 +1245,9 @@ mod tests {
     #[test]
     fn representative_serde_roundtrip() {
         let r = make_representative(ArtifactFamily::ModuleSnapshot, "ms");
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: CanonicalRepresentative =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1404,9 +1403,9 @@ mod tests {
             )],
         )];
         let basis = make_basis(classes);
-        let json = serde_json::to_string(&basis).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&basis).expect("serialize derived Serialize");
         let back: SemanticCanonicalBasis =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(basis, back);
     }
 

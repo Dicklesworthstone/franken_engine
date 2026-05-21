@@ -1297,10 +1297,10 @@ mod tests {
     fn workload_domain_roundtrip_serde() {
         for domain in WorkloadDomain::ALL {
             // SAFETY: WorkloadDomain derives Serialize; writing to an in-memory String cannot fail here.
-            let json = serde_json::to_string(domain).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(domain).expect("serialize derived Serialize");
             // SAFETY: JSON was produced from the same WorkloadDomain schema immediately above.
             let back: WorkloadDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*domain, back);
         }
     }
@@ -1665,10 +1665,10 @@ mod tests {
     fn verdict_serde_roundtrip() {
         for v in SynthesisVerdict::ALL {
             // SAFETY: SynthesisVerdict derives Serialize; writing to an in-memory String cannot fail here.
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             // SAFETY: JSON was produced from the same SynthesisVerdict schema immediately above.
             let back: SynthesisVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }

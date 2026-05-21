@@ -1656,9 +1656,9 @@ mod tests {
             loss_matrix_id: "balanced".to_string(),
             annotations: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&meta).expect("serialize derived Serialize");
         let decoded: IncidentMetadata =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(meta, decoded);
     }
 
@@ -1687,9 +1687,9 @@ mod tests {
                 epoch: SecurityEpoch::GENESIS,
             },
         };
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
         let decoded: ReplayStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, decoded);
     }
 
@@ -1700,9 +1700,9 @@ mod tests {
         let result = replayer
             .replay(&trace, &ReplayConfig::default())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let decoded: ReplayResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, decoded);
     }
 
@@ -1716,9 +1716,9 @@ mod tests {
             inject_evidence: Vec::new(),
             description: "test spec".to_string(),
         };
-        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&spec).expect("serialize derived Serialize");
         let decoded: CounterfactualSpec =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(spec, decoded);
     }
 
@@ -1751,9 +1751,9 @@ mod tests {
             counterfactual_final_action: Some(ContainmentAction::Challenge),
             final_outcome_differs: true,
         };
-        let json = serde_json::to_string(&diff).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&diff).expect("serialize derived Serialize");
         let decoded: ReplayDiff =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(diff, decoded);
     }
 
@@ -1927,9 +1927,9 @@ mod tests {
     fn replayer_serde_roundtrip() {
         let mut replayer = ForensicReplayer::new();
         replayer.set_epoch(SecurityEpoch::from_raw(3));
-        let json = serde_json::to_string(&replayer).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&replayer).expect("serialize derived Serialize");
         let decoded: ForensicReplayer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.replay_count(), 0);
         assert_eq!(decoded.epoch, SecurityEpoch::from_raw(3));
     }
@@ -2050,9 +2050,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let restored: TraceValidationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, restored);
         }
         assert_eq!(errors.len(), 7);
@@ -2074,9 +2074,9 @@ mod tests {
             },
         ];
         for c in &changes {
-            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(c).expect("serialize derived Serialize");
             let restored: DecisionChange =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*c, restored);
         }
         assert_eq!(changes.len(), 3);
@@ -2094,9 +2094,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let restored: ReplayError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, restored);
         }
         assert_eq!(errors.len(), 3);
@@ -2145,9 +2145,8 @@ mod tests {
     #[test]
     fn replay_config_serde_roundtrip() {
         let config = ReplayConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let back: ReplayConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
+        let back: ReplayConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -2172,9 +2171,9 @@ mod tests {
     #[test]
     fn enrichment_counterfactual_spec_identity_serde() {
         let spec = CounterfactualSpec::identity();
-        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&spec).expect("serialize derived Serialize");
         let back: CounterfactualSpec =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(spec, back);
     }
 
@@ -2302,9 +2301,9 @@ mod tests {
             verify_receipt_integrity: false,
             max_steps: 42,
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let decoded: ReplayConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, decoded);
         assert!(!decoded.verify_telemetry_integrity);
         assert!(!decoded.verify_receipt_integrity);
@@ -2323,9 +2322,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         assert_eq!(replayer.replay_count(), 2);
 
-        let json = serde_json::to_string(&replayer).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&replayer).expect("serialize derived Serialize");
         let decoded: ForensicReplayer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.replay_count(), 2);
     }
 
@@ -2466,9 +2465,9 @@ mod tests {
             loss_matrix_id: "balanced".to_string(),
             annotations,
         };
-        let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&meta).expect("serialize derived Serialize");
         let decoded: IncidentMetadata =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(meta, decoded);
         assert_eq!(decoded.annotations.len(), 2);
         assert_eq!(decoded.annotations["severity"], "high");
@@ -2477,9 +2476,9 @@ mod tests {
     #[test]
     fn incident_trace_full_serde_roundtrip() {
         let trace = build_trace(vec![benign_evidence(), suspicious_evidence()]);
-        let json = serde_json::to_string(&trace).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&trace).expect("serialize derived Serialize");
         let decoded: IncidentTrace =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(trace, decoded);
         assert_eq!(decoded.evidence_log.len(), 2);
         assert_eq!(decoded.decision_log.len(), 2);

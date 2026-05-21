@@ -797,7 +797,7 @@ mod tests {
     fn make_complete_graph(n: usize) -> GossipTopology {
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
         // SAFETY: Test helper with valid node IDs should succeed topology creation
-        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
+        let mut topo = GossipTopology::new(node_ids).expect("constructor with valid inputs");
         for i in 0..n {
             for j in (i + 1)..n {
                 // SAFETY: Test helper with valid node indices should succeed edge addition
@@ -811,7 +811,7 @@ mod tests {
     fn make_cycle_graph(n: usize) -> GossipTopology {
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
         // SAFETY: Test helper with valid node IDs should succeed topology creation
-        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
+        let mut topo = GossipTopology::new(node_ids).expect("constructor with valid inputs");
         for i in 0..n {
             // SAFETY: Test helper with valid node indices should succeed edge addition
             topo.add_edge(i, (i + 1) % n, MILLION)
@@ -823,7 +823,7 @@ mod tests {
     fn make_path_graph(n: usize) -> GossipTopology {
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
         // SAFETY: Test helper with valid node IDs should succeed topology creation
-        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
+        let mut topo = GossipTopology::new(node_ids).expect("constructor with valid inputs");
         for i in 0..n - 1 {
             // SAFETY: Test helper with valid node indices should succeed edge addition
             topo.add_edge(i, i + 1, MILLION)
@@ -845,7 +845,7 @@ mod tests {
     fn disconnected_graph_detected() {
         let node_ids: Vec<String> = (0..4).map(|i| format!("node_{i}")).collect();
         // SAFETY: Test with valid node IDs should succeed topology creation
-        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
+        let mut topo = GossipTopology::new(node_ids).expect("constructor with valid inputs");
         // SAFETY: Test with valid node indices should succeed edge addition
         topo.add_edge(0, 1, MILLION)
             .expect("serde deserialization should succeed");
@@ -1007,7 +1007,7 @@ mod tests {
     #[test]
     fn disconnected_graph_rejected() {
         let node_ids: Vec<String> = (0..4).map(|i| format!("node_{i}")).collect();
-        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
+        let mut topo = GossipTopology::new(node_ids).expect("constructor with valid inputs");
         topo.add_edge(0, 1, MILLION)
             .expect("serde deserialization should succeed");
         // 2 and 3 are isolated.
@@ -1022,7 +1022,7 @@ mod tests {
     fn fiedler_vector_partitions_barbell() {
         // Barbell: 0-1-2 connected, 3-4-5 connected, with one bridge 2-3.
         let node_ids: Vec<String> = (0..6).map(|i| format!("node_{i}")).collect();
-        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
+        let mut topo = GossipTopology::new(node_ids).expect("constructor with valid inputs");
         // Clique 1.
         topo.add_edge(0, 1, MILLION)
             .expect("serde deserialization should succeed");
@@ -1094,9 +1094,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let cert = ConvergenceCertificate::from_analysis(&analysis, SecurityEpoch::from_raw(42));
 
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let restored: ConvergenceCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, restored);
     }
 
@@ -1108,9 +1108,9 @@ mod tests {
             .analyze(&topo)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&analysis).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&analysis).expect("serialize derived Serialize");
         let restored: SpectralAnalysis =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(analysis, restored);
     }
 
@@ -1242,9 +1242,9 @@ mod tests {
     #[test]
     fn topology_serde_roundtrip() {
         let topo = make_complete_graph(3);
-        let json = serde_json::to_string(&topo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&topo).expect("serialize derived Serialize");
         let restored: GossipTopology =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(topo, restored);
     }
 
@@ -1291,9 +1291,9 @@ mod tests {
             SpectralError::DegenerateSpectralGap,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: SpectralError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1368,9 +1368,9 @@ mod tests {
         let topo = make_complete_graph(3);
         let lap =
             LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&lap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lap).expect("serialize derived Serialize");
         let back: LaplacianMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lap, back);
     }
 
@@ -1461,7 +1461,7 @@ mod tests {
     #[test]
     fn non_uniform_weights_analysis() {
         let node_ids: Vec<String> = (0..4).map(|i| format!("node_{i}")).collect();
-        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
+        let mut topo = GossipTopology::new(node_ids).expect("constructor with valid inputs");
         // Strong connections in one group, weak bridge
         topo.add_edge(0, 1, 10 * MILLION)
             .expect("serde deserialization should succeed");
@@ -1486,7 +1486,7 @@ mod tests {
     fn star_graph_connected_analysis() {
         let n = 5;
         let node_ids: Vec<String> = (0..n).map(|i| format!("node_{i}")).collect();
-        let mut topo = GossipTopology::new(node_ids).expect("serde deserialization should succeed");
+        let mut topo = GossipTopology::new(node_ids).expect("constructor with valid inputs");
         // Node 0 is the center, connected to all others
         for i in 1..n {
             topo.add_edge(0, i, MILLION)
@@ -1712,7 +1712,7 @@ mod tests {
         ];
         let set: std::collections::BTreeSet<String> = variants
             .iter()
-            .map(|v| serde_json::to_string(v).expect("serde deserialization should succeed"))
+            .map(|v| serde_json::to_string(v).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(set.len(), 7);
     }
@@ -1793,7 +1793,7 @@ mod tests {
     fn gossip_topology_json_field_names() {
         let t = GossipTopology::new(vec!["a".to_string()])
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         assert!(json.contains("\"num_nodes\""));
         assert!(json.contains("\"node_ids\""));
         assert!(json.contains("\"adjacency\""));
@@ -1817,7 +1817,7 @@ mod tests {
         let analysis = analyzer
             .analyze(&topo)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&analysis).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&analysis).expect("serialize derived Serialize");
         assert!(json.contains("\"schema\""));
         assert!(json.contains("\"num_nodes\""));
         assert!(json.contains("\"algebraic_connectivity_millionths\""));
@@ -1837,9 +1837,9 @@ mod tests {
         let analysis = analyzer
             .analyze(&topo)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&analysis).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&analysis).expect("serialize derived Serialize");
         let back: SpectralAnalysis =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(analysis, back);
     }
 
@@ -1856,7 +1856,7 @@ mod tests {
     #[test]
     fn spectral_analyzer_json_field_names() {
         let a = SpectralAnalyzer::default();
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         assert!(json.contains("\"max_iterations\""));
         assert!(json.contains("\"convergence_threshold_millionths\""));
     }
@@ -1875,9 +1875,9 @@ mod tests {
         let topo = make_complete_graph(3);
         let l =
             LaplacianMatrix::from_topology(&topo).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&l).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&l).expect("serialize derived Serialize");
         let back: LaplacianMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(l, back);
     }
 
@@ -2039,9 +2039,9 @@ mod tests {
             SpectralError::DegenerateSpectralGap,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: SpectralError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2070,18 +2070,18 @@ mod tests {
     #[test]
     fn gossip_topology_serde_roundtrip() {
         let topo = make_complete_graph(3);
-        let json = serde_json::to_string(&topo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&topo).expect("serialize derived Serialize");
         let back: GossipTopology =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(topo, back);
     }
 
     #[test]
     fn spectral_analyzer_serde_roundtrip() {
         let a = SpectralAnalyzer::default();
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let back: SpectralAnalyzer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a.max_iterations, back.max_iterations);
         assert_eq!(
             a.convergence_threshold_millionths,

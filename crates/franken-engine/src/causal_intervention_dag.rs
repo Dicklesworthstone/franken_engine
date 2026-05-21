@@ -1225,7 +1225,7 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "C -> Y".to_string(),
         });
-        b.build().expect("serde deserialization should succeed")
+        b.build().expect("builder with valid inputs")
     }
 
     // --- Schema & Constants ---
@@ -1250,9 +1250,9 @@ mod tests {
     #[test]
     fn test_variable_domain_serde() {
         for domain in VariableDomain::ALL {
-            let json = serde_json::to_string(domain).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(domain).expect("serialize derived Serialize");
             let back: VariableDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*domain, back);
         }
     }
@@ -1443,7 +1443,7 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "".to_string(),
         });
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let adj = dag.backdoor_adjustment(1, 2);
         assert!(adj.is_valid);
         assert!(adj.variables.is_empty()); // no confounders to adjust for
@@ -1483,7 +1483,7 @@ mod tests {
             subsystem: "".to_string(),
         })
         .expect("serde deserialization should succeed");
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let cert = dag.identify_effect(1, 2);
         assert!(!cert.is_identifiable);
         assert!(
@@ -1504,9 +1504,9 @@ mod tests {
     fn test_certificate_serde_roundtrip() {
         let dag = simple_dag();
         let cert = dag.identify_effect(1, 2);
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let back: IdentifiabilityCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, back);
     }
 
@@ -1545,7 +1545,7 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "".to_string(),
         });
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let inst = dag.find_instrument(1, 2);
         assert_eq!(inst, Some(3));
     }
@@ -1659,9 +1659,9 @@ mod tests {
             UnidentifiableReason::NoBackdoorSet,
             UnidentifiableReason::NotConnected,
         ] {
-            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&r).expect("serialize derived Serialize");
             let back: UnidentifiableReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(r, back);
         }
     }
@@ -1671,9 +1671,8 @@ mod tests {
     #[test]
     fn test_dag_serde_roundtrip() {
         let dag = simple_dag();
-        let json = serde_json::to_string(&dag).expect("serde deserialization should succeed");
-        let back: CausalDag =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dag).expect("serialize derived Serialize");
+        let back: CausalDag = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(dag.variable_count(), back.variable_count());
         assert_eq!(dag.edge_count(), back.edge_count());
         assert_eq!(dag.structure_hash, back.structure_hash);
@@ -1688,9 +1687,8 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "test".to_string(),
         };
-        let json = serde_json::to_string(&edge).expect("serde deserialization should succeed");
-        let back: CausalEdge =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&edge).expect("serialize derived Serialize");
+        let back: CausalEdge = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(edge, back);
     }
 
@@ -1763,7 +1761,7 @@ mod tests {
         for from in 1..5 {
             b.add_edge(make_edge(from, from + 1));
         }
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert!(dag.has_path(1, 5));
         assert!(!dag.has_path(5, 1));
         let desc = dag.descendants(1);
@@ -1780,7 +1778,7 @@ mod tests {
         b.add_variable(make_var(2, "B", VariableDomain::Outcome))
             .expect("serde deserialization should succeed");
         // No edges
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert!(!dag.has_path(1, 2));
         assert!(!dag.has_path(2, 1));
         assert!(dag.ancestors(1).is_empty());
@@ -1810,7 +1808,7 @@ mod tests {
         b.add_edge(make_edge(1, 3));
         b.add_edge(make_edge(2, 4));
         b.add_edge(make_edge(3, 4));
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert!(dag.has_path(1, 4));
         let parents_of_4 = dag
             .parents
@@ -1853,7 +1851,7 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "U -> Y".to_string(),
         });
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let adj = dag.backdoor_adjustment(1, 2);
         // Latent confounder should NOT be in adjustment set
         assert!(!adj.variables.contains(&3));
@@ -1897,7 +1895,7 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "U -> Y".to_string(),
         });
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let mediator = dag.front_door_mediator(1, 2);
         assert_eq!(mediator, Some(3));
     }
@@ -1923,9 +1921,8 @@ mod tests {
             EdgeKind::Confounding,
             EdgeKind::Instrumental,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: EdgeKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
+            let back: EdgeKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -1937,9 +1934,9 @@ mod tests {
             EdgeConfidence::Empirical,
             EdgeConfidence::Hypothesized,
         ] {
-            let json = serde_json::to_string(&conf).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&conf).expect("serialize derived Serialize");
             let back: EdgeConfidence =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(conf, back);
         }
     }
@@ -1951,9 +1948,9 @@ mod tests {
             Observability::Latent,
             Observability::Proxy,
         ] {
-            let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
             let back: Observability =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(obs, back);
         }
     }
@@ -1966,9 +1963,9 @@ mod tests {
             MeasurementScale::Continuous,
             MeasurementScale::Categorical,
         ] {
-            let json = serde_json::to_string(&scale).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&scale).expect("serialize derived Serialize");
             let back: MeasurementScale =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(scale, back);
         }
     }
@@ -1981,9 +1978,9 @@ mod tests {
             IdentificationStrategy::Instrumental,
             IdentificationStrategy::Unidentifiable,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: IdentificationStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -2005,9 +2002,9 @@ mod tests {
     #[test]
     fn test_error_serde() {
         let err = CausalDagError::CycleDetected { from: 1, to: 2 };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: CausalDagError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -2016,7 +2013,7 @@ mod tests {
         let mut b = CausalDagBuilder::new();
         b.add_variable(make_var(1, "lonely", VariableDomain::Treatment))
             .expect("serde deserialization should succeed");
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert_eq!(dag.variable_count(), 1);
         assert_eq!(dag.edge_count(), 0);
     }
@@ -2028,7 +2025,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         b1.add_variable(make_var(2, "B", VariableDomain::Outcome))
             .expect("serde deserialization should succeed");
-        let dag1 = b1.build().expect("serde deserialization should succeed");
+        let dag1 = b1.build().expect("builder with valid inputs");
 
         let mut b2 = CausalDagBuilder::new();
         b2.add_variable(make_var(1, "A", VariableDomain::Treatment))
@@ -2036,7 +2033,7 @@ mod tests {
         b2.add_variable(make_var(2, "B", VariableDomain::Outcome))
             .expect("serde deserialization should succeed");
         b2.add_edge(make_edge(1, 2));
-        let dag2 = b2.build().expect("serde deserialization should succeed");
+        let dag2 = b2.build().expect("builder with valid inputs");
 
         assert_ne!(dag1.structure_hash, dag2.structure_hash);
     }
@@ -2057,7 +2054,7 @@ mod tests {
         b.add_variable(make_var(2, "Y", VariableDomain::Outcome))
             .expect("serde deserialization should succeed");
         b.add_edge(make_edge(1, 2));
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let cert = dag.identify_effect(1, 2);
         assert!(
             cert.unidentifiable_reasons
@@ -2073,9 +2070,9 @@ mod tests {
     #[test]
     fn test_causal_variable_serde() {
         let var = make_var(1, "test_var", VariableDomain::Confounder);
-        let json = serde_json::to_string(&var).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&var).expect("serialize derived Serialize");
         let back: CausalVariable =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(var, back);
     }
 
@@ -2088,9 +2085,9 @@ mod tests {
             is_valid: true,
             reason: None,
         };
-        let json = serde_json::to_string(&adj).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&adj).expect("serialize derived Serialize");
         let back: AdjustmentSet =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(adj, back);
     }
 
@@ -2159,7 +2156,7 @@ mod tests {
         })
         .expect("serde deserialization should succeed");
         b.add_edge(make_edge(1, 2));
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let cert = dag.identify_effect(1, 2);
         assert!(
             cert.unidentifiable_reasons
@@ -2187,7 +2184,7 @@ mod tests {
         .expect("serde deserialization should succeed");
         b.add_edge(make_edge(1, 3));
         b.add_edge(make_edge(3, 2));
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert!(dag.front_door_mediator(1, 2).is_none());
     }
 
@@ -2203,7 +2200,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         b.add_edge(make_edge(1, 3));
         b.add_edge(make_edge(3, 2));
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert!(dag.front_door_mediator(1, 2).is_none());
     }
 
@@ -2220,7 +2217,7 @@ mod tests {
         b.add_edge(make_edge(3, 1)); // Z -> T
         b.add_edge(make_edge(1, 2)); // T -> Y
         b.add_edge(make_edge(3, 2)); // Z -> Y (violates exclusion restriction)
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert!(dag.find_instrument(1, 2).is_none());
     }
 
@@ -2244,7 +2241,7 @@ mod tests {
         .expect("serde deserialization should succeed");
         b.add_edge(make_edge(3, 1));
         b.add_edge(make_edge(1, 2));
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert!(dag.find_instrument(1, 2).is_none());
     }
 
@@ -2291,7 +2288,7 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "Z -> T".to_string(),
         });
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let cert = dag.identify_effect(1, 2);
         assert!(cert.is_identifiable);
         assert_eq!(cert.strategy, IdentificationStrategy::Instrumental);
@@ -2308,9 +2305,9 @@ mod tests {
     #[test]
     fn test_evidence_manifest_serde_roundtrip() {
         let manifest = run_causal_dag_evidence();
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: CausalDagEvidenceManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
     }
 
@@ -2355,7 +2352,7 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "C2 -> Y".to_string(),
         });
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let adj = dag.backdoor_adjustment(1, 2);
         assert!(adj.is_valid);
         assert!(adj.variables.contains(&3));
@@ -2375,7 +2372,7 @@ mod tests {
         b.add_edge(make_edge(1, 3)); // T -> Col
         b.add_edge(make_edge(2, 3)); // Y -> Col (collider)
         b.add_edge(make_edge(1, 2)); // T -> Y
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let colliders = dag.variables_by_domain(VariableDomain::Collider);
         assert_eq!(colliders, vec![3]);
         // Collider should not appear in backdoor adjustment
@@ -2394,7 +2391,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         b.add_edge(make_edge(1, 2));
         // Node 3 is disconnected
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert!(dag.ancestors(3).is_empty());
         assert!(dag.descendants(3).is_empty());
         // Node 3 is not reachable from 1 or 2
@@ -2424,7 +2421,7 @@ mod tests {
             confidence: EdgeConfidence::Empirical,
             mechanism: "mediated".to_string(),
         });
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         assert_eq!(dag.edge_count(), 2);
         // Children adjacency deduplicates (BTreeSet)
         let children_of_1 = dag
@@ -2446,7 +2443,7 @@ mod tests {
         b.add_variable(make_var(10, "Y", VariableDomain::Outcome))
             .expect("serde deserialization should succeed");
         b.add_edge(make_edge(1, 10));
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let treatments = dag.variables_by_domain(VariableDomain::Treatment);
         assert_eq!(treatments, vec![1, 2, 3]);
     }
@@ -2456,12 +2453,12 @@ mod tests {
         let mut b1 = CausalDagBuilder::new();
         b1.add_variable(make_var(1, "Alpha", VariableDomain::Treatment))
             .expect("serde deserialization should succeed");
-        let dag1 = b1.build().expect("serde deserialization should succeed");
+        let dag1 = b1.build().expect("builder with valid inputs");
 
         let mut b2 = CausalDagBuilder::new();
         b2.add_variable(make_var(1, "Beta", VariableDomain::Treatment))
             .expect("serde deserialization should succeed");
-        let dag2 = b2.build().expect("serde deserialization should succeed");
+        let dag2 = b2.build().expect("builder with valid inputs");
 
         assert_ne!(dag1.structure_hash, dag2.structure_hash);
     }
@@ -2517,7 +2514,7 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "U -> Y".to_string(),
         });
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let cert = dag.identify_effect(1, 2);
         assert!(!cert.is_identifiable);
         assert_eq!(cert.strategy, IdentificationStrategy::Unidentifiable);
@@ -2573,7 +2570,7 @@ mod tests {
             confidence: EdgeConfidence::Structural,
             mechanism: "P -> Y".to_string(),
         });
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let adj = dag.backdoor_adjustment(1, 2);
         assert!(adj.is_valid);
         assert!(adj.variables.contains(&3));
@@ -2590,7 +2587,7 @@ mod tests {
                 .expect("serde deserialization should succeed");
             b.add_edge(make_edge(1, id));
         }
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let desc = dag.descendants(1);
         assert_eq!(desc.len(), 5);
         for id in 2..=6 {
@@ -2614,7 +2611,7 @@ mod tests {
         }
         b.add_variable(make_var(6, "sink", VariableDomain::Outcome))
             .expect("serde deserialization should succeed");
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let anc = dag.ancestors(6);
         assert_eq!(anc.len(), 5);
         for id in 1..=5 {
@@ -2678,9 +2675,9 @@ mod tests {
             UnidentifiableReason::OutcomeNotObservable,
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(reason).expect("serialize derived Serialize");
             let back: UnidentifiableReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*reason, back);
         }
     }
@@ -2695,9 +2692,9 @@ mod tests {
             CausalDagError::EmptyDag,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: CausalDagError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -2736,7 +2733,7 @@ mod tests {
         b.add_edge(make_edge(1, 3)); // T -> M
         b.add_edge(make_edge(3, 2)); // M -> Y
         b.add_edge(make_edge(4, 3)); // U -> M (confounds mediator directly)
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         // U is a parent of M but U is NOT reachable from T
         // so all_m_parents_from_treatment should be false
         assert!(dag.front_door_mediator(1, 2).is_none());
@@ -2775,7 +2772,7 @@ mod tests {
         b.add_edge(make_edge(3, 1)); // Z -> T
         b.add_edge(make_edge(1, 2)); // T -> Y
         b.add_edge(make_edge(3, 2)); // Z -> Y (but instrument, so allowed)
-        let dag = b.build().expect("serde deserialization should succeed");
+        let dag = b.build().expect("builder with valid inputs");
         let adj = dag.backdoor_adjustment(1, 2);
         // Instrument parent with path to outcome: the validation code exempts
         // instruments from requiring adjustment
@@ -2791,9 +2788,9 @@ mod tests {
             is_valid: false,
             reason: Some("Latent confounders present".to_string()),
         };
-        let json = serde_json::to_string(&adj).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&adj).expect("serialize derived Serialize");
         let back: AdjustmentSet =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(adj, back);
         assert!(back.reason.is_some());
     }

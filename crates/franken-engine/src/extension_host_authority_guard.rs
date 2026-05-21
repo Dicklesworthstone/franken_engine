@@ -1136,9 +1136,9 @@ mod tests {
             ViolationKind::CanonicalTypeShadow,
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let restored: ViolationKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, restored);
         }
     }
@@ -1955,9 +1955,9 @@ fn bad_fn(data: &[u8]) {
             remediation: "Import from crate::control_plane instead".to_string(),
             exempted: false,
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let restored: ExtensionHostFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(finding, restored);
     }
 
@@ -1971,9 +1971,9 @@ fn bad_fn(data: &[u8]) {
             reason: "Bootstrap needs direct access".to_string(),
             line: 0,
         };
-        let json = serde_json::to_string(&exemption).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&exemption).expect("serialize derived Serialize");
         let restored: ExtensionHostExemption =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(exemption, restored);
     }
 
@@ -1988,9 +1988,9 @@ fn bad_fn(data: &[u8]) {
             reason: "r".to_string(),
             line: 0,
         });
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let restored: ExtensionHostExemptionRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, restored);
     }
 
@@ -2004,18 +2004,18 @@ fn bad_fn(data: &[u8]) {
             passed: true,
             summary_by_kind: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: ExtensionHostAuditResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
     #[test]
     fn guard_config_serde_roundtrip() {
         let config = GuardConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: GuardConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -2202,9 +2202,9 @@ fn bad_fn(data: &[u8]) {
             passed: false,
             summary_by_kind: summary,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let deser: ExtensionHostAuditResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, deser);
     }
 
@@ -2283,9 +2283,8 @@ fn bad_fn(data: &[u8]) {
         config.add_cx_audited_prefix("ext_host");
         config.add_effectful_indicator("custom_op");
         config.add_forbidden_import("use bad_crate", "use good_crate instead");
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
-        let deser: GuardConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
+        let deser: GuardConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, deser);
     }
 

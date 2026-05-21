@@ -1671,9 +1671,9 @@ mod tests {
             budget_remaining_ms: 99,
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let deser: CxThreadedEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, deser);
     }
 
@@ -1686,9 +1686,9 @@ mod tests {
             budget_consumed_ms: 1,
             sequence_number: 5,
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let deser: HostcallReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, deser);
     }
 
@@ -1701,9 +1701,9 @@ mod tests {
             budget_consumed_ms: 3,
             sequence_number: 2,
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let deser: LifecycleReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, deser);
     }
 
@@ -1720,9 +1720,9 @@ mod tests {
             final_lifecycle_phase: LifecyclePhase::Running,
             events: vec![],
         };
-        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&log).expect("serialize derived Serialize");
         let deser: EffectAuditLog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(log, deser);
     }
 
@@ -1756,9 +1756,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let deser: CxThreadingError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, deser);
         }
     }
@@ -1887,9 +1887,9 @@ mod tests {
             EffectCategory::TelemetryEmit,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: EffectCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1906,9 +1906,9 @@ mod tests {
             LifecyclePhase::Terminated,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: LifecyclePhase =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1922,9 +1922,9 @@ mod tests {
             TelemetryLevel::Error,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: TelemetryLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1941,9 +1941,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: PolicyVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1991,9 +1991,9 @@ mod tests {
             budget_consumed_ms: 5,
             sequence_number: 1,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: PolicyCheckResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -2008,9 +2008,9 @@ mod tests {
             budget_consumed_ms: 1,
             sequence_number: 3,
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: TelemetryReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -2021,27 +2021,27 @@ mod tests {
             extension_id: "ext-1".into(),
             budget_cost_override_ms: Some(10),
         };
-        let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&desc).expect("serialize derived Serialize");
         let back: HostcallDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(desc, back);
     }
 
     #[test]
     fn policy_check_descriptor_serde_roundtrip() {
         let desc = PolicyCheckDescriptor::new("pre_hostcall", "pol-1", "ext-1");
-        let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&desc).expect("serialize derived Serialize");
         let back: PolicyCheckDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(desc, back);
     }
 
     #[test]
     fn telemetry_descriptor_serde_roundtrip() {
         let desc = TelemetryDescriptor::new("span", "metric_emit", TelemetryLevel::Warn);
-        let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&desc).expect("serialize derived Serialize");
         let back: TelemetryDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(desc, back);
     }
 }

@@ -1030,9 +1030,9 @@ mod tests {
     #[test]
     fn cell_status_serde_roundtrip() {
         for s in CellStatus::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: CellStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1080,9 +1080,9 @@ mod tests {
     #[test]
     fn obs_mode_serde() {
         for m in ObservabilityMode::ALL {
-            let json = serde_json::to_string(m).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(m).expect("serialize derived Serialize");
             let back: ObservabilityMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*m, back);
         }
     }
@@ -1165,9 +1165,8 @@ mod tests {
             coverage_fraction_millionths: 500_000,
             required_millionths: 1_000_000,
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: BlockReason =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
+        let back: BlockReason = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1219,9 +1218,9 @@ mod tests {
                 details: "hash mismatch".into(),
             }],
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: PublicationGateVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1244,9 +1243,8 @@ mod tests {
     #[test]
     fn cell_evidence_serde() {
         let c = green_cell("cell-serde");
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: CellEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
+        let back: CellEvidence = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1337,9 +1335,8 @@ mod tests {
     #[test]
     fn config_serde() {
         let c = BundleConfig::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: BundleConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
+        let back: BundleConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1383,9 +1380,8 @@ mod tests {
         let e = BundleError::DuplicateCellIds {
             duplicates: vec!["cell-1".into(), "cell-2".into()],
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: BundleError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
+        let back: BundleError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1542,9 +1538,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let genesis = ContentHash::compute(b"genesis");
         let receipt = DecisionReceipt::new("rs-001", &bundle, genesis);
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -1607,9 +1603,9 @@ mod tests {
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("serde-test", &cells, &config, epoch())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let back: EvidenceBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, back);
     }
 

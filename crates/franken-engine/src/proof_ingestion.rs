@@ -1841,10 +1841,10 @@ mod tests {
     fn proof_input_serde_roundtrip() {
         let proof = make_default_proof(ProofType::PlasCapabilityWitness);
         // SAFETY: Serialization of valid ProofInput should succeed
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         // SAFETY: Deserialization of valid JSON should succeed
         let restored: ProofInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(proof, restored);
     }
 
@@ -1858,11 +1858,10 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // SAFETY: Serialization of valid OptimizerHypothesis should succeed
-        let json =
-            serde_json::to_string(&hypotheses[0]).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hypotheses[0]).expect("serialize derived Serialize");
         // SAFETY: Deserialization of valid JSON should succeed
         let restored: OptimizerHypothesis =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hypotheses[0], restored);
     }
 
@@ -1888,10 +1887,10 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // SAFETY: Serialization of valid SpecializationReceipt should succeed
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         // SAFETY: Deserialization of valid JSON should succeed
         let restored: SpecializationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
     }
 
@@ -1906,10 +1905,10 @@ mod tests {
 
         let event = &engine.events()[0];
         // SAFETY: Serialization of valid IngestionEvent should succeed
-        let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(event).expect("serialize derived Serialize");
         // SAFETY: Deserialization of valid JSON should succeed
         let restored: IngestionEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*event, restored);
     }
 
@@ -1995,10 +1994,10 @@ mod tests {
             ProofType::ReplaySequenceMotif,
         ] {
             // SAFETY: Serialization of valid ProofType should succeed
-            let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&pt).expect("serialize derived Serialize");
             // SAFETY: Deserialization of valid JSON should succeed
             let restored: ProofType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(restored, pt);
         }
     }
@@ -2012,10 +2011,10 @@ mod tests {
             HypothesisKind::SuperinstructionFusion,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&hk).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&hk).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: HypothesisKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(restored, hk);
         }
     }
@@ -2024,10 +2023,10 @@ mod tests {
     fn risk_level_serde_roundtrip() {
         for rl in [RiskLevel::Low, RiskLevel::Medium, RiskLevel::High] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&rl).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&rl).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: RiskLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(restored, rl);
         }
     }
@@ -2041,10 +2040,10 @@ mod tests {
             ActivationStageLocal::Default,
         ] {
             // SAFETY: Serialization of valid ActivationStageLocal should succeed
-            let json = serde_json::to_string(&stage).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&stage).expect("serialize derived Serialize");
             // SAFETY: Deserialization of valid JSON should succeed
             let restored: ActivationStageLocal =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(restored, stage);
         }
     }
@@ -2053,10 +2052,10 @@ mod tests {
     fn ingestion_config_serde_roundtrip() {
         let cfg = test_config();
         // SAFETY: Serialization of valid IngestionConfig should succeed
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         // SAFETY: Deserialization of valid JSON should succeed
         let restored: IngestionConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         // signing_key is excluded from serialization (security: prevent key leakage),
         // so it deserializes as the default [0; 32].
         assert_eq!(restored.active_policy_id, cfg.active_policy_id);
@@ -2098,10 +2097,10 @@ mod tests {
         ];
         for err in &errors {
             // SAFETY: Serialization of valid IngestionError should succeed
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             // SAFETY: Deserialization of valid JSON should succeed
             let restored: IngestionError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&restored, err);
         }
     }
@@ -2145,10 +2144,10 @@ mod tests {
         ];
         for s in &statuses {
             // SAFETY: Serialization of valid ProofValidationStatus should succeed
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             // SAFETY: Deserialization of valid JSON should succeed
             let restored: ProofValidationStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&restored, s);
         }
     }
@@ -2278,10 +2277,10 @@ mod tests {
         // Test empty engine which has no entries in those maps.
         let engine = test_engine();
         // SAFETY: Serialization of valid empty ProofIngestionEngine should succeed
-        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         // SAFETY: Deserialization of valid JSON should succeed
         let restored: ProofIngestionEngine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.current_epoch(), test_epoch());
         assert!(restored.active_proofs().is_empty());
         assert!(restored.active_hypotheses().is_empty());
@@ -2737,10 +2736,10 @@ mod tests {
 
         for v in &variants {
             // SAFETY: Serialization of valid IngestionEventType should succeed
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             // SAFETY: Deserialization of valid JSON should succeed
             let restored: IngestionEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&restored, v);
         }
     }

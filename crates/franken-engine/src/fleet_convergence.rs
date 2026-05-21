@@ -1264,9 +1264,9 @@ mod tests {
     #[test]
     fn thresholds_serde_round_trip() {
         let t = ContainmentThresholds::default();
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let decoded: ContainmentThresholds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, decoded);
     }
 
@@ -1451,9 +1451,9 @@ mod tests {
             escalation_depth: 1,
             signature: AuthenticityHash::compute_keyed(b"k", b"v"),
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let decoded: ContainmentReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, decoded);
     }
 
@@ -1989,9 +1989,9 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let decoded: ConvergenceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, decoded);
     }
 
@@ -2029,9 +2029,9 @@ mod tests {
         let err = ConvergenceError::AlreadyAtMaxSeverity {
             extension_id: "ext-1".into(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let decoded: ConvergenceError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, decoded);
     }
 
@@ -2047,9 +2047,9 @@ mod tests {
     #[test]
     fn convergence_verification_serde_round_trip() {
         let v = ConvergenceVerification::Converged { checkpoint_seq: 42 };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let decoded: ConvergenceVerification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, decoded);
     }
 
@@ -2058,9 +2058,9 @@ mod tests {
     #[test]
     fn convergence_config_serde_round_trip() {
         let config = ConvergenceConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let decoded: ConvergenceConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config.thresholds, decoded.thresholds);
         assert_eq!(
             config.degraded_tightening_factor,
@@ -2198,9 +2198,9 @@ mod tests {
             local_partition_size: 3,
             total_fleet_size: 5,
         };
-        let json = serde_json::to_string(&info).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&info).expect("serialize derived Serialize");
         let decoded: PartitionInfo =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(info, decoded);
     }
 
@@ -2216,9 +2216,9 @@ mod tests {
             conflict_count: 7,
             merged_evidence_count: 42,
         };
-        let json = serde_json::to_string(&info).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&info).expect("serialize derived Serialize");
         let decoded: HealingInfo =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(info, decoded);
     }
 
@@ -2238,9 +2238,9 @@ mod tests {
             merged_evidence_count: 0,
         });
         for mode in [normal, degraded, healing] {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let decoded: PartitionMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mode, decoded);
         }
     }
@@ -2255,9 +2255,9 @@ mod tests {
             degraded_mode: true,
             evidence_count: 20,
         };
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let decoded: ConvergenceDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, decoded);
     }
 
@@ -2280,9 +2280,9 @@ mod tests {
         });
         reg.increment_escalation("ext-1");
 
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let decoded: ActionRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.total_actions(), 1);
         assert!(decoded.is_executed("ext-1", ContainmentAction::Suspend));
         assert_eq!(decoded.escalation_depth("ext-1"), 1);
@@ -2461,9 +2461,9 @@ mod tests {
     #[test]
     fn convergence_engine_serde_roundtrip() {
         let engine = test_engine("local");
-        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         let decoded: ConvergenceEngine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.node_id, engine.node_id);
         assert_eq!(decoded.policy_version, engine.policy_version);
         assert_eq!(decoded.config.thresholds, engine.config.thresholds);
@@ -2489,9 +2489,9 @@ mod tests {
             local_summary_hash: ContentHash::compute(b"local"),
             checkpoint_summary_hash: ContentHash::compute(b"remote"),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let decoded: ConvergenceVerification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, decoded);
     }
 
@@ -2513,9 +2513,9 @@ mod tests {
             ConvergenceError::Protocol(ProtocolError::EmptyIntents),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let decoded: ConvergenceError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, decoded);
         }
     }

@@ -1369,9 +1369,8 @@ mod tests {
     #[test]
     fn frir_version_serde_roundtrip() {
         let v = FrirVersion::CURRENT;
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: FrirVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
+        let back: FrirVersion = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1387,9 +1386,9 @@ mod tests {
     #[test]
     fn lane_target_serde_roundtrip() {
         for lane in [LaneTarget::Js, LaneTarget::Wasm, LaneTarget::Baseline] {
-            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&lane).expect("serialize derived Serialize");
             let back: LaneTarget =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(lane, back);
         }
     }
@@ -1426,9 +1425,8 @@ mod tests {
             PassKind::CodeGeneration,
             PassKind::Custom,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: PassKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
+            let back: PassKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -1501,9 +1499,9 @@ mod tests {
     #[test]
     fn effect_annotation_serde_roundtrip() {
         let ann = EffectAnnotation::pure_annotation();
-        let json = serde_json::to_string(&ann).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ann).expect("serialize derived Serialize");
         let back: EffectAnnotation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ann, back);
     }
 
@@ -1555,9 +1553,8 @@ mod tests {
     #[test]
     fn pass_witness_serde_roundtrip() {
         let w = make_witness(0, PassKind::Parse, b"source", b"ir0");
-        let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
-        let back: PassWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&w).expect("serialize derived Serialize");
+        let back: PassWitness = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(w, back);
     }
 
@@ -1682,9 +1679,8 @@ mod tests {
             complete: true,
             chain_hash: make_hash(b"chain"),
         };
-        let json = serde_json::to_string(&chain).expect("serde deserialization should succeed");
-        let back: WitnessChain =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&chain).expect("serialize derived Serialize");
+        let back: WitnessChain = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(chain, back);
     }
 
@@ -1732,9 +1728,9 @@ mod tests {
             preserved_invariants: vec![InvariantKind::Determinism],
             witness_hash: make_hash(b"eq_witness"),
         };
-        let json = serde_json::to_string(&ew).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ew).expect("serialize derived Serialize");
         let back: EquivalenceWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ew, back);
     }
 
@@ -1773,9 +1769,9 @@ mod tests {
             pass_kind: PassKind::ScopeResolve,
             detail: "type error".to_string(),
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: FallbackReason =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1822,9 +1818,9 @@ mod tests {
     #[test]
     fn pipeline_config_serde_roundtrip() {
         let config = PipelineConfig::production();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: PipelineConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1852,9 +1848,9 @@ mod tests {
             pass_index: 3,
             detail: "hash mismatch".to_string(),
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: FrirPipelineError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -2083,9 +2079,9 @@ mod tests {
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         p.record_pass(w0)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: FrirLoweringPipeline =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -2101,9 +2097,8 @@ mod tests {
         let artifact = p
             .finalize(source_hash)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
-        let back: FrirArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
+        let back: FrirArtifact = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -2112,9 +2107,9 @@ mod tests {
     #[test]
     fn obligation_ref_serde_roundtrip() {
         let ob = make_obligation("ob_1", true);
-        let json = serde_json::to_string(&ob).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ob).expect("serialize derived Serialize");
         let back: ObligationRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ob, back);
     }
 
@@ -2123,9 +2118,9 @@ mod tests {
     #[test]
     fn assumption_ref_serde_roundtrip() {
         let asm = make_assumption("asm_1", true);
-        let json = serde_json::to_string(&asm).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&asm).expect("serialize derived Serialize");
         let back: AssumptionRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(asm, back);
     }
 
@@ -2138,9 +2133,9 @@ mod tests {
             errors: Vec::new(),
             pass_verdicts: vec![WitnessVerdict::Valid, WitnessVerdict::Valid],
         };
-        let json = serde_json::to_string(&cv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cv).expect("serialize derived Serialize");
         let back: ChainVerification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cv, back);
     }
 
@@ -2149,9 +2144,9 @@ mod tests {
     #[test]
     fn invariant_check_serde_roundtrip() {
         let ic = make_invariant(InvariantKind::SemanticEquivalence, true);
-        let json = serde_json::to_string(&ic).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ic).expect("serialize derived Serialize");
         let back: InvariantCheck =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ic, back);
     }
 
@@ -2167,9 +2162,9 @@ mod tests {
             WitnessVerdict::TimedOut,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: WitnessVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2185,9 +2180,9 @@ mod tests {
             InvariantKind::Determinism,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: InvariantKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2202,9 +2197,9 @@ mod tests {
             EquivalenceKind::Approximate,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: EquivalenceKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2220,9 +2215,9 @@ mod tests {
             FrirPipelineEventKind::EquivalenceWitnessProduced,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: FrirPipelineEventKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2422,9 +2417,9 @@ mod tests {
             FrirPipelineError::DuplicatePassIndex(2),
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: FrirPipelineError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -2458,9 +2453,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: FallbackReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -2538,9 +2533,8 @@ mod tests {
             PassKind::Custom,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: PassKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
+            let back: PassKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 15);
@@ -2550,9 +2544,9 @@ mod tests {
     fn lane_target_serde_roundtrip_all() {
         let variants = [LaneTarget::Js, LaneTarget::Wasm, LaneTarget::Baseline];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: LaneTarget =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 3);
@@ -2561,9 +2555,9 @@ mod tests {
     #[test]
     fn frir_pipeline_event_kind_serde_includes_pipeline_completed() {
         let v = FrirPipelineEventKind::PipelineCompleted;
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: FrirPipelineEventKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
         assert_eq!(v.to_string(), "pipeline_completed");
     }
@@ -2643,9 +2637,9 @@ mod tests {
             pass_index: Some(3),
             detail: "pass 3 verified".into(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: FrirPipelineEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2657,9 +2651,9 @@ mod tests {
             pass_index: None,
             detail: "started".into(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: FrirPipelineEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.pass_index.is_none());
     }
 }

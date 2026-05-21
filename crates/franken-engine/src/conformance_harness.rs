@@ -2312,11 +2312,11 @@ mod tests {
         let rng = DeterministicRng::seeded(999);
         // SAFETY: DeterministicRng derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&rng).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rng).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DeterministicRng,
         // so from_str back to DeterministicRng cannot fail (valid format + matching schema).
         let back: DeterministicRng =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rng, back);
     }
 
@@ -2460,11 +2460,11 @@ mod tests {
     fn waiver_reason_code_serde_round_trip() {
         let code = WaiverReasonCode::HarnessGap;
         // SAFETY: WaiverReasonCode derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&code).expect("serialize derived Serialize");
         assert_eq!(json, "\"harness_gap\"");
         // SAFETY: JSON was just generated from WaiverReasonCode, deserialization guaranteed to succeed
         let back: WaiverReasonCode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, code);
     }
 
@@ -3616,9 +3616,9 @@ expiry_date = "2030-01-01"
             ConformanceFailureClass::Observability,
             ConformanceFailureClass::Performance,
         ] {
-            let json = serde_json::to_string(&class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&class).expect("serialize derived Serialize");
             let back: ConformanceFailureClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, class);
         }
     }
@@ -3631,9 +3631,9 @@ expiry_date = "2030-01-01"
             ConformanceFailureSeverity::Error,
             ConformanceFailureSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             let back: ConformanceFailureSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, sev);
         }
     }
@@ -3648,9 +3648,9 @@ expiry_date = "2030-01-01"
             ConformanceDeltaKind::TimingChange,
             ConformanceDeltaKind::ErrorFormatChange,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let back: ConformanceDeltaKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, kind);
         }
     }
@@ -3663,9 +3663,9 @@ expiry_date = "2030-01-01"
             tracking_bead: "bd-42".to_string(),
             expiry_date: "2030-12-31".to_string(),
         };
-        let json = serde_json::to_string(&waiver).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&waiver).expect("serialize derived Serialize");
         let back: ConformanceWaiver =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, waiver);
     }
 
@@ -3678,9 +3678,9 @@ expiry_date = "2030-01-01"
             actual: Some("present".to_string()),
             detail: "field added".to_string(),
         };
-        let json = serde_json::to_string(&delta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&delta).expect("serialize derived Serialize");
         let back: ConformanceDeltaClassification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, delta);
     }
 
@@ -3691,9 +3691,8 @@ expiry_date = "2030-01-01"
             source: "var x = 1;".to_string(),
             observed_output: "1".to_string(),
         };
-        let json = serde_json::to_string(&fixture).expect("serde deserialization should succeed");
-        let back: DonorFixture =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fixture).expect("serialize derived Serialize");
+        let back: DonorFixture = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, fixture);
     }
 
@@ -4514,9 +4513,9 @@ expiry_date = "2030-01-01"
                 expiry_date: "2030-01-01".to_string(),
             }],
         };
-        let json = serde_json::to_string(&set).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&set).expect("serialize derived Serialize");
         let back: ConformanceWaiverSet =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, set);
     }
 
@@ -4544,9 +4543,9 @@ expiry_date = "2030-01-01"
             duration_us: 42,
             error_detail: Some("detail".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ConformanceLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
@@ -4562,27 +4561,27 @@ expiry_date = "2030-01-01"
             errored: 0,
             env_fingerprint: "fp".to_string(),
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: ConformanceRunSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, summary);
     }
 
     #[test]
     fn conformance_repro_metadata_serde_round_trip() {
         let meta = ConformanceReproMetadata::default();
-        let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&meta).expect("serialize derived Serialize");
         let back: ConformanceReproMetadata =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, meta);
     }
 
     #[test]
     fn conformance_runner_config_serde_round_trip() {
         let cfg = ConformanceRunnerConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: ConformanceRunnerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
@@ -4596,9 +4595,9 @@ expiry_date = "2030-01-01"
             os: "linux".to_string(),
             arch: "x86_64".to_string(),
         };
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let back: ConformanceReproEnvironment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, env);
     }
 
@@ -4610,9 +4609,9 @@ expiry_date = "2030-01-01"
             verification_command: "verify".to_string(),
             verification_digest: "digest".to_string(),
         };
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         let back: ConformanceReplayContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, contract);
     }
 
@@ -4622,9 +4621,9 @@ expiry_date = "2030-01-01"
             tracker: "beads".to_string(),
             issue_id: "bd-42".to_string(),
         };
-        let json = serde_json::to_string(&link).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&link).expect("serialize derived Serialize");
         let back: ConformanceIssueLink =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, link);
     }
 
@@ -4636,9 +4635,9 @@ expiry_date = "2030-01-01"
             decision_id: "d".to_string(),
             ci_run_id: Some("ci-1".to_string()),
         };
-        let json = serde_json::to_string(&linkage).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&linkage).expect("serialize derived Serialize");
         let back: ConformanceRunLinkage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, linkage);
     }
 
@@ -4654,9 +4653,9 @@ expiry_date = "2030-01-01"
             minimized_actual_lines: 2,
             preserved_failure_class: true,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: ConformanceMinimizationSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, summary);
     }
 
@@ -4674,18 +4673,18 @@ expiry_date = "2030-01-01"
             },
             expected_output: "exp".to_string(),
         };
-        let json = serde_json::to_string(&vector).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&vector).expect("serialize derived Serialize");
         let back: ConformanceMinimizedFailingVector =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, vector);
     }
 
     #[test]
     fn conformance_asset_record_serde_round_trip() {
         let rec = valid_asset_record();
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let back: ConformanceAssetRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, rec);
     }
 
@@ -4696,9 +4695,9 @@ expiry_date = "2030-01-01"
             generated_at_utc: "2025-01-01T00:00:00Z".to_string(),
             assets: vec![valid_asset_record()],
         };
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: ConformanceAssetManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, manifest);
     }
 
@@ -4718,7 +4717,7 @@ expiry_date = "2030-01-01"
         let value = serde_json::json!({"key": "value"});
         let bytes = canonical_json_bytes(&value).expect("serde deserialization should succeed");
         let back: serde_json::Value =
-            serde_json::from_slice(&bytes).expect("serde deserialization should succeed");
+            serde_json::from_slice(&bytes).expect("deserialize known-valid JSON");
         assert_eq!(back, value);
     }
 
@@ -4861,9 +4860,9 @@ expiry_date = "2030-01-01"
         rec.flow_path_type = Some("direct".to_string());
         rec.expected_outcome = Some("allow".to_string());
         rec.expected_evidence_type = Some("none".to_string());
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let back: ConformanceAssetRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, rec);
     }
 
@@ -4888,9 +4887,9 @@ expiry_date = "2030-01-01"
             waived: 1,
             errored: 0,
         };
-        let json = serde_json::to_string(&counts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&counts).expect("serialize derived Serialize");
         let back: IfcCategoryCounts =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, counts);
     }
 
@@ -5004,9 +5003,9 @@ expiry_date = "2030-01-01"
                 issue_id: "bd-test".to_string(),
             },
         };
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: ConformanceMinimizedReproArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -5049,9 +5048,9 @@ expiry_date = "2030-01-01"
             },
             minimized_repros: vec![],
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: ConformanceRunResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
         assert_eq!(back.logs.len(), 1);
     }
@@ -5074,9 +5073,9 @@ expiry_date = "2030-01-01"
             },
             minimized_repros: vec![],
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: ConformanceRunResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
         assert!(back.logs.is_empty());
     }

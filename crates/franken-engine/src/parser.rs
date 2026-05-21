@@ -9730,7 +9730,7 @@ mod tests {
         );
         let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let decoded: ParseError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, err);
     }
 
@@ -9921,7 +9921,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&code).expect("serde serialization should succeed");
             let restored: ParseErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(code, restored);
         }
     }
@@ -9931,7 +9931,7 @@ mod tests {
         let mode = ParserMode::ScalarReference;
         let json = serde_json::to_string(&mode).expect("serde serialization should succeed");
         let restored: ParserMode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mode, restored);
         // Verify snake_case rename
         assert!(json.contains("scalar_reference"));
@@ -9946,7 +9946,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let restored: ParseBudgetKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, restored);
         }
     }
@@ -9961,7 +9961,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&status).expect("serde serialization should succeed");
             let restored: GrammarCoverageStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(status, restored);
         }
     }
@@ -9975,7 +9975,7 @@ mod tests {
         let budget = ParserBudget::default();
         let json = serde_json::to_string(&budget).expect("serde serialization should succeed");
         let restored: ParserBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(budget, restored);
     }
 
@@ -9984,7 +9984,7 @@ mod tests {
         let opts = ParserOptions::default();
         let json = serde_json::to_string(&opts).expect("serde serialization should succeed");
         let restored: ParserOptions =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(opts, restored);
     }
 
@@ -10002,7 +10002,7 @@ mod tests {
         };
         let json = serde_json::to_string(&witness).expect("serde serialization should succeed");
         let restored: ParseFailureWitness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(witness, restored);
     }
 
@@ -10017,7 +10017,7 @@ mod tests {
         };
         let json = serde_json::to_string(&gfc).expect("serde serialization should succeed");
         let restored: GrammarFamilyCoverage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(gfc, restored);
     }
 
@@ -10032,7 +10032,7 @@ mod tests {
         };
         let json = serde_json::to_string(&summary).expect("serde serialization should succeed");
         let restored: GrammarCompletenessSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -10041,7 +10041,7 @@ mod tests {
         let matrix = CanonicalEs2020Parser.scalar_reference_grammar_matrix();
         let json = serde_json::to_string(&matrix).expect("serde serialization should succeed");
         let restored: GrammarCompletenessMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(matrix, restored);
     }
 
@@ -10109,7 +10109,7 @@ mod tests {
         let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         assert!(!json.contains("witness"));
         let restored: ParseError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(restored.witness.is_none());
         assert_eq!(restored.code, err.code);
     }
@@ -10135,7 +10135,7 @@ mod tests {
         let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         assert!(json.contains("witness"));
         let restored: ParseError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(restored.witness.is_some());
         assert_eq!(
             restored
@@ -10292,7 +10292,7 @@ mod tests {
         let right = normalize_parse_error(&err);
         let json = serde_json::to_string(&left).expect("serde serialization should succeed");
         let restored: ParseDiagnosticEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, left);
         assert_eq!(left.canonical_hash(), right.canonical_hash());
         assert!(
@@ -10311,7 +10311,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let restored: ParseEventKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, restored);
         }
     }
@@ -10417,7 +10417,7 @@ mod tests {
         let ir = ParseEventIr::from_syntax_tree(&tree, "fixture.js", ParserMode::ScalarReference);
         let json = serde_json::to_string(&ir).expect("serde serialization should succeed");
         let restored: ParseEventIr =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, ir);
     }
 
@@ -10846,7 +10846,7 @@ mod tests {
         };
         let json = serde_json::to_string(&rule).expect("serde serialization should succeed");
         let restored: ParseDiagnosticRule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rule, restored);
     }
 
@@ -10855,7 +10855,7 @@ mod tests {
         let taxonomy = ParseDiagnosticTaxonomy::v1();
         let json = serde_json::to_string(&taxonomy).expect("serde serialization should succeed");
         let restored: ParseDiagnosticTaxonomy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(taxonomy, restored);
     }
 
@@ -10868,7 +10868,7 @@ mod tests {
         );
         let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let restored: ParseEventMaterializationError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -10968,7 +10968,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&cat).expect("serde serialization should succeed");
             let back: ParseDiagnosticCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cat, back);
         }
     }
@@ -10981,7 +10981,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&sev).expect("serde serialization should succeed");
             let back: ParseDiagnosticSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, back);
         }
     }
@@ -11042,7 +11042,7 @@ mod tests {
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde serialization should succeed");
             let back: GrammarCoverageStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, &back);
             names.insert(json);
         }
@@ -11060,7 +11060,7 @@ mod tests {
         };
         let json = serde_json::to_string(&fam).expect("serde serialization should succeed");
         let back: GrammarFamilyCoverage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fam, back);
     }
 
@@ -11701,8 +11701,7 @@ mod tests {
             payload_hash: Some("abc123".to_string()),
         };
         let json = serde_json::to_string(&e).expect("serde serialization should succeed");
-        let back: ParseEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParseEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -11726,8 +11725,7 @@ mod tests {
             payload_hash: None,
         };
         let json = serde_json::to_string(&e).expect("serde serialization should succeed");
-        let back: ParseEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ParseEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -11742,7 +11740,7 @@ mod tests {
         };
         let json = serde_json::to_string(&n).expect("serde serialization should succeed");
         let back: MaterializedStatementNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(n, back);
     }
 
@@ -11774,7 +11772,7 @@ mod tests {
         };
         let json = serde_json::to_string(&tree).expect("serde serialization should succeed");
         let back: MaterializedSyntaxTree =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tree, back);
         assert_eq!(back.statement_nodes.len(), 1);
     }

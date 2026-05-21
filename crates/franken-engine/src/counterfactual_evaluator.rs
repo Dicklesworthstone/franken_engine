@@ -1545,9 +1545,9 @@ mod tests {
             EstimatorKind::DoublyRobust,
             EstimatorKind::DirectMethod,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let back: EstimatorKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -1555,18 +1555,17 @@ mod tests {
     #[test]
     fn policy_id_serde_roundtrip() {
         let pid = PolicyId("test-policy-v3".to_string());
-        let json = serde_json::to_string(&pid).expect("serde deserialization should succeed");
-        let back: PolicyId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pid).expect("serialize derived Serialize");
+        let back: PolicyId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pid, back);
     }
 
     #[test]
     fn logged_transition_serde_roundtrip() {
         let t = make_transition(5, 42, RegimeLabel::Attack, 750_000, 333_000);
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: LoggedTransition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 
@@ -1578,18 +1577,18 @@ mod tests {
         let result = e
             .evaluate(&batch, &target)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: EvaluationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
     #[test]
     fn config_serde_roundtrip() {
         let cfg = EvaluatorConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: EvaluatorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -1604,9 +1603,9 @@ mod tests {
             CounterfactualError::ZeroEffectiveSamples,
         ];
         for e in errs {
-            let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&e).expect("serialize derived Serialize");
             let back: CounterfactualError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(e, back);
         }
     }
@@ -1883,27 +1882,27 @@ mod tests {
     #[test]
     fn baseline_policy_serde_roundtrip() {
         let bp = BaselinePolicy::default();
-        let json = serde_json::to_string(&bp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bp).expect("serialize derived Serialize");
         let back: BaselinePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bp, back);
     }
 
     #[test]
     fn transition_batch_serde_roundtrip() {
         let batch = make_batch(3, 100_000, 500_000);
-        let json = serde_json::to_string(&batch).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&batch).expect("serialize derived Serialize");
         let back: TransitionBatch =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(batch, back);
     }
 
     #[test]
     fn target_policy_mapping_serde_roundtrip() {
         let target = make_target(5, 600_000);
-        let json = serde_json::to_string(&target).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&target).expect("serialize derived Serialize");
         let back: TargetPolicyMapping =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(target, back);
     }
 
@@ -1916,9 +1915,9 @@ mod tests {
             confidence_millionths: 950_000,
             effective_samples: 42,
         };
-        let json = serde_json::to_string(&ce).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ce).expect("serialize derived Serialize");
         let back: ConfidenceEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ce, back);
     }
 
@@ -1929,10 +1928,9 @@ mod tests {
             EnvelopeStatus::Inconclusive,
             EnvelopeStatus::Unsafe,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: EnvelopeStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1940,18 +1938,18 @@ mod tests {
     #[test]
     fn evaluator_config_serde_roundtrip() {
         let cfg = EvaluatorConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: EvaluatorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
     #[test]
     fn counterfactual_evaluator_serde_roundtrip() {
         let e = CounterfactualEvaluator::default_safe_mode();
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: CounterfactualEvaluator =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.evaluation_count(), 0);
         assert_eq!(back.config().estimator, EstimatorKind::DoublyRobust);
     }
@@ -2073,9 +2071,9 @@ mod tests {
             CounterfactualError::NegativeThreshold { value: -1 },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: CounterfactualError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2195,9 +2193,9 @@ mod tests {
             EstimatorKind::DoublyRobust,
             EstimatorKind::DirectMethod,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: EstimatorKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }

@@ -3899,7 +3899,7 @@ mod tests {
         for syntax in &[ModuleSyntax::EsModule, ModuleSyntax::CommonJs] {
             let json = serde_json::to_string(syntax).expect("serde serialization should succeed");
             let decoded: ModuleSyntax =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&decoded, syntax);
         }
     }
@@ -3909,7 +3909,7 @@ mod tests {
         for style in &[ImportStyle::Import, ImportStyle::Require] {
             let json = serde_json::to_string(style).expect("serde serialization should succeed");
             let decoded: ImportStyle =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&decoded, style);
         }
     }
@@ -3926,7 +3926,7 @@ mod tests {
         for code in &codes {
             let json = serde_json::to_string(code).expect("serde serialization should succeed");
             let decoded: ResolutionErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&decoded, code);
         }
     }
@@ -4096,7 +4096,7 @@ mod tests {
         };
         let json = serde_json::to_string(&mp).expect("serde serialization should succeed");
         let restored: ModuleProvenance =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mp, restored);
     }
 
@@ -4108,7 +4108,7 @@ mod tests {
         };
         let json = serde_json::to_string(&md).expect("serde serialization should succeed");
         let restored: ModuleDependency =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(md, restored);
     }
 
@@ -4117,7 +4117,7 @@ mod tests {
         let mr = ModuleRequest::new("franken:core", ImportStyle::Import);
         let json = serde_json::to_string(&mr).expect("serde serialization should succeed");
         let restored: ModuleRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mr, restored);
     }
 
@@ -4128,7 +4128,7 @@ mod tests {
             .with_compatibility_mode(CompatibilityMode::BunCompat);
         let json = serde_json::to_string(&mr).expect("serde serialization should succeed");
         let restored: ModuleRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mr, restored);
         assert_eq!(restored.compatibility_mode, CompatibilityMode::BunCompat);
     }
@@ -4151,7 +4151,7 @@ mod tests {
         };
         let json = serde_json::to_string(&ctx).expect("serde serialization should succeed");
         let restored: ResolutionContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctx, restored);
     }
 
@@ -4163,7 +4163,7 @@ mod tests {
         };
         let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let restored: RegistryError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -4172,7 +4172,7 @@ mod tests {
         let p = AllowAllPolicy;
         let json = serde_json::to_string(&p).expect("serde serialization should succeed");
         let restored: AllowAllPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, restored);
     }
 
@@ -4185,7 +4185,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let restored: ModuleSourceKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, restored);
         }
     }
@@ -4276,7 +4276,7 @@ mod tests {
         let code = RegistryErrorCode::EmptyKey;
         let json = serde_json::to_string(&code).expect("serde serialization should succeed");
         let back: RegistryErrorCode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(code, back);
     }
 
@@ -4316,7 +4316,7 @@ mod tests {
             .with_provenance("test:origin");
         let json = serde_json::to_string(&def).expect("serde serialization should succeed");
         let restored: ModuleDefinition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(def, restored);
     }
 
@@ -4333,7 +4333,7 @@ mod tests {
         };
         let json = serde_json::to_string(&ev).expect("serde serialization should succeed");
         let restored: ResolutionEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, restored);
     }
 
@@ -4403,7 +4403,7 @@ mod tests {
 
         let json = serde_json::to_string(&outcome).expect("serde serialization should succeed");
         let restored: ResolutionOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(outcome, restored);
         assert_eq!(restored.module.probe_sequence, vec!["left-pad"]);
     }
@@ -4494,7 +4494,7 @@ mod tests {
             .deny_specifier("malware");
         let json = serde_json::to_string(&hook).expect("serde serialization should succeed");
         let restored: CapabilityPolicyHook =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hook, restored);
     }
 
@@ -4521,7 +4521,7 @@ mod tests {
             .expect("serde serialization should succeed");
         let json = serde_json::to_string(&resolver).expect("serde serialization should succeed");
         let restored: DeterministicModuleResolver =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(resolver, restored);
     }
 
@@ -4550,7 +4550,7 @@ mod tests {
         };
         let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let restored: ResolutionError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -5147,7 +5147,7 @@ mod tests {
         let mr = ModuleRequest::new("./dep", ImportStyle::Import).with_referrer("/app/main.js");
         let json = serde_json::to_string(&mr).expect("serde serialization should succeed");
         let restored: ModuleRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mr, restored);
         assert_eq!(restored.referrer.as_deref(), Some("/app/main.js"));
     }

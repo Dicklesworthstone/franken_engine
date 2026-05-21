@@ -837,9 +837,9 @@ mod tests {
             ClaimEnvelopeTier::Target,
             ClaimEnvelopeTier::Hypothesis,
         ] {
-            let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&tier).expect("serialize derived Serialize");
             let restored: ClaimEnvelopeTier =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(restored, tier);
         }
     }
@@ -853,10 +853,9 @@ mod tests {
             ClaimEnvelopeVerdict::DowngradeToHypothesis,
             ClaimEnvelopeVerdict::Forbid,
         ] {
-            let json =
-                serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&verdict).expect("serialize derived Serialize");
             let restored: ClaimEnvelopeVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(restored, verdict);
         }
     }
@@ -864,9 +863,9 @@ mod tests {
     #[test]
     fn contract_serde_round_trip() {
         let contract = minimal_contract();
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         let restored: ClaimEnvelopeContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, contract);
     }
 
@@ -874,9 +873,9 @@ mod tests {
     fn scenario_serde_round_trip() {
         let scenario =
             scenario_all_ready(ClaimEnvelopeTier::PublishableUniversal, "universal test");
-        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&scenario).expect("serialize derived Serialize");
         let restored: ClaimEnvelopeScenario =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, scenario);
     }
 
@@ -1419,9 +1418,9 @@ mod tests {
             contract_policy_id: Some("policy-test".to_string()),
             role: "test role".to_string(),
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let restored: ContractInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, input);
     }
 
@@ -1438,9 +1437,9 @@ mod tests {
             frontier_gap_artifact: "gap.json".to_string(),
             frontier_gap_bead: "bd-gap".to_string(),
         };
-        let json = serde_json::to_string(&linkage).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&linkage).expect("serialize derived Serialize");
         let restored: BoardLinkage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, linkage);
     }
 
@@ -1452,9 +1451,9 @@ mod tests {
             resulting_class: ClaimEnvelopeTier::Hypothesis,
             rationale: "because".to_string(),
         };
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
         let restored: DowngradeRule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, rule);
     }
 
@@ -1467,9 +1466,9 @@ mod tests {
             requires_artifacts: vec!["artifact.json".to_string()],
             rationale: "testing".to_string(),
         };
-        let json = serde_json::to_string(&channel).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&channel).expect("serialize derived Serialize");
         let restored: ConsumerChannel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, channel);
     }
 
@@ -1483,9 +1482,9 @@ mod tests {
             required_qualifier_terms: vec!["alpha".to_string(), "beta".to_string()],
             allowed_surfaces: vec!["docs".to_string()],
         };
-        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&spec).expect("serialize derived Serialize");
         let restored: ClaimClassSpec =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, spec);
     }
 
@@ -1495,9 +1494,9 @@ mod tests {
             id: "RGC-016C".to_string(),
             name: "claim envelope".to_string(),
         };
-        let json = serde_json::to_string(&track).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&track).expect("serialize derived Serialize");
         let restored: ContractTrack =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored, track);
     }
 

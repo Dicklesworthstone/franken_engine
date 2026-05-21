@@ -1168,11 +1168,11 @@ mod tests {
         );
         // SAFETY: TimescaleSeparationCertificate derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid TimescaleSeparationCertificate,
         // so from_str back to TimescaleSeparationCertificate cannot fail (valid format + matching schema).
         let deser: TimescaleSeparationCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, deser);
     }
 
@@ -1186,11 +1186,11 @@ mod tests {
         let bundle = build_certificate_bundle(&profiles, &config, 0);
         // SAFETY: CertificateBundle derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid CertificateBundle,
         // so from_str back to CertificateBundle cannot fail (valid format + matching schema).
         let deser: CertificateBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, deser);
     }
 
@@ -1201,11 +1201,11 @@ mod tests {
         let result = detect_bifurcation_signals(&telemetry, &config, 0);
         // SAFETY: BifurcationDetectorResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid BifurcationDetectorResult,
         // so from_str back to BifurcationDetectorResult cannot fail (valid format + matching schema).
         let deser: BifurcationDetectorResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, deser);
     }
 
@@ -1223,11 +1223,11 @@ mod tests {
         };
         // SAFETY: BifurcationSignal derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&signal).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&signal).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid BifurcationSignal,
         // so from_str back to BifurcationSignal cannot fail (valid format + matching schema).
         let deser: BifurcationSignal =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(signal, deser);
     }
 
@@ -1236,11 +1236,11 @@ mod tests {
         let config = BifurcationDetectorConfig::default();
         // SAFETY: BifurcationDetectorConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid BifurcationDetectorConfig,
         // so from_str back to BifurcationDetectorConfig cannot fail (valid format + matching schema).
         let deser: BifurcationDetectorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, deser);
     }
 
@@ -1294,11 +1294,11 @@ mod tests {
         };
         // SAFETY: ControllerPairId derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&pair).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pair).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid ControllerPairId,
         // so from_str back to ControllerPairId cannot fail (valid format + matching schema).
         let back: ControllerPairId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pair, back);
     }
 
@@ -1313,11 +1313,11 @@ mod tests {
         };
         // SAFETY: ControllerTimescaleProfile derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&profile).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid ControllerTimescaleProfile,
         // so from_str back to ControllerTimescaleProfile cannot fail (valid format + matching schema).
         let back: ControllerTimescaleProfile =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(profile, back);
     }
 
@@ -1333,11 +1333,11 @@ mod tests {
         };
         // SAFETY: TimescaleRatio derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&ratio).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ratio).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid TimescaleRatio,
         // so from_str back to TimescaleRatio cannot fail (valid format + matching schema).
         let back: TimescaleRatio =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ratio, back);
     }
 

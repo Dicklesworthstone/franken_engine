@@ -1961,11 +1961,10 @@ mod tests {
             CandidateDisposition::Reject,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json =
-                serde_json::to_string(&disposition).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&disposition).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: CandidateDisposition =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, disposition);
         }
     }
@@ -1981,10 +1980,10 @@ mod tests {
             SurfaceArea::Telemetry,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&area).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&area).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: SurfaceArea =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, area);
         }
     }
@@ -2000,11 +1999,10 @@ mod tests {
             BaselineStrategy::QueryAppendOnly,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json =
-                serde_json::to_string(&strategy).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&strategy).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: BaselineStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, strategy);
         }
     }
@@ -2018,10 +2016,10 @@ mod tests {
             TearingRisk::High,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&risk).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&risk).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: TearingRisk =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, risk);
         }
     }
@@ -2035,11 +2033,10 @@ mod tests {
             WriteProfile::HotPath,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json =
-                serde_json::to_string(&profile).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&profile).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: WriteProfile =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, profile);
         }
     }
@@ -2056,11 +2053,10 @@ mod tests {
             FallbackReason::NonRetrySafeRead,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: FallbackReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, reason);
         }
     }
@@ -2148,10 +2144,10 @@ mod tests {
             notes: vec!["note 1".to_string()],
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: CandidateInventoryEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, entry);
     }
 
@@ -2419,10 +2415,10 @@ mod tests {
             CandidateDisposition::Reject,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: CandidateDisposition =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, back);
         }
     }
@@ -2438,10 +2434,10 @@ mod tests {
             SurfaceArea::Telemetry,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: SurfaceArea =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -2457,10 +2453,10 @@ mod tests {
             BaselineStrategy::QueryAppendOnly,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&b).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: BaselineStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(b, back);
         }
     }
@@ -2473,9 +2469,9 @@ mod tests {
             TearingRisk::Medium,
             TearingRisk::High,
         ] {
-            let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&t).expect("serialize derived Serialize");
             let back: TearingRisk =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(t, back);
         }
     }
@@ -2488,9 +2484,9 @@ mod tests {
             WriteProfile::Bursty,
             WriteProfile::HotPath,
         ] {
-            let json = serde_json::to_string(&w).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&w).expect("serialize derived Serialize");
             let back: WriteProfile =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(w, back);
         }
     }
@@ -2524,9 +2520,9 @@ mod tests {
             conditional: 2,
             reject: 1,
         };
-        let json = serde_json::to_string(&counts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&counts).expect("serialize derived Serialize");
         let back: CandidateCounts =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(counts, back);
     }
 
@@ -2618,9 +2614,9 @@ mod tests {
             FallbackReason::RetryBudgetExhausted,
             FallbackReason::ExternalJoinBoundary,
         ] {
-            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&r).expect("serialize derived Serialize");
             let back: FallbackReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(r, back);
         }
     }
@@ -2631,9 +2627,9 @@ mod tests {
             ReadResolution::Optimistic,
             ReadResolution::IncumbentFallback,
         ] {
-            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&r).expect("serialize derived Serialize");
             let back: ReadResolution =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(r, back);
         }
     }

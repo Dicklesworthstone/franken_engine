@@ -615,18 +615,18 @@ mod tests {
     #[test]
     fn mask_justification_serialization_round_trip() {
         let just = checkpoint_justification();
-        let json = serde_json::to_string(&just).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&just).expect("serialize derived Serialize");
         let restored: MaskJustification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(just, restored);
     }
 
     #[test]
     fn mask_policy_serialization_round_trip() {
         let policy = MaskPolicy::standard();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: MaskPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
     }
 
@@ -640,9 +640,9 @@ mod tests {
             ops_executed: 10,
             outcome: MaskOutcome::CleanRelease,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: MaskEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -685,9 +685,9 @@ mod tests {
             MaskOutcome::CancelDeferred,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: MaskOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -702,9 +702,9 @@ mod tests {
             MaskError::AlreadyReleased,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: MaskError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -712,9 +712,9 @@ mod tests {
     #[test]
     fn mask_bounds_serde_roundtrip() {
         let bounds = MaskBounds { max_ops: 42 };
-        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bounds).expect("serialize derived Serialize");
         let restored: MaskBounds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bounds, restored);
     }
 
@@ -1063,9 +1063,9 @@ mod tests {
     fn lab_mode_policy_serde_roundtrip() {
         let mut policy = MaskPolicy::standard();
         policy.lab_mode = true;
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: MaskPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
         assert!(restored.lab_mode);
     }
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn json_field_presence_mask_justification() {
         let just = checkpoint_justification();
-        let json = serde_json::to_string(&just).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&just).expect("serialize derived Serialize");
         assert!(json.contains("\"operation_name\""));
         assert!(json.contains("\"expected_ops_hint\""));
         assert!(json.contains("\"atomicity_reason\""));
@@ -1147,7 +1147,7 @@ mod tests {
             ops_executed: 3,
             outcome: MaskOutcome::CleanRelease,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"region_id\""));
         assert!(json.contains("\"mask_id\""));
@@ -1159,7 +1159,7 @@ mod tests {
     #[test]
     fn json_field_presence_mask_policy() {
         let policy = MaskPolicy::standard();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         assert!(json.contains("\"default_bounds\""));
         assert!(json.contains("\"operation_bounds\""));
         assert!(json.contains("\"lab_mode\""));
@@ -1207,9 +1207,9 @@ mod tests {
         ];
         for v in &variants {
             let display_before = v.to_string();
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: MaskOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(display_before, restored.to_string());
         }
     }
@@ -1413,9 +1413,9 @@ mod tests {
             operation_bounds: BTreeMap::new(),
             lab_mode: false,
         };
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: MaskPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
         assert!(restored.operation_bounds.is_empty());
     }
@@ -1597,9 +1597,9 @@ mod tests {
                 ops_executed: 10,
                 outcome: *outcome,
             };
-            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&event).expect("serialize derived Serialize");
             let restored: MaskEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(event, restored);
         }
     }
@@ -1611,9 +1611,9 @@ mod tests {
             expected_ops_hint: 0,
             atomicity_reason: String::new(),
         };
-        let json = serde_json::to_string(&just).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&just).expect("serialize derived Serialize");
         let restored: MaskJustification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(just, restored);
         assert!(restored.operation_name.is_empty());
         assert!(restored.atomicity_reason.is_empty());
@@ -1626,18 +1626,18 @@ mod tests {
             expected_ops_hint: 1,
             atomicity_reason: "\u{00E9}\u{00E8}\u{00EA}".to_string(),
         };
-        let json = serde_json::to_string(&just).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&just).expect("serialize derived Serialize");
         let restored: MaskJustification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(just, restored);
     }
 
     #[test]
     fn mask_bounds_large_max_ops_serde() {
         let bounds = MaskBounds { max_ops: u64::MAX };
-        let json = serde_json::to_string(&bounds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bounds).expect("serialize derived Serialize");
         let restored: MaskBounds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bounds, restored);
     }
 
@@ -1649,9 +1649,9 @@ mod tests {
                 .operation_bounds
                 .insert(format!("op_{i}"), MaskBounds { max_ops: i + 1 });
         }
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: MaskPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
         assert_eq!(restored.operation_bounds.len(), 54); // 4 standard + 50
     }

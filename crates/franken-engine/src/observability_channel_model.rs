@@ -607,7 +607,7 @@ pub fn generate_report(
         });
     }
 
-    let canonical = serde_json::to_string(&entries).expect("serde deserialization should succeed");
+    let canonical = serde_json::to_string(&entries).expect("serialize derived Serialize");
     let hash = Sha256::digest(canonical.as_bytes());
     let content_hash = hex::encode(hash);
 
@@ -2072,9 +2072,9 @@ mod tests {
     #[test]
     fn payload_family_serde_roundtrip() {
         for fam in PayloadFamily::ALL {
-            let json = serde_json::to_string(&fam).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&fam).expect("serialize derived Serialize");
             let back: PayloadFamily =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, fam);
         }
     }
@@ -2510,9 +2510,9 @@ mod tests {
     #[test]
     fn channel_spec_serde_roundtrip() {
         let specs = canonical_channel_specs();
-        let json = serde_json::to_string(&specs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&specs).expect("serialize derived Serialize");
         let back: Vec<ChannelSpec> =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.len(), specs.len());
     }
 
@@ -2520,9 +2520,8 @@ mod tests {
     fn channel_state_serde_roundtrip() {
         let mut state = ChannelState::new("test".to_string(), epoch(1));
         state.items_emitted = 42;
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let back: ChannelState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
+        let back: ChannelState = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.items_emitted, 42);
     }
 
@@ -2530,9 +2529,9 @@ mod tests {
     fn channel_report_serde_roundtrip() {
         let specs = canonical_channel_specs();
         let report = generate_report(&specs, &BTreeMap::new(), epoch(1));
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: ChannelReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.gate_pass, report.gate_pass);
         assert_eq!(back.content_hash, report.content_hash);
     }
@@ -2609,9 +2608,9 @@ mod tests {
             ViolationKind::BackpressureOverflow,
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: ViolationKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -2642,9 +2641,9 @@ mod tests {
             max_distortion_millionths: 0,
             min_rate_millibits: 500_000,
         };
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let back: RateDistortionEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(env, back);
     }
 
@@ -2729,7 +2728,7 @@ mod tests {
     #[test]
     fn channel_spec_json_field_presence() {
         let spec = &canonical_channel_specs()[0];
-        let json = serde_json::to_string(spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(spec).expect("serialize derived Serialize");
         assert!(json.contains("\"channel_id\""));
         assert!(json.contains("\"max_items_per_epoch\""));
         assert!(json.contains("\"failure_budget\""));
@@ -2743,7 +2742,7 @@ mod tests {
             epoch: epoch(1),
             detail: "d".into(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(json.contains("\"channel_id\""));
         assert!(json.contains("\"violation_kind\""));
         assert!(json.contains("\"epoch\""));
@@ -2762,7 +2761,7 @@ mod tests {
             max_distortion_millionths: 100_000,
             min_rate_millibits: 250_000,
         };
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         assert!(json.contains("\"family\""));
         assert!(json.contains("\"metric\""));
         assert!(json.contains("\"frontier\""));
@@ -2789,9 +2788,9 @@ mod tests {
             DistortionMetric::EditDistance,
             DistortionMetric::BinaryFidelity,
         ] {
-            let json = serde_json::to_string(&dm).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&dm).expect("serialize derived Serialize");
             let back: DistortionMetric =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(dm, back);
         }
     }
@@ -2799,9 +2798,9 @@ mod tests {
     #[test]
     fn channel_path_serde_roundtrip_all() {
         for cp in ChannelPath::ALL {
-            let json = serde_json::to_string(&cp).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cp).expect("serialize derived Serialize");
             let back: ChannelPath =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cp, back);
         }
     }
@@ -2997,9 +2996,9 @@ mod tests {
                 },
             ],
         };
-        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         let back: DistortionRiskLedger =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ledger, back);
     }
 
@@ -3010,9 +3009,9 @@ mod tests {
             risk_millionths: 750_000,
             consequence: "moderate risk".into(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: DistortionRiskEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -3024,9 +3023,9 @@ mod tests {
             degradation_threshold_millionths: 200_000,
             fail_closed: false,
         };
-        let json = serde_json::to_string(&fb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fb).expect("serialize derived Serialize");
         let back: FailureBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fb, back);
     }
 
@@ -3237,9 +3236,9 @@ mod tests {
             healthy: true,
             violation_count: 0,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: ChannelHealthEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -3306,9 +3305,9 @@ mod tests {
             violation_kind: ViolationKind::BackpressureOverflow,
             detail: "buffer full".into(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: PolicyViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 

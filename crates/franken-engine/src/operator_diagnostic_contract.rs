@@ -819,7 +819,7 @@ mod tests {
         // SAFETY: JSON was just produced by to_string_pretty of a valid BoundaryPolicyMappingContract,
         // so from_str back to BoundaryPolicyMappingContract cannot fail (valid format + matching schema).
         let parsed: BoundaryPolicyMappingContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(contract, parsed);
     }
 
@@ -833,9 +833,9 @@ mod tests {
             Some("replay-ref"),
             BTreeMap::from([("key".to_string(), "value".to_string())]),
         );
-        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&diag).expect("serialize derived Serialize");
         let parsed: DiagnosticEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(diag, parsed);
     }
 
@@ -895,9 +895,9 @@ mod tests {
     #[test]
     fn all_failure_kinds_serde_round_trip() {
         for kind in InternalFailureKind::all() {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: InternalFailureKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -910,9 +910,9 @@ mod tests {
             DiagnosticSeverity::Warning,
             DiagnosticSeverity::Info,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             let back: DiagnosticSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, back);
         }
     }
@@ -924,10 +924,9 @@ mod tests {
             UserImpact::DegradedQuality,
             UserImpact::None,
         ] {
-            let json =
-                serde_json::to_string(&impact).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&impact).expect("serialize derived Serialize");
             let back: UserImpact =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(impact, back);
         }
     }
@@ -939,10 +938,9 @@ mod tests {
             OperatorImpact::TriageRequired,
             OperatorImpact::InformationalOnly,
         ] {
-            let json =
-                serde_json::to_string(&impact).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&impact).expect("serialize derived Serialize");
             let back: OperatorImpact =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(impact, back);
         }
     }
@@ -959,10 +957,9 @@ mod tests {
             NextAction::NoAction,
             NextAction::InvestigateInfra,
         ] {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let back: NextAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, back);
         }
     }
@@ -1055,9 +1052,9 @@ mod tests {
             BTreeMap::new(),
         );
         let event = build_diagnostic_event("t-1", "d-1", "s-1", &diag);
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: DiagnosticEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event.trace_id, back.trace_id);
         assert_eq!(event.failure_kind, back.failure_kind);
         assert_eq!(event.severity, back.severity);
@@ -1139,9 +1136,9 @@ mod tests {
         let mapping = contract
             .mapping_for(InternalFailureKind::BudgetExhaustion)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(mapping).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(mapping).expect("serialize derived Serialize");
         let back: PolicyMapping =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*mapping, back);
     }
 

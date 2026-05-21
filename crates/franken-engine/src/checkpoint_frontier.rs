@@ -1459,9 +1459,9 @@ mod tests {
         let genesis = build_genesis(&[sk], "zone-a");
         let state = FrontierState::from_genesis("zone-a", &genesis);
 
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let restored: FrontierState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(state, restored);
     }
 
@@ -1482,9 +1482,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: FrontierError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1499,9 +1499,9 @@ mod tests {
             },
             trace_id: "t-1".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: FrontierEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1726,9 +1726,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: FrontierError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1742,9 +1742,9 @@ mod tests {
             checkpoint_id: EngineObjectId([0xAA; 32]),
             epoch: SecurityEpoch::from_raw(2),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: FrontierEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
     }
 
@@ -2178,8 +2178,8 @@ mod tests {
         let sk = make_sk(1);
         let genesis = build_genesis(std::slice::from_ref(&sk), "zone-a");
         let state = FrontierState::from_genesis("zone-a", &genesis);
-        let json1 = serde_json::to_string(&state).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&state).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&state).expect("serialize derived Serialize");
         assert_eq!(json1, json2, "serialization must be deterministic");
     }
 
@@ -2215,9 +2215,9 @@ mod tests {
             zone: "z".into(),
             genesis_seq: 0,
         };
-        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&et).expect("serialize derived Serialize");
         let back: FrontierEventType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(et, back);
     }
 
@@ -2228,9 +2228,9 @@ mod tests {
             prev_seq: 1,
             new_seq: 2,
         };
-        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&et).expect("serialize derived Serialize");
         let back: FrontierEventType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(et, back);
     }
 
@@ -2241,9 +2241,9 @@ mod tests {
             frontier_seq: 10,
             attempted_seq: 3,
         };
-        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&et).expect("serialize derived Serialize");
         let back: FrontierEventType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(et, back);
     }
 
@@ -2253,9 +2253,9 @@ mod tests {
             zone: "z".into(),
             checkpoint_seq: 5,
         };
-        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&et).expect("serialize derived Serialize");
         let back: FrontierEventType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(et, back);
     }
 
@@ -2266,9 +2266,9 @@ mod tests {
             frontier_epoch: SecurityEpoch::from_raw(5),
             attempted_epoch: SecurityEpoch::from_raw(2),
         };
-        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&et).expect("serialize derived Serialize");
         let back: FrontierEventType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(et, back);
     }
 
@@ -2278,9 +2278,9 @@ mod tests {
             zone: "z".into(),
             frontier_seq: 42,
         };
-        let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&et).expect("serialize derived Serialize");
         let back: FrontierEventType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(et, back);
     }
 
@@ -2502,9 +2502,9 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(event).expect("serialize derived Serialize");
             let back: FrontierEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*event, back);
         }
     }
@@ -2882,9 +2882,9 @@ mod tests {
                 },
             ],
         };
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let back: FrontierState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(state, back);
         assert_eq!(back.recent_ids.len(), 2);
     }
@@ -2898,9 +2898,9 @@ mod tests {
             },
             trace_id: "trace-42".into(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: FrontierEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.trace_id, "trace-42");
     }
 

@@ -833,9 +833,9 @@ mod tests {
     #[test]
     fn category_serde_roundtrip() {
         for cat in &ObligationCategory::ALL {
-            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cat).expect("serialize derived Serialize");
             let back: ObligationCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cat, back);
         }
     }
@@ -880,9 +880,9 @@ mod tests {
             ObligationStatus::InsufficientEvidence,
         ];
         for s in &statuses {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: ObligationStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -924,9 +924,9 @@ mod tests {
     #[test]
     fn builtin_templates_serde_roundtrip() {
         let templates = builtin_templates();
-        let json = serde_json::to_string(&templates).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&templates).expect("serialize derived Serialize");
         let back: Vec<ObligationTemplate> =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(templates.len(), back.len());
     }
 
@@ -1228,9 +1228,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         reg.auto_evaluate(&obl_id, 999_500, 2000);
         let report = reg.report();
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: ObligationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1247,9 +1247,8 @@ mod tests {
     #[test]
     fn obligation_id_serde() {
         let id = ObligationId("obl-1".into());
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: ObligationId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let back: ObligationId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, back);
     }
 
@@ -1296,9 +1295,9 @@ mod tests {
             EvidenceRequirement::OperatorReview,
         ];
         for req in &requirements {
-            let json = serde_json::to_string(req).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(req).expect("serialize derived Serialize");
             let back: EvidenceRequirement =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*req, back);
         }
     }
@@ -1317,9 +1316,9 @@ mod tests {
             severity: ObligationSeverity::Fatal,
             evidence: EvidenceRequirement::HashLinkage,
         };
-        let json = serde_json::to_string(&binding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&binding).expect("serialize derived Serialize");
         let back: ObligationBinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(binding, back);
     }
 
@@ -1340,9 +1339,9 @@ mod tests {
             required_value: Some(999_000),
             reason: "insufficient".into(),
         };
-        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eval).expect("serialize derived Serialize");
         let back: ObligationEvaluation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eval, back);
     }
 
@@ -1354,9 +1353,9 @@ mod tests {
     fn registry_serde_roundtrip() {
         let mut reg = ObligationRegistry::new(epoch(1));
         reg.bind(PassId("test".into()), "behavioral/ir_transform_equivalence");
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: ObligationRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg.template_count(), back.template_count());
         assert_eq!(reg.binding_count(), back.binding_count());
     }
@@ -1440,9 +1439,9 @@ mod tests {
             ObligationSeverity::Fatal,
         ];
         for sev in &severities {
-            let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(sev).expect("serialize derived Serialize");
             let back: ObligationSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*sev, back);
         }
     }
@@ -1454,9 +1453,8 @@ mod tests {
     #[test]
     fn pass_id_serde_roundtrip() {
         let id = PassId("ir_lowering".into());
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: PassId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let back: PassId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, back);
     }
 
@@ -1515,9 +1513,9 @@ mod tests {
             evidence: EvidenceRequirement::OperatorReview,
             waivable: true,
         };
-        let json = serde_json::to_string(&template).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&template).expect("serialize derived Serialize");
         let back: ObligationTemplate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(template.template_id, back.template_id);
         assert_eq!(template.category, back.category);
         assert_eq!(template.waivable, back.waivable);
@@ -1564,9 +1562,9 @@ mod tests {
             ObligationStatus::InsufficientEvidence,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ObligationStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1783,9 +1781,9 @@ mod tests {
             EvidenceRequirement::OperatorReview,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: EvidenceRequirement =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1814,9 +1812,9 @@ mod tests {
     #[test]
     fn obligation_report_serde_roundtrip() {
         let report = ObligationReport::from_evaluations(epoch(1), vec![]);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: ObligationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1835,9 +1833,9 @@ mod tests {
             required_value: Some(999_000),
             reason: "not enough data".into(),
         };
-        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eval).expect("serialize derived Serialize");
         let back: ObligationEvaluation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eval, back);
     }
 
@@ -1850,9 +1848,9 @@ mod tests {
             .bind(PassId("p".into()), "behavioral/ir_transform_equivalence")
             .expect("serde deserialization should succeed");
         reg.auto_evaluate(&obl_id, MILLION, 10_000);
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: ObligationRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.template_count(), reg.template_count());
         assert_eq!(back.binding_count(), reg.binding_count());
     }

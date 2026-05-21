@@ -1282,8 +1282,7 @@ mod tests {
         // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: GateVerdict =
-            serde_json::from_str(&json).expect("deserialize known-valid JSON");
+        let back: GateVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1476,8 +1475,7 @@ mod tests {
             test_epoch(),
         );
         let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
-        let back: GateDecision =
-            serde_json::from_str(&json).expect("deserialize known-valid JSON");
+        let back: GateDecision = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
     }
 

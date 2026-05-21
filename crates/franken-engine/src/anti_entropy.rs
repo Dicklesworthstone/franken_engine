@@ -1352,9 +1352,8 @@ mod tests {
             object_type: ReconcileObjectType::RevocationEvent,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let restored: ObjectId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let restored: ObjectId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, restored);
     }
 
@@ -1371,9 +1370,9 @@ mod tests {
             event: "reconcile_success".to_string(),
             fallback_triggered: false,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: ReconcileEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1390,9 +1389,9 @@ mod tests {
             ReconcileError::EmptyObjectSet,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: ReconcileError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1403,18 +1402,17 @@ mod tests {
         iblt.insert(&make_hash(1));
         iblt.insert(&make_hash(2));
 
-        let json = serde_json::to_string(&iblt).expect("serde deserialization should succeed");
-        let restored: Iblt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&iblt).expect("serialize derived Serialize");
+        let restored: Iblt = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(iblt, restored);
     }
 
     #[test]
     fn reconcile_config_serialization_round_trip() {
         let config = ReconcileConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: ReconcileConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1822,9 +1820,9 @@ mod tests {
             },
         ];
         for t in &triggers {
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             let restored: FallbackTrigger =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, restored);
         }
     }
@@ -1842,9 +1840,9 @@ mod tests {
             epoch_id: 1,
             trace_id: "t1".to_string(),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let restored: FallbackEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, restored);
     }
 
@@ -1857,18 +1855,18 @@ mod tests {
             total_in_window: 50,
             epoch_id: 1,
         };
-        let json = serde_json::to_string(&alert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&alert).expect("serialize derived Serialize");
         let restored: FallbackRateAlert =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(alert, restored);
     }
 
     #[test]
     fn fallback_config_serialization_round_trip() {
         let config = FallbackConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: FallbackConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1913,9 +1911,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: ReconcileError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1947,9 +1945,9 @@ mod tests {
             ReconcileObjectType::EvidenceEntry,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: ReconcileObjectType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -1961,9 +1959,9 @@ mod tests {
             objects_to_send: vec![make_hash(3)],
             fallback_triggered: false,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: ReconcileResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1984,9 +1982,9 @@ mod tests {
                 trace_id: "t1".to_string(),
             },
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: FallbackResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -2163,9 +2161,8 @@ mod tests {
             key_hash_xor: make_hash(77),
             checksum_xor: 0xDEAD_BEEF,
         };
-        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
-        let restored: IbltCell =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cell).expect("serialize derived Serialize");
+        let restored: IbltCell = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cell, restored);
     }
 
@@ -2178,9 +2175,8 @@ mod tests {
             object_type: ReconcileObjectType::RevocationEvent,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: ObjectId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let back: ObjectId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, id);
     }
 
@@ -2196,9 +2192,8 @@ mod tests {
                 object_type: otype,
                 epoch: test_epoch(),
             };
-            let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-            let back: ObjectId =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+            let back: ObjectId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, id);
         }
     }
@@ -2222,9 +2217,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: FallbackTrigger =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -2232,9 +2227,9 @@ mod tests {
     #[test]
     fn reconcile_config_serde_roundtrip() {
         let cfg = ReconcileConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: ReconcileConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
@@ -2246,18 +2241,18 @@ mod tests {
             max_retries: 4,
             retry_scale_factor: 3,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: ReconcileConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
     #[test]
     fn fallback_config_serde_roundtrip() {
         let cfg = FallbackConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: FallbackConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
@@ -2267,17 +2262,17 @@ mod tests {
             max_fallback_rate_pct: 10,
             monitoring_window: 200,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: FallbackConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
     #[test]
     fn iblt_serde_roundtrip() {
         let iblt = Iblt::new(8, 3);
-        let json = serde_json::to_string(&iblt).expect("serde deserialization should succeed");
-        let back: Iblt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&iblt).expect("serialize derived Serialize");
+        let back: Iblt = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, iblt);
     }
 
@@ -2286,8 +2281,8 @@ mod tests {
         let mut iblt = Iblt::new(16, 3);
         iblt.insert(&make_hash(1));
         iblt.insert(&make_hash(2));
-        let json = serde_json::to_string(&iblt).expect("serde deserialization should succeed");
-        let back: Iblt = serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&iblt).expect("serialize derived Serialize");
+        let back: Iblt = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, iblt);
     }
 

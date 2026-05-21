@@ -876,10 +876,9 @@ mod tests {
     #[test]
     fn safety_action_serde_roundtrip() {
         for &action in SafetyAction::all() {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let restored: SafetyAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, restored);
         }
     }
@@ -962,9 +961,9 @@ mod tests {
             },
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: SafetyVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -1019,8 +1018,7 @@ mod tests {
     fn safety_contract_bayes_action_with_safe_posterior_is_allow() {
         let c = SafetyContract::default_for(SafetyAction::BudgetOverride);
         // Posterior strongly favoring "safe" state.
-        let posterior =
-            Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+        let posterior = Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
         // expected_loss(allow) = 0.99*0.0 + 0.01*0.9 = 0.009
         // expected_loss(deny)  = 0.99*0.1 + 0.01*0.0 = 0.099
         let action_idx = c.choose_action(&posterior);
@@ -1036,7 +1034,7 @@ mod tests {
                 .posteriors
                 .get_mut(&SafetyAction::ExtensionQuarantine)
                 .expect("registered posterior") =
-                Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+                Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
 
             let mut cx = test_cx(100);
             let request = test_request(SafetyAction::ExtensionQuarantine, 42);
@@ -1061,7 +1059,7 @@ mod tests {
                 .posteriors
                 .get_mut(&SafetyAction::ExtensionQuarantine)
                 .expect("registered posterior") =
-                Posterior::new(vec![0.01, 0.99]).expect("serde deserialization should succeed");
+                Posterior::new(vec![0.01, 0.99]).expect("constructor with valid inputs");
 
             let mut cx = test_cx(100);
             let request = test_request(SafetyAction::ExtensionQuarantine, 43);
@@ -1088,9 +1086,9 @@ mod tests {
     #[test]
     fn safety_contract_serde_roundtrip() {
         let c = SafetyContract::default_for(SafetyAction::CrossExtensionShare);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let restored: SafetyContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c.action_type(), restored.action_type());
         assert_eq!(c.name(), restored.name());
     }
@@ -1159,7 +1157,7 @@ mod tests {
         *r.posteriors
             .get_mut(&SafetyAction::BudgetOverride)
             .expect("serde deserialization should succeed") =
-            Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+            Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
 
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::BudgetOverride, 2);
@@ -1327,7 +1325,7 @@ mod tests {
         *r.posteriors
             .get_mut(&SafetyAction::BudgetOverride)
             .expect("serde deserialization should succeed") =
-            Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+            Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
 
         let mut cx = test_cx(100);
         let mut req = test_request(SafetyAction::BudgetOverride, 10);
@@ -1349,7 +1347,7 @@ mod tests {
         *r.posteriors
             .get_mut(&SafetyAction::PrivilegeEscalation)
             .expect("serde deserialization should succeed") =
-            Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+            Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
 
         let mut cx = test_cx(100);
         let mut req = test_request(SafetyAction::PrivilegeEscalation, 11);
@@ -1407,9 +1405,9 @@ mod tests {
     #[test]
     fn safety_decision_request_serde_roundtrip() {
         let req = test_request(SafetyAction::CrossExtensionShare, 42);
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let restored: SafetyDecisionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, restored);
     }
 
@@ -1429,9 +1427,9 @@ mod tests {
             budget_consumed_ms: 2,
             sequence_number: 1,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: SafetyDecisionResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1447,9 +1445,9 @@ mod tests {
             outcome: "allow".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: SafetyDecisionEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1471,9 +1469,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let restored: SafetyRouterError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, restored);
         }
     }
@@ -1501,9 +1499,9 @@ mod tests {
             denials: 5,
             fallbacks: 2,
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let restored: ActionSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, restored);
     }
 
@@ -1569,7 +1567,7 @@ mod tests {
         *r.posteriors
             .get_mut(&SafetyAction::ForcedTermination)
             .expect("serde deserialization should succeed") =
-            Posterior::new(vec![0.99, 0.01]).expect("serde deserialization should succeed");
+            Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
 
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::ForcedTermination, 21);
@@ -1808,9 +1806,9 @@ mod tests {
             },
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: SafetyVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1833,9 +1831,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let back: SafetyRouterError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }
@@ -1928,9 +1926,9 @@ mod tests {
             outcome: "allow".into(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: SafetyDecisionEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1942,18 +1940,18 @@ mod tests {
             denials: 3,
             fallbacks: 2,
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: ActionSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
     #[test]
     fn safety_action_serde_roundtrip_batch2() {
         for action in SafetyAction::all() {
-            let json = serde_json::to_string(action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(action).expect("serialize derived Serialize");
             let back: SafetyAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*action, back);
         }
     }
@@ -2039,7 +2037,7 @@ mod tests {
     #[test]
     fn safety_decision_request_json_field_presence() {
         let req = test_request(SafetyAction::CrossExtensionShare, 99);
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         assert!(json.contains("\"action\""), "missing action field");
         assert!(
             json.contains("\"extension_id\""),
@@ -2069,7 +2067,7 @@ mod tests {
             budget_consumed_ms: 2,
             sequence_number: 5,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(
             json.contains("\"expected_loss_milli\""),
             "missing expected_loss_milli"
@@ -2096,7 +2094,7 @@ mod tests {
             outcome: "allow".to_string(),
             error_code: Some("err".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"error_code\""), "missing error_code field");
         assert!(json.contains("\"component\""), "missing component field");
         assert!(json.contains("\"seq\""), "missing seq field");
@@ -2152,9 +2150,9 @@ mod tests {
             e_process_milli: 0,
             ci_width_milli: 0,
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let restored: SafetyDecisionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, restored);
     }
 

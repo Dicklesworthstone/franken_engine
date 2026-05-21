@@ -1770,9 +1770,9 @@ mod tests {
     #[test]
     fn specialization_serde_roundtrip() {
         let spec = make_default_spec();
-        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&spec).expect("serialize derived Serialize");
         let restored: EpochBoundSpecialization =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(spec, restored);
     }
 
@@ -1795,9 +1795,9 @@ mod tests {
             )
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: InvalidationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
     }
 
@@ -1810,9 +1810,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let event = &engine.events()[0];
-        let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(event).expect("serialize derived Serialize");
         let restored: InvalidationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*event, restored);
     }
 
@@ -1824,9 +1824,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         let restored: EpochInvalidationEngine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.current_epoch(), engine.current_epoch());
         assert_eq!(
             restored.specializations().len(),
@@ -1900,9 +1900,9 @@ mod tests {
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
         // Simulate crash/restart via serde roundtrip.
-        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         let restored: EpochInvalidationEngine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         let spec = restored
             .get_specialization(&spec_id)
@@ -1966,9 +1966,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: InvalidationReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -1982,9 +1982,9 @@ mod tests {
             FallbackState::ReSpecializing,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: FallbackState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -2017,9 +2017,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: InvalidationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -2064,9 +2064,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: InvalidationEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -2074,18 +2074,18 @@ mod tests {
     #[test]
     fn churn_config_serde_roundtrip() {
         let cfg = ChurnConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: ChurnConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
     #[test]
     fn invalidation_config_serde_roundtrip() {
         let cfg = test_config();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: InvalidationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
@@ -2104,9 +2104,9 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(10),
             activated_at_ns: 500,
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let restored: SpecializationInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input.optimization_class, restored.optimization_class);
         assert_eq!(input.valid_from_epoch, restored.valid_from_epoch);
         assert_eq!(input.linked_policy_id, restored.linked_policy_id);
@@ -2738,9 +2738,9 @@ mod tests {
     #[test]
     fn epoch_bound_specialization_serde_round_trip() {
         let spec = make_default_spec();
-        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&spec).expect("serialize derived Serialize");
         let back: EpochBoundSpecialization =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(spec, back);
     }
 
@@ -2759,9 +2759,9 @@ mod tests {
         let receipt = engine
             .invalidate_specialization(&sid, reason, 2000)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: InvalidationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -2776,9 +2776,9 @@ mod tests {
         let events = engine.events();
         assert!(!events.is_empty());
         let event = &events[0];
-        let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(event).expect("serialize derived Serialize");
         let back: InvalidationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*event, back);
     }
 
@@ -2809,9 +2809,9 @@ mod tests {
             .register_specialization(spec, 1000)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         let back: EpochInvalidationEngine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.current_epoch(), engine.current_epoch());
         assert_eq!(back.specializations().len(), engine.specializations().len());
         assert_eq!(back.active_count(), engine.active_count());
@@ -3557,9 +3557,8 @@ mod tests {
             extended_canary_multiplier: 3_000_000,
             cooldown_ns: 15_000_000_000,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let deser: ChurnConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
+        let deser: ChurnConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser, cfg);
     }
 
@@ -3620,9 +3619,9 @@ mod tests {
         let total = engine.total_invalidations();
         assert!(total >= 11);
 
-        let json = serde_json::to_string(&engine).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         let restored: EpochInvalidationEngine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(
             restored.is_conservative_mode(),
             engine.is_conservative_mode()
@@ -3832,9 +3831,9 @@ mod tests {
     #[test]
     fn invalidation_event_type_churn_dampening_deactivated_serde() {
         let evt = InvalidationEventType::ChurnDampeningDeactivated;
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
         let deser: InvalidationEventType =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser, evt);
     }
 
@@ -3886,9 +3885,9 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(50),
             activated_at_ns: 999,
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let deser: SpecializationInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser.optimization_class, input.optimization_class);
         assert_eq!(deser.linked_policy_id, input.linked_policy_id);
         assert_eq!(deser.source_proof_ids.len(), 2);
@@ -3908,9 +3907,9 @@ mod tests {
                 cooldown_ns: 2_000,
             },
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let deser: InvalidationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser.signing_key, key);
         assert_eq!(deser.churn.threshold, 3);
     }

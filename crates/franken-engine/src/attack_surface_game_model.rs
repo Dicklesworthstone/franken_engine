@@ -643,11 +643,11 @@ mod tests {
         ] {
             // SAFETY: Subsystem derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid Subsystem,
             // so from_str back to Subsystem cannot fail (valid format + matching schema).
             let back: Subsystem =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -665,11 +665,10 @@ mod tests {
         for p in [Player::Attacker, Player::Defender] {
             // SAFETY: Player derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&p).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid Player,
             // so from_str back to Player cannot fail (valid format + matching schema).
-            let back: Player =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: Player = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(p, back);
         }
     }
@@ -701,11 +700,11 @@ mod tests {
         ] {
             // SAFETY: LossDimension derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid LossDimension,
             // so from_str back to LossDimension cannot fail (valid format + matching schema).
             let back: LossDimension =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, back);
         }
     }
@@ -788,11 +787,10 @@ mod tests {
         let tensor = LossTensor::from_entries(Subsystem::Runtime, entries);
         // SAFETY: LossTensor derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&tensor).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tensor).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid LossTensor,
         // so from_str back to LossTensor cannot fail (valid format + matching schema).
-        let back: LossTensor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: LossTensor = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tensor, back);
     }
 
@@ -876,9 +874,9 @@ mod tests {
             }],
             all_defender_actions: BTreeSet::from([atk("x"), atk("y")]),
         };
-        let json = serde_json::to_string(&automaton).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&automaton).expect("serialize derived Serialize");
         let back: AdmissibleActionAutomaton =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(automaton, back);
     }
 
@@ -950,11 +948,10 @@ mod tests {
 
         // SAFETY: GameModel derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&model).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&model).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid GameModel,
         // so from_str back to GameModel cannot fail (valid format + matching schema).
-        let back: GameModel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: GameModel = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(model, back);
     }
 
@@ -1004,9 +1001,9 @@ mod tests {
     #[test]
     fn report_serde_roundtrip() {
         let report = generate_report(&[], &test_epoch());
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: GameModelReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1131,9 +1128,9 @@ mod tests {
             forbidden_actions: BTreeSet::from([atk("x")]),
             active_conditions: vec!["always".to_string()],
         };
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: HardConstraint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1142,9 +1139,9 @@ mod tests {
     #[test]
     fn strategic_action_serde_roundtrip() {
         let a = make_attacker_action("test", Subsystem::Compiler);
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let back: StrategicAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -1426,9 +1423,9 @@ mod tests {
             constraints: 1,
             minimax_recommendation: Some("block".to_string()),
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: SubsystemSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -1489,7 +1486,7 @@ mod tests {
             dimension: LossDimension::PerformanceCost,
             loss_millionths: 42_000,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         assert!(json.contains("\"attacker_action\""));
         assert!(json.contains("\"defender_action\""));
         assert!(json.contains("\"dimension\""));
@@ -1499,7 +1496,7 @@ mod tests {
     #[test]
     fn game_model_report_json_field_names() {
         let report = generate_report(&[], &test_epoch());
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"epoch\""));
         assert!(json.contains("\"subsystem_summaries\""));
@@ -1520,7 +1517,7 @@ mod tests {
             constraints: 0,
             minimax_recommendation: None,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         assert!(json.contains("\"subsystem\""));
         assert!(json.contains("\"attacker_actions\""));
         assert!(json.contains("\"defender_actions\""));
@@ -1532,9 +1529,8 @@ mod tests {
     #[test]
     fn action_id_serde_roundtrip() {
         let id = ActionId("complex_multi_stage_attack".to_string());
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: ActionId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let back: ActionId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, back);
     }
 
@@ -1774,9 +1770,8 @@ mod tests {
     #[test]
     fn model_serde_preserves_schema_version() {
         let model = GameModelBuilder::new(Subsystem::ControlPlane, test_epoch()).build();
-        let json = serde_json::to_string(&model).expect("serde deserialization should succeed");
-        let back: GameModel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&model).expect("serialize derived Serialize");
+        let back: GameModel = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.schema_version, SCHEMA_VERSION);
     }
 
@@ -1821,11 +1816,11 @@ mod tests {
     #[test]
     fn player_serde_rename_all_snake_case() {
         assert_eq!(
-            serde_json::to_string(&Player::Attacker).expect("serde deserialization should succeed"),
+            serde_json::to_string(&Player::Attacker).expect("serialize derived Serialize"),
             "\"attacker\""
         );
         assert_eq!(
-            serde_json::to_string(&Player::Defender).expect("serde deserialization should succeed"),
+            serde_json::to_string(&Player::Defender).expect("serialize derived Serialize"),
             "\"defender\""
         );
     }
@@ -1936,9 +1931,9 @@ mod tests {
             })
             .build();
         let report = generate_report(&[model], &test_epoch());
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: GameModelReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1953,8 +1948,7 @@ mod tests {
             Subsystem::EvidencePipeline,
         ] {
             let display = s.to_string();
-            let serde_str =
-                serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let serde_str = serde_json::to_string(&s).expect("serialize derived Serialize");
             assert_eq!(format!("\"{display}\""), serde_str);
         }
     }
@@ -1969,8 +1963,7 @@ mod tests {
             LossDimension::EvidenceIntegrityCost,
         ] {
             let display = d.to_string();
-            let serde_str =
-                serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let serde_str = serde_json::to_string(&d).expect("serialize derived Serialize");
             assert_eq!(format!("\"{display}\""), serde_str);
         }
     }
@@ -1979,8 +1972,7 @@ mod tests {
     fn player_display_matches_serde_key() {
         for p in [Player::Attacker, Player::Defender] {
             let display = p.to_string();
-            let serde_str =
-                serde_json::to_string(&p).expect("serde deserialization should succeed");
+            let serde_str = serde_json::to_string(&p).expect("serialize derived Serialize");
             assert_eq!(format!("\"{display}\""), serde_str);
         }
     }
@@ -1998,9 +1990,9 @@ mod tests {
                 "no_false_positives".to_string(),
             ],
         };
-        let json = serde_json::to_string(&action).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&action).expect("serialize derived Serialize");
         let back: StrategicAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(action, back);
         assert_eq!(back.constraints.len(), 2);
     }

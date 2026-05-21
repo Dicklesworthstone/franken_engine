@@ -892,9 +892,9 @@ mod tests {
     fn schema_version_tag_serde_round_trip() {
         let tag = SchemaVersionTag::parse("franken-engine.parser-log-event.v5")
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&tag).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tag).expect("serialize derived Serialize");
         let back: SchemaVersionTag =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tag, back);
     }
 
@@ -1526,9 +1526,9 @@ mod tests {
             events: vec![],
             schema_migrations: vec![],
         };
-        let json = serde_json::to_string(&index).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&index).expect("serialize derived Serialize");
         let back: ParserEvidenceIndex =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(index, back);
     }
 
@@ -1549,9 +1549,9 @@ mod tests {
             replay_commands: vec!["cmd".to_string()],
             severity: "high".to_string(),
         };
-        let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cr).expect("serialize derived Serialize");
         let back: CorrelatedRegression =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cr, back);
     }
 
@@ -1563,9 +1563,9 @@ mod tests {
             to_schema: "fam.v2".to_string(),
             affected_records: 42,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: AppliedSchemaMigration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -1619,9 +1619,9 @@ mod tests {
             error_code: Some("E001".into()),
             outcome: "fail".into(),
         };
-        let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&key).expect("serialize derived Serialize");
         let back: CorrelationKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(key, back);
     }
 
@@ -1633,9 +1633,9 @@ mod tests {
             from_schema: "parser_event.v1".into(),
             to_schema: "parser_event.v2".into(),
         };
-        let json = serde_json::to_string(&boundary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&boundary).expect("serialize derived Serialize");
         let back: SchemaMigrationBoundary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(boundary, back);
     }
 
@@ -1646,9 +1646,9 @@ mod tests {
             from_schema: "parser_event.v1".into(),
             to_schema: "parser_event.v2".into(),
         };
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
         let back: SchemaMigrationStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, back);
     }
 
@@ -1668,9 +1668,9 @@ mod tests {
             replay_command: Some("replay --run run-1".into()),
             scenario_id: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: IndexedParserEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1686,9 +1686,9 @@ mod tests {
             generated_at_utc: Some("2026-02-26T00:00:00Z".into()),
             outcome: Some("pass".into()),
         };
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: ParserRunArtifactRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1714,9 +1714,9 @@ mod tests {
             error_code: None,
             outcome: "ok".into(),
         };
-        let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&key).expect("serialize derived Serialize");
         let back: CorrelationKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(key, back);
     }
 
@@ -1819,7 +1819,7 @@ mod tests {
             replay_command: None,
             scenario_id: Some("scen-fp".into()),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         assert!(json.contains("\"run_id\""));
         assert!(json.contains("\"sequence\""));
         assert!(json.contains("\"trace_id\""));
@@ -1843,7 +1843,7 @@ mod tests {
             replay_commands: vec![],
             severity: "medium".into(),
         };
-        let json = serde_json::to_string(&cr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cr).expect("serialize derived Serialize");
         assert!(json.contains("\"run_count\""));
         assert!(json.contains("\"occurrence_count\""));
         assert!(json.contains("\"severity\""));
@@ -1858,7 +1858,7 @@ mod tests {
             to_schema: "fam.v2".into(),
             affected_records: 100,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         assert!(json.contains("\"migration_id\""));
         assert!(json.contains("\"from_schema\""));
         assert!(json.contains("\"to_schema\""));
@@ -2036,7 +2036,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&index).expect("serde deserialization should succeed");
         let back: ParserEvidenceIndex =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(index, back);
     }
 
@@ -2052,7 +2052,7 @@ mod tests {
             generated_at_utc: Some("2026-03-02T12:00:00Z".into()),
             outcome: None,
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         assert!(json.contains("\"run_id\""));
         assert!(json.contains("\"manifest_schema_version\""));
         assert!(json.contains("\"manifest_path\""));
@@ -2071,7 +2071,7 @@ mod tests {
             from_schema: "fam.event.v1".into(),
             to_schema: "fam.event.v2".into(),
         };
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         assert!(json.contains("\"run_id\""));
         assert!(json.contains("\"sequence\""));
         assert!(json.contains("\"from_schema\""));
@@ -2085,7 +2085,7 @@ mod tests {
             from_schema: "fam.event.v1".into(),
             to_schema: "fam.event.v2".into(),
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         assert!(json.contains("\"migration_id\""));
         assert!(json.contains("\"from_schema\""));
         assert!(json.contains("\"to_schema\""));

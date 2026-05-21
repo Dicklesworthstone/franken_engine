@@ -1232,7 +1232,7 @@ impl DriftDetector {
             let alert = DriftAlert {
                 id: derive_drift_alert_id(&format!(
                     "hook_ordering_{}_{epoch}",
-                    serde_json::to_string(hook_kind).expect("serde deserialization should succeed")
+                    serde_json::to_string(hook_kind).expect("serialize derived Serialize")
                 )),
                 kind: DriftKind::HookContractBreach,
                 severity: ViolationSeverity::Fatal,
@@ -1596,7 +1596,7 @@ mod tests {
                 ))
                 .expect("serde deserialization should succeed");
         }
-        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
+        let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
             .expect("serde deserialization should succeed");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_effect())
@@ -1953,7 +1953,7 @@ mod tests {
     #[test]
     fn package_create() {
         let corpus = make_corpus_with_fixtures(3);
-        let pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
+        let pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         assert!(!pkg.is_frozen());
         assert_eq!(pkg.total_contracts(), 0);
     }
@@ -1961,7 +1961,7 @@ mod tests {
     #[test]
     fn package_add_hook_contract() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
+        let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
             .expect("serde deserialization should succeed");
         assert_eq!(pkg.total_contracts(), 1);
@@ -1970,7 +1970,7 @@ mod tests {
     #[test]
     fn package_add_effect_contract() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
+        let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_effect_contract(EffectSemanticContract::canonical_dom_mutation())
             .expect("serde deserialization should succeed");
         assert_eq!(pkg.total_contracts(), 1);
@@ -1979,7 +1979,7 @@ mod tests {
     #[test]
     fn package_add_adjudication_rule() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
+        let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         let rule = AdjudicationRule {
             id: make_id("r1"),
             name: "test_rule".to_string(),
@@ -2006,7 +2006,7 @@ mod tests {
     #[test]
     fn package_freeze_empty_fails() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
+        let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         assert_eq!(pkg.freeze(1), Err(FoundationError::EmptyPackage));
     }
 
@@ -2030,7 +2030,7 @@ mod tests {
     #[test]
     fn package_hash_changes_on_add() {
         let corpus = make_corpus_with_fixtures(1);
-        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
+        let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         let h1 = pkg.package_hash;
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
             .expect("serde deserialization should succeed");
@@ -2470,9 +2470,9 @@ mod tests {
     #[test]
     fn serde_version() {
         let v = SemanticContractVersion::CURRENT;
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let v2: SemanticContractVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, v2);
     }
 
@@ -2483,45 +2483,44 @@ mod tests {
             FixtureCategory::HookState,
             FixturePriority::High,
         );
-        let json = serde_json::to_string(&fix).expect("serde deserialization should succeed");
-        let fix2: TraceFixture =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fix).expect("serialize derived Serialize");
+        let fix2: TraceFixture = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fix, fix2);
     }
 
     #[test]
     fn serde_corpus() {
         let corpus = make_corpus_with_fixtures(3);
-        let json = serde_json::to_string(&corpus).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&corpus).expect("serialize derived Serialize");
         let c2: CompatibilityCorpus =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(corpus, c2);
     }
 
     #[test]
     fn serde_hook_contract() {
         let c = HookSemanticContract::canonical_use_state();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let c2: HookSemanticContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, c2);
     }
 
     #[test]
     fn serde_effect_contract() {
         let c = EffectSemanticContract::canonical_dom_mutation();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let c2: EffectSemanticContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, c2);
     }
 
     #[test]
     fn serde_package() {
         let pkg = make_full_package();
-        let json = serde_json::to_string(&pkg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let p2: ContractPackage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pkg, p2);
     }
 
@@ -2537,9 +2536,8 @@ mod tests {
             detected_epoch: 5,
             evidence_hash: ContentHash::compute(b"evidence"),
         };
-        let json = serde_json::to_string(&alert).expect("serde deserialization should succeed");
-        let a2: DriftAlert =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&alert).expect("serialize derived Serialize");
+        let a2: DriftAlert = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(alert, a2);
     }
 
@@ -2547,9 +2545,9 @@ mod tests {
     fn serde_foundation() {
         let mut f = SemanticContractFoundation::new();
         f.register_package(make_full_package());
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let f2: SemanticContractFoundation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f, f2);
     }
 
@@ -2565,9 +2563,8 @@ mod tests {
             drift_ratio_millionths: 83_333,
             alerts_by_kind: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
-        let s2: DriftSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
+        let s2: DriftSummary = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, s2);
     }
 
@@ -2609,9 +2606,8 @@ mod tests {
             kind: MutationKind::AppendChild,
             value: "<span>hi</span>".to_string(),
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let m2: DomMutation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
+        let m2: DomMutation = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, m2);
     }
 
@@ -2650,7 +2646,7 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         // 2. Build package
-        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
+        let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
             .expect("serde deserialization should succeed");
         pkg.add_effect_contract(EffectSemanticContract::canonical_dom_mutation())
@@ -2897,9 +2893,9 @@ mod tests {
             FixtureCategory::RefEdgeCase,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: FixtureCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 12);
@@ -2920,9 +2916,8 @@ mod tests {
             HookKind::UseDebugValue,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: HookKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
+            let back: HookKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 10);
@@ -2938,9 +2933,9 @@ mod tests {
             InvocationRule::OrderPreservedAcrossRenders,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: InvocationRule =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 5);
@@ -2955,9 +2950,9 @@ mod tests {
             CleanupPolicy::ConditionalCleanup,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: CleanupPolicy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -2973,9 +2968,9 @@ mod tests {
             EffectKind::CustomEffect,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: EffectKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -2990,9 +2985,9 @@ mod tests {
             EffectTiming::Deferred,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: EffectTiming =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -3008,9 +3003,9 @@ mod tests {
             ConsumerLane::Adoption,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ConsumerLane =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -3028,9 +3023,9 @@ mod tests {
             DriftKind::VersionIncompatibility,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: DriftKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 7);
@@ -3120,9 +3115,9 @@ mod tests {
             FoundationError::IncompatibleVersion,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: FoundationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
     }
@@ -3136,9 +3131,9 @@ mod tests {
             ViolationSeverity::Info,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ViolationSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 4);
@@ -3154,9 +3149,9 @@ mod tests {
             AdjudicationCategory::SpecGap,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: AdjudicationCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 5);
@@ -3171,9 +3166,9 @@ mod tests {
             AdjudicationResolution::RequireExplicitFallback,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: AdjudicationResolution =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 4);
@@ -3187,9 +3182,9 @@ mod tests {
             SideEffectBoundary::Unknown,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: SideEffectBoundary =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 3);
@@ -3203,9 +3198,9 @@ mod tests {
             DeterminismLevel::Nondeterministic,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: DeterminismLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 3);
@@ -3222,9 +3217,9 @@ mod tests {
             MutationKind::InsertBefore,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: MutationKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 6);
@@ -3239,9 +3234,9 @@ mod tests {
             FixturePriority::Low,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: FixturePriority =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 4);
@@ -3267,7 +3262,7 @@ mod tests {
         corpus
             .freeze()
             .expect("serde deserialization should succeed");
-        let mut pkg = ContractPackage::new(corpus).expect("serde deserialization should succeed");
+        let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
             .expect("serde deserialization should succeed");
         let lanes = vec![ConsumerLane::Compiler, ConsumerLane::Runtime];

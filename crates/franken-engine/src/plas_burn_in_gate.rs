@@ -844,10 +844,9 @@ mod tests {
             ExtensionRiskClass::Standard,
             ExtensionRiskClass::High,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: ExtensionRiskClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -925,9 +924,9 @@ mod tests {
     #[test]
     fn thresholds_serde_roundtrip() {
         let t = BurnInThresholds::for_risk_class(ExtensionRiskClass::High);
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: BurnInThresholds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 
@@ -977,10 +976,9 @@ mod tests {
             BurnInLifecycleState::AutoEnforcement,
             BurnInLifecycleState::Rejection,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: BurnInLifecycleState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1027,10 +1025,9 @@ mod tests {
             BurnInFailureCode::FalseDenyEnvelopeExceeded,
             BurnInFailureCode::RollbackProofArtifactsMissing,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: BurnInFailureCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -1101,9 +1098,9 @@ mod tests {
     #[test]
     fn rollback_artifacts_serde_roundtrip() {
         let a = complete_rollback_artifacts();
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let back: RollbackProofArtifacts =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -1135,9 +1132,9 @@ mod tests {
     #[test]
     fn shadow_observation_serde_roundtrip() {
         let o = success_observation("obs-1", 100);
-        let json = serde_json::to_string(&o).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&o).expect("serialize derived Serialize");
         let back: ShadowObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(o, back);
     }
 
@@ -1221,9 +1218,9 @@ mod tests {
             successful_observations: 9,
             false_denies: 1,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: BurnInMetrics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -1273,9 +1270,8 @@ mod tests {
             from: BurnInLifecycleState::ShadowStart,
             to: BurnInLifecycleState::Rejection,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: BurnInError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let back: BurnInError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1331,9 +1327,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = make_config();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: BurnInSessionConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1733,9 +1729,9 @@ mod tests {
     #[test]
     fn session_serde_roundtrip() {
         let session = session_ready_for_promotion();
-        let json = serde_json::to_string(&session).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&session).expect("serialize derived Serialize");
         let back: BurnInSession =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(session, back);
     }
 
@@ -1753,9 +1749,9 @@ mod tests {
             error_code: None,
             lifecycle_state: BurnInLifecycleState::ShadowStart,
         };
-        let json = serde_json::to_string(&le).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&le).expect("serialize derived Serialize");
         let back: BurnInLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(le, back);
     }
 
@@ -1767,9 +1763,9 @@ mod tests {
         let artifact = session
             .evaluate_promotion_gate(100_000)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: BurnInDecisionArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1783,9 +1779,9 @@ mod tests {
             rollback_artifacts_verified: true,
             lifecycle_state: BurnInLifecycleState::AutoEnforcement,
         };
-        let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sc).expect("serialize derived Serialize");
         let back: BurnInScorecardMetrics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sc, back);
     }
 
@@ -1893,9 +1889,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: BurnInError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }

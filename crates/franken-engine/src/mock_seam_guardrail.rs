@@ -884,9 +884,9 @@ mod tests {
     #[test]
     fn pattern_category_serde_round_trip() {
         for c in PatternCategory::all() {
-            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(c).expect("serialize derived Serialize");
             let back: PatternCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*c, back);
         }
     }
@@ -907,9 +907,9 @@ mod tests {
             ScopeClassification::Production,
             ScopeClassification::Unknown,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: ScopeClassification =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -971,9 +971,9 @@ mod tests {
     #[test]
     fn registry_serde_round_trip() {
         let reg = build_default_registry();
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: PatternRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg.total_count, back.total_count);
         assert_eq!(reg.registry_hash, back.registry_hash);
     }
@@ -1070,9 +1070,9 @@ mod tests {
         let waiver = empty_waiver_policy();
         let content = "use MockCx;\n";
         let result = scan_file_content("src/bad.rs", content, &reg, &waiver, epoch(1));
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: FileScanResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.verdict, back.verdict);
         assert_eq!(result.file_hash, back.file_hash);
     }
@@ -1209,9 +1209,8 @@ mod tests {
             Some(epoch(100)),
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: WaiverPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
+        let back: WaiverPolicy = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p.waivers.len(), back.waivers.len());
         assert_eq!(p.policy_hash, back.policy_hash);
     }
@@ -1273,9 +1272,8 @@ mod tests {
         let files: Vec<(&str, &str)> = vec![("src/bad.rs", "let cx = MockCx::new();")];
         let report = run_guard_sweep(&files, &reg, &waiver, epoch(1))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
-        let back: GuardReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
+        let back: GuardReport = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report.decision, back.decision);
         assert_eq!(report.report_hash, back.report_hash);
     }
@@ -1311,9 +1309,9 @@ mod tests {
             FileVerdict::TestOnlyUsage,
             FileVerdict::ProductionViolation,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: FileVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }
@@ -1337,9 +1335,9 @@ mod tests {
             GateDecision::Fail,
             GateDecision::AbortedExcessViolations,
         ] {
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             let back: GateDecision =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, back);
         }
     }
@@ -1386,9 +1384,9 @@ mod tests {
             },
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let back: GuardrailError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }

@@ -1240,11 +1240,11 @@ mod tests {
         for kind in ExecutionPathKind::ALL {
             // SAFETY: ExecutionPathKind derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid ExecutionPathKind,
             // so from_str back to ExecutionPathKind cannot fail (valid format + matching schema).
             let back: ExecutionPathKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1294,11 +1294,11 @@ mod tests {
         for mode in VerificationMode::ALL {
             // SAFETY: VerificationMode derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(mode).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid VerificationMode,
             // so from_str back to VerificationMode cannot fail (valid format + matching schema).
             let back: VerificationMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*mode, back);
         }
     }
@@ -1349,11 +1349,11 @@ mod tests {
         for kind in MismatchKind::ALL {
             // SAFETY: MismatchKind derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid MismatchKind,
             // so from_str back to MismatchKind cannot fail (valid format + matching schema).
             let back: MismatchKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1385,11 +1385,11 @@ mod tests {
         for sev in MismatchSeverity::ALL {
             // SAFETY: MismatchSeverity derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(sev).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid MismatchSeverity,
             // so from_str back to MismatchSeverity cannot fail (valid format + matching schema).
             let back: MismatchSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*sev, back);
         }
     }
@@ -1478,9 +1478,8 @@ mod tests {
     #[test]
     fn path_evidence_serde_roundtrip() {
         let e = ssr_evidence("p1", b"data");
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
-        let back: PathEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
+        let back: PathEvidence = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1540,9 +1539,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = default_config();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: VerificationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1601,9 +1600,9 @@ mod tests {
     #[test]
     fn path_verdict_serde_roundtrip() {
         for v in PathVerdict::ALL {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: PathVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1976,9 +1975,9 @@ mod tests {
         let err = VerificationError::InvalidConfig {
             reason: "test".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: VerificationError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -2007,9 +2006,8 @@ mod tests {
         ];
         let bv =
             verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&bv).expect("serde deserialization should succeed");
-        let back: BatchVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bv).expect("serialize derived Serialize");
+        let back: BatchVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bv, back);
     }
 }

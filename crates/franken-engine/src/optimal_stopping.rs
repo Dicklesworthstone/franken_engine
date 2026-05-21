@@ -725,8 +725,7 @@ mod tests {
 
     #[test]
     fn cusum_creation() {
-        let chart =
-            CusumChart::new(5_000_000, 500_000).expect("serde deserialization should succeed");
+        let chart = CusumChart::new(5_000_000, 500_000).expect("constructor with valid inputs");
         assert_eq!(chart.statistic_millionths, 0);
         assert!(!chart.signaled);
     }
@@ -745,8 +744,7 @@ mod tests {
 
     #[test]
     fn cusum_signals_on_sustained_anomaly() {
-        let mut chart =
-            CusumChart::new(3_000_000, 500_000).expect("serde deserialization should succeed");
+        let mut chart = CusumChart::new(3_000_000, 500_000).expect("constructor with valid inputs");
         // Feed high LLR observations until threshold crossed.
         for i in 0..10 {
             let obs = make_observation(1_000_000, 800_000, i);
@@ -762,8 +760,7 @@ mod tests {
 
     #[test]
     fn cusum_continues_on_benign() {
-        let mut chart =
-            CusumChart::new(5_000_000, 500_000).expect("serde deserialization should succeed");
+        let mut chart = CusumChart::new(5_000_000, 500_000).expect("constructor with valid inputs");
         // Feed low LLR observations.
         for i in 0..100 {
             let obs = make_observation(100_000, 100_000, i);
@@ -775,8 +772,7 @@ mod tests {
 
     #[test]
     fn cusum_resets_on_negative_llr() {
-        let mut chart =
-            CusumChart::new(5_000_000, 500_000).expect("serde deserialization should succeed");
+        let mut chart = CusumChart::new(5_000_000, 500_000).expect("constructor with valid inputs");
         // Feed one positive, then many negative.
         chart.observe(&make_observation(2_000_000, 500_000, 0));
         assert!(chart.statistic_millionths > 0);
@@ -790,8 +786,7 @@ mod tests {
 
     #[test]
     fn cusum_reset_method() {
-        let mut chart =
-            CusumChart::new(3_000_000, 500_000).expect("serde deserialization should succeed");
+        let mut chart = CusumChart::new(3_000_000, 500_000).expect("constructor with valid inputs");
         for i in 0..10 {
             chart.observe(&make_observation(1_000_000, 800_000, i));
         }
@@ -803,24 +798,21 @@ mod tests {
 
     #[test]
     fn cusum_arl0_lower_bound_positive() {
-        let chart =
-            CusumChart::new(5_000_000, 500_000).expect("serde deserialization should succeed");
+        let chart = CusumChart::new(5_000_000, 500_000).expect("constructor with valid inputs");
         let arl0 = chart.arl0_lower_bound(MILLION);
         assert!(arl0 > MILLION);
     }
 
     #[test]
     fn cusum_arl0_lower_bound_saturates_for_extreme_inputs() {
-        let chart =
-            CusumChart::new(i64::MAX, 500_000).expect("serde deserialization should succeed");
+        let chart = CusumChart::new(i64::MAX, 500_000).expect("constructor with valid inputs");
         let arl0 = chart.arl0_lower_bound(1);
         assert_eq!(arl0, i64::MAX);
     }
 
     #[test]
     fn cusum_observe_extreme_negative_llr_does_not_overflow() {
-        let mut chart =
-            CusumChart::new(1_000_000, 500_000).expect("serde deserialization should succeed");
+        let mut chart = CusumChart::new(1_000_000, 500_000).expect("constructor with valid inputs");
         let obs = Observation {
             llr_millionths: i64::MIN,
             risk_score_millionths: 0,
@@ -835,9 +827,9 @@ mod tests {
     #[test]
     fn cusum_serde_roundtrip() {
         let chart = CusumChart::with_defaults();
-        let json = serde_json::to_string(&chart).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&chart).expect("serialize derived Serialize");
         let restored: CusumChart =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(chart, restored);
     }
 
@@ -937,9 +929,9 @@ mod tests {
     fn gittins_serde_roundtrip() {
         let gc = GittinsIndexComputer::new(vec!["a".into(), "b".into()], 900_000, 100)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&gc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gc).expect("serialize derived Serialize");
         let restored: GittinsIndexComputer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(gc, restored);
     }
 
@@ -1017,9 +1009,9 @@ mod tests {
         let payoffs = vec![1_000_000, 3_000_000, 2_000_000];
         let env =
             SnellEnvelope::compute(payoffs, MILLION).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let restored: SnellEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(env, restored);
     }
 
@@ -1079,9 +1071,9 @@ mod tests {
     #[test]
     fn secretary_serde_roundtrip() {
         let sel = SecretarySelector::new(50);
-        let json = serde_json::to_string(&sel).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sel).expect("serialize derived Serialize");
         let restored: SecretarySelector =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sel, restored);
     }
 
@@ -1134,9 +1126,9 @@ mod tests {
     fn escalation_policy_serde_roundtrip() {
         let policy = EscalationPolicy::new(5_000_000, 500_000, 100)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: EscalationPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
     }
 
@@ -1155,9 +1147,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(7),
             certificate_hash: ContentHash::compute(b"test_cert"),
         };
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let restored: OptimalStoppingCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, restored);
     }
 
@@ -1179,9 +1171,9 @@ mod tests {
     #[test]
     fn observation_serde_roundtrip() {
         let obs = make_observation(500_000, 700_000, 42);
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         let restored: Observation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, restored);
     }
 
@@ -1201,10 +1193,9 @@ mod tests {
     #[test]
     fn stopping_decision_serde_roundtrip() {
         for decision in [StoppingDecision::Continue, StoppingDecision::Stop] {
-            let json =
-                serde_json::to_string(&decision).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
             let back: StoppingDecision =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(decision, back);
         }
     }
@@ -1265,9 +1256,9 @@ mod tests {
             .expect("serde deserialization should succeed");
         let obs = make_observation(100_000, 100_000, 0);
         policy.observe(&obs);
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: EscalationPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy.total_observations, restored.total_observations);
     }
 
@@ -1324,7 +1315,7 @@ mod tests {
     #[test]
     fn enrichment_json_fields_cusum_chart() {
         let chart = CusumChart::with_defaults();
-        let json = serde_json::to_string(&chart).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&chart).expect("serialize derived Serialize");
         assert!(json.contains("statistic_millionths"));
         assert!(json.contains("threshold_millionths"));
         assert!(json.contains("reference_millionths"));
@@ -1337,8 +1328,7 @@ mod tests {
     fn enrichment_json_fields_gittins_arm() {
         let gc = GittinsIndexComputer::new(vec!["hyp_x".into()], 900_000, 100)
             .expect("serde deserialization should succeed");
-        let json =
-            serde_json::to_string(&gc.arms[0]).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gc.arms[0]).expect("serialize derived Serialize");
         assert!(json.contains("arm_id"));
         assert!(json.contains("successes"));
         assert!(json.contains("failures"));
@@ -1359,7 +1349,7 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             certificate_hash: ContentHash::compute(b"field_check"),
         };
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         assert!(json.contains("algorithm"));
         assert!(json.contains("observations_before_stop"));
         assert!(json.contains("snell_optimal_value_millionths"));
@@ -1374,9 +1364,9 @@ mod tests {
         let gc = GittinsIndexComputer::new(vec!["arm0".into()], 800_000, 50)
             .expect("serde deserialization should succeed");
         let arm = &gc.arms[0];
-        let json = serde_json::to_string(arm).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(arm).expect("serialize derived Serialize");
         let restored: GittinsArm =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*arm, restored);
     }
 
@@ -1483,9 +1473,9 @@ mod tests {
             StoppingError::IndexOutOfBounds { index: 5, size: 3 },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: StoppingError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, &back);
         }
     }
@@ -1518,7 +1508,7 @@ mod tests {
     #[test]
     fn enrichment_json_fields_observation() {
         let obs = make_observation(100_000, 200_000, 99);
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         assert!(json.contains("llr_millionths"));
         assert!(json.contains("risk_score_millionths"));
         assert!(json.contains("timestamp_us"));
@@ -1528,7 +1518,7 @@ mod tests {
     #[test]
     fn enrichment_json_fields_secretary_selector() {
         let sel = SecretarySelector::new(20);
-        let json = serde_json::to_string(&sel).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sel).expect("serialize derived Serialize");
         assert!(json.contains("total_items"));
         assert!(json.contains("exploration_length"));
         assert!(json.contains("observed"));
@@ -1542,7 +1532,7 @@ mod tests {
     fn enrichment_json_fields_escalation_policy() {
         let policy = EscalationPolicy::new(5_000_000, 500_000, 50)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         assert!(json.contains("cusum"));
         assert!(json.contains("cusum_enabled"));
         assert!(json.contains("secretary"));
@@ -1555,7 +1545,7 @@ mod tests {
     fn enrichment_json_fields_snell_envelope() {
         let env = SnellEnvelope::compute(vec![1_000_000, 2_000_000], MILLION)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         assert!(json.contains("payoffs_millionths"));
         assert!(json.contains("envelope_millionths"));
         assert!(json.contains("optimal_stopping_time"));
@@ -1566,7 +1556,7 @@ mod tests {
     #[test]
     fn enrichment_cusum_high_water_mark_tracks_peak() {
         let mut chart =
-            CusumChart::new(10_000_000, 500_000).expect("serde deserialization should succeed");
+            CusumChart::new(10_000_000, 500_000).expect("constructor with valid inputs");
         // Push the statistic up, then down, then check high_water_mark stayed at peak
         chart.observe(&make_observation(2_000_000, 500_000, 0));
         chart.observe(&make_observation(2_000_000, 500_000, 1));
@@ -1582,8 +1572,7 @@ mod tests {
 
     #[test]
     fn enrichment_cusum_post_signal_keeps_returning_stop() {
-        let mut chart =
-            CusumChart::new(1_000_000, 0).expect("serde deserialization should succeed");
+        let mut chart = CusumChart::new(1_000_000, 0).expect("constructor with valid inputs");
         // Force a signal
         chart.observe(&make_observation(2_000_000, 500_000, 0));
         assert!(chart.signaled);
@@ -1596,16 +1585,14 @@ mod tests {
 
     #[test]
     fn enrichment_cusum_arl0_zero_post_change_mean() {
-        let chart =
-            CusumChart::new(5_000_000, 500_000).expect("serde deserialization should succeed");
+        let chart = CusumChart::new(5_000_000, 500_000).expect("constructor with valid inputs");
         let arl0 = chart.arl0_lower_bound(0);
         assert_eq!(arl0, i64::MAX);
     }
 
     #[test]
     fn enrichment_cusum_arl0_negative_post_change_mean() {
-        let chart =
-            CusumChart::new(5_000_000, 500_000).expect("serde deserialization should succeed");
+        let chart = CusumChart::new(5_000_000, 500_000).expect("constructor with valid inputs");
         let arl0 = chart.arl0_lower_bound(-100);
         assert_eq!(arl0, i64::MAX);
     }

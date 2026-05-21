@@ -848,9 +848,9 @@ mod tests {
             CheckpointReason::Explicit,
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(reason).expect("serialize derived Serialize");
             let restored: CheckpointReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*reason, restored);
         }
     }
@@ -867,18 +867,18 @@ mod tests {
             action: CheckpointAction::Continue,
             timestamp_virtual: 42,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: CheckpointEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
     #[test]
     fn density_config_serialization_round_trip() {
         let config = DensityConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: DensityConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -890,9 +890,9 @@ mod tests {
             LoopSite::Custom("x".to_string()),
         ];
         for site in &sites {
-            let json = serde_json::to_string(site).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(site).expect("serialize derived Serialize");
             let restored: LoopSite =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*site, restored);
         }
     }
@@ -906,10 +906,9 @@ mod tests {
             CheckpointAction::Drain,
             CheckpointAction::Abort,
         ] {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let restored: CheckpointAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, restored);
         }
     }
@@ -942,9 +941,9 @@ mod tests {
     fn coverage_serialization_round_trip() {
         let mut cov = CheckpointCoverage::new();
         cov.register("bytecode_dispatch");
-        let json = serde_json::to_string(&cov).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cov).expect("serialize derived Serialize");
         let restored: CheckpointCoverage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cov, restored);
     }
 
@@ -1197,9 +1196,9 @@ mod tests {
             action: CheckpointAction::Continue,
             timestamp_virtual: 100,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: CheckpointEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1249,9 +1248,9 @@ mod tests {
             LoopSite::IrCompilation,
         ];
         for site in &sites {
-            let json = serde_json::to_string(site).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(site).expect("serialize derived Serialize");
             let restored: LoopSite =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*site, restored);
         }
     }
@@ -1393,9 +1392,9 @@ mod tests {
             max_iterations: 42,
             max_total_iterations: 9999,
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: DensityConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1420,9 +1419,9 @@ mod tests {
             CheckpointReason::Explicit,
         ];
         for r in &reasons {
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             let restored: CheckpointReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, restored);
         }
     }
@@ -1662,7 +1661,7 @@ mod tests {
             action: CheckpointAction::Continue,
             timestamp_virtual: 3,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(
             json.contains("\"trace_id\""),
             "field trace_id must be present"
@@ -1697,7 +1696,7 @@ mod tests {
             max_iterations: 1,
             max_total_iterations: 2,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         assert!(
             json.contains("\"max_iterations\""),
             "field max_iterations must be present"
@@ -1840,9 +1839,8 @@ mod tests {
     #[test]
     fn loop_site_custom_empty_string_serde() {
         let site = LoopSite::Custom(String::new());
-        let json = serde_json::to_string(&site).expect("serde deserialization should succeed");
-        let restored: LoopSite =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&site).expect("serialize derived Serialize");
+        let restored: LoopSite = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(site, restored);
     }
 
@@ -1858,9 +1856,9 @@ mod tests {
             action: CheckpointAction::Continue,
             timestamp_virtual: 0,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: CheckpointEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1876,9 +1874,9 @@ mod tests {
             action: CheckpointAction::Abort,
             timestamp_virtual: u64::MAX,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: CheckpointEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1891,9 +1889,9 @@ mod tests {
         cov.register("gc_sweep");
         cov.register("policy_iteration");
         cov.register("contract_evaluation");
-        let json = serde_json::to_string(&cov).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cov).expect("serialize derived Serialize");
         let restored: CheckpointCoverage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cov, restored);
         assert_eq!(restored.covered_count(), 5);
         assert_eq!(restored.uncovered().len(), 5);
@@ -1928,9 +1926,9 @@ mod tests {
         let events = guard.drain_events();
         assert!(!events.is_empty());
         for event in &events {
-            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(event).expect("serialize derived Serialize");
             let restored: CheckpointEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(event, &restored);
         }
     }
@@ -2068,9 +2066,9 @@ mod tests {
     #[test]
     fn coverage_serde_empty_default() {
         let cov = CheckpointCoverage::default();
-        let json = serde_json::to_string(&cov).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cov).expect("serialize derived Serialize");
         let restored: CheckpointCoverage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cov, restored);
         assert!(!restored.all_covered());
     }
@@ -2106,9 +2104,9 @@ mod tests {
             max_iterations: 1,
             max_total_iterations: 1,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: DensityConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
@@ -2178,9 +2176,8 @@ mod tests {
     #[test]
     fn loop_site_custom_with_special_chars_serde() {
         let site = LoopSite::Custom("scan:v2/hot_path".to_string());
-        let json = serde_json::to_string(&site).expect("serde deserialization should succeed");
-        let restored: LoopSite =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&site).expect("serialize derived Serialize");
+        let restored: LoopSite = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(site, restored);
     }
 

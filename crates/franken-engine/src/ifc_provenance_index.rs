@@ -2953,18 +2953,18 @@ mod tests {
             Label::Internal,
             FlowDecision::Allowed,
         );
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let deser: FlowEventRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, deser);
     }
 
     #[test]
     fn flow_proof_record_serde_roundtrip() {
         let proof = flow_proof("p1", "ext-a", Label::Internal, Label::Confidential, 1);
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         let deser: FlowProofRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(proof, deser);
     }
 
@@ -2977,9 +2977,9 @@ mod tests {
             Label::Public,
             DeclassificationDecision::Allow,
         );
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let deser: DeclassReceiptRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, deser);
     }
 
@@ -3011,9 +3011,9 @@ mod tests {
     #[test]
     fn confinement_claim_record_serde_roundtrip() {
         let claim = confinement_claim("c1", "ext-a", ClaimStrength::Full, 1);
-        let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&claim).expect("serialize derived Serialize");
         let deser: ConfinementClaimRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(claim, deser);
     }
 
@@ -3024,9 +3024,9 @@ mod tests {
             FlowDecision::Blocked,
             FlowDecision::Declassified,
         ] {
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             let deser: FlowDecision =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, deser);
         }
     }
@@ -3038,9 +3038,9 @@ mod tests {
             LineageEvidenceType::FlowProof,
             LineageEvidenceType::DeclassificationReceipt,
         ] {
-            let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&t).expect("serialize derived Serialize");
             let deser: LineageEvidenceType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(t, deser);
         }
     }
@@ -3054,9 +3054,9 @@ mod tests {
             strongest_claim: Some(ClaimStrength::Full),
             latest_proof_epoch: Some(3),
         };
-        let json = serde_json::to_string(&status).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&status).expect("serialize derived Serialize");
         let deser: ConfinementStatus =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(status, deser);
     }
 
@@ -3078,9 +3078,9 @@ mod tests {
             ProvenanceError::SerializationError("test".to_string()),
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let deser: ProvenanceError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, deser);
         }
     }
@@ -3096,9 +3096,9 @@ mod tests {
             extension_id: Some("ext-a".to_string()),
             record_count: Some(1),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let deser: ProvenanceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, deser);
     }
 
@@ -3865,9 +3865,9 @@ mod tests {
             declass_receipts: 3,
             confinement_claims: 2,
         };
-        let json = serde_json::to_string(&counts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&counts).expect("serialize derived Serialize");
         let deser: RecordCounts =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(counts, deser);
         assert_eq!(deser.total(), 20);
     }
@@ -3989,9 +3989,8 @@ mod tests {
             evidence_ref: "ev1".to_string(),
             evidence_type: LineageEvidenceType::FlowEvent,
         };
-        let json = serde_json::to_string(&hop).expect("serde deserialization should succeed");
-        let deser: LineageHop =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hop).expect("serialize derived Serialize");
+        let deser: LineageHop = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hop, deser);
     }
 
@@ -4006,9 +4005,8 @@ mod tests {
                 evidence_type: LineageEvidenceType::FlowProof,
             }],
         };
-        let json = serde_json::to_string(&path).expect("serde deserialization should succeed");
-        let deser: LineagePath =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&path).expect("serialize derived Serialize");
+        let deser: LineagePath = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(path, deser);
     }
 
@@ -4274,9 +4272,9 @@ mod tests {
                 evidence_ref: format!("ref-{et}"),
                 evidence_type: *et,
             };
-            let json = serde_json::to_string(&hop).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&hop).expect("serialize derived Serialize");
             let back: LineageHop =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(hop, back);
         }
     }
@@ -4319,9 +4317,9 @@ mod tests {
             extension_id: None,
             record_count: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ProvenanceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
         assert!(back.error_code.is_none());
         assert!(back.extension_id.is_none());
@@ -4543,9 +4541,9 @@ mod tests {
             FlowDecision::Declassified,
         );
         ev.receipt_ref = Some("r1".to_string());
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let back: FlowEventRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
         assert_eq!(back.receipt_ref, Some("r1".to_string()));
     }
@@ -4644,9 +4642,9 @@ mod tests {
             extension_id: Some("ext-a".into()),
             record_count: Some(0),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ProvenanceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
         assert_eq!(back.error_code.as_deref(), Some("PROV_EMPTY_ID"));
     }

@@ -1240,9 +1240,9 @@ mod tests {
     #[test]
     fn race_surface_catalog_serialization_round_trip() {
         let catalog = RaceSurfaceCatalog::default_catalog();
-        let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&catalog).expect("serialize derived Serialize");
         let restored: RaceSurfaceCatalog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(catalog, restored);
     }
 
@@ -1260,9 +1260,9 @@ mod tests {
             race_surfaces_total: 5,
             regression_transcripts: vec![],
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: ExplorationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
@@ -1274,9 +1274,9 @@ mod tests {
             minimized_transcript: None,
             related_race_ids: vec!["race-1".to_string()],
         };
-        let json = serde_json::to_string(&failure).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&failure).expect("serialize derived Serialize");
         let restored: ExplorationFailure =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(failure, restored);
     }
 
@@ -1286,9 +1286,9 @@ mod tests {
             action: "test".to_string(),
             outcome: "fail".to_string(),
         };
-        let json = serde_json::to_string(&checker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&checker).expect("serialize derived Serialize");
         let restored: InvariantChecker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(checker, restored);
     }
 
@@ -1389,9 +1389,9 @@ mod tests {
             OperationType::CancelInjection,
             OperationType::TimeAdvance,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: OperationType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -1404,9 +1404,9 @@ mod tests {
             RaceSeverity::High,
             RaceSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: RaceSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -1426,9 +1426,9 @@ mod tests {
             },
         ];
         for s in &strategies {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let restored: ExplorationStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, restored);
         }
     }
@@ -1436,17 +1436,17 @@ mod tests {
     #[test]
     fn invariant_result_serde_roundtrip() {
         let held = InvariantResult::Held;
-        let json = serde_json::to_string(&held).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&held).expect("serialize derived Serialize");
         let restored: InvariantResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(held, restored);
 
         let violated = InvariantResult::Violated {
             description: "bad".to_string(),
         };
-        let json = serde_json::to_string(&violated).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&violated).expect("serialize derived Serialize");
         let restored: InvariantResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(violated, restored);
     }
 
@@ -1465,9 +1465,9 @@ mod tests {
             },
         ];
         for a in &actions {
-            let json = serde_json::to_string(a).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(a).expect("serialize derived Serialize");
             let restored: ScenarioAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*a, restored);
         }
     }
@@ -1487,9 +1487,9 @@ mod tests {
             invariant: "monotonic".to_string(),
             severity: RaceSeverity::High,
         };
-        let json = serde_json::to_string(&rs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rs).expect("serialize derived Serialize");
         let restored: RaceSurface =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rs, restored);
     }
 
@@ -1503,9 +1503,8 @@ mod tests {
             ],
             seed: 42,
         };
-        let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
-        let restored: Scenario =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sc).expect("serialize derived Serialize");
+        let restored: Scenario = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sc, restored);
     }
 
@@ -1576,9 +1575,9 @@ mod tests {
     #[test]
     fn invariant_checker_all_tasks_terminal_serde_roundtrip() {
         let checker = InvariantChecker::AllTasksTerminal;
-        let json = serde_json::to_string(&checker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&checker).expect("serialize derived Serialize");
         let restored: InvariantChecker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(checker, restored);
     }
 
@@ -1625,9 +1624,9 @@ mod tests {
             minimized_transcript: Some(ScheduleTranscript::new(1)),
             related_race_ids: vec!["r1".to_string()],
         };
-        let json = serde_json::to_string(&failure).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&failure).expect("serialize derived Serialize");
         let restored: ExplorationFailure =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(failure, restored);
         assert!(restored.minimized_transcript.is_some());
     }
@@ -1635,9 +1634,9 @@ mod tests {
     #[test]
     fn targeted_race_strategy_with_empty_ids() {
         let strategy = ExplorationStrategy::TargetedRace { race_ids: vec![] };
-        let json = serde_json::to_string(&strategy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&strategy).expect("serialize derived Serialize");
         let restored: ExplorationStrategy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(strategy, restored);
     }
 
@@ -1704,9 +1703,8 @@ mod tests {
             region_id: Some("r-42".to_string()),
             outcome: "completed".to_string(),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: LabEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
+        let back: LabEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -1719,9 +1717,8 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: Verdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
+            let back: Verdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1759,7 +1756,7 @@ mod tests {
             race_surfaces_total: 2,
             regression_transcripts: vec![],
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         for field in &[
             "exploration_id",
             "strategy",
@@ -1787,9 +1784,9 @@ mod tests {
         };
         assert_eq!(f.violations.len(), 3);
         assert_eq!(f.related_race_ids.len(), 2);
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let back: ExplorationFailure =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f, back);
     }
 
@@ -2050,18 +2047,18 @@ mod tests {
     #[test]
     fn invariant_checker_no_completed_and_faulted_serde() {
         let checker = InvariantChecker::NoCompletedAndFaulted;
-        let json = serde_json::to_string(&checker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&checker).expect("serialize derived Serialize");
         let restored: InvariantChecker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(checker, restored);
     }
 
     #[test]
     fn invariant_checker_fault_after_completion_serde() {
         let checker = InvariantChecker::FaultAfterCompletionForbidden;
-        let json = serde_json::to_string(&checker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&checker).expect("serialize derived Serialize");
         let restored: InvariantChecker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(checker, restored);
     }
 
@@ -2528,9 +2525,9 @@ mod tests {
             race_surfaces_total: 5,
             regression_transcripts: vec![ScheduleTranscript::new(7)],
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: ExplorationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
@@ -2767,10 +2764,9 @@ mod tests {
                 task_index: 0,
                 fault: fault.clone(),
             };
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let restored: ScenarioAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, restored);
         }
     }

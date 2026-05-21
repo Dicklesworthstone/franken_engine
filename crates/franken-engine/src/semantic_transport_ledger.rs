@@ -1687,11 +1687,11 @@ mod tests {
 
         // SAFETY: TransportAnalysisResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid TransportAnalysisResult,
         // so from_str back to TransportAnalysisResult cannot fail (valid format + matching schema).
         let deserialized: TransportAnalysisResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.outcome, deserialized.outcome);
         assert_eq!(result.result_hash, deserialized.result_hash);
     }
@@ -1701,11 +1701,11 @@ mod tests {
         let ledger = SemanticTransportLedger::new(42);
         // SAFETY: SemanticTransportLedger derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid SemanticTransportLedger,
         // so from_str back to SemanticTransportLedger cannot fail (valid format + matching schema).
         let deserialized: SemanticTransportLedger =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ledger.compiled_epoch, deserialized.compiled_epoch);
     }
 
@@ -1714,11 +1714,11 @@ mod tests {
         let config = TransportAnalyzerConfig::default();
         // SAFETY: TransportAnalyzerConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid TransportAnalyzerConfig,
         // so from_str back to TransportAnalyzerConfig cannot fail (valid format + matching schema).
         let deserialized: TransportAnalyzerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config.max_entries, deserialized.max_entries);
     }
 
@@ -2515,11 +2515,11 @@ mod tests {
         for d in &domains {
             // SAFETY: ContractDomain derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(d).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid ContractDomain,
             // so from_str back to ContractDomain cannot fail (valid format + matching schema).
             let back: ContractDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*d, back);
         }
     }
@@ -2533,9 +2533,9 @@ mod tests {
             TransportVerdict::Unknown,
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: TransportVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2550,9 +2550,9 @@ mod tests {
             TransportAnalysisOutcome::BudgetExhausted,
         ];
         for o in &outcomes {
-            let json = serde_json::to_string(o).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(o).expect("serialize derived Serialize");
             let back: TransportAnalysisOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*o, back);
         }
     }
@@ -2569,9 +2569,9 @@ mod tests {
             TransportError::MorphismConflict("conflict".to_string()),
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let back: TransportError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }
@@ -2640,11 +2640,11 @@ mod tests {
         let d = delta(500_000, true);
         // SAFETY: BehavioralDelta derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid BehavioralDelta,
         // so from_str back to BehavioralDelta cannot fail (valid format + matching schema).
         let back: BehavioralDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -2655,9 +2655,8 @@ mod tests {
     #[test]
     fn test_version_pair_serde() {
         let pair = VersionPair::new(v(1, 2, 3), v(4, 5, 6));
-        let json = serde_json::to_string(&pair).expect("serde deserialization should succeed");
-        let back: VersionPair =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pair).expect("serialize derived Serialize");
+        let back: VersionPair = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pair, back);
     }
 
@@ -2818,9 +2817,9 @@ mod tests {
             }],
             epoch: 99,
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: TransportAnalysisInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -3261,9 +3260,9 @@ mod tests {
     #[test]
     fn test_analyzer_serde_roundtrip() {
         let a = SemanticTransportAnalyzer::new();
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let back: SemanticTransportAnalyzer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a.config.max_entries, back.config.max_entries);
         assert_eq!(
             a.config.incompatibility_threshold_millionths,
@@ -3281,9 +3280,9 @@ mod tests {
             detect_regression_masks: false,
         };
         let a = SemanticTransportAnalyzer::with_config(config);
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let back: SemanticTransportAnalyzer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.config.max_entries, 42);
         assert_eq!(back.config.max_morphisms_per_entry, 7);
         assert_eq!(back.config.max_regression_masks, 3);
@@ -3676,9 +3675,9 @@ mod tests {
             .analyze(&input)
             .expect("serde deserialization should succeed");
         let entry = &result.ledger.entries[0];
-        let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(entry).expect("serialize derived Serialize");
         let back: TransportEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*entry, back);
     }
 
@@ -3708,9 +3707,9 @@ mod tests {
             .analyze(&input)
             .expect("serde deserialization should succeed");
         let morph = &result.ledger.morphisms[0];
-        let json = serde_json::to_string(morph).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(morph).expect("serialize derived Serialize");
         let back: CompatibilityMorphism =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*morph, back);
     }
 
@@ -3750,9 +3749,9 @@ mod tests {
             debt_code: DEBT_REGRESSION_MASKED.to_string(),
             evidence_hash: ContentHash::compute(b"mask-serde-test"),
         };
-        let json = serde_json::to_string(&mask).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mask).expect("serialize derived Serialize");
         let back: RegressionMask =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mask, back);
     }
 
@@ -4005,9 +4004,9 @@ mod tests {
         assert!(report.contains("Morphisms"));
 
         // Serde roundtrip of full result.
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: TransportAnalysisResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.result_hash, back.result_hash);
         assert_eq!(result.outcome, back.outcome);
         assert_eq!(result.ledger.entries.len(), back.ledger.entries.len());

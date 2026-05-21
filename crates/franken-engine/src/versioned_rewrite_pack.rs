@@ -1146,11 +1146,10 @@ mod tests {
         let v = PackVersion::CURRENT;
         // SAFETY: PackVersion derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid PackVersion,
         // so from_str back to PackVersion cannot fail (valid format + matching schema).
-        let back: PackVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: PackVersion = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1179,10 +1178,10 @@ mod tests {
     fn cost_class_serde_roundtrip() {
         for class in InstructionCostClass::ALL {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(class).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(class).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: InstructionCostClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*class, back);
         }
     }
@@ -1222,10 +1221,10 @@ mod tests {
     fn cost_model_serde_roundtrip() {
         let model = DeterministicCostModel::default_baseline("serde-test");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&model).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&model).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: DeterministicCostModel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(model, back);
     }
 
@@ -1358,10 +1357,10 @@ mod tests {
             RewriteCategory::Custom,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cat).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: RewriteCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cat, back);
         }
     }
@@ -1387,10 +1386,10 @@ mod tests {
             RuleInterferenceKind::BudgetContention,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: RuleInterferenceKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -1481,10 +1480,10 @@ mod tests {
             RuleInterferenceKind::None,
         )]);
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&meta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&meta).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: InterferenceMetadata =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(meta, back);
     }
 
@@ -1678,10 +1677,9 @@ mod tests {
             vec![test_rule("r1", RewriteCategory::Custom, true)],
         );
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&pack).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pack).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
-        let back: RewritePack =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: RewritePack = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pack, back);
     }
 
@@ -2149,9 +2147,8 @@ mod tests {
     #[test]
     fn catalog_serde_roundtrip() {
         let catalog = PackCatalog::new("serde");
-        let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
-        let back: PackCatalog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&catalog).expect("serialize derived Serialize");
+        let back: PackCatalog = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(catalog, back);
     }
 
@@ -2229,9 +2226,9 @@ mod tests {
     #[test]
     fn rule_entry_serde_roundtrip() {
         let rule = test_rule("serde-rule", RewriteCategory::EffectHoisting, true);
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
         let back: RewriteRuleEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rule, back);
     }
 
@@ -2493,9 +2490,9 @@ mod tests {
     #[test]
     fn rule_interference_serde() {
         let interf = test_interference("a", "b", RuleInterferenceKind::BudgetContention);
-        let json = serde_json::to_string(&interf).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&interf).expect("serialize derived Serialize");
         let back: RuleInterference =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(interf, back);
     }
 }

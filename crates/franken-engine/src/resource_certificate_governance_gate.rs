@@ -1070,9 +1070,9 @@ mod tests {
     #[test]
     fn resource_kind_serde_roundtrip() {
         for k in ResourceKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: ResourceKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1094,9 +1094,9 @@ mod tests {
     #[test]
     fn risk_level_serde_roundtrip() {
         for r in RiskLevel::ALL {
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             let back: RiskLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, back);
         }
     }
@@ -1126,9 +1126,9 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for v in GateVerdict::ALL {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: GateVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1150,9 +1150,9 @@ mod tests {
     #[test]
     fn regression_kind_serde_roundtrip() {
         for k in RegressionKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: RegressionKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1198,9 +1198,9 @@ mod tests {
     #[test]
     fn evidence_serde_roundtrip() {
         let e = good_evidence(ResourceKind::IoBudget);
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: CertificateEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1514,9 +1514,9 @@ mod tests {
         let ev = good_evidence(ResourceKind::CpuBudget);
         let result = evaluate(&ev, None, &config);
         let receipt = DecisionReceipt::from_result(&result, &ev);
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -1550,9 +1550,8 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = GateConfig::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: GateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
+        let back: GateConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1579,9 +1578,9 @@ mod tests {
             max_claimable_improvement: 100_000,
             caveats: Vec::new(),
         };
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: PublicationConstraint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1601,9 +1600,8 @@ mod tests {
         let config = default_config();
         let ev = good_evidence(ResourceKind::CpuBudget);
         let r = evaluate(&ev, None, &config);
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: GateResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
+        let back: GateResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 

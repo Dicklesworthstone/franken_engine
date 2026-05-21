@@ -857,9 +857,9 @@ mod tests {
     #[test]
     fn op_kind_serde() {
         for k in OperationKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: OperationKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -897,9 +897,9 @@ mod tests {
     #[test]
     fn side_effect_serde() {
         for s in SideEffectKind::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: SideEffectKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -940,9 +940,8 @@ mod tests {
     #[test]
     fn schema_serde_roundtrip() {
         let s = side_effect_schema("test");
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: KernelSchema =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
+        let back: KernelSchema = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -998,9 +997,9 @@ mod tests {
             depth: 12,
             limit: 8,
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: RejectionReason =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1051,9 +1050,9 @@ mod tests {
         let v = EligibilityVerdict::EligibleWithCaveats {
             caveats: vec!["test caveat".into()],
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: EligibilityVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1180,9 +1179,9 @@ mod tests {
         freqs.insert("s1".into(), 50_000);
         freqs.insert("s2".into(), 80_000);
         let e = SynthesisEnvelope::compute(epoch(), &schemas, &freqs);
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: SynthesisEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1253,9 +1252,8 @@ mod tests {
     fn corpus_serde_roundtrip() {
         let mut c = KernelCorpus::new();
         c.observe(pure_arithmetic_schema("s1"), 100);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: KernelCorpus =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
+        let back: KernelCorpus = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 

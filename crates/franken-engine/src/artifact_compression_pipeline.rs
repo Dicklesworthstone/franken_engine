@@ -1148,11 +1148,11 @@ mod tests {
         for alg in CompressionAlgorithm::ALL {
             // SAFETY: CompressionAlgorithm derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(alg).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(alg).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid CompressionAlgorithm,
             // so from_str back to CompressionAlgorithm cannot fail (valid format + matching schema).
             let back: CompressionAlgorithm =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*alg, back);
         }
     }
@@ -1190,11 +1190,11 @@ mod tests {
         for cat in ArtifactCategory::ALL {
             // SAFETY: ArtifactCategory derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cat).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid ArtifactCategory,
             // so from_str back to ArtifactCategory cannot fail (valid format + matching schema).
             let back: ArtifactCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cat, back);
         }
     }
@@ -1303,11 +1303,11 @@ mod tests {
         let d = make_descriptor("art-1", ArtifactCategory::Aot, 2048);
         // SAFETY: ArtifactDescriptor derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid ArtifactDescriptor,
         // so from_str back to ArtifactDescriptor cannot fail (valid format + matching schema).
         let back: ArtifactDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -1366,11 +1366,11 @@ mod tests {
         );
         // SAFETY: RestorationRecipe derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&recipe).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&recipe).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid RestorationRecipe,
         // so from_str back to RestorationRecipe cannot fail (valid format + matching schema).
         let back: RestorationRecipe =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(recipe, back);
     }
 
@@ -1412,11 +1412,10 @@ mod tests {
         );
         // SAFETY: DedupReceipt derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DedupReceipt,
         // so from_str back to DedupReceipt cannot fail (valid format + matching schema).
-        let back: DedupReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: DedupReceipt = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1447,9 +1446,9 @@ mod tests {
             ExclusionReason::CategoryExcluded,
             test_epoch(),
         );
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: ExclusionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1744,9 +1743,8 @@ mod tests {
             64,
             1,
         );
-        let json = serde_json::to_string(&tracker).expect("serde deserialization should succeed");
-        let back: DedupTracker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tracker).expect("serialize derived Serialize");
+        let back: DedupTracker = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tracker, back);
     }
 

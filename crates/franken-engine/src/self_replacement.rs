@@ -360,7 +360,7 @@ impl SignaturePreimage for DelegateCellManifest {
                     .iter()
                     .map(|c| {
                         CanonicalValue::String(
-                            serde_json::to_string(c).expect("serde deserialization should succeed"),
+                            serde_json::to_string(c).expect("serialize derived Serialize"),
                         )
                     })
                     .collect(),
@@ -374,7 +374,7 @@ impl SignaturePreimage for DelegateCellManifest {
                     .iter()
                     .map(|c| {
                         CanonicalValue::String(
-                            serde_json::to_string(c).expect("serde deserialization should succeed"),
+                            serde_json::to_string(c).expect("serialize derived Serialize"),
                         )
                     })
                     .collect(),
@@ -1154,7 +1154,7 @@ mod tests {
     // -- Test helpers --
 
     fn test_slot_id() -> SlotId {
-        SlotId::new("parser-slot").expect("serde deserialization should succeed")
+        SlotId::new("parser-slot").expect("constructor with valid inputs")
     }
 
     fn test_authority_envelope() -> AuthorityEnvelope {
@@ -1259,7 +1259,7 @@ mod tests {
         let json = serde_json::to_string(&SchemaVersion::V1)
             .expect("serde deserialization should succeed");
         let restored: SchemaVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(SchemaVersion::V1, restored);
     }
 
@@ -1282,9 +1282,9 @@ mod tests {
             DelegateType::WasmBacked,
             DelegateType::ExternalProcess,
         ] {
-            let json = serde_json::to_string(&dt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&dt).expect("serialize derived Serialize");
             let restored: DelegateType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(dt, restored);
         }
     }
@@ -1304,9 +1304,9 @@ mod tests {
     #[test]
     fn sandbox_serde_roundtrip() {
         let sb = SandboxConfiguration::default();
-        let json = serde_json::to_string(&sb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sb).expect("serialize derived Serialize");
         let restored: SandboxConfiguration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sb, restored);
     }
 
@@ -1396,9 +1396,9 @@ mod tests {
     #[test]
     fn manifest_serde_roundtrip() {
         let manifest = create_test_manifest();
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let restored: DelegateCellManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, restored);
     }
 
@@ -1435,9 +1435,9 @@ mod tests {
     #[test]
     fn bundle_serde_roundtrip() {
         let bundle = SignatureBundle::new(1);
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let restored: SignatureBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, restored);
     }
 
@@ -1564,9 +1564,9 @@ mod tests {
         })
         .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: ReplacementReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
     }
 
@@ -1703,9 +1703,9 @@ mod tests {
         })
         .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let restored: PromotionDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, restored);
     }
 
@@ -1747,9 +1747,9 @@ mod tests {
             GateVerdict::Denied,
             GateVerdict::Inconclusive,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: GateVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -1770,9 +1770,9 @@ mod tests {
             RiskLevel::High,
             RiskLevel::Critical,
         ] {
-            let json = serde_json::to_string(&rl).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&rl).expect("serialize derived Serialize");
             let restored: RiskLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(rl, restored);
         }
     }
@@ -1795,9 +1795,9 @@ mod tests {
             ReplacementStage::Canary,
             ReplacementStage::Production,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let restored: ReplacementStage =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, restored);
         }
     }
@@ -1923,7 +1923,7 @@ mod tests {
         let manifest = create_test_manifest();
         let mut lifecycle = ReplacementLifecycle::new(test_slot_id(), manifest);
 
-        let wrong_slot = SlotId::new("wrong-slot").expect("serde deserialization should succeed");
+        let wrong_slot = SlotId::new("wrong-slot").expect("constructor with valid inputs");
         let artifacts = test_validation_artifacts();
         let receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &wrong_slot,
@@ -2003,9 +2003,9 @@ mod tests {
             },
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let restored: ApproverKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, restored);
         }
     }
@@ -2040,9 +2040,9 @@ mod tests {
             passed: true,
             summary: "ok".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: ValidationArtifactRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2087,9 +2087,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: SelfReplacementError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2182,9 +2182,9 @@ mod tests {
     fn lifecycle_serde_roundtrip() {
         let manifest = create_test_manifest();
         let lifecycle = ReplacementLifecycle::new(test_slot_id(), manifest);
-        let json = serde_json::to_string(&lifecycle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lifecycle).expect("serialize derived Serialize");
         let restored: ReplacementLifecycle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lifecycle, restored);
     }
 
@@ -2197,9 +2197,9 @@ mod tests {
             trigger_event: "hostcall".to_string(),
             blocking: true,
         };
-        let json = serde_json::to_string(&hook).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hook).expect("serialize derived Serialize");
         let restored: MonitoringHook =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hook, restored);
     }
 
@@ -2275,9 +2275,9 @@ mod tests {
             evidence_refs: vec!["ev-1".to_string()],
             summary: "all equivalent".to_string(),
         };
-        let json = serde_json::to_string(&gr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gr).expect("serialize derived Serialize");
         let restored: GateResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(gr, restored);
     }
 
@@ -2289,9 +2289,9 @@ mod tests {
             verification_key: sk.verification_key(),
             signature: Signature::from_bytes([0u8; 64]),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: SignerEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
     }
 
@@ -2645,9 +2645,9 @@ mod tests {
             trigger_event: "invocation_start".to_string(),
             blocking: false,
         };
-        let json = serde_json::to_string(&hook).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hook).expect("serialize derived Serialize");
         let restored: MonitoringHook =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hook, restored);
         assert!(!restored.blocking);
     }

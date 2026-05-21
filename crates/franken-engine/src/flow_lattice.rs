@@ -1935,9 +1935,9 @@ mod tests {
             LabelClass::Secret,
             LabelClass::TopSecret,
         ] {
-            let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&label).expect("serialize derived Serialize");
             let decoded: LabelClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(label, decoded);
         }
     }
@@ -1951,10 +1951,9 @@ mod tests {
             Clearance::SealedSink,
             Clearance::NeverSink,
         ] {
-            let json =
-                serde_json::to_string(&clearance).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&clearance).expect("serialize derived Serialize");
             let decoded: Clearance =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(clearance, decoded);
         }
     }
@@ -1971,9 +1970,9 @@ mod tests {
             max_uses: 5,
             use_count: 2,
         };
-        let json = serde_json::to_string(&ob).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ob).expect("serialize derived Serialize");
         let decoded: DeclassificationObligation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ob, decoded);
     }
 
@@ -1990,9 +1989,9 @@ mod tests {
             },
         ];
         for r in &results {
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             let decoded: FlowCheckResult =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(r, &decoded);
         }
     }
@@ -2119,9 +2118,9 @@ mod tests {
             DataSource::PolicyProtectedArtifact,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: DataSource =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2140,9 +2139,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: DataSource =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2158,9 +2157,8 @@ mod tests {
             SinkKind::MetricsExport,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
-            let back: SinkKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
+            let back: SinkKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2352,9 +2350,9 @@ mod tests {
             FlowLatticeError::FlowBlocked { detail: "d".into() },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: FlowLatticeError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2375,9 +2373,9 @@ mod tests {
             receipt_id: None,
             receipt_replay_command: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: FlowLatticeEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2397,7 +2395,7 @@ mod tests {
             receipt_id: None,
             receipt_replay_command: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         // Optional fields with skip_serializing_if should not appear
         assert!(!json.contains("obligation_id"));
         assert!(!json.contains("decision_contract_id"));
@@ -2426,7 +2424,7 @@ mod tests {
             receipt_id: Some("rcpt-x".into()),
             receipt_replay_command: Some("cmd".into()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"obligation_id\""));
         assert!(json.contains("\"decision_contract_id\""));
         assert!(json.contains("\"declassification_route_ref\""));
@@ -3011,7 +3009,7 @@ mod tests {
             max_uses: 10,
             use_count: 3,
         };
-        let json = serde_json::to_string(&ob).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ob).expect("serialize derived Serialize");
         assert!(json.contains("\"obligation_id\""));
         assert!(json.contains("\"source_label\""));
         assert!(json.contains("\"target_clearance\""));

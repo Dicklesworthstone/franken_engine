@@ -2053,10 +2053,9 @@ mod tests {
     fn cut_line_serde_roundtrip() {
         let original = CutLine::C3;
         // SAFETY: CutLine derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&original).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&original).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid CutLine serialization
-        let restored: CutLine =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: CutLine = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(original, restored);
     }
 
@@ -2104,10 +2103,10 @@ mod tests {
     fn gate_category_serde_roundtrip() {
         let original = GateCategory::SecuritySurvival;
         // SAFETY: GateCategory derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&original).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&original).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid GateCategory serialization
         let restored: GateCategory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(original, restored);
     }
 
@@ -2165,10 +2164,10 @@ mod tests {
     fn spec_serde_roundtrip() {
         let spec = CutLineSpec::default_c0();
         // SAFETY: CutLineSpec derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&spec).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid CutLineSpec serialization
         let restored: CutLineSpec =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(spec, restored);
     }
 
@@ -2178,10 +2177,10 @@ mod tests {
     fn gate_input_serde_roundtrip() {
         let input = make_passing_input(GateCategory::SemanticContract, 1000);
         // SAFETY: GateInput derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid GateInput serialization
         let restored: GateInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, restored);
     }
 
@@ -3353,9 +3352,9 @@ mod tests {
         let record = evaluator
             .evaluate(input)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let restored: PromotionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, restored);
     }
 
@@ -3445,9 +3444,9 @@ mod tests {
         evaluator.evaluate(input);
 
         let history = GateHistory::from_evaluator(&evaluator);
-        let json = serde_json::to_string(&history).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&history).expect("serialize derived Serialize");
         let restored: GateHistory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(history, restored);
     }
 
@@ -3720,9 +3719,9 @@ mod tests {
         };
         evaluator.evaluate(input);
 
-        let json = serde_json::to_string(&evaluator).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evaluator).expect("serialize derived Serialize");
         let restored: CutLineEvaluator =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evaluator.history_len(), restored.history_len());
         assert_eq!(
             evaluator.is_promoted(CutLine::C0),
@@ -3813,9 +3812,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: InputValidity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -3845,9 +3844,9 @@ mod tests {
             description: "adversarial tests pass".into(),
             min_score_millionths: Some(950_000),
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let restored: GateRequirement =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, restored);
     }
 
@@ -3896,9 +3895,9 @@ mod tests {
             approved_count: 1,
             denied_count: 2,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let restored: PromotionSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -3964,9 +3963,9 @@ mod tests {
             summary: "compiler gate passed".into(),
             input_validity: InputValidity::Valid,
         };
-        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eval).expect("serialize derived Serialize");
         let restored: GateEvaluation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eval, restored);
     }
 
@@ -4322,9 +4321,9 @@ mod tests {
             predecessor_promoted: true,
             zone: "staging".into(),
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let restored: GateEvaluationInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, restored);
     }
 
@@ -4480,9 +4479,9 @@ mod tests {
         assert!(history.verify());
 
         // Serde roundtrip.
-        let json = serde_json::to_string(&history).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&history).expect("serialize derived Serialize");
         let restored: GateHistory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(history, restored);
         assert!(restored.verify());
     }
@@ -4652,9 +4651,9 @@ mod tests {
     #[test]
     fn cut_line_serde_all_variants() {
         for cl in CutLine::all() {
-            let json = serde_json::to_string(cl).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cl).expect("serialize derived Serialize");
             let restored: CutLine =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cl, restored);
         }
     }
@@ -4674,9 +4673,9 @@ mod tests {
             GateCategory::HandoffReadiness,
         ];
         for cat in &categories {
-            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cat).expect("serialize derived Serialize");
             let restored: GateCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cat, restored);
         }
         assert_eq!(categories.len(), 10);
@@ -5102,9 +5101,9 @@ mod tests {
             schema_major: 1,
             metadata: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let restored: GateInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(restored.evidence_refs.is_empty());
     }
 
@@ -5136,9 +5135,9 @@ mod tests {
             zone: "test".into(),
         });
 
-        let json = serde_json::to_string(&evaluator).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evaluator).expect("serialize derived Serialize");
         let restored: CutLineEvaluator =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evaluator.history_len(), restored.history_len());
         assert_eq!(
             evaluator.is_promoted(CutLine::C0),

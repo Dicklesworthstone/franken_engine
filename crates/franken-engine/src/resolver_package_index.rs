@@ -1429,9 +1429,9 @@ mod tests {
         let entry = make_package("react", vec![".", "./jsx-runtime"])
             .with_main_entry("./index.js")
             .with_syntax_hint("esm");
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let decoded: PackageEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, decoded);
     }
 
@@ -1443,9 +1443,9 @@ mod tests {
             &[("import", "./esm.js"), ("require", "./cjs.js")],
         )
         .with_fallback("./index.js");
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let decoded: ExportEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, decoded);
     }
 
@@ -1457,9 +1457,9 @@ mod tests {
         let index = PackageIndex::build(config, packages, exports)
             .expect("serde deserialization should succeed");
         let receipt = IndexBuildReceipt::from_index(&index, 1000);
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let decoded: IndexBuildReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, decoded);
     }
 

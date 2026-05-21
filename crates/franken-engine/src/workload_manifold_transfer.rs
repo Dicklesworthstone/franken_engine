@@ -529,10 +529,10 @@ mod tests {
     fn embedding_feature_serde() {
         for f in EmbeddingFeature::ALL {
             // SAFETY: EmbeddingFeature derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(f).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(f).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid EmbeddingFeature serialization
             let back: EmbeddingFeature =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*f, back);
         }
     }
@@ -599,10 +599,10 @@ mod tests {
             TransferKind::TypeProfileHints,
         ] {
             // SAFETY: TransferKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid TransferKind serialization
             let back: TransferKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -680,9 +680,9 @@ mod tests {
     #[test]
     fn manifest_serde_roundtrip() {
         let m = build_seed_manifest();
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: TransferManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m.embeddings.len(), back.embeddings.len());
         assert_eq!(m.content_hash(), back.content_hash());
     }

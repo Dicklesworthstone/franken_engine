@@ -925,9 +925,9 @@ mod tests {
             RegressionSeverity::High,
             RegressionSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             let back: RegressionSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, back);
         }
     }
@@ -947,9 +947,9 @@ mod tests {
     #[test]
     fn status_serde_roundtrip() {
         for st in [RegressionStatus::Active, RegressionStatus::Waived] {
-            let json = serde_json::to_string(&st).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&st).expect("serialize derived Serialize");
             let back: RegressionStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(st, back);
         }
     }
@@ -968,9 +968,9 @@ mod tests {
     #[test]
     fn policy_serde_roundtrip() {
         let p = baseline_policy();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: RegressionGatePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1412,9 +1412,9 @@ mod tests {
             vec![mk_obs("w", 100, 200, 5000)],
             vec![RegressionWaiver::new("wv", "w", "o", 200, "r")],
         );
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: RegressionGateInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -1425,9 +1425,9 @@ mod tests {
             &RegressionGateInput::new("t", "d", "p", 100, vec![obs], Vec::new()),
             &baseline_policy(),
         );
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: RegressionGateReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1443,9 +1443,9 @@ mod tests {
             error_codes: vec![ERROR_FAIL_REGRESSION.to_string()],
             commit_id: Some("abc".to_string()),
         };
-        let json = serde_json::to_string(&candidate).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&candidate).expect("serialize derived Serialize");
         let back: CulpritCandidate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(candidate, back);
     }
 

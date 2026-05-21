@@ -1743,9 +1743,9 @@ mod tests {
     #[test]
     fn extension_state_serde_roundtrip() {
         let state = ExtensionState::Running;
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let back: ExtensionState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, state);
     }
 
@@ -1756,9 +1756,9 @@ mod tests {
             current_state: ExtensionState::Running,
             attempted: LifecycleTransition::Validate,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: LifecycleError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, err);
     }
 
@@ -1773,9 +1773,9 @@ mod tests {
             trace_id: "trace-1".to_string(),
             decision_id: Some("dec-1".to_string()),
         };
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let back: TransitionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, rec);
     }
 
@@ -1794,18 +1794,18 @@ mod tests {
             to_state: Some("validating".to_string()),
             transition: Some("validate".to_string()),
         };
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
         let back: LifecycleManagerEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, evt);
     }
 
     #[test]
     fn resource_budget_serde_roundtrip() {
         let b = ResourceBudget::new(500_000, 1024, 50);
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         let back: ResourceBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, b);
     }
 
@@ -2072,9 +2072,9 @@ mod tests {
             ExtensionState::Quarantined,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ExtensionState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 11);
@@ -2099,9 +2099,9 @@ mod tests {
             LifecycleTransition::StartFailed,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: LifecycleTransition =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, v);
         }
         assert_eq!(variants.len(), 14);
@@ -2171,9 +2171,9 @@ mod tests {
             current_state: ExtensionState::Running,
             attempted: LifecycleTransition::Validate,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: LifecycleError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, err);
     }
 

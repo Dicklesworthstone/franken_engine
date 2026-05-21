@@ -1490,11 +1490,10 @@ mod tests {
     fn surface_serde_roundtrip() {
         for surface in AsupersyncSurface::all() {
             // SAFETY: Test-only unwrap for serde serialization of known valid enum variants
-            let json =
-                serde_json::to_string(surface).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(surface).expect("serialize derived Serialize");
             // SAFETY: Test-only unwrap for serde deserialization of valid JSON roundtrip
             let back: AsupersyncSurface =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, *surface);
         }
     }
@@ -1616,10 +1615,10 @@ mod tests {
             CompatibilityDisposition::BridgeIncompatible,
         ] {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(&disp).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&disp).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: CompatibilityDisposition =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, disp);
         }
     }
@@ -1704,10 +1703,10 @@ mod tests {
     fn failure_code_serde_roundtrip() {
         for code in ContractFailureCode::all() {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(code).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: ContractFailureCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, *code);
         }
     }
@@ -1795,10 +1794,10 @@ mod tests {
     fn canonical_catalog_serde_roundtrip() {
         let catalog = canonical_failure_code_catalog();
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&catalog).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&catalog).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: VersionDriftFailureCatalog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.failure_codes.len(), catalog.failure_codes.len());
     }
 
@@ -1849,10 +1848,10 @@ mod tests {
             dependency_versions: BTreeMap::new(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&release).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&release).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: UpstreamReleaseIdentifier =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.surface, AsupersyncSurface::KernelContext);
         assert_eq!(back.package_name, "franken-kernel");
     }
@@ -1883,10 +1882,10 @@ mod tests {
             dependency_versions: BTreeMap::new(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cell).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: CompatibilityCell =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.disposition, CompatibilityDisposition::Compatible);
     }
 
@@ -1903,10 +1902,9 @@ mod tests {
             description: "CLI missing".to_string(),
             remediation: "restore the CLI".to_string(),
         };
-        let json =
-            serde_json::to_string(&descriptor).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&descriptor).expect("serialize derived Serialize");
         let back: FailureCodeDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.code, ContractFailureCode::FrankenlabCliMissing);
     }
 
@@ -1932,9 +1930,9 @@ mod tests {
             version_cell: "0.1.0".to_string(),
             upstream_revision: "abc123".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ContractEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.event, "surface_probed");
     }
 }

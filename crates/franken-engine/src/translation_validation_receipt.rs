@@ -1612,9 +1612,9 @@ mod tests {
             ProofMode::Axiomatic,
             ProofMode::Composite,
         ] {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let restored: ProofMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mode, restored);
         }
     }
@@ -1665,9 +1665,9 @@ mod tests {
     #[test]
     fn test_proof_evidence_serde() {
         let ev = test_evidence().with_metadata("k", "v");
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let restored: ProofEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, restored);
     }
 
@@ -1697,9 +1697,9 @@ mod tests {
     #[test]
     fn test_rule_serde() {
         let rule = test_rule("r1", -100_000);
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
         let restored: AppliedRuleRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rule, restored);
     }
 
@@ -1733,27 +1733,27 @@ mod tests {
     #[test]
     fn test_verdict_serde_proven() {
         let v = proven_verdict();
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: ReceiptVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
     #[test]
     fn test_verdict_serde_disproven() {
         let v = disproven_verdict();
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: ReceiptVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
     #[test]
     fn test_verdict_serde_inconclusive() {
         let v = inconclusive_verdict();
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: ReceiptVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -1975,9 +1975,9 @@ mod tests {
             "cm",
         )
         .sign(b"key123");
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: TranslationValidationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
     }
 
@@ -2038,9 +2038,9 @@ mod tests {
             test_epoch(),
             500,
         );
-        let json = serde_json::to_string(&fr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fr).expect("serialize derived Serialize");
         let restored: FailureReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fr, restored);
     }
 
@@ -2096,9 +2096,9 @@ mod tests {
             FailureKind::MalformedOutput { detail: "d".into() },
         ];
         for k in kinds {
-            let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&k).expect("serialize derived Serialize");
             let restored: FailureKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(k, restored);
         }
     }
@@ -2586,9 +2586,9 @@ mod tests {
         chain
             .append(r)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&chain).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&chain).expect("serialize derived Serialize");
         let restored: ReceiptChain =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(chain, restored);
     }
 
@@ -2777,9 +2777,9 @@ mod tests {
         let mut em = default_emitter();
         em.emit(make_input("opt-1", proven_verdict()));
         em.emit(make_input("opt-2", disproven_verdict()));
-        let json = serde_json::to_string(&em).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&em).expect("serialize derived Serialize");
         let restored: ValidationReceiptEmitter =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(em.stats.total_receipts, restored.stats.total_receipts);
         assert_eq!(em.quarantine, restored.quarantine);
     }

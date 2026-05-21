@@ -1369,9 +1369,9 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_telemetry_tier() {
         for tier in TelemetryTier::ALL {
-            let json = serde_json::to_string(tier).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(tier).expect("serialize derived Serialize");
             let back: TelemetryTier =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*tier, back);
         }
     }
@@ -1385,9 +1385,9 @@ mod tests {
             750_000,
             960_000,
         );
-        let json = serde_json::to_string(&sample).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sample).expect("serialize derived Serialize");
         let back: BenchmarkSample =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sample, back);
     }
 
@@ -1402,9 +1402,9 @@ mod tests {
         )];
         let epoch = SecurityEpoch::from_raw(3);
         let bundle = build_evidence_bundle(samples, &epoch);
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let back: BenchmarkEvidenceBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, back);
     }
 
@@ -1421,9 +1421,9 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let bundle = build_evidence_bundle(samples, &epoch);
         let verdict = evaluate_publication(&bundle, &contract, &epoch);
-        let json = serde_json::to_string(&verdict).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&verdict).expect("serialize derived Serialize");
         let back: PublicationVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(verdict, back);
     }
 

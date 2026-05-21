@@ -1306,9 +1306,9 @@ mod tests {
             },
         ];
         for kind in kinds {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let back: GuardKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -1342,10 +1342,9 @@ mod tests {
             SideExitReason::PrototypeInvalidated,
             SideExitReason::UnexpectedControlFlow,
         ] {
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             let back: SideExitReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(reason, back);
         }
     }
@@ -1423,9 +1422,9 @@ mod tests {
             },
             "exit-xyz".into(),
         );
-        let json = serde_json::to_string(&guard).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&guard).expect("serialize derived Serialize");
         let back: SuperblockGuard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(guard, back);
     }
 
@@ -1555,9 +1554,8 @@ mod tests {
             tail_duplication_count: 0,
             formation_epoch: 1,
         };
-        let json = serde_json::to_string(&block).expect("serde deserialization should succeed");
-        let back: Superblock =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&block).expect("serialize derived Serialize");
+        let back: Superblock = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(block, back);
     }
 
@@ -1705,9 +1703,8 @@ mod tests {
             formation_epoch: 1,
         };
         let tree = TraceTree::new("fn_ser", root);
-        let json = serde_json::to_string(&tree).expect("serde deserialization should succeed");
-        let back: TraceTree =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tree).expect("serialize derived Serialize");
+        let back: TraceTree = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tree.tree_id, back.tree_id);
         assert_eq!(tree.node_count(), back.node_count());
     }
@@ -1917,9 +1914,9 @@ mod tests {
     fn formation_decision_serde() {
         let policy = SuperblockPolicy::default();
         let decision = FormationDecision::build("fn_ser", &policy, 1, vec![], None);
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: FormationDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
     }
 
@@ -1990,9 +1987,9 @@ mod tests {
             is_tail_duplicate: true,
             execution_count: 42,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: SuperblockEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -2007,9 +2004,9 @@ mod tests {
             total_guards: 5,
             formation_epoch: 1,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: TraceTreeSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 

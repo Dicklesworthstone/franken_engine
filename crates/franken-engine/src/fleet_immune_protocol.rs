@@ -1510,10 +1510,10 @@ mod tests {
     fn evidence_packet_serde_round_trip() {
         let packet = test_evidence("node-1", "ext-1", 1, 500_000);
         // SAFETY: Test serializes known-valid EvidencePacket; to_string succeeds in controlled test environment.
-        let json = serde_json::to_string(&packet).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&packet).expect("serialize derived Serialize");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let decoded: EvidencePacket =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(packet, decoded);
     }
 
@@ -1521,10 +1521,10 @@ mod tests {
     fn containment_intent_serde_round_trip() {
         let intent = test_intent("node-1", "ext-1", ContainmentAction::Quarantine, 1, 1);
         // SAFETY: Test serializes known-valid ContainmentIntent; to_string succeeds in controlled test environment.
-        let json = serde_json::to_string(&intent).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&intent).expect("serialize derived Serialize");
         // SAFETY: Test deserializes self-generated JSON; from_str succeeds in controlled test environment.
         let decoded: ContainmentIntent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(intent, decoded);
     }
 
@@ -1540,9 +1540,9 @@ mod tests {
     #[test]
     fn gossip_config_serde_round_trip() {
         let config = GossipConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let decoded: GossipConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, decoded);
     }
 
@@ -1554,9 +1554,9 @@ mod tests {
         assert_eq!(msg.node_id(), &NodeId::new("node-1"));
         assert_eq!(msg.sequence(), Some(1));
 
-        let json = serde_json::to_string(&msg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&msg).expect("serialize derived Serialize");
         let decoded: FleetMessage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(msg, decoded);
     }
 
@@ -1586,9 +1586,9 @@ mod tests {
             contributing_intent_ids: vec!["intent-1".into(), "intent-2".into()],
             epoch: SecurityEpoch::from_raw(3),
         };
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let decoded: ResolvedContainmentDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, decoded);
     }
 
@@ -1610,9 +1610,9 @@ mod tests {
             required: 3,
             actual: 1,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let decoded: ProtocolError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, decoded);
     }
 
@@ -1626,9 +1626,9 @@ mod tests {
             .process_heartbeat(&test_heartbeat("remote-2", 1, 5_000_000_000))
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let decoded: FleetProtocolState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.evidence.posterior_delta("ext-1"), 500_000);
     }
 
@@ -1645,8 +1645,8 @@ mod tests {
                 .expect("serde deserialization should succeed");
         }
 
-        let json1 = serde_json::to_string(&acc1).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&acc2).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&acc1).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&acc2).expect("serialize derived Serialize");
         assert_eq!(json1, json2);
     }
 
@@ -1677,9 +1677,9 @@ mod tests {
             protocol_version: ProtocolVersion::CURRENT,
         };
 
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let decoded: ReconciliationRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, decoded);
     }
 
@@ -1718,10 +1718,9 @@ mod tests {
             extensions: BTreeMap::new(),
         };
 
-        let json =
-            serde_json::to_string(&checkpoint).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&checkpoint).expect("serialize derived Serialize");
         let decoded: QuorumCheckpoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(checkpoint, decoded);
     }
 
@@ -1801,18 +1800,17 @@ mod tests {
     #[test]
     fn node_id_serde_roundtrip() {
         let node = NodeId::new("test-node-42");
-        let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
-        let back: NodeId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&node).expect("serialize derived Serialize");
+        let back: NodeId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(node, back);
     }
 
     #[test]
     fn sequence_range_serde_roundtrip() {
         let range = SequenceRange::new(5, 15);
-        let json = serde_json::to_string(&range).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&range).expect("serialize derived Serialize");
         let back: SequenceRange =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(range, back);
     }
 
@@ -1844,9 +1842,9 @@ mod tests {
     #[test]
     fn heartbeat_liveness_serde_roundtrip() {
         let hb = test_heartbeat("node-1", 1, 5_000_000_000);
-        let json = serde_json::to_string(&hb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hb).expect("serialize derived Serialize");
         let back: HeartbeatLiveness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hb, back);
     }
 
@@ -1855,9 +1853,9 @@ mod tests {
     #[test]
     fn message_signature_serde_roundtrip() {
         let sig = test_signature("node-sig");
-        let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sig).expect("serialize derived Serialize");
         let back: MessageSignature =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sig, back);
     }
 
@@ -1872,9 +1870,9 @@ mod tests {
     #[test]
     fn protocol_version_serde_roundtrip() {
         let v = ProtocolVersion { major: 3, minor: 7 };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ProtocolVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1921,10 +1919,9 @@ mod tests {
             ContainmentAction::Terminate,
             ContainmentAction::Quarantine,
         ] {
-            let json =
-                serde_json::to_string(&action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&action).expect("serialize derived Serialize");
             let back: ContainmentAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(action, back, "roundtrip failed for {action}");
         }
     }
@@ -2082,9 +2079,9 @@ mod tests {
             ProtocolError::EmptyIntents,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ProtocolError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2121,9 +2118,8 @@ mod tests {
             protocol_version: ProtocolVersion::CURRENT,
         };
         let msg = FleetMessage::Reconciliation(req);
-        let json = serde_json::to_string(&msg).expect("serde deserialization should succeed");
-        let back: FleetMessage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&msg).expect("serialize derived Serialize");
+        let back: FleetMessage = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(msg, back);
         assert_eq!(msg.sequence(), Some(5));
     }
@@ -2297,9 +2293,9 @@ mod tests {
             .accept(&NodeId::new("b"), 20)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&tracker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tracker).expect("serialize derived Serialize");
         let back: NodeSequenceTracker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.last_sequence(&NodeId::new("a")), 10);
         assert_eq!(back.last_sequence(&NodeId::new("b")), 20);
     }
@@ -2337,9 +2333,9 @@ mod tests {
         let mut tracker = NodeHealthTracker::new();
         tracker.record_heartbeat(&test_heartbeat("node-1", 1, 5_000_000_000));
 
-        let json = serde_json::to_string(&tracker).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tracker).expect("serialize derived Serialize");
         let back: NodeHealthTracker =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(
             back.last_heartbeat_ns(&NodeId::new("node-1")),
             Some(5_000_000_000)

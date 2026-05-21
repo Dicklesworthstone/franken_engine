@@ -1040,9 +1040,9 @@ mod tests {
     #[test]
     fn test_locality_dimension_serde_roundtrip() {
         for dim in LocalityDimension::all() {
-            let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(dim).expect("serialize derived Serialize");
             let back: LocalityDimension =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*dim, back);
         }
     }
@@ -1050,9 +1050,9 @@ mod tests {
     #[test]
     fn test_portability_target_serde_roundtrip() {
         for target in PortabilityTarget::all() {
-            let json = serde_json::to_string(target).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(target).expect("serialize derived Serialize");
             let back: PortabilityTarget =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*target, back);
         }
     }
@@ -1068,9 +1068,9 @@ mod tests {
             GovernanceVerdict::MultipleViolations,
         ];
         for v in &verdicts {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: GovernanceVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1078,9 +1078,9 @@ mod tests {
     #[test]
     fn test_governance_config_serde_roundtrip() {
         let config = GovernanceConfig::strict();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: GovernanceConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1094,9 +1094,9 @@ mod tests {
             100,
             DEFAULT_MAX_CACHE_MISS_RATE,
         );
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: CacheMissEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1109,9 +1109,8 @@ mod tests {
             4,
             DEFAULT_MAX_NUMA_REMOTE_RATIO,
         );
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: NumaEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
+        let back: NumaEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1123,9 +1122,9 @@ mod tests {
             true,
             850_000,
         );
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: PortabilityEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1136,9 +1135,9 @@ mod tests {
         eval.add_numa("op1".into(), 10000, 500, 2);
         eval.add_portability("op1".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
         let receipt = eval.evaluate(epoch());
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: GovernanceReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
     }
 
@@ -1624,9 +1623,9 @@ mod tests {
         eval.add_cache_miss(LocalityDimension::L1Data, "op".into(), 10000, 200, 50);
         eval.add_numa("op".into(), 10000, 500, 2);
         eval.add_portability("op".into(), PortabilityTarget::X64Linux, true, FIXED_ONE);
-        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eval).expect("serialize derived Serialize");
         let back: GovernanceEvaluator =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(eval, back);
     }
 

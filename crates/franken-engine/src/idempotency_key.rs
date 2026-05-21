@@ -953,9 +953,9 @@ mod tests {
     fn idempotency_key_serialization_round_trip() {
         let input = test_derivation_input();
         let key = derive_idempotency_key(&test_session_key(), test_epoch(), &input);
-        let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&key).expect("serialize derived Serialize");
         let restored: IdempotencyKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(key, restored);
     }
 
@@ -971,9 +971,9 @@ mod tests {
             },
         ];
         for status in &statuses {
-            let json = serde_json::to_string(status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(status).expect("serialize derived Serialize");
             let restored: DedupStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*status, restored);
         }
     }
@@ -991,9 +991,9 @@ mod tests {
             },
         ];
         for result in &results {
-            let json = serde_json::to_string(result).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(result).expect("serialize derived Serialize");
             let restored: DedupResult =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*result, restored);
         }
     }
@@ -1009,9 +1009,9 @@ mod tests {
             epoch_id: 1,
             event: "dedup_check".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: IdempotencyEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1035,9 +1035,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: IdempotencyError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1048,9 +1048,9 @@ mod tests {
             max_retries: 5,
             entry_ttl_ticks: 1000,
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: RetryConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1338,9 +1338,9 @@ mod tests {
     #[test]
     fn key_derivation_input_serde_roundtrip() {
         let input = test_derivation_input();
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: KeyDerivationInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -1354,9 +1354,8 @@ mod tests {
             created_at_ticks: 42,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: DedupEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
+        let back: DedupEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1413,7 +1412,7 @@ mod tests {
             epoch_id: 5,
             event: "dedup_check".into(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"idempotency_key_hash\""));
         assert!(json.contains("\"computation_name\""));
         assert!(json.contains("\"attempt\""));
@@ -1431,7 +1430,7 @@ mod tests {
             created_at_ticks: 0,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         assert!(json.contains("\"status\""));
         assert!(json.contains("\"computation_name\""));
         assert!(json.contains("\"created_at_ticks\""));
@@ -1441,7 +1440,7 @@ mod tests {
     #[test]
     fn key_derivation_input_json_field_presence() {
         let input = test_derivation_input();
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         assert!(json.contains("\"computation_name\""));
         assert!(json.contains("\"input_hash\""));
         assert!(json.contains("\"trace_id\""));
@@ -1976,9 +1975,8 @@ mod tests {
             max_retries: u32::MAX,
             entry_ttl_ticks: u64::MAX,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: RetryConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
+        let back: RetryConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 

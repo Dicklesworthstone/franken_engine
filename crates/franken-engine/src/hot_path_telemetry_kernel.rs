@@ -2153,9 +2153,9 @@ mod tests {
     #[test]
     fn serde_capture_mode_roundtrip() {
         let mode = CaptureMode::ExactShadow;
-        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
         let restored: CaptureMode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mode, restored);
         assert!(json.contains("exact_shadow"));
     }
@@ -2163,36 +2163,36 @@ mod tests {
     #[test]
     fn serde_thinning_strategy_roundtrip() {
         let strategy = ThinningStrategy::WeightProportional;
-        let json = serde_json::to_string(&strategy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&strategy).expect("serialize derived Serialize");
         let restored: ThinningStrategy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(strategy, restored);
     }
 
     #[test]
     fn serde_kernel_state_roundtrip() {
         let k = make_kernel("k1", 500_000, 1000);
-        let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&k).expect("serialize derived Serialize");
         let restored: KernelState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(k, restored);
     }
 
     #[test]
     fn serde_policy_roundtrip() {
         let policy = make_policy("p1", ThinningStrategy::PriorityTiered, 300_000);
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: ThinningPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
     }
 
     #[test]
     fn serde_evidence_entry_roundtrip() {
         let entry = make_entry("e1", "k1", "key_a", 0, 5, CaptureMode::Budgeted);
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: HotPathEvidenceEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
     }
 
@@ -2208,9 +2208,9 @@ mod tests {
         }
         let evidence =
             calibrate_kernel(&k, &shadow, epoch(1)).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&evidence).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evidence).expect("serialize derived Serialize");
         let restored: CalibrationEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evidence, restored);
     }
 

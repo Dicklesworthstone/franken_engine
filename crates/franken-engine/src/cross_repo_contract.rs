@@ -1823,9 +1823,9 @@ mod tests {
             regression_class: RegressionClass::Behavioral,
             detail: "ordering changed".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ContractViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1864,9 +1864,9 @@ mod tests {
     #[test]
     fn schema_contract_serde_roundtrip() {
         let contract = frankentui_envelope_contract();
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         let back: SchemaContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(contract, back);
     }
 
@@ -1879,9 +1879,9 @@ mod tests {
             current_version: 3,
             minimum_compatible_version: 1,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: VersionCompatibilityEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, entry);
     }
 
@@ -1896,9 +1896,9 @@ mod tests {
             FieldType::Null,
         ];
         for ft in &all {
-            let json = serde_json::to_string(ft).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(ft).expect("serialize derived Serialize");
             let back: FieldType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, ft);
         }
     }
@@ -1986,7 +1986,7 @@ mod tests {
             regression_class: RegressionClass::Performance,
             detail: "latency exceeded".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(json.contains("\"boundary\""));
         assert!(json.contains("\"contract_name\""));
         assert!(json.contains("\"regression_class\""));
@@ -2000,7 +2000,7 @@ mod tests {
             current_version: 2,
             minimum_compatible_version: 1,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         assert!(json.contains("\"boundary\""));
         assert!(json.contains("\"current_version\""));
         assert!(json.contains("\"minimum_compatible_version\""));
@@ -2015,7 +2015,7 @@ mod tests {
             violations: Vec::new(),
             boundaries_covered: BTreeSet::new(),
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(json.contains("\"total_contracts\""));
         assert!(json.contains("\"passed\""));
         assert!(json.contains("\"failed\""));
@@ -2189,7 +2189,7 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         assert!(json.contains("\"boundary\""));
         assert!(json.contains("\"type_name\""));
         assert!(json.contains("\"required_fields\""));

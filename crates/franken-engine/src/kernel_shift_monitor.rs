@@ -631,9 +631,9 @@ mod tests {
     #[test]
     fn dimension_serde_roundtrip() {
         for d in WorkloadDimension::ALL {
-            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(d).expect("serialize derived Serialize");
             let back: WorkloadDimension =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*d, back);
         }
     }
@@ -662,9 +662,9 @@ mod tests {
     #[test]
     fn kernel_serde_roundtrip() {
         for k in KernelKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: KernelKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -696,9 +696,9 @@ mod tests {
             filled: 50,
             window_size: 256,
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: MonitorAbstention =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -739,9 +739,9 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for v in ShiftVerdict::ALL {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ShiftVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -761,9 +761,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let c = MonitorConfig::default_for(WorkloadDimension::AllocationPattern);
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: MonitorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -824,9 +824,8 @@ mod tests {
             100,
             200,
         );
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
-        let back: MmdResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
+        let back: MmdResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -855,16 +854,15 @@ mod tests {
     #[test]
     fn monitor_result_serde_roundtrip() {
         let measured = make_measured(WorkloadDimension::HostcallProfile, 80_000);
-        let json = serde_json::to_string(&measured).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&measured).expect("serialize derived Serialize");
         let back: MonitorResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(measured, back);
 
         let abstained = make_abstained(WorkloadDimension::IoSchedulingPattern);
-        let json2 =
-            serde_json::to_string(&abstained).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&abstained).expect("serialize derived Serialize");
         let back2: MonitorResult =
-            serde_json::from_str(&json2).expect("serde deserialization should succeed");
+            serde_json::from_str(&json2).expect("deserialize known-valid JSON");
         assert_eq!(abstained, back2);
     }
 
@@ -973,9 +971,9 @@ mod tests {
             make_abstained(WorkloadDimension::AllocationPattern),
         ];
         let report = AggregateShiftReport::new(test_epoch(), results);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: AggregateShiftReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 

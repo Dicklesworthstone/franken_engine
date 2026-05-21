@@ -1018,11 +1018,11 @@ mod tests {
         let cp = build_genesis(&[sk]);
         // SAFETY: PolicyCheckpoint derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&cp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cp).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid PolicyCheckpoint,
         // so from_str back to PolicyCheckpoint cannot fail (valid format + matching schema).
         let restored: PolicyCheckpoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cp, restored);
     }
 
@@ -1031,11 +1031,11 @@ mod tests {
         let head = make_policy_head(PolicyType::RuntimeExecution, 5);
         // SAFETY: PolicyHead derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&head).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&head).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid PolicyHead,
         // so from_str back to PolicyHead cannot fail (valid format + matching schema).
         let restored: PolicyHead =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(head, restored);
     }
 
@@ -1049,9 +1049,9 @@ mod tests {
             PolicyType::RevocationGovernance,
         ];
         for pt in &types {
-            let json = serde_json::to_string(pt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(pt).expect("serialize derived Serialize");
             let restored: PolicyType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*pt, restored);
         }
     }
@@ -1069,9 +1069,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: CheckpointError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1127,9 +1127,9 @@ mod tests {
             checkpoint_seq: 0,
             trace_id: "t-event".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: CheckpointEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1169,9 +1169,9 @@ mod tests {
     #[test]
     fn deterministic_timestamp_serde_roundtrip() {
         let ts = DeterministicTimestamp(12345);
-        let json = serde_json::to_string(&ts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ts).expect("serialize derived Serialize");
         let restored: DeterministicTimestamp =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ts, restored);
     }
 
@@ -1407,9 +1407,9 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(event).expect("serialize derived Serialize");
             let restored: CheckpointEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*event, restored);
         }
     }
@@ -1631,9 +1631,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: CheckpointError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1785,10 +1785,10 @@ mod tests {
         ];
         for t in &types {
             // SAFETY: CheckpointEventType derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid CheckpointEventType serialization
             let restored: CheckpointEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, restored);
         }
     }
@@ -1818,7 +1818,7 @@ mod tests {
             PolicyType::RevocationGovernance,
         ]
         .iter()
-        .map(|p| serde_json::to_string(p).expect("serde deserialization should succeed"))
+        .map(|p| serde_json::to_string(p).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(set.len(), 5);
     }
@@ -2105,18 +2105,17 @@ mod tests {
     #[test]
     fn deterministic_timestamp_max_serde_roundtrip() {
         let ts = DeterministicTimestamp(u64::MAX);
-        let json = serde_json::to_string(&ts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ts).expect("serialize derived Serialize");
         let back: DeterministicTimestamp =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ts, back);
     }
 
     #[test]
     fn policy_head_version_zero() {
         let h = make_policy_head(PolicyType::RuntimeExecution, 0);
-        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let back: PolicyHead =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&h).expect("serialize derived Serialize");
+        let back: PolicyHead = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(h, back);
     }
 
@@ -2127,9 +2126,8 @@ mod tests {
             policy_hash: ContentHash::compute(b"max-ver"),
             policy_version: u64::MAX,
         };
-        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let back: PolicyHead =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&h).expect("serialize derived Serialize");
+        let back: PolicyHead = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(h, back);
     }
 
@@ -2185,9 +2183,9 @@ mod tests {
             checkpoint_seq: u64::MAX,
             trace_id: "max-seq".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: CheckpointEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2198,9 +2196,9 @@ mod tests {
             checkpoint_seq: 1,
             trace_id: String::new(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: CheckpointEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2233,7 +2231,7 @@ mod tests {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
         let uv = cp.unsigned_view();
-        let uv_json = serde_json::to_string(&uv).expect("serde deserialization should succeed");
+        let uv_json = serde_json::to_string(&uv).expect("serialize derived Serialize");
         // The unsigned view should contain "quorum_signatures" with sentinel, not real sigs
         assert!(uv_json.contains("quorum_signatures"));
     }

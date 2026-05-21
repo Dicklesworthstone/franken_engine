@@ -2041,9 +2041,9 @@ mod tests {
     #[test]
     fn bundle_serde_roundtrip() {
         let bundle = build_test_bundle();
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let restored: IncidentReplayBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle.manifest.bundle_id, restored.manifest.bundle_id);
         assert_eq!(bundle.manifest.merkle_root, restored.manifest.merkle_root);
         assert_eq!(bundle.traces.len(), restored.traces.len());
@@ -2052,10 +2052,9 @@ mod tests {
     #[test]
     fn manifest_serde_roundtrip() {
         let bundle = build_test_bundle();
-        let json =
-            serde_json::to_string(&bundle.manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle.manifest).expect("serialize derived Serialize");
         let restored: BundleManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle.manifest, restored);
     }
 
@@ -2065,9 +2064,9 @@ mod tests {
         let verifier = BundleVerifier::new();
         let report = verifier.verify_integrity(&bundle, 6000);
 
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: VerificationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
@@ -2077,10 +2076,9 @@ mod tests {
         let verifier = BundleVerifier::new();
         let inspection = verifier.inspect(&bundle);
 
-        let json =
-            serde_json::to_string(&inspection).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inspection).expect("serialize derived Serialize");
         let restored: BundleInspection =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inspection, restored);
     }
 
@@ -2106,9 +2104,9 @@ mod tests {
         };
         policy.custom_redaction_keys.insert("tenant_id".to_string());
 
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: RedactionPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
     }
 
@@ -2236,9 +2234,9 @@ mod tests {
     #[test]
     fn policy_snapshot_serde_roundtrip() {
         let snap = make_policy_snapshot("p1");
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let restored: PolicySnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, restored);
     }
 
@@ -2364,9 +2362,9 @@ mod tests {
             },
             source_trace_id: "trace-001".to_string(),
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: CounterfactualResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -2407,9 +2405,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: BundleError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2489,9 +2487,9 @@ mod tests {
     #[test]
     fn bundle_format_version_serde_roundtrip() {
         let v = BundleFormatVersion { major: 3, minor: 7 };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: BundleFormatVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2506,10 +2504,9 @@ mod tests {
             BundleArtifactKind::CounterfactualResult,
             BundleArtifactKind::PolicySnapshot,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let restored: BundleArtifactKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, restored);
         }
     }
@@ -2526,10 +2523,9 @@ mod tests {
             },
         ];
         for outcome in &outcomes {
-            let json =
-                serde_json::to_string(outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(outcome).expect("serialize derived Serialize");
             let restored: CheckOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*outcome, restored);
         }
     }
@@ -2544,10 +2540,9 @@ mod tests {
             VerificationCategory::Counterfactual,
             VerificationCategory::Compatibility,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let restored: VerificationCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, restored);
         }
     }
@@ -2559,9 +2554,9 @@ mod tests {
             category: VerificationCategory::Integrity,
             outcome: CheckOutcome::Pass,
         };
-        let json = serde_json::to_string(&check).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&check).expect("serialize derived Serialize");
         let restored: VerificationCheck =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(check, restored);
     }
 
@@ -2572,9 +2567,9 @@ mod tests {
             failed: 2,
             skipped: 1,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let restored: CategorySummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -2587,9 +2582,9 @@ mod tests {
             redacted: false,
             size_bytes: 128,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: ArtifactEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
     }
 
@@ -2736,9 +2731,9 @@ mod tests {
             ..RedactionPolicy::default()
         };
         policy.custom_redaction_keys.insert("api-key".to_string());
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: RedactionPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
     }
 
@@ -2833,10 +2828,9 @@ mod tests {
         let bundle = build_test_bundle();
         let verifier = BundleVerifier::new();
         let inspection = verifier.inspect(&bundle);
-        let json =
-            serde_json::to_string(&inspection).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inspection).expect("serialize derived Serialize");
         let restored: BundleInspection =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inspection, restored);
     }
 

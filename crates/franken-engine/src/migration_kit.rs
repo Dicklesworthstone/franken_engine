@@ -2692,9 +2692,9 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_config() {
         let config = MigrationConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let roundtripped: MigrationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, roundtripped);
     }
 
@@ -2703,9 +2703,9 @@ mod tests {
         let err = MigrationKitError::AnalysisFailed {
             detail: "test error".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let roundtripped: MigrationKitError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, roundtripped);
     }
 
@@ -2713,9 +2713,9 @@ mod tests {
     fn test_serde_roundtrip_compatibility_report() {
         let report = analyze_package(&minimal_package_json(), &default_config())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let roundtripped: CompatibilityReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, roundtripped);
     }
 
@@ -2800,9 +2800,9 @@ mod tests {
     #[test]
     fn source_runtime_serde_roundtrip() {
         for rt in [SourceRuntime::Node, SourceRuntime::Bun] {
-            let json = serde_json::to_string(&rt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&rt).expect("serialize derived Serialize");
             let restored: SourceRuntime =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(rt, restored);
         }
     }
@@ -2816,9 +2816,9 @@ mod tests {
             ApiSupportLevel::Deprecated,
             ApiSupportLevel::RequiresPolyfill,
         ] {
-            let json = serde_json::to_string(&level).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&level).expect("serialize derived Serialize");
             let restored: ApiSupportLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(level, restored);
         }
     }
@@ -2833,9 +2833,9 @@ mod tests {
             DivergenceKind::MissingFeature,
             DivergenceKind::SecurityPolicyDifference,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let restored: DivergenceKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, restored);
         }
     }
@@ -2849,9 +2849,9 @@ mod tests {
             DivergenceSeverity::Low,
             DivergenceSeverity::Informational,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             let restored: DivergenceSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, restored);
         }
     }
@@ -2872,9 +2872,9 @@ mod tests {
             InferredCapabilityKind::SharedMemory,
             InferredCapabilityKind::NativeAddon,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let restored: InferredCapabilityKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, restored);
         }
     }
@@ -2890,9 +2890,9 @@ mod tests {
             RemediationCategory::SecurityPolicyUpdate,
             RemediationCategory::FeatureDisable,
         ] {
-            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cat).expect("serialize derived Serialize");
             let restored: RemediationCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cat, restored);
         }
     }
@@ -2906,10 +2906,9 @@ mod tests {
             RemediationEffort::High,
             RemediationEffort::Significant,
         ] {
-            let json =
-                serde_json::to_string(&effort).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&effort).expect("serialize derived Serialize");
             let restored: RemediationEffort =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(effort, restored);
         }
     }
@@ -2949,9 +2948,9 @@ mod tests {
             MigrationKitError::InternalError { detail: "p".into() },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: MigrationKitError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -3139,9 +3138,9 @@ mod tests {
             error_code: Some("FE-MK-0001".to_string()),
             details: BTreeMap::from([("k".to_string(), "v".to_string())]),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: MigrationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -3156,9 +3155,9 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 200,
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let restored: LockstepTestResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, restored);
     }
 
@@ -3168,9 +3167,9 @@ mod tests {
             path: "index.js".to_string(),
             content: "console.log('hi');".to_string(),
         };
-        let json = serde_json::to_string(&sf).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sf).expect("serialize derived Serialize");
         let restored: SourceFile =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sf, restored);
     }
 
@@ -3183,9 +3182,9 @@ mod tests {
             support_level: ApiSupportLevel::FullySupported,
             notes: "sandboxed".to_string(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: ApiUsageEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
     }
 
@@ -3197,9 +3196,9 @@ mod tests {
             compatible: true,
             migration_notes: "pure JS".to_string(),
         };
-        let json = serde_json::to_string(&de).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&de).expect("serialize derived Serialize");
         let restored: DependencyEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(de, restored);
     }
 
@@ -4189,9 +4188,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
         };
         let manifest = generate_manifest(input).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: MigrationManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
     }
 
@@ -4209,9 +4208,9 @@ mod tests {
         }];
         let report =
             validate_behavior(&results, &config).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: BehaviorValidationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -4224,9 +4223,9 @@ mod tests {
         let config = MigrationConfig::default();
         let result =
             infer_capabilities(&files, &config).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CapabilityInferenceResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -4241,9 +4240,9 @@ mod tests {
             node_duration_us: 42,
             franken_duration_us: 43,
         };
-        let json = serde_json::to_string(&ltr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ltr).expect("serialize derived Serialize");
         let back: LockstepTestResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ltr, back);
     }
 
@@ -4258,9 +4257,9 @@ mod tests {
             max_divergence_count: 50,
             deterministic_seed: 99,
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: MigrationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -4277,9 +4276,9 @@ mod tests {
             error_code: Some("FE-MK-0001".into()),
             details,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: MigrationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -4304,9 +4303,9 @@ mod tests {
             affected_files: vec!["lib.js".into()],
             priority_score_millionths: 700_000,
         };
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
         let back: RemediationStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, back);
     }
 
@@ -4410,9 +4409,9 @@ mod tests {
             MigrationKitError::InternalError { detail: "p".into() },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: MigrationKitError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, &back);
         }
     }
@@ -4531,7 +4530,7 @@ mod tests {
         let json = emit_migration_event(&event);
         assert!(json.contains("migration_kit"));
         let parsed: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(parsed["outcome"], "pass");
     }
 }

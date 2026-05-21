@@ -828,9 +828,9 @@ mod tests {
     #[test]
     fn risk_state_serde_roundtrip() {
         for state in &RiskState::ALL {
-            let json = serde_json::to_string(state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(state).expect("serialize derived Serialize");
             let restored: RiskState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*state, restored);
         }
     }
@@ -896,9 +896,9 @@ mod tests {
     #[test]
     fn posterior_serde_roundtrip() {
         let p = Posterior::default_prior();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let restored: Posterior =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, restored);
     }
 
@@ -938,9 +938,9 @@ mod tests {
     #[test]
     fn likelihood_serde_roundtrip() {
         let model = LikelihoodModel::default();
-        let json = serde_json::to_string(&model).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&model).expect("serialize derived Serialize");
         let restored: LikelihoodModel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(model, restored);
     }
 
@@ -1070,9 +1070,9 @@ mod tests {
     fn updater_serde_roundtrip() {
         let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         updater.update(&benign_evidence());
-        let json = serde_json::to_string(&updater).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&updater).expect("serialize derived Serialize");
         let restored: BayesianPosteriorUpdater =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(updater.posterior(), restored.posterior());
         assert_eq!(updater.update_count(), restored.update_count());
     }
@@ -1107,9 +1107,9 @@ mod tests {
     fn calibration_serde_roundtrip() {
         let updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         let cal = updater.calibration_check(RiskState::Benign);
-        let json = serde_json::to_string(&cal).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cal).expect("serialize derived Serialize");
         let restored: CalibrationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cal, restored);
     }
 
@@ -1155,9 +1155,9 @@ mod tests {
     fn change_detector_serde_roundtrip() {
         let mut det = ChangePointDetector::new(50_000, 50);
         det.update(MILLION, MILLION);
-        let json = serde_json::to_string(&det).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&det).expect("serialize derived Serialize");
         let restored: ChangePointDetector =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(det, restored);
     }
 
@@ -1261,9 +1261,9 @@ mod tests {
     fn store_serde_roundtrip() {
         let mut store = UpdaterStore::new();
         store.get_or_create("ext-001");
-        let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&store).expect("serialize derived Serialize");
         let restored: UpdaterStore =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(store.len(), restored.len());
     }
 
@@ -1274,9 +1274,8 @@ mod tests {
     #[test]
     fn evidence_serde_roundtrip() {
         let ev = benign_evidence();
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let restored: Evidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
+        let restored: Evidence = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, restored);
     }
 
@@ -1288,9 +1287,9 @@ mod tests {
     fn update_result_serde_roundtrip() {
         let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         let result = updater.update(&benign_evidence());
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: UpdateResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1446,9 +1445,9 @@ mod tests {
     #[test]
     fn change_detector_serde_default_state() {
         let det = ChangePointDetector::new(50_000, 50);
-        let json = serde_json::to_string(&det).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&det).expect("serialize derived Serialize");
         let back: ChangePointDetector =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(det, back);
         assert_eq!(back.map_run_length(), 0);
     }
@@ -1777,7 +1776,7 @@ mod tests {
     fn risk_state_serde_variants_all_distinct() {
         let jsons: std::collections::BTreeSet<String> = RiskState::ALL
             .iter()
-            .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
+            .map(|s| serde_json::to_string(s).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 4);
     }
@@ -1786,8 +1785,8 @@ mod tests {
     fn posterior_serde_distinct_for_different_values() {
         let p1 = Posterior::default_prior();
         let p2 = Posterior::uniform();
-        let j1 = serde_json::to_string(&p1).expect("serde deserialization should succeed");
-        let j2 = serde_json::to_string(&p2).expect("serde deserialization should succeed");
+        let j1 = serde_json::to_string(&p1).expect("serialize derived Serialize");
+        let j2 = serde_json::to_string(&p2).expect("serialize derived Serialize");
         assert_ne!(j1, j2);
     }
 
@@ -2074,9 +2073,9 @@ mod tests {
         updater.update(&malicious_evidence());
         updater.update(&anomalous_evidence());
 
-        let json = serde_json::to_string(&updater).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&updater).expect("serialize derived Serialize");
         let restored: BayesianPosteriorUpdater =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(updater.posterior(), restored.posterior());
         assert_eq!(updater.update_count(), restored.update_count());
@@ -2104,9 +2103,9 @@ mod tests {
         let u2 = store.get_or_create("ext-002");
         u2.update(&malicious_evidence());
 
-        let json = serde_json::to_string(&store).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&store).expect("serialize derived Serialize");
         let restored: UpdaterStore =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(store.len(), restored.len());
         assert_eq!(

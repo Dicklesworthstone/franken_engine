@@ -2370,7 +2370,7 @@ mod tests {
         let entry = sample_entry();
         let json = serde_json::to_string(&entry).expect("serde serialization should succeed");
         let restored: EvidenceEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, restored);
     }
 
@@ -2400,7 +2400,7 @@ mod tests {
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde serialization should succeed");
             let restored: LedgerError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2410,7 +2410,7 @@ mod tests {
         let c = CandidateAction::filtered("sandbox", 100_000, "max-loss");
         let json = serde_json::to_string(&c).expect("serde serialization should succeed");
         let restored: CandidateAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, restored);
     }
 
@@ -2419,7 +2419,7 @@ mod tests {
         let v = current_schema_version();
         let json = serde_json::to_string(&v).expect("serde serialization should succeed");
         let restored: SchemaVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2470,7 +2470,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&dt).expect("serde serialization should succeed");
             let restored: DecisionType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(dt, restored);
         }
     }
@@ -2484,7 +2484,7 @@ mod tests {
         };
         let json = serde_json::to_string(&c).expect("serde serialization should succeed");
         let restored: Constraint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, restored);
     }
 
@@ -2496,8 +2496,7 @@ mod tests {
             value: "proof-hash".to_string(),
         };
         let json = serde_json::to_string(&w).expect("serde serialization should succeed");
-        let restored: Witness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Witness = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(w, restored);
     }
 
@@ -2510,7 +2509,7 @@ mod tests {
         };
         let json = serde_json::to_string(&ca).expect("serde serialization should succeed");
         let restored: ChosenAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ca, restored);
     }
 
@@ -2664,7 +2663,7 @@ mod tests {
         assert_eq!(c.expected_loss_millionths, -999_999);
         let json = serde_json::to_string(&c).expect("serde serialization should succeed");
         let restored: CandidateAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, restored);
     }
 
@@ -3123,8 +3122,7 @@ mod tests {
             value: String::new(),
         };
         let json = serde_json::to_string(&w).expect("serde serialization should succeed");
-        let restored: Witness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let restored: Witness = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(w, restored);
         assert!(restored.value.is_empty());
     }
@@ -3138,7 +3136,7 @@ mod tests {
         };
         let json = serde_json::to_string(&c).expect("serde serialization should succeed");
         let restored: Constraint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, restored);
         assert!(!restored.active);
     }
@@ -3360,7 +3358,7 @@ mod tests {
         };
         let json = serde_json::to_string(&ca).expect("serde serialization should succeed");
         let restored: ChosenAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ca, restored);
         assert_eq!(restored.expected_loss_millionths, -500_000);
     }

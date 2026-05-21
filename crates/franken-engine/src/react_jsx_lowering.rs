@@ -1673,9 +1673,9 @@ mod tests {
     #[test]
     fn test_build_mode_serde_roundtrip() {
         for mode in [BuildMode::Development, BuildMode::Production] {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let back: BuildMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mode, back);
         }
     }
@@ -1750,9 +1750,9 @@ mod tests {
             classic_pragma: Some("createElement".to_string()),
             ..Default::default()
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: ReactLoweringConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -1833,9 +1833,9 @@ mod tests {
             },
             ElementType::Fragment,
         ] {
-            let json = serde_json::to_string(&et).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&et).expect("serialize derived Serialize");
             let back: ElementType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(et, back);
         }
     }
@@ -2643,10 +2643,9 @@ mod tests {
         });
         let result = lower_jsx_to_react(&node, &classic_config())
             .expect("serde deserialization should succeed");
-        let json =
-            serde_json::to_string(&result.element).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result.element).expect("serialize derived Serialize");
         let back: LoweredElement =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.element, back);
     }
 
@@ -2658,9 +2657,9 @@ mod tests {
             message: "test".to_string(),
             span: Some(test_span()),
         };
-        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&diag).expect("serialize derived Serialize");
         let back: LoweringDiagnostic =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(diag, back);
     }
 
@@ -2676,9 +2675,9 @@ mod tests {
                 message: "bad".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let back: ReactLoweringError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, back);
         }
     }

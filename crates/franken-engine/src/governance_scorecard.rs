@@ -1445,10 +1445,9 @@ mod tests {
             GovernanceScorecardOutcome::Warning,
             GovernanceScorecardOutcome::Critical,
         ] {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: GovernanceScorecardOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, outcome);
         }
     }
@@ -1539,9 +1538,9 @@ mod tests {
     #[test]
     fn thresholds_serde_roundtrip() {
         let t = GovernanceScorecardThresholds::default();
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: GovernanceScorecardThresholds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, t);
     }
 
@@ -1993,7 +1992,7 @@ mod tests {
             .to_json_pretty()
             .expect("serde deserialization should succeed");
         let back: GovernanceScorecardPublication =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.scorecard_id, publication.scorecard_id);
         assert_eq!(back.outcome, publication.outcome);
     }
@@ -2061,9 +2060,9 @@ mod tests {
     #[test]
     fn receipt_observation_serde() {
         let r = test_receipts()[0].clone();
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: AttestedReceiptObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, r);
     }
 
@@ -2078,9 +2077,9 @@ mod tests {
             conformance_pass_rate_millionths: 980_000,
             outcome: GovernanceScorecardOutcome::Healthy,
         };
-        let json = serde_json::to_string(&tp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tp).expect("serialize derived Serialize");
         let back: GovernanceScorecardTrendPoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, tp);
     }
 
@@ -2097,9 +2096,9 @@ mod tests {
             dimension: Some("dim".to_string()),
             detail: None,
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let back: GovernanceScorecardEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, ev);
     }
 
@@ -2199,27 +2198,27 @@ mod tests {
     #[test]
     fn privacy_budget_health_input_serde_roundtrip() {
         let input = test_privacy_budget();
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let restored: PrivacyBudgetHealthInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, restored);
     }
 
     #[test]
     fn moonshot_governor_health_input_serde_roundtrip() {
         let input = test_moonshot_governor();
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let restored: MoonshotGovernorHealthInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, restored);
     }
 
     #[test]
     fn cross_repo_conformance_input_serde_roundtrip() {
         let input = test_conformance();
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let restored: CrossRepoConformanceInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, restored);
     }
 
@@ -2232,9 +2231,9 @@ mod tests {
             coverage_millionths: 800_000,
             threshold_pass: true,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let restored: AttestedReceiptCoverageSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -2258,9 +2257,9 @@ mod tests {
             threshold_pass: true,
             near_term_exhaustion_warning: false,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let restored: PrivacyBudgetHealthSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -2278,9 +2277,9 @@ mod tests {
             killed_moonshots: 1,
             threshold_pass: true,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let restored: MoonshotGovernorDecisionSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -2301,9 +2300,9 @@ mod tests {
             ]),
             threshold_pass: true,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let restored: CrossRepoConformanceStabilitySummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -2452,9 +2451,9 @@ mod tests {
             max_outstanding_exemptions: 2,
             fail_on_trend_regression: true,
         };
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let back: GovernanceScorecardThresholds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, back);
     }
 

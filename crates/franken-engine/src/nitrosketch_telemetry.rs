@@ -1129,9 +1129,9 @@ mod tests {
     #[test]
     fn sketch_kind_serde_round_trip() {
         for kind in SketchKind::all() {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: SketchKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1163,9 +1163,9 @@ mod tests {
             SamplingStrategy::BudgetAdaptive,
         ];
         for s in &strategies {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: SamplingStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1226,9 +1226,9 @@ mod tests {
     #[test]
     fn site_serde_round_trip() {
         let site = make_site("s2", SketchKind::TopK);
-        let json = serde_json::to_string(&site).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&site).expect("serialize derived Serialize");
         let back: TelemetrySite =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(site, back);
     }
 
@@ -1329,9 +1329,9 @@ mod tests {
             make_site("a", SketchKind::CountMin),
             make_site("b", SketchKind::Histogram),
         ]);
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         let back: SiteInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv, back);
     }
 
@@ -1471,9 +1471,9 @@ mod tests {
         let site = make_site("s", SketchKind::CountMin);
         let results = vec![calibrate_site(&site, 50, 48)];
         let report = build_calibration_report(SecurityEpoch::from_raw(7), results);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: CalibrationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1548,9 +1548,9 @@ mod tests {
             TelemetryError::InternalError("test".to_string()),
         ];
         for e in &errors {
-            let json = serde_json::to_string(e).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(e).expect("serialize derived Serialize");
             let back: TelemetryError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*e, back);
         }
     }
@@ -1924,9 +1924,9 @@ mod tests {
     fn calibration_result_serde_round_trip() {
         let site = make_site("cr1", SketchKind::CountMin);
         let result = calibrate_site(&site, 500, 510);
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CalibrationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 

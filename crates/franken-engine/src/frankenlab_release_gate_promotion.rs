@@ -740,9 +740,9 @@ mod tests {
     #[test]
     fn promoted_gate_serde_roundtrip() {
         for gate in PromotedGateKind::ALL {
-            let json = serde_json::to_string(&gate).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&gate).expect("serialize derived Serialize");
             let round: PromotedGateKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(gate, round);
         }
     }
@@ -765,10 +765,9 @@ mod tests {
             PromotionStatus::OracleBacked,
             PromotionStatus::FullyPromoted,
         ] {
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             let round: PromotionStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(status, round);
         }
     }
@@ -795,9 +794,9 @@ mod tests {
     fn threshold_serde_roundtrip() {
         let t = BlockerThreshold::strict(PromotedGateKind::BudgetPropagation)
             .with_rationale("zero tolerance for budget violations");
-        let json = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let round: BlockerThreshold =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, round);
     }
 
@@ -936,9 +935,9 @@ mod tests {
             scenario_id: Some("s1".to_owned()),
             oracle_invariant: Some("safety".to_owned()),
         }]);
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let round: TriageBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, round);
     }
 
@@ -1027,7 +1026,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&reg).expect("serde deserialization should succeed");
         let round: ReleaseGatePromotionRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, round);
     }
 
@@ -1079,7 +1078,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
         let round: ReleaseGatePromotionReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);
     }
 
@@ -1201,11 +1200,10 @@ mod tests {
             ),
         ];
         for (variant, json_str) in expected {
-            let serialized =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let serialized = serde_json::to_string(&variant).expect("serialize derived Serialize");
             assert_eq!(serialized, json_str, "mismatch for {variant:?}");
             let deserialized: PromotedGateKind =
-                serde_json::from_str(&serialized).expect("serde deserialization should succeed");
+                serde_json::from_str(&serialized).expect("deserialize known-valid JSON");
             assert_eq!(deserialized, variant);
         }
     }
@@ -1219,11 +1217,10 @@ mod tests {
             (PromotionStatus::FullyPromoted, "\"fully_promoted\""),
         ];
         for (variant, json_str) in expected {
-            let serialized =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let serialized = serde_json::to_string(&variant).expect("serialize derived Serialize");
             assert_eq!(serialized, json_str, "mismatch for {variant:?}");
             let deserialized: PromotionStatus =
-                serde_json::from_str(&serialized).expect("serde deserialization should succeed");
+                serde_json::from_str(&serialized).expect("deserialize known-valid JSON");
             assert_eq!(deserialized, variant);
         }
     }
@@ -1237,11 +1234,10 @@ mod tests {
             (TriageSeverity::Critical, "\"critical\""),
         ];
         for (variant, json_str) in expected {
-            let serialized =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let serialized = serde_json::to_string(&variant).expect("serialize derived Serialize");
             assert_eq!(serialized, json_str, "mismatch for {variant:?}");
             let deserialized: TriageSeverity =
-                serde_json::from_str(&serialized).expect("serde deserialization should succeed");
+                serde_json::from_str(&serialized).expect("deserialize known-valid JSON");
             assert_eq!(deserialized, variant);
         }
     }
@@ -1253,8 +1249,7 @@ mod tests {
         // Display output should match the serde snake_case string (without quotes)
         for gate in PromotedGateKind::ALL {
             let display = gate.to_string();
-            let serde_str =
-                serde_json::to_string(&gate).expect("serde deserialization should succeed");
+            let serde_str = serde_json::to_string(&gate).expect("serialize derived Serialize");
             // serde_str is e.g. "\"lifecycle_scenarios\"", strip quotes
             let serde_inner = &serde_str[1..serde_str.len() - 1];
             assert_eq!(
@@ -1273,8 +1268,7 @@ mod tests {
             PromotionStatus::FullyPromoted,
         ] {
             let display = status.to_string();
-            let serde_str =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let serde_str = serde_json::to_string(&status).expect("serialize derived Serialize");
             let serde_inner = &serde_str[1..serde_str.len() - 1];
             assert_eq!(
                 display, serde_inner,
@@ -1292,8 +1286,7 @@ mod tests {
             TriageSeverity::Critical,
         ] {
             let display = severity.to_string();
-            let serde_str =
-                serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let serde_str = serde_json::to_string(&severity).expect("serialize derived Serialize");
             let serde_inner = &serde_str[1..serde_str.len() - 1];
             assert_eq!(
                 display, serde_inner,
@@ -1912,9 +1905,9 @@ mod tests {
         entry.record_run(true);
         entry.record_run(false);
 
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let round: GatePromotionEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, round);
         assert_eq!(round.evaluation_runs, 3);
         assert_eq!(round.passing_runs, 2);

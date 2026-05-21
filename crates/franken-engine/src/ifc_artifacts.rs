@@ -1737,9 +1737,9 @@ mod tests {
     #[test]
     fn schema_version_serde_roundtrip() {
         let v = IfcSchemaVersion::CURRENT;
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let parsed: IfcSchemaVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, parsed);
     }
 
@@ -1817,9 +1817,8 @@ mod tests {
                 level: 7,
             },
         ] {
-            let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
-            let parsed: Label =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&label).expect("serialize derived Serialize");
+            let parsed: Label = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(label, parsed);
         }
     }
@@ -1829,9 +1828,8 @@ mod tests {
     #[test]
     fn flow_policy_serde_roundtrip() {
         let policy = make_flow_policy();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let parsed: FlowPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
+        let parsed: FlowPolicy = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, parsed);
     }
 
@@ -1986,9 +1984,8 @@ mod tests {
     #[test]
     fn flow_proof_serde_roundtrip() {
         let proof = make_flow_proof();
-        let json = serde_json::to_string(&proof).expect("serde deserialization should succeed");
-        let parsed: FlowProof =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
+        let parsed: FlowProof = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(proof, parsed);
     }
 
@@ -2031,10 +2028,9 @@ mod tests {
             ProofMethod::RuntimeCheck,
             ProofMethod::Declassification,
         ] {
-            let json =
-                serde_json::to_string(&method).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&method).expect("serialize derived Serialize");
             let parsed: ProofMethod =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(method, parsed);
         }
     }
@@ -2044,9 +2040,9 @@ mod tests {
     #[test]
     fn receipt_serde_roundtrip() {
         let receipt = make_receipt();
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let parsed: DeclassificationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, parsed);
     }
 
@@ -2143,9 +2139,9 @@ mod tests {
             DeclassificationDecision::Allow,
             DeclassificationDecision::Deny,
         ] {
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             let parsed: DeclassificationDecision =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, parsed);
         }
     }
@@ -2334,9 +2330,9 @@ mod tests {
     fn claim_serde_roundtrip() {
         for strength in [ClaimStrength::Full, ClaimStrength::Partial] {
             let claim = make_claim(strength);
-            let json = serde_json::to_string(&claim).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&claim).expect("serialize derived Serialize");
             let parsed: ConfinementClaim =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(claim, parsed);
         }
     }
@@ -2370,9 +2366,9 @@ mod tests {
     #[test]
     fn claim_strength_serde_roundtrip() {
         for s in [ClaimStrength::Full, ClaimStrength::Partial] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let parsed: ClaimStrength =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, parsed);
         }
     }
@@ -2431,9 +2427,9 @@ mod tests {
             },
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let parsed: IfcValidationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, parsed);
         }
     }
@@ -2446,9 +2442,8 @@ mod tests {
             source_label: Label::Internal,
             sink_clearance: Label::Confidential,
         };
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
-        let parsed: FlowRule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
+        let parsed: FlowRule = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rule, parsed);
     }
 
@@ -2462,9 +2457,9 @@ mod tests {
             target_clearance: Label::Internal,
             conditions: vec!["audit_approval".to_string(), "ciso_sign_off".to_string()],
         };
-        let json = serde_json::to_string(&route).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&route).expect("serialize derived Serialize");
         let parsed: DeclassificationRoute =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(route, parsed);
     }
 
@@ -2482,9 +2477,9 @@ mod tests {
             FlowCheckResult::Denied,
         ];
         for r in results {
-            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&r).expect("serialize derived Serialize");
             let parsed: FlowCheckResult =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(r, parsed);
         }
     }
@@ -2791,9 +2786,9 @@ mod tests {
     #[test]
     fn clearance_class_serde_roundtrip() {
         for cc in ClearanceClass::all() {
-            let json = serde_json::to_string(&cc).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cc).expect("serialize derived Serialize");
             let parsed: ClearanceClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cc, parsed);
         }
     }
@@ -2848,9 +2843,9 @@ mod tests {
     #[test]
     fn obligation_serde_roundtrip() {
         let obl = make_obligation();
-        let json = serde_json::to_string(&obl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obl).expect("serialize derived Serialize");
         let parsed: DeclassificationObligation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obl, parsed);
     }
 
@@ -3007,10 +3002,9 @@ mod tests {
             },
         ];
         for source in sources {
-            let json =
-                serde_json::to_string(&source).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&source).expect("serialize derived Serialize");
             let parsed: Ir2LabelSource =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(source, parsed);
         }
     }
@@ -3035,9 +3029,9 @@ mod tests {
     #[test]
     fn flow_envelope_serde_roundtrip() {
         let env = make_flow_envelope();
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let parsed: FlowEnvelope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(env, parsed);
     }
 

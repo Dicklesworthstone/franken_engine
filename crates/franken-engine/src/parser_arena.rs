@@ -1054,8 +1054,7 @@ mod tests {
     fn node_handle_serde_roundtrip() {
         let handle = NodeHandle::from_parts(10, 1);
         let json = serde_json::to_string(&handle).expect("serde serialization should succeed");
-        let back: NodeHandle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: NodeHandle = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, handle);
     }
 
@@ -1082,7 +1081,7 @@ mod tests {
         let handle = ExpressionHandle::from_parts(8, 1);
         let json = serde_json::to_string(&handle).expect("serde serialization should succeed");
         let back: ExpressionHandle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, handle);
     }
 
@@ -1101,8 +1100,7 @@ mod tests {
     fn span_handle_serde_roundtrip() {
         let handle = SpanHandle::from_parts(99, 1);
         let json = serde_json::to_string(&handle).expect("serde serialization should succeed");
-        let back: SpanHandle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: SpanHandle = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, handle);
     }
 
@@ -1123,8 +1121,7 @@ mod tests {
     fn arena_budget_serde_roundtrip() {
         let budget = ArenaBudget::default();
         let json = serde_json::to_string(&budget).expect("serde serialization should succeed");
-        let back: ArenaBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ArenaBudget = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, budget);
     }
 
@@ -1142,7 +1139,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let back: ArenaBudgetKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, kind);
         }
     }
@@ -1586,7 +1583,7 @@ mod tests {
         };
         let json = serde_json::to_string(&entry).expect("serde serialization should succeed");
         let back: HandleAuditEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, entry);
     }
 
@@ -1601,7 +1598,7 @@ mod tests {
         assert!(!jsonl.is_empty());
         for line in jsonl.lines() {
             let parsed: HandleAuditEntry =
-                serde_json::from_str(line).expect("serde deserialization should succeed");
+                serde_json::from_str(line).expect("deserialize known-valid JSON");
             assert!(!parsed.descriptor.is_empty());
         }
     }
@@ -1772,7 +1769,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let back: HandleAuditKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, kind);
         }
     }
@@ -1866,7 +1863,7 @@ mod tests {
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde serialization should succeed");
             let back: ArenaBudgetKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1875,8 +1872,7 @@ mod tests {
     fn arena_budget_default_serde_roundtrip() {
         let budget = ArenaBudget::default();
         let json = serde_json::to_string(&budget).expect("serde serialization should succeed");
-        let back: ArenaBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ArenaBudget = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(budget, back);
     }
 
@@ -2048,8 +2044,7 @@ mod tests {
             max_bytes: 4,
         };
         let json = serde_json::to_string(&budget).expect("serde serialization should succeed");
-        let back: ArenaBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: ArenaBudget = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.max_nodes, 1);
         assert_eq!(back.max_expressions, 2);
         assert_eq!(back.max_spans, 3);

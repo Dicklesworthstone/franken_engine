@@ -1071,11 +1071,11 @@ mod tests {
         let s = HoleGovernanceSeverity::Blocking;
         // SAFETY: HoleGovernanceSeverity derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid HoleGovernanceSeverity,
         // so from_str back to HoleGovernanceSeverity cannot fail (valid format + matching schema).
         let back: HoleGovernanceSeverity =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -1084,11 +1084,11 @@ mod tests {
         let a = GovernanceAction::ForceExperiment;
         // SAFETY: GovernanceAction derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid GovernanceAction,
         // so from_str back to GovernanceAction cannot fail (valid format + matching schema).
         let back: GovernanceAction =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -1457,9 +1457,9 @@ mod tests {
         let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
             .expect("serde deserialization should succeed");
         let s = summarize(&report);
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: GovernanceSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -1480,9 +1480,9 @@ mod tests {
             previous_millionths: 900_000,
             current_millionths: 500_000,
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: GovernanceError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1572,9 +1572,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let cfg = GovernanceConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: GovernanceConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -1633,9 +1633,9 @@ mod tests {
         let ratchet = RatchetState::new();
         let report = evaluate(&holes, &claims, &ratchet, epoch(), &default_config())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: GovernanceReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 

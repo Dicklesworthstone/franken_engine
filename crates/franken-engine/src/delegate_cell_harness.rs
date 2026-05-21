@@ -689,7 +689,7 @@ mod tests {
     // -- Test helpers --
 
     fn test_slot_id() -> SlotId {
-        SlotId::new("test-parser-slot").expect("serde deserialization should succeed")
+        SlotId::new("test-parser-slot").expect("constructor with valid inputs")
     }
 
     fn test_authority() -> AuthorityEnvelope {
@@ -796,9 +796,9 @@ mod tests {
             CellLifecycle::Terminated,
             CellLifecycle::Quarantined,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let decoded: CellLifecycle =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, decoded);
         }
     }
@@ -1176,9 +1176,9 @@ mod tests {
             total_heap_bytes: 5_000_000,
             total_hostcalls: 80,
         };
-        let json = serde_json::to_string(&metrics).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&metrics).expect("serialize derived Serialize");
         let decoded: PerformanceMetrics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(metrics, decoded);
     }
 
@@ -1204,10 +1204,9 @@ mod tests {
             },
         ];
         for outcome in &outcomes {
-            let json =
-                serde_json::to_string(outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(outcome).expect("serialize derived Serialize");
             let decoded: InvocationOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*outcome, decoded);
         }
     }
@@ -1239,9 +1238,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let decoded: DelegateCellError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, decoded);
         }
     }
@@ -1251,9 +1250,9 @@ mod tests {
     #[test]
     fn replay_verification_serde_round_trip() {
         let rv = ReplayVerification::Match { sequence: 42 };
-        let json = serde_json::to_string(&rv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rv).expect("serialize derived Serialize");
         let decoded: ReplayVerification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rv, decoded);
     }
 
@@ -1271,9 +1270,9 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let decoded: HarnessEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, decoded);
     }
 
@@ -1457,18 +1456,18 @@ mod tests {
     #[test]
     fn resource_usage_serde_roundtrip() {
         let usage = ok_usage();
-        let json = serde_json::to_string(&usage).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&usage).expect("serialize derived Serialize");
         let back: ResourceUsage =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(usage, back);
     }
 
     #[test]
     fn sandbox_configuration_serde_roundtrip() {
         let sandbox = test_sandbox();
-        let json = serde_json::to_string(&sandbox).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sandbox).expect("serialize derived Serialize");
         let back: SandboxConfiguration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sandbox, back);
     }
 
@@ -1548,7 +1547,7 @@ mod tests {
     #[test]
     fn enrichment_json_fields_resource_usage() {
         let usage = ok_usage();
-        let json = serde_json::to_string(&usage).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&usage).expect("serialize derived Serialize");
         assert!(json.contains("heap_bytes_used"));
         assert!(json.contains("execution_ns"));
         assert!(json.contains("hostcall_count"));
@@ -1568,7 +1567,7 @@ mod tests {
             total_heap_bytes: 2_000_000,
             total_hostcalls: 25,
         };
-        let json = serde_json::to_string(&metrics).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&metrics).expect("serialize derived Serialize");
         assert!(json.contains("total_invocations"));
         assert!(json.contains("successful_invocations"));
         assert!(json.contains("min_duration_ns"));
@@ -1585,7 +1584,7 @@ mod tests {
             timestamp_ns: 999,
             fields,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("event_type"));
         assert!(json.contains("cell_id"));
         assert!(json.contains("timestamp_ns"));
@@ -1597,9 +1596,9 @@ mod tests {
     #[test]
     fn enrichment_serde_roundtrip_delegate_cell_harness() {
         let harness = test_harness();
-        let json = serde_json::to_string(&harness).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&harness).expect("serialize derived Serialize");
         let decoded: DelegateCellHarness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(harness.slot_id, decoded.slot_id);
         assert_eq!(harness.lifecycle, decoded.lifecycle);
         assert_eq!(harness.metrics, decoded.metrics);
@@ -1741,9 +1740,9 @@ mod tests {
             ResourceViolation::FilesystemAccessDenied { bytes: 8192 },
         ];
         for v in &violations {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let decoded: ResourceViolation =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, decoded);
         }
     }
@@ -1852,9 +1851,9 @@ mod tests {
             .record_invocation(b"input2", b"output2", 43, ok_usage(), 6_000, 20_000)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&harness).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&harness).expect("serialize derived Serialize");
         let decoded: DelegateCellHarness =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.invocation_log().len(), 2);
         assert_eq!(decoded.invocation_count(), 2);
         assert_eq!(decoded.metrics.total_invocations, 2);

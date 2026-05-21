@@ -1226,9 +1226,9 @@ mod tests {
             ControlAction::EmergencyBrake,
         ];
         for action in &actions {
-            let json = serde_json::to_string(action).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(action).expect("serialize derived Serialize");
             let decoded: ControlAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*action, decoded);
         }
     }
@@ -1236,27 +1236,27 @@ mod tests {
     #[test]
     fn test_serde_latency_target() {
         let target = make_target(990_000, 1_000_000, 50_000);
-        let json = serde_json::to_string(&target).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&target).expect("serialize derived Serialize");
         let decoded: LatencyTarget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(target, decoded);
     }
 
     #[test]
     fn test_serde_controller_state() {
         let state = ControllerState::new("test", SecurityEpoch::from_raw(1));
-        let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let decoded: ControllerState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(state, decoded);
     }
 
     #[test]
     fn test_serde_feedback_report() {
         let report = franken_engine_feedback_control_manifest();
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let decoded: FeedbackControlReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, decoded);
     }
 
@@ -1268,9 +1268,9 @@ mod tests {
             "test reason",
             SecurityEpoch::from_raw(10),
         );
-        let json = serde_json::to_string(&over).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&over).expect("serialize derived Serialize");
         let decoded: PolicyOverride =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(over, decoded);
     }
 

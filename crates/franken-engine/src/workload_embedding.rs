@@ -1377,10 +1377,10 @@ mod tests {
     fn feature_family_serde_roundtrip() {
         let fam = FeatureFamily::ControlFlow;
         // SAFETY: FeatureFamily derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&fam).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fam).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid FeatureFamily serialization
         let back: FeatureFamily =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fam, back);
     }
 
@@ -1445,10 +1445,10 @@ mod tests {
     fn embedding_validity_serde() {
         let v = EmbeddingValidity::Valid;
         // SAFETY: EmbeddingValidity derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid EmbeddingValidity serialization
         let back: EmbeddingValidity =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -1602,10 +1602,10 @@ mod tests {
             ],
         );
         // SAFETY: WorkloadEmbedding derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&emb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&emb).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid WorkloadEmbedding serialization
         let back: WorkloadEmbedding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(emb, back);
     }
 
@@ -1734,10 +1734,10 @@ mod tests {
     fn distance_metric_serde() {
         let m = DistanceMetric::Cosine;
         // SAFETY: DistanceMetric derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid DistanceMetric serialization
         let back: DistanceMetric =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -1913,10 +1913,10 @@ mod tests {
         let cfg = NeighborhoodCertificateConfig::default();
         let cert = issue_neighborhood_certificate(&emb, &emb, &cfg, test_epoch());
         // SAFETY: NeighborhoodCertificate derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid NeighborhoodCertificate serialization
         let back: NeighborhoodCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, back);
     }
 
@@ -2123,11 +2123,10 @@ mod tests {
         let cfg = NeighborhoodCertificateConfig::default();
         let assessment = assess_transfer_safety(&emb, &emb, &cfg, test_epoch());
         // SAFETY: TransferSafetyAssessment derives Serialize and has no non-serializable fields
-        let json =
-            serde_json::to_string(&assessment).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&assessment).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid TransferSafetyAssessment serialization
         let back: TransferSafetyAssessment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(assessment, back);
     }
 
@@ -2172,10 +2171,10 @@ mod tests {
         let (specimens, _) = run_embedding_corpus(test_epoch());
         for s in &specimens {
             // SAFETY: EmbeddingSpecimen derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid EmbeddingSpecimen serialization
             let back: EmbeddingSpecimen =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }

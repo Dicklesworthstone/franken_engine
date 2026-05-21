@@ -1315,9 +1315,8 @@ mod tests {
     #[test]
     fn test_addon_cohort_serde_roundtrip() {
         let c = AddonCohort::Compression;
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: AddonCohort =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
+        let back: AddonCohort = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1347,9 +1346,8 @@ mod tests {
     #[test]
     fn test_gate_axis_serde_roundtrip() {
         let a = GateAxis::Security;
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
-        let back: GateAxis =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
+        let back: GateAxis = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
     }
 
@@ -1374,9 +1372,9 @@ mod tests {
     #[test]
     fn test_finding_severity_serde() {
         let s = FindingSeverity::High;
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: FindingSeverity =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -1659,9 +1657,8 @@ mod tests {
     #[test]
     fn test_config_serde() {
         let c = GateConfig::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
-        let back: GateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
+        let back: GateConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1698,9 +1695,8 @@ mod tests {
     #[test]
     fn test_verdict_serde() {
         let v = GateVerdict::ThroughputExceeded;
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: GateVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
+        let back: GateVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -2069,9 +2065,8 @@ mod tests {
             support_surface_entries: 3,
             approval_rate_millionths: 600_000,
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: GateSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
+        let back: GateSummary = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -2089,9 +2084,8 @@ mod tests {
     #[test]
     fn test_violation_serde() {
         let v = Violation::new(GateAxis::Throughput, None, "too slow");
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-        let back: Violation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
+        let back: Violation = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, back);
     }
 
@@ -2133,9 +2127,9 @@ mod tests {
         let mut g = GateEvaluator::with_defaults(epoch());
         g.add_parity(AddonCohort::Crypto, "aes", GateAxis::Parity, MILLIONTHS, 50);
         g.evaluate();
-        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&g).expect("serialize derived Serialize");
         let back: GateEvaluator =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.evaluation_count(), 1);
         assert_eq!(back.approved_count(), 1);
     }

@@ -1754,7 +1754,7 @@ mod tests {
             "\"rollout\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::Ga).expect("serde deserialization should succeed"),
+            serde_json::to_string(&ClaimDomain::Ga).expect("serialize derived Serialize"),
             "\"ga\""
         );
         assert_eq!(
@@ -2546,8 +2546,8 @@ mod tests {
         let contract = minimal_contract();
         let cloned = contract.clone();
         assert_eq!(contract, cloned);
-        let json1 = serde_json::to_string(&contract).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&cloned).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&contract).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&cloned).expect("serialize derived Serialize");
         assert_eq!(json1, json2);
     }
 

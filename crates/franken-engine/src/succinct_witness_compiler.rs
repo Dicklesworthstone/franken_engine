@@ -962,9 +962,9 @@ mod tests {
     #[test]
     fn sufficiency_dimension_serde_roundtrip() {
         for dim in &SufficiencyDimension::ALL {
-            let json = serde_json::to_string(dim).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(dim).expect("serialize derived Serialize");
             let back: SufficiencyDimension =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*dim, back);
         }
     }
@@ -1024,9 +1024,9 @@ mod tests {
     #[test]
     fn schema_serde_roundtrip() {
         let schema = test_schema();
-        let json = serde_json::to_string(&schema).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&schema).expect("serialize derived Serialize");
         let back: WitnessSchema =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(schema, back);
     }
 
@@ -1182,7 +1182,7 @@ mod tests {
             .inclusion_proof(0)
             .expect("serde deserialization should succeed");
         let back: InclusionProof = serde_json::from_str(
-            &serde_json::to_string(&proof).expect("serde deserialization should succeed"),
+            &serde_json::to_string(&proof).expect("serialize derived Serialize"),
         )
         .expect("serde deserialization should succeed");
         assert_eq!(proof, back);
@@ -1208,7 +1208,7 @@ mod tests {
     fn provenance_serde_roundtrip() {
         let prov = test_provenance();
         let back: ProvenanceAttachment = serde_json::from_str(
-            &serde_json::to_string(&prov).expect("serde deserialization should succeed"),
+            &serde_json::to_string(&prov).expect("serialize derived Serialize"),
         )
         .expect("serde deserialization should succeed");
         assert_eq!(prov, back);
@@ -1237,7 +1237,7 @@ mod tests {
             ReconstructionKind::Hybrid,
         ] {
             let back: ReconstructionKind = serde_json::from_str(
-                &serde_json::to_string(&kind).expect("serde deserialization should succeed"),
+                &serde_json::to_string(&kind).expect("serialize derived Serialize"),
             )
             .expect("serde deserialization should succeed");
             assert_eq!(kind, back);
@@ -1373,7 +1373,7 @@ mod tests {
             .compile(test_epoch())
             .expect("serde deserialization should succeed");
         let back: WitnessPack = serde_json::from_str(
-            &serde_json::to_string(&result.pack).expect("serde deserialization should succeed"),
+            &serde_json::to_string(&result.pack).expect("serialize derived Serialize"),
         )
         .expect("serde deserialization should succeed");
         assert_eq!(result.pack, back);
@@ -1523,7 +1523,7 @@ mod tests {
             .expect("serde deserialization should succeed");
         let report = generate_report(&[&result]);
         let back: WitnessPackReport = serde_json::from_str(
-            &serde_json::to_string(&report).expect("serde deserialization should succeed"),
+            &serde_json::to_string(&report).expect("serialize derived Serialize"),
         )
         .expect("serde deserialization should succeed");
         assert_eq!(report, back);
@@ -1630,9 +1630,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: CompilationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1696,9 +1696,9 @@ mod tests {
     fn provenance_with_legal_summary_serde_roundtrip() {
         let mut prov = test_provenance();
         prov.legal_summary = Some("Retained per 7-year policy".into());
-        let json = serde_json::to_string(&prov).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&prov).expect("serialize derived Serialize");
         let back: ProvenanceAttachment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(prov, back);
         assert_eq!(
             back.legal_summary,
@@ -1733,9 +1733,9 @@ mod tests {
             min_score_millionths: 850_000,
             rationale: "causal chain must be intact".into(),
         };
-        let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sc).expect("serialize derived Serialize");
         let back: SufficiencyConstraint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sc, back);
     }
 
@@ -1750,9 +1750,9 @@ mod tests {
                 actual_millionths: 400_000,
             }],
         };
-        let json = serde_json::to_string(&sr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sr).expect("serialize derived Serialize");
         let back: SufficiencyResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sr, back);
     }
 
@@ -1763,18 +1763,18 @@ mod tests {
             required_millionths: 850_000,
             actual_millionths: 0,
         };
-        let json = serde_json::to_string(&sv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sv).expect("serialize derived Serialize");
         let back: SufficiencyViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sv, back);
     }
 
     #[test]
     fn evidence_chunk_serde_roundtrip() {
         let chunk = EvidenceChunk::new(7, "security", b"payload bytes".to_vec());
-        let json = serde_json::to_string(&chunk).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&chunk).expect("serialize derived Serialize");
         let back: EvidenceChunk =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(chunk, back);
     }
 
@@ -1784,9 +1784,8 @@ mod tests {
             .map(|i| EvidenceChunk::new(i, "x", vec![i as u8; 10]).leaf_hash())
             .collect();
         let tree = MerkleTree::build(&leaves);
-        let json = serde_json::to_string(&tree).expect("serde deserialization should succeed");
-        let back: MerkleTree =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tree).expect("serialize derived Serialize");
+        let back: MerkleTree = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tree, back);
     }
 
@@ -1796,9 +1795,8 @@ mod tests {
             hash: [0xAB; 32],
             is_right: true,
         };
-        let json = serde_json::to_string(&step).expect("serde deserialization should succeed");
-        let back: ProofStep =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&step).expect("serialize derived Serialize");
+        let back: ProofStep = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(step, back);
     }
 
@@ -1810,9 +1808,9 @@ mod tests {
             artifact_hash: Some("abc123".into()),
             replay_session_id: Some("sess-99".into()),
         };
-        let json = serde_json::to_string(&hint).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hint).expect("serialize derived Serialize");
         let back: ReconstructionHint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hint, back);
     }
 
@@ -1825,9 +1823,9 @@ mod tests {
             size_bytes: 256,
             leaf_hash: "cafebabe".into(),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: ChunkManifestEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1842,9 +1840,9 @@ mod tests {
             issues: vec![],
             sufficiency_score: Some(900_000),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: PackReportEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -1854,9 +1852,9 @@ mod tests {
             valid: false,
             issues: vec!["merkle root mismatch".into()],
         };
-        let json = serde_json::to_string(&pvr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pvr).expect("serialize derived Serialize");
         let back: PackVerificationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pvr, back);
     }
 
@@ -1874,9 +1872,9 @@ mod tests {
             all_satisfied: true,
             epoch: test_epoch(),
         };
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let back: SufficiencyCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, back);
     }
 
@@ -1887,9 +1885,9 @@ mod tests {
             .provenance(test_provenance())
             .compile(test_epoch())
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CompilationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
         assert!(back.verify_all_proofs());
     }

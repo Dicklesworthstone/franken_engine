@@ -3907,11 +3907,11 @@ abstract class Base { }"#;
         let opts = TsCompilerOptions::default();
         // SAFETY: TsCompilerOptions derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&opts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&opts).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid TsCompilerOptions,
         // so from_str back to TsCompilerOptions cannot fail (valid format + matching schema).
         let back: TsCompilerOptions =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(opts, back);
     }
 
@@ -3920,11 +3920,11 @@ abstract class Base { }"#;
         let config = TsNormalizationConfig::default();
         // SAFETY: TsNormalizationConfig derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid TsNormalizationConfig,
         // so from_str back to TsNormalizationConfig cannot fail (valid format + matching schema).
         let back: TsNormalizationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -3937,11 +3937,11 @@ abstract class Base { }"#;
         };
         // SAFETY: NormalizationDecision derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid NormalizationDecision,
         // so from_str back to NormalizationDecision cannot fail (valid format + matching schema).
         let back: NormalizationDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -3958,11 +3958,11 @@ abstract class Base { }"#;
         };
         // SAFETY: NormalizationEvent derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid NormalizationEvent,
         // so from_str back to NormalizationEvent cannot fail (valid format + matching schema).
         let back: NormalizationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -3974,11 +3974,11 @@ abstract class Base { }"#;
         };
         // SAFETY: CapabilityIntent derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ci).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid CapabilityIntent,
         // so from_str back to CapabilityIntent cannot fail (valid format + matching schema).
         let back: CapabilityIntent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ci, back);
     }
 
@@ -3988,9 +3988,9 @@ abstract class Base { }"#;
             normalized_line: 1,
             original_line: 1,
         };
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: SourceMapEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -4176,18 +4176,18 @@ abstract class Base { }"#;
     #[test]
     fn ts_compiler_options_default_serde_roundtrip() {
         let opts = TsCompilerOptions::default();
-        let json = serde_json::to_string(&opts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&opts).expect("serialize derived Serialize");
         let back: TsCompilerOptions =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(opts, back);
     }
 
     #[test]
     fn ts_normalization_config_default_serde_roundtrip() {
         let config = TsNormalizationConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: TsNormalizationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -4198,9 +4198,9 @@ abstract class Base { }"#;
             changed: true,
             detail: "removed 5 annotations".into(),
         };
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: NormalizationDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 

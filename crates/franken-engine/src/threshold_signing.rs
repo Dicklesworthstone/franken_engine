@@ -1468,9 +1468,9 @@ mod tests {
     fn policy_serde_roundtrip() {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: ThresholdSigningPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
     }
 
@@ -1495,9 +1495,9 @@ mod tests {
             .finalize(TEST_PREIMAGE)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: ThresholdResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1513,9 +1513,9 @@ mod tests {
             ThresholdError::NoScopedOperations,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: ThresholdError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1769,9 +1769,9 @@ mod tests {
             ThresholdEventType::UnauthorizedSubmission { signer: holder },
         ];
         for evt in &events {
-            let json = serde_json::to_string(evt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(evt).expect("serialize derived Serialize");
             let restored: ThresholdEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*evt, restored);
         }
     }
@@ -1797,8 +1797,8 @@ mod tests {
         };
         let r1 = run();
         let r2 = run();
-        let json1 = serde_json::to_string(&r1).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&r2).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&r1).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&r2).expect("serialize derived Serialize");
         assert_eq!(json1, json2, "serialized results must be byte-identical");
     }
 
@@ -1877,9 +1877,9 @@ mod tests {
     #[test]
     fn threshold_scope_serde_roundtrip_all_variants() {
         for scope in ThresholdScope::ALL {
-            let json = serde_json::to_string(scope).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(scope).expect("serialize derived Serialize");
             let back: ThresholdScope =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, *scope);
         }
     }
@@ -1887,9 +1887,9 @@ mod tests {
     #[test]
     fn share_holder_id_serde_roundtrip() {
         let id = ShareHolderId([42u8; 32]);
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
         let back: ShareHolderId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, id);
     }
 
@@ -2034,7 +2034,7 @@ mod tests {
     fn enrichment_policy_json_field_presence() {
         let keys = make_share_keys(3);
         let policy = create_test_policy(2, &keys);
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         assert!(json.contains("\"policy_id\""), "missing policy_id");
         assert!(json.contains("\"principal_id\""), "missing principal_id");
         assert!(json.contains("\"threshold_k\""), "missing threshold_k");
@@ -2071,7 +2071,7 @@ mod tests {
         let result = ceremony
             .finalize(TEST_PREIMAGE)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(json.contains("\"ceremony_id\""), "missing ceremony_id");
         assert!(json.contains("\"policy_id\""), "missing policy_id");
         assert!(json.contains("\"scope\""), "missing scope");
@@ -2098,7 +2098,7 @@ mod tests {
             new_keys.iter().map(|sk| sk.verification_key()).collect();
         let (_, refresh) = refresh_shares(&policy, &new_vks, SecurityEpoch::from_raw(5))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&refresh).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&refresh).expect("serialize derived Serialize");
         assert!(json.contains("\"policy_id\""), "missing policy_id");
         assert!(json.contains("\"old_shares\""), "missing old_shares");
         assert!(json.contains("\"new_shares\""), "missing new_shares");
@@ -2122,9 +2122,9 @@ mod tests {
             DeterministicTimestamp(1000),
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&ceremony).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ceremony).expect("serialize derived Serialize");
         let restored: ThresholdCeremony =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ceremony.ceremony_id, restored.ceremony_id);
         assert_eq!(ceremony.policy_id, restored.policy_id);
         assert_eq!(ceremony.scope, restored.scope);

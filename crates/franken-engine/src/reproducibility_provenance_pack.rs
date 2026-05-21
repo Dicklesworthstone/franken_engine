@@ -864,9 +864,9 @@ mod tests {
     #[test]
     fn toolchain_serde_roundtrip() {
         let tc = test_toolchain();
-        let json = serde_json::to_string(&tc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tc).expect("serialize derived Serialize");
         let back: ToolchainFingerprint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tc, back);
     }
 
@@ -889,9 +889,9 @@ mod tests {
     #[test]
     fn git_serde_roundtrip() {
         let git = test_git();
-        let json = serde_json::to_string(&git).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&git).expect("serialize derived Serialize");
         let back: GitFingerprint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(git, back);
     }
 
@@ -906,9 +906,9 @@ mod tests {
     #[test]
     fn env_serde_roundtrip() {
         let env = test_env();
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let back: BuildEnvironment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(env, back);
     }
 
@@ -944,9 +944,9 @@ mod tests {
             ArtifactKind::Documentation,
             ArtifactKind::Legal,
         ] {
-            let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&k).expect("serialize derived Serialize");
             let back: ArtifactKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(k, back);
         }
     }
@@ -989,9 +989,9 @@ mod tests {
     fn manifest_serde_roundtrip() {
         let artifacts = vec![test_artifact("a.rs", ArtifactKind::Source)];
         let manifest = ArtifactManifest::from_artifacts("pack-4".to_string(), artifacts);
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: ArtifactManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
     }
 
@@ -1052,9 +1052,9 @@ mod tests {
     fn dep_snapshot_serde_roundtrip() {
         let entries = vec![test_dep("serde", "1.0.200")];
         let snap = DependencySnapshot::from_entries(entries);
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let back: DependencySnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, back);
     }
 
@@ -1098,9 +1098,9 @@ mod tests {
             LicenseRisk::Medium,
             LicenseRisk::High,
         ] {
-            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&r).expect("serialize derived Serialize");
             let back: LicenseRisk =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(r, back);
         }
     }
@@ -1175,10 +1175,9 @@ mod tests {
             notes: "Dual licensed".to_string(),
         }];
         let assessment = LegalAssessment::from_findings(findings);
-        let json =
-            serde_json::to_string(&assessment).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&assessment).expect("serialize derived Serialize");
         let back: LegalAssessment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(assessment, back);
     }
 
@@ -1306,9 +1305,9 @@ mod tests {
             .build()
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&pack).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pack).expect("serialize derived Serialize");
         let back: ReproducibilityPack =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pack, back);
     }
 
@@ -1370,9 +1369,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let report = generate_report(&pack);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: ReproducibilityReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1401,9 +1400,9 @@ mod tests {
             dependencies_sorted: true,
             all_valid: true,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: PackIntegrityResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -1454,18 +1453,18 @@ mod tests {
     #[test]
     fn toolchain_fingerprint_serde_roundtrip() {
         let fp = test_env().toolchain;
-        let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fp).expect("serialize derived Serialize");
         let back: ToolchainFingerprint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fp, back);
     }
 
     #[test]
     fn build_environment_serde_roundtrip() {
         let env = test_env();
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let back: BuildEnvironment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(env, back);
     }
 
@@ -1535,27 +1534,27 @@ mod tests {
             risk: LicenseRisk::None,
             notes: "dual".to_string(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let back: LicenseFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(finding, back);
     }
 
     #[test]
     fn artifact_entry_serde_roundtrip() {
         let entry = test_artifact("main.rs", ArtifactKind::Source);
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: ArtifactEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
     #[test]
     fn dependency_entry_serde_roundtrip() {
         let dep = test_dep("serde", "1.0.200");
-        let json = serde_json::to_string(&dep).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dep).expect("serialize derived Serialize");
         let back: DependencyEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(dep, back);
     }
 
@@ -1572,9 +1571,9 @@ mod tests {
             ArtifactKind::Legal,
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: ArtifactKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1587,9 +1586,9 @@ mod tests {
     #[test]
     fn git_fingerprint_serde_roundtrip() {
         let git = test_env().git;
-        let json = serde_json::to_string(&git).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&git).expect("serialize derived Serialize");
         let back: GitFingerprint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(git, back);
     }
 
@@ -1599,7 +1598,7 @@ mod tests {
             .environment(test_env())
             .build()
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&pack).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pack).expect("serialize derived Serialize");
         for field in &[
             "pack_id",
             "claim_id",
@@ -1620,7 +1619,7 @@ mod tests {
             .build()
             .expect("serde deserialization should succeed");
         let report = generate_report(&pack);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         for field in &[
             "schema_version",
             "claim_id",
@@ -2102,9 +2101,9 @@ mod tests {
             size_bytes: 512,
             redacted: true,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: ArtifactEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.redacted);
     }
 
@@ -2116,9 +2115,9 @@ mod tests {
             source: "path".to_string(),
             checksum: None,
         };
-        let json = serde_json::to_string(&dep).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dep).expect("serialize derived Serialize");
         let back: DependencyEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.checksum.is_none());
     }
 
@@ -2152,9 +2151,9 @@ mod tests {
     fn env_with_container_digest_serde_roundtrip() {
         let mut env = test_env();
         env.container_digest = Some("sha256:abc123".to_string());
-        let json = serde_json::to_string(&env).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let back: BuildEnvironment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.container_digest, Some("sha256:abc123".to_string()));
     }
 
@@ -2167,9 +2166,9 @@ mod tests {
             dirty: true,
             tags: vec![],
         };
-        let json = serde_json::to_string(&git).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&git).expect("serialize derived Serialize");
         let back: GitFingerprint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(git, back);
         assert!(back.branch.is_none());
         assert!(back.tags.is_empty());

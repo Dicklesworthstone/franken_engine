@@ -1712,9 +1712,9 @@ mod tests {
     #[test]
     fn test_serde_round_trip_policy() {
         let policy = make_policy();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: AdmissionControlPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
     }
 
@@ -1723,9 +1723,9 @@ mod tests {
         let mut ctrl = make_controller();
         ctrl.check_admission(ExecutionStage::Parse, AdmissionPriority::Normal);
         let receipt = &ctrl.receipts()[0];
-        let json = serde_json::to_string(receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(receipt).expect("serialize derived Serialize");
         let restored: AdmissionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, &restored);
     }
 
@@ -1733,18 +1733,18 @@ mod tests {
     fn test_serde_round_trip_manifest() {
         let ctrl = make_controller();
         let manifest = AdmissionControlManifest::from_controller(&ctrl);
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let restored: AdmissionControlManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, restored);
     }
 
     #[test]
     fn test_serde_round_trip_token_bucket() {
         let tb = TokenBucket::new(100, 10);
-        let json = serde_json::to_string(&tb).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tb).expect("serialize derived Serialize");
         let restored: TokenBucket =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(tb, restored);
     }
 

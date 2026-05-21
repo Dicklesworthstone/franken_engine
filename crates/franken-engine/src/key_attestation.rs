@@ -1408,9 +1408,9 @@ mod tests {
     #[test]
     fn attestation_serialization_round_trip() {
         let att = create_test_attestation(KeyRole::Signing, 1, 100, 200);
-        let json = serde_json::to_string(&att).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&att).expect("serialize derived Serialize");
         let restored: KeyAttestation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(att, restored);
     }
 
@@ -1435,9 +1435,9 @@ mod tests {
         )
         .expect("create");
 
-        let json = serde_json::to_string(&att).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&att).expect("serialize derived Serialize");
         let restored: KeyAttestation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(att, restored);
     }
 
@@ -1459,9 +1459,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: AttestationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1473,9 +1473,9 @@ mod tests {
             .check_and_record(&test_principal(), AttestationNonce::from_counter(5))
             .expect("record");
 
-        let json = serde_json::to_string(&registry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&registry).expect("serialize derived Serialize");
         let restored: NonceRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.high_water_for(&test_principal()), 5);
     }
 
@@ -1728,9 +1728,9 @@ mod tests {
             posture_type: "tpm2".to_string(),
             evidence: vec![0x01, 0x02, 0x03, 0xFF],
         };
-        let json = serde_json::to_string(&dp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dp).expect("serialize derived Serialize");
         let restored: DevicePosture =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(dp, restored);
     }
 
@@ -1753,9 +1753,9 @@ mod tests {
             zone: TEST_ZONE.to_string(),
             trace_id: "t-test".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: AttestationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1821,9 +1821,9 @@ mod tests {
     #[test]
     fn enrichment_attestation_nonce_serde_roundtrip() {
         let nonce = AttestationNonce::from_counter(1_000_000);
-        let json = serde_json::to_string(&nonce).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&nonce).expect("serialize derived Serialize");
         let restored: AttestationNonce =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(nonce, restored);
         assert_eq!(restored.as_u64(), 1_000_000);
     }
@@ -2050,10 +2050,9 @@ mod tests {
             AttestationEventType::ExpiredPurged { count: 42 },
         ];
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let restored: AttestationEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*variant, restored);
         }
     }

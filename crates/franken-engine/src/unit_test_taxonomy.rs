@@ -620,11 +620,11 @@ mod tests {
         let bundle = default_frx20_bundle();
         // SAFETY: UnitTestTaxonomyBundle derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let encoded = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let encoded = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid UnitTestTaxonomyBundle,
         // so from_str back to UnitTestTaxonomyBundle cannot fail (valid format + matching schema).
         let decoded: UnitTestTaxonomyBundle =
-            serde_json::from_str(&encoded).expect("serde deserialization should succeed");
+            serde_json::from_str(&encoded).expect("deserialize known-valid JSON");
         assert_eq!(decoded, bundle);
     }
 
@@ -665,12 +665,11 @@ mod tests {
         for variant in UnitTestClass::ALL {
             // SAFETY: UnitTestClass derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid UnitTestClass,
             // so from_str back to UnitTestClass cannot fail (valid format + matching schema).
             let back: UnitTestClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, variant);
         }
     }
@@ -721,11 +720,10 @@ mod tests {
         for lane in LaneId::ALL {
             // SAFETY: LaneId derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&lane).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid LaneId,
             // so from_str back to LaneId cannot fail (valid format + matching schema).
-            let back: LaneId =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let back: LaneId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, lane);
         }
     }
@@ -819,11 +817,11 @@ mod tests {
         let contract = DeterminismContract::default_frx20();
         // SAFETY: DeterminismContract derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid DeterminismContract,
         // so from_str back to DeterminismContract cannot fail (valid format + matching schema).
         let back: DeterminismContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, contract);
     }
 
@@ -971,11 +969,11 @@ mod tests {
         let entry = valid_fixture_entry();
         // SAFETY: FixtureRegistryEntry derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FixtureRegistryEntry,
         // so from_str back to FixtureRegistryEntry cannot fail (valid format + matching schema).
         let back: FixtureRegistryEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, entry);
     }
 
@@ -985,11 +983,11 @@ mod tests {
         entry.trace_path = None;
         // SAFETY: FixtureRegistryEntry derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FixtureRegistryEntry,
         // so from_str back to FixtureRegistryEntry cannot fail (valid format + matching schema).
         let back: FixtureRegistryEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.trace_path, None);
     }
 
@@ -1059,11 +1057,11 @@ mod tests {
         let lc = valid_lane_coverage();
         // SAFETY: LaneCoverageContract derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&lc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lc).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid LaneCoverageContract,
         // so from_str back to LaneCoverageContract cannot fail (valid format + matching schema).
         let back: LaneCoverageContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, lc);
     }
 
@@ -1224,12 +1222,11 @@ mod tests {
         for variant in &variants {
             // SAFETY: TaxonomyValidationError derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid TaxonomyValidationError,
             // so from_str back to TaxonomyValidationError cannot fail (valid format + matching schema).
             let back: TaxonomyValidationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, variant);
         }
     }

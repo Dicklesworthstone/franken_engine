@@ -2001,10 +2001,9 @@ mod tests {
             AblationSearchStrategy::LatticeGreedy,
             AblationSearchStrategy::BinaryGuided,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: AblationSearchStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -2016,10 +2015,9 @@ mod tests {
             AblationSearchStage::CorrelatedPair,
             AblationSearchStage::BinaryBlock,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: AblationSearchStage =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -2035,10 +2033,9 @@ mod tests {
             AblationFailureClass::InvalidOracleResult,
             AblationFailureClass::BudgetExhausted,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: AblationFailureClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -2046,9 +2043,9 @@ mod tests {
     #[test]
     fn config_serde_round_trip() {
         let config = config_with_seed(42);
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: ShadowAblationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -2064,9 +2061,9 @@ mod tests {
     #[test]
     fn evaluation_record_serde_round_trip() {
         let record = sample_evaluation("test-candidate");
-        let json = serde_json::to_string(&record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: ShadowAblationEvaluationRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, back);
     }
 
@@ -2535,9 +2532,9 @@ mod tests {
             removed_capabilities: vec!["cap_a".to_string()],
             remaining_capability_count: Some(3),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ShadowAblationLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -2557,9 +2554,9 @@ mod tests {
             randomness_snapshot_id: "rng".to_string(),
             deterministic_seed: 42,
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: ShadowAblationCandidateRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, back);
     }
 
@@ -2577,9 +2574,9 @@ mod tests {
             execution_trace_hash: ContentHash::compute(b"obs"),
             failure_detail: None,
         };
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         let back: ShadowAblationObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, back);
     }
 
@@ -2625,9 +2622,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: ShadowAblationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2650,9 +2647,9 @@ mod tests {
             fallback: None,
             budget_utilization: BTreeMap::new(),
         };
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let restored: ShadowAblationTranscriptInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, restored);
     }
 
@@ -2723,9 +2720,9 @@ mod tests {
                 signature: Signature::from_bytes([0u8; 64]),
             },
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: ShadowAblationRunResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -2758,10 +2755,9 @@ mod tests {
                 .verification_key(),
             signature: Signature::from_bytes([0u8; 64]),
         };
-        let json =
-            serde_json::to_string(&transcript).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&transcript).expect("serialize derived Serialize");
         let restored: SignedShadowAblationTranscript =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(transcript, restored);
     }
 
@@ -3242,9 +3238,9 @@ mod tests {
             "no_exfiltration".to_string(),
             "no_side_channels".to_string(),
         ]);
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: ShadowAblationConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
         assert_eq!(restored.required_invariants.len(), 2);
     }
@@ -3472,9 +3468,9 @@ mod tests {
             execution_trace_hash: ContentHash::compute(b"detail"),
             failure_detail: Some("bad things happened".to_string()),
         };
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         let back: ShadowAblationObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obs, back);
         assert_eq!(back.failure_detail.as_deref(), Some("bad things happened"));
     }

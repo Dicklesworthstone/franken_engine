@@ -1740,9 +1740,9 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_module_node() {
         let node = make_node("test");
-        let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&node).expect("serialize derived Serialize");
         let restored: ModuleNode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(node, restored);
     }
 
@@ -1754,9 +1754,9 @@ mod tests {
             kind: EdgeKind::DynamicImport,
             conditions: vec!["import".to_string(), "node".to_string()],
         };
-        let json = serde_json::to_string(&edge).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&edge).expect("serialize derived Serialize");
         let restored: DependencyEdge =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(edge, restored);
     }
 
@@ -1771,9 +1771,9 @@ mod tests {
             EdgeKind::Conditional,
         ];
         for kind in &variants {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let restored: EdgeKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, restored);
         }
     }
@@ -1787,9 +1787,9 @@ mod tests {
             InvalidationScope::FullGraph,
         ];
         for scope in &scopes {
-            let json = serde_json::to_string(scope).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(scope).expect("serialize derived Serialize");
             let restored: InvalidationScope =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*scope, restored);
         }
     }
@@ -1797,9 +1797,9 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_resolution_graph() {
         let graph = simple_graph();
-        let json = serde_json::to_string(&graph).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&graph).expect("serialize derived Serialize");
         let restored: ResolutionGraph =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(graph, restored);
     }
 
@@ -1807,9 +1807,9 @@ mod tests {
     fn test_serde_roundtrip_invalidation_receipt() {
         let graph = simple_graph();
         let receipt = invalidate_module(&graph, "b").expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: InvalidationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
     }
 
@@ -1817,10 +1817,9 @@ mod tests {
     fn test_serde_roundtrip_rollback_checkpoint() {
         let graph = simple_graph();
         let checkpoint = create_checkpoint(&graph);
-        let json =
-            serde_json::to_string(&checkpoint).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&checkpoint).expect("serialize derived Serialize");
         let restored: RollbackCheckpoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(checkpoint, restored);
     }
 
@@ -1835,9 +1834,9 @@ mod tests {
             ResolutionGraphError::InternalError("oops".to_string()),
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: ResolutionGraphError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }

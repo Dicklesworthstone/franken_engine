@@ -1601,9 +1601,9 @@ mod tests {
         let cell = make_cell(CellDomain::Memory, ComparisonTarget::Bun, "serde-test");
         add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&board).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&board).expect("serialize derived Serialize");
         let deser: RatchetBoard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(board, deser);
     }
 
@@ -1618,9 +1618,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         let deser: FrontierGapLedger =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ledger, deser);
     }
 
@@ -1641,9 +1641,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&log).expect("serialize derived Serialize");
         let deser: RatchetEventLog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(log, deser);
     }
 
@@ -1660,9 +1660,9 @@ mod tests {
         add_cell(&mut board, &mut log, cell).expect("serde deserialization should succeed");
 
         let snapshot = compute_dominance_snapshot(&board, &ledger, &mut log);
-        let json = serde_json::to_string(&snapshot).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snapshot).expect("serialize derived Serialize");
         let deser: DominanceSnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snapshot, deser);
     }
 
@@ -1673,9 +1673,8 @@ mod tests {
             ComparisonTarget::Jsc,
             "ssr-hydration",
         );
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let deser: CellId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let deser: CellId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, deser);
     }
 
@@ -2525,9 +2524,9 @@ mod tests {
             current_state: CellState::Proven,
             attempted_state: CellState::Unproven,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let deser: RatchetError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, deser);
     }
 
@@ -2544,9 +2543,8 @@ mod tests {
         cell.last_advanced_epoch = 7;
         cell.owning_bead = "bd-test".to_string();
 
-        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
-        let deser: RatchetCell =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cell).expect("serialize derived Serialize");
+        let deser: RatchetCell = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cell, deser);
     }
 
@@ -2559,9 +2557,9 @@ mod tests {
         entry.resolution = Some(GapResolution::SubsumedByOther);
         entry.priority_millionths = 750_000;
 
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let deser: FrontierGapEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, deser);
     }
 
@@ -2569,8 +2567,8 @@ mod tests {
     fn serde_deterministic_serialization_for_cell_domain() {
         // Serialize the same domain twice and ensure identical JSON.
         let d = CellDomain::ReactPerformance;
-        let json1 = serde_json::to_string(&d).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&d).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&d).expect("serialize derived Serialize");
         assert_eq!(json1, json2);
         assert_eq!(json1, "\"react_performance\"");
     }
@@ -2578,8 +2576,8 @@ mod tests {
     #[test]
     fn serde_deterministic_serialization_for_comparison_target() {
         let t = ComparisonTarget::Jsc;
-        let json1 = serde_json::to_string(&t).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&t).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&t).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&t).expect("serialize derived Serialize");
         assert_eq!(json1, json2);
         assert_eq!(json1, "\"jsc\"");
     }
@@ -2591,7 +2589,7 @@ mod tests {
             (CellState::Claimed, "\"claimed\""),
             (CellState::Proven, "\"proven\""),
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             assert_eq!(json, expected);
         }
     }
@@ -2828,9 +2826,9 @@ mod tests {
         );
         gap.target = Some(ComparisonTarget::Bun);
 
-        let json = serde_json::to_string(&gap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gap).expect("serialize derived Serialize");
         let deser: FrontierGapEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(gap, deser);
         assert_eq!(deser.target, Some(ComparisonTarget::Bun));
     }
@@ -2838,9 +2836,9 @@ mod tests {
     #[test]
     fn gap_without_target_serde_round_trip() {
         let gap = make_gap("no-target-gap", CellDomain::Memory, GapKind::OutOfScope);
-        let json = serde_json::to_string(&gap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gap).expect("serialize derived Serialize");
         let deser: FrontierGapEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser.target, None);
     }
 
@@ -2976,10 +2974,9 @@ mod tests {
         ];
 
         for variant in &variants {
-            let json =
-                serde_json::to_string(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(variant).expect("serialize derived Serialize");
             let deser: RatchetEventKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*variant, deser);
         }
     }

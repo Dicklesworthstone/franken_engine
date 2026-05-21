@@ -701,9 +701,9 @@ mod tests {
     fn scenario_result_serde_roundtrip() {
         let mut cx = real_cx(5000);
         let result = run_scenario(ScenarioKind::Startup, 1, &mut cx);
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: ScenarioResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -711,9 +711,9 @@ mod tests {
     fn scenario_suite_result_serde_roundtrip() {
         let mut cx = real_cx(100000);
         let suite = run_all_scenarios(42, &mut cx);
-        let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&suite).expect("serialize derived Serialize");
         let back: ScenarioSuiteResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(suite, back);
     }
 
@@ -728,9 +728,9 @@ mod tests {
             ScenarioKind::DegradedMode,
             ScenarioKind::MultiExtension,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let back: ScenarioKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -742,9 +742,9 @@ mod tests {
             passed: true,
             detail: String::new(),
         };
-        let json = serde_json::to_string(&assertion).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&assertion).expect("serialize derived Serialize");
         let back: ScenarioAssertion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(assertion, back);
     }
 
@@ -905,9 +905,9 @@ mod tests {
         let suite = run_all_scenarios(42, &mut cx);
 
         // Verify it serializes to JSON for bd-24bu release gating
-        let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&suite).expect("serialize derived Serialize");
         let parsed: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(parsed["verdict"], "Pass");
         // SAFETY: test suite JSON has total_assertions field as u64; as_u64() returns Some
         assert!(
@@ -1150,9 +1150,9 @@ mod tests {
     fn scenario_suite_result_json_scenarios_array() {
         let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
-        let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&suite).expect("serialize derived Serialize");
         let parsed: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let scenarios = parsed["scenarios"]
             .as_array()
             .expect("serde deserialization should succeed");
@@ -1281,7 +1281,7 @@ mod tests {
     fn suite_result_json_field_presence() {
         let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(42, &mut cx);
-        let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&suite).expect("serialize derived Serialize");
         assert!(json.contains("\"seed\""));
         assert!(json.contains("\"scenarios\""));
         assert!(json.contains("\"verdict\""));
@@ -1321,9 +1321,9 @@ mod tests {
         let mut result = ScenarioResult::new(ScenarioKind::Startup, 0);
         result.assert_true("deliberate failure", false);
         assert!(!result.passed);
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: ScenarioResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
         assert!(!restored.passed);
         assert!(!restored.assertions[0].passed);
@@ -1470,7 +1470,7 @@ mod tests {
         ];
         let jsons: std::collections::BTreeSet<String> = kinds
             .iter()
-            .map(|k| serde_json::to_string(k).expect("serde deserialization should succeed"))
+            .map(|k| serde_json::to_string(k).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 7, "all serde JSON strings must be distinct");
     }
@@ -1550,7 +1550,7 @@ mod tests {
     #[test]
     fn scenario_result_json_field_names_stable() {
         let r = ScenarioResult::new(ScenarioKind::Startup, 7);
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         assert!(json.contains("\"kind\""));
         assert!(json.contains("\"seed\""));
         assert!(json.contains("\"passed\""));
@@ -1568,7 +1568,7 @@ mod tests {
             passed: true,
             detail: String::new(),
         };
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         assert!(json.contains("\"description\""));
         assert!(json.contains("\"passed\""));
         assert!(json.contains("\"detail\""));
@@ -1578,7 +1578,7 @@ mod tests {
     fn scenario_suite_result_json_field_names_stable() {
         let mut cx = real_cx(20_000);
         let suite = run_all_scenarios(1, &mut cx);
-        let json = serde_json::to_string(&suite).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&suite).expect("serialize derived Serialize");
         assert!(json.contains("\"seed\""));
         assert!(json.contains("\"scenarios\""));
         assert!(json.contains("\"verdict\""));
@@ -1771,9 +1771,9 @@ mod tests {
             ScenarioKind::MultiExtension,
         ] {
             let r = ScenarioResult::new(kind, 42);
-            let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&r).expect("serialize derived Serialize");
             let back: ScenarioResult =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(r, back);
             assert_eq!(back.kind, kind);
         }
@@ -1786,9 +1786,9 @@ mod tests {
             passed: false,
             detail: "42 != 99".to_string(),
         };
-        let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let back: ScenarioAssertion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(a, back);
         assert!(!back.passed);
         assert_eq!(back.detail, "42 != 99");
@@ -1799,9 +1799,9 @@ mod tests {
         let mut r = ScenarioResult::new(ScenarioKind::Revocation, 55);
         r.assert_true("pass", true);
         r.assert_true("fail", false);
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: ScenarioResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
         assert!(!back.passed);
         assert_eq!(back.assertions.len(), 2);
@@ -1814,7 +1814,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&suite).expect("serde deserialization should succeed");
         let back: ScenarioSuiteResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(suite.seed, back.seed);
         assert_eq!(suite.total_assertions, back.total_assertions);
         assert_eq!(suite.passed_assertions, back.passed_assertions);

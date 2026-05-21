@@ -1046,9 +1046,9 @@ mod tests {
             GateId::FuzzAdversarial,
         ];
         for id in &ids {
-            let json = serde_json::to_string(id).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(id).expect("serialize derived Serialize");
             let restored: GateId =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*id, restored);
         }
     }
@@ -1066,9 +1066,9 @@ mod tests {
             },
         ];
         for s in &statuses {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let restored: GateStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, restored);
         }
     }
@@ -1086,19 +1086,18 @@ mod tests {
             "t1",
             1000,
         );
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: GateReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
     #[test]
     fn gate_thresholds_serialization_round_trip() {
         let thresholds = GateThresholds::default();
-        let json =
-            serde_json::to_string(&thresholds).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&thresholds).expect("serialize derived Serialize");
         let restored: GateThresholds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(thresholds, restored);
     }
 
@@ -1111,9 +1110,9 @@ mod tests {
             epoch_id: 1,
             event: "gate_evaluated".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: GateEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1126,9 +1125,9 @@ mod tests {
         let m = GateMetrics::empty()
             .with("latency_p99", "42ms")
             .with("throughput", "1000rps");
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: GateMetrics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -1139,9 +1138,9 @@ mod tests {
             replayed_hash: ContentHash::compute(b"replayed"),
             event_count: 512,
         };
-        let json = serde_json::to_string(&ri).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ri).expect("serialize derived Serialize");
         let restored: ReplayInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ri, restored);
     }
 
@@ -1153,9 +1152,9 @@ mod tests {
             unresolved_failures: 3,
             regression_transcripts: 1,
         };
-        let json = serde_json::to_string(&ii).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ii).expect("serialize derived Serialize");
         let restored: InterleavingInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ii, restored);
     }
 
@@ -1167,9 +1166,9 @@ mod tests {
             failed_vectors: 2,
             categories: vec!["syntax".to_string(), "semantics".to_string()],
         };
-        let json = serde_json::to_string(&ci).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ci).expect("serialize derived Serialize");
         let restored: ConformanceInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ci, restored);
     }
 
@@ -1182,9 +1181,9 @@ mod tests {
             bypasses: 0,
             targets: vec!["parser".to_string(), "interpreter".to_string()],
         };
-        let json = serde_json::to_string(&fi).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fi).expect("serialize derived Serialize");
         let restored: FuzzInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fi, restored);
     }
 

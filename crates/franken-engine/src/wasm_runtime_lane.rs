@@ -509,7 +509,7 @@ impl WasmFlushResult {
             self.signals_evaluated,
             self.dom_ops_emitted,
             // SAFETY: WasmLaneMode derives Serialize and has no non-serializable fields
-            serde_json::to_string(&self.mode_after).expect("serde deserialization should succeed"),
+            serde_json::to_string(&self.mode_after).expect("serialize derived Serialize"),
         );
         derive_id(
             ObjectDomain::EvidenceRecord,
@@ -708,7 +708,7 @@ impl WasmRuntimeLane {
             "wasm_lane:signals={}:mode={}:flushes={}",
             self.graph.active_count(),
             // SAFETY: WasmLaneMode derives Serialize and has no non-serializable fields
-            serde_json::to_string(&self.mode).expect("serde deserialization should succeed"),
+            serde_json::to_string(&self.mode).expect("serialize derived Serialize"),
             self.flush_count,
         );
         derive_id(
@@ -965,10 +965,10 @@ mod tests {
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
             .expect("serde deserialization should succeed");
         // SAFETY: WasmSignalGraph derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&g).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from WasmSignalGraph, deserialization guaranteed to succeed
         let g2: WasmSignalGraph =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(g, g2);
     }
 
@@ -1002,10 +1002,9 @@ mod tests {
             text: b"hello".to_vec(),
         });
         // SAFETY: AbiDomBatch derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&b).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&b).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from AbiDomBatch, deserialization guaranteed to succeed
-        let b2: AbiDomBatch =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let b2: AbiDomBatch = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(b, b2);
     }
 
@@ -1017,10 +1016,9 @@ mod tests {
             sequence: 42,
         };
         // SAFETY: AbiStateUpdate derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&u).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&u).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from AbiStateUpdate, deserialization guaranteed to succeed
-        let u2: AbiStateUpdate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let u2: AbiStateUpdate = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(u, u2);
     }
 
@@ -1318,10 +1316,10 @@ mod tests {
     fn lane_serde_roundtrip() {
         let lane = WasmRuntimeLane::with_defaults();
         // SAFETY: WasmRuntimeLane derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lane).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from WasmRuntimeLane, deserialization guaranteed to succeed
         let l2: WasmRuntimeLane =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lane, l2);
     }
 
@@ -1554,10 +1552,10 @@ mod tests {
             WasmSignalKind::Effect,
         ] {
             // SAFETY: WasmSignalKind derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             // SAFETY: JSON was just generated from WasmSignalKind, deserialization guaranteed to succeed
             let restored: WasmSignalKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, restored);
         }
     }
@@ -1573,11 +1571,10 @@ mod tests {
             WasmSignalStatus::Disposed,
         ] {
             // SAFETY: WasmSignalStatus derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             // SAFETY: JSON was just generated from WasmSignalStatus, deserialization guaranteed to succeed
             let restored: WasmSignalStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(status, restored);
         }
     }
@@ -1593,10 +1590,10 @@ mod tests {
             WasmLaneMode::Halted,
         ] {
             // SAFETY: WasmLaneMode derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             // SAFETY: JSON was just generated from WasmLaneMode, deserialization guaranteed to succeed
             let restored: WasmLaneMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mode, restored);
         }
     }
@@ -1636,10 +1633,10 @@ mod tests {
         ];
         for reason in &reasons {
             // SAFETY: SafeModeReason derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(reason).expect("serialize derived Serialize");
             // SAFETY: JSON was just generated from SafeModeReason, deserialization guaranteed to succeed
             let restored: SafeModeReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*reason, restored);
         }
     }
@@ -1650,10 +1647,10 @@ mod tests {
     fn wasm_budget_serde_roundtrip() {
         let budget = WasmBudget::default_budget();
         // SAFETY: WasmBudget derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&budget).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from WasmBudget, deserialization guaranteed to succeed
         let restored: WasmBudget =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(budget, restored);
     }
 
@@ -1684,9 +1681,9 @@ mod tests {
             mode_after: WasmLaneMode::Normal,
             safe_mode_triggers: vec![],
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: WasmFlushResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1948,9 +1945,9 @@ mod tests {
             WasmSignalKind::Effect,
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: WasmSignalKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -1964,9 +1961,9 @@ mod tests {
             WasmSignalStatus::Disposed,
         ];
         for s in &statuses {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: WasmSignalStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -2005,15 +2002,13 @@ mod tests {
     #[test]
     fn queue_error_serde_roundtrip() {
         let full = QueueError::Full { capacity: 42 };
-        let json = serde_json::to_string(&full).expect("serde deserialization should succeed");
-        let back: QueueError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&full).expect("serialize derived Serialize");
+        let back: QueueError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(full, back);
 
         let empty = QueueError::Empty;
-        let json2 = serde_json::to_string(&empty).expect("serde deserialization should succeed");
-        let back2: QueueError =
-            serde_json::from_str(&json2).expect("serde deserialization should succeed");
+        let json2 = serde_json::to_string(&empty).expect("serialize derived Serialize");
+        let back2: QueueError = serde_json::from_str(&json2).expect("deserialize known-valid JSON");
         assert_eq!(empty, back2);
     }
 
@@ -2024,9 +2019,9 @@ mod tests {
             depth: 20,
             max: 16,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: WasmGraphError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -2103,7 +2098,7 @@ mod tests {
             dependencies: BTreeSet::new(),
             dependents: BTreeSet::new(),
         };
-        let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&node).expect("serialize derived Serialize");
         assert!(json.contains("\"id\""));
         assert!(json.contains("\"kind\""));
         assert!(json.contains("\"status\""));
@@ -2116,7 +2111,7 @@ mod tests {
     #[test]
     fn json_field_presence_wasm_budget() {
         let budget = WasmBudget::default_budget();
-        let json = serde_json::to_string(&budget).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&budget).expect("serialize derived Serialize");
         assert!(json.contains("\"max_signals\""));
         assert!(json.contains("\"max_depth\""));
         assert!(json.contains("\"max_pending_updates\""));
@@ -2127,7 +2122,7 @@ mod tests {
     #[test]
     fn json_field_presence_abi_dom_batch() {
         let batch = AbiDomBatch::new(42);
-        let json = serde_json::to_string(&batch).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&batch).expect("serialize derived Serialize");
         assert!(json.contains("\"ops\""));
         assert!(json.contains("\"cycle\""));
     }
@@ -2151,9 +2146,9 @@ mod tests {
             sequence: 0,
         })
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lane).expect("serialize derived Serialize");
         let restored: WasmRuntimeLane =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lane, restored);
     }
 

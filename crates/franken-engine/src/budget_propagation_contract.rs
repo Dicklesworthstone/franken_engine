@@ -1175,27 +1175,27 @@ mod tests {
             error: None,
             sequence: 1,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let round: BudgetPropagationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, round);
     }
 
     #[test]
     fn test_cleanup_budget_policy_serde_roundtrip() {
         let policy = CleanupBudgetPolicy::default();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let round: CleanupBudgetPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, round);
     }
 
     #[test]
     fn test_propagation_policy_serde_roundtrip() {
         let policy = BudgetPropagationPolicy::default();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let round: BudgetPropagationPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, round);
     }
 
@@ -1209,9 +1209,9 @@ mod tests {
             BudgetBoundaryKind::ParentToChildExtension,
         );
         let report = validator.build_report();
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let round: BudgetPropagationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);
     }
 
@@ -1351,9 +1351,9 @@ mod tests {
             BudgetBoundaryKind::OrchestratorToCellClose,
         ];
         for kind in &kinds {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let decoded: BudgetBoundaryKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, decoded);
         }
     }
@@ -1433,9 +1433,9 @@ mod tests {
             BudgetDerivationStrategy::AllRemaining,
         ];
         for strat in &strategies {
-            let json = serde_json::to_string(strat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(strat).expect("serialize derived Serialize");
             let decoded: BudgetDerivationStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*strat, decoded);
         }
     }
@@ -1643,9 +1643,9 @@ mod tests {
             minimum_ms: 50,
             parent_remaining_ms: 100,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let decoded: BudgetPropagationError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, decoded);
     }
 
@@ -1654,9 +1654,9 @@ mod tests {
     #[test]
     fn test_child_rule_serde_roundtrip() {
         let rule = ChildBudgetRule::default_extension();
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
         let decoded: ChildBudgetRule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rule, decoded);
     }
 
@@ -1677,9 +1677,9 @@ mod tests {
             boundary_kind: BudgetBoundaryKind::ParentToChildExtension,
             carved_from_parent: true,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let decoded: BudgetDerivationResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, decoded);
     }
 

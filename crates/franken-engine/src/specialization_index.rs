@@ -1873,18 +1873,18 @@ mod tests {
     #[test]
     fn specialization_record_serde_roundtrip() {
         let rec = make_record("r1", 1);
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let decoded: SpecializationRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rec, decoded);
     }
 
     #[test]
     fn benchmark_outcome_serde_roundtrip() {
         let bm = make_benchmark("bm-1", "r1");
-        let json = serde_json::to_string(&bm).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bm).expect("serialize derived Serialize");
         let decoded: BenchmarkOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bm, decoded);
     }
 
@@ -1899,9 +1899,9 @@ mod tests {
             timestamp_ns: 1000,
             fallback_confirmed: true,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let decoded: InvalidationEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, decoded);
     }
 
@@ -1916,9 +1916,9 @@ mod tests {
             latency_reduction_millionths: Some(150_000),
             epoch: SecurityEpoch::from_raw(3),
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let decoded: AuditChainEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, decoded);
     }
 
@@ -2090,9 +2090,9 @@ mod tests {
             avg_latency_reduction_millionths: 200_000,
             proof_utilization_count: 4,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let decoded: ExtensionSpecializationSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, decoded);
     }
 
@@ -2107,9 +2107,9 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let decoded: SpecializationIndexEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, decoded);
     }
 
@@ -2158,9 +2158,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: InvalidationReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2438,7 +2438,7 @@ mod tests {
     #[test]
     fn specialization_record_json_field_presence() {
         let rec = make_record("r1", 1);
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"proof_input_ids\""));
         assert!(json.contains("\"proof_types\""));
@@ -2451,7 +2451,7 @@ mod tests {
     #[test]
     fn benchmark_outcome_json_field_presence() {
         let bm = make_benchmark("bm-1", "r1");
-        let json = serde_json::to_string(&bm).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bm).expect("serialize derived Serialize");
         assert!(json.contains("\"benchmark_id\""));
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"latency_reduction_millionths\""));
@@ -2735,9 +2735,9 @@ mod tests {
             sample_count: 0,
             timestamp_ns: 0,
         };
-        let json = serde_json::to_string(&bm).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bm).expect("serialize derived Serialize");
         let decoded: BenchmarkOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.latency_reduction_millionths, 0);
         assert_eq!(decoded.throughput_increase_millionths, 0);
         assert_eq!(decoded.sample_count, 0);
@@ -2753,9 +2753,9 @@ mod tests {
             sample_count: u64::MAX,
             timestamp_ns: u64::MAX,
         };
-        let json = serde_json::to_string(&bm).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bm).expect("serialize derived Serialize");
         let decoded: BenchmarkOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded.latency_reduction_millionths, u64::MAX);
         assert_eq!(decoded.timestamp_ns, u64::MAX);
     }
@@ -2831,7 +2831,7 @@ mod tests {
             latency_reduction_millionths: Some(500_000),
             epoch: SecurityEpoch::from_raw(10),
         };
-        let json = serde_json::to_string(&ace).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ace).expect("serialize derived Serialize");
         assert!(json.contains("\"proof_id\""));
         assert!(json.contains("\"proof_type\""));
         assert!(json.contains("\"receipt_id\""));
@@ -2852,7 +2852,7 @@ mod tests {
             avg_latency_reduction_millionths: 180_000,
             proof_utilization_count: 15,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         assert!(json.contains("\"extension_id\""));
         assert!(json.contains("\"total_specializations\""));
         assert!(json.contains("\"active_specializations\""));
@@ -2872,7 +2872,7 @@ mod tests {
             timestamp_ns: 12345,
             fallback_confirmed: true,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"reason\""));
         assert!(json.contains("\"timestamp_ns\""));
@@ -2891,7 +2891,7 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: Some("E001".to_string()),
         };
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));

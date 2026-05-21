@@ -1315,10 +1315,10 @@ mod tests {
         let root = test_trust_root();
         let m = test_measurement(&root);
         // SAFETY: MeasurementDigest derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid MeasurementDigest serialization
         let restored: MeasurementDigest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -1361,10 +1361,10 @@ mod tests {
         let m = test_measurement(&root);
         let quote = test_quote(&root, &m, [2u8; 32], 200, 5_000_000);
         // SAFETY: AttestationQuote derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&quote).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&quote).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid AttestationQuote serialization
         let restored: AttestationQuote =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(quote, restored);
     }
 
@@ -2156,10 +2156,10 @@ mod tests {
         // SAFETY: Test-only unwrap, cell was just created and measured
         let cell = reg.get(&cid).expect("serde deserialization should succeed");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(cell).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(cell).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: ExecutionCell =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*cell, restored);
     }
 
@@ -2170,19 +2170,19 @@ mod tests {
         reg.create_cell(default_cell_input(), 1_000)
             .expect("serde deserialization should succeed");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: CellRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.cell_count(), 1);
     }
 
     #[test]
     fn software_trust_root_serde_roundtrip() {
         let root = test_trust_root();
-        let json = serde_json::to_string(&root).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&root).expect("serialize derived Serialize");
         let restored: SoftwareTrustRoot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(root.key_id, restored.key_id);
         assert_eq!(root.secret_key_bytes, restored.secret_key_bytes);
     }
@@ -2203,9 +2203,9 @@ mod tests {
             },
         ];
         for r in &results {
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             let restored: VerificationResult =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, restored);
         }
     }
@@ -2223,9 +2223,9 @@ mod tests {
     fn fallback_policy_serde_roundtrip() {
         let mut fp = FallbackPolicy::default();
         fp.high_impact_actions.insert("deploy".to_string());
-        let json = serde_json::to_string(&fp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fp).expect("serialize derived Serialize");
         let restored: FallbackPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fp, restored);
     }
 
@@ -2240,9 +2240,9 @@ mod tests {
                 reason: "revoked".to_string(),
             },
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: CellEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -2258,9 +2258,9 @@ mod tests {
             CellLifecycle::Suspended,
             CellLifecycle::Decommissioned,
         ] {
-            let json = serde_json::to_string(&lc).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&lc).expect("serialize derived Serialize");
             let restored: CellLifecycle =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(lc, restored);
         }
     }
@@ -2274,9 +2274,9 @@ mod tests {
             CellFunction::ProofValidator,
             CellFunction::ExtensionRuntime,
         ] {
-            let json = serde_json::to_string(&cf).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cf).expect("serialize derived Serialize");
             let restored: CellFunction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(cf, restored);
         }
     }
@@ -2289,9 +2289,9 @@ mod tests {
             PlatformKind::AmdSevSnp,
             PlatformKind::Software,
         ] {
-            let json = serde_json::to_string(&pk).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&pk).expect("serialize derived Serialize");
             let restored: PlatformKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(pk, restored);
         }
     }
@@ -2303,9 +2303,9 @@ mod tests {
             TrustLevel::Hybrid,
             TrustLevel::Hardware,
         ] {
-            let json = serde_json::to_string(&tl).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&tl).expect("serialize derived Serialize");
             let restored: TrustLevel =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(tl, restored);
         }
     }
@@ -2320,9 +2320,9 @@ mod tests {
             reason: "initial measurement".to_string(),
             signature_bytes: vec![0u8; 64],
         };
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: LifecycleReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
     }
 
@@ -2391,9 +2391,9 @@ mod tests {
             CellEventType::ReattestationSucceeded,
         ];
         for et in &event_types {
-            let json = serde_json::to_string(et).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(et).expect("serialize derived Serialize");
             let restored: CellEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*et, restored);
         }
     }
@@ -2522,7 +2522,7 @@ mod tests {
     fn enrichment_json_field_presence_measurement_digest() {
         let root = SoftwareTrustRoot::new("k1", 42);
         let m = root.measure(b"code", b"cfg", b"pol", b"evi", "v1.0");
-        let j = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&m).expect("serialize derived Serialize");
         assert!(j.contains("\"code_hash\""));
         assert!(j.contains("\"config_hash\""));
         assert!(j.contains("\"policy_hash\""));
@@ -2540,7 +2540,7 @@ mod tests {
             cell_id: "c-json".to_string(),
             event_type: CellEventType::Created,
         };
-        let j = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let j = serde_json::to_string(&e).expect("serialize derived Serialize");
         assert!(j.contains("\"seq\""));
         assert!(j.contains("\"timestamp_ns\""));
         assert!(j.contains("\"epoch\""));
@@ -2577,9 +2577,9 @@ mod tests {
             CellError::EmptyAuthority,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: CellError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }

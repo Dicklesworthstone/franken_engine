@@ -1466,9 +1466,9 @@ mod tests {
             ElementKind::Frozen,
         ];
         for kind in kinds {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let decoded: ElementKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, decoded);
         }
     }
@@ -1476,18 +1476,18 @@ mod tests {
     #[test]
     fn test_array_lane_serde() {
         let lane = ArrayLaneDescriptor::new("arr-1", ElementKind::PackedSmi, 10);
-        let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&lane).expect("serialize derived Serialize");
         let decoded: ArrayLaneDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(lane, decoded);
     }
 
     #[test]
     fn test_typed_array_serde() {
         let ta = TypedArrayDescriptor::new("ta-1", ElementKind::TypedFloat64, 100);
-        let json = serde_json::to_string(&ta).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ta).expect("serialize derived Serialize");
         let decoded: TypedArrayDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ta, decoded);
     }
 
@@ -1505,10 +1505,9 @@ mod tests {
             DeoptReason::BufferDetached,
         ];
         for reason in reasons {
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             let decoded: DeoptReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(reason, decoded);
         }
     }
@@ -1517,18 +1516,18 @@ mod tests {
     fn test_diagnostics_serde() {
         let engine = ArrayFastLaneEngine::new(epoch(1));
         let diag = engine.diagnostics();
-        let json = serde_json::to_string(&diag).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&diag).expect("serialize derived Serialize");
         let decoded: ArrayFastLaneDiagnostics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(diag, decoded);
     }
 
     #[test]
     fn test_policy_serde() {
         let policy = FastLanePolicy::default();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let decoded: FastLanePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, decoded);
     }
 

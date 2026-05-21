@@ -1687,9 +1687,9 @@ mod tests {
     fn governor_serde_round_trip() {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
-        let json = serde_json::to_string(&gov).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gov).expect("serialize derived Serialize");
         let decoded: PortfolioGovernor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(gov, decoded);
     }
 
@@ -1706,9 +1706,8 @@ mod tests {
             computed_at_ns: 1_000_000_000,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
-        let decoded: Scorecard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sc).expect("serialize derived Serialize");
+        let decoded: Scorecard = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sc, decoded);
     }
 
@@ -1736,9 +1735,9 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             rationale: "All criteria met".into(),
         };
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let decoded: GovernorDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, decoded);
     }
 
@@ -1765,9 +1764,9 @@ mod tests {
         let err = GovernorError::InvalidContract {
             reason: "test".into(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let decoded: GovernorError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, decoded);
     }
 
@@ -1840,8 +1839,8 @@ mod tests {
         let mut g2 = test_governor();
         register_test_moonshot(&mut g2);
         assert_eq!(
-            serde_json::to_string(&g1).expect("serde deserialization should succeed"),
-            serde_json::to_string(&g2).expect("serde deserialization should succeed")
+            serde_json::to_string(&g1).expect("serialize derived Serialize"),
+            serde_json::to_string(&g2).expect("serialize derived Serialize")
         );
     }
 
@@ -1960,9 +1959,9 @@ mod tests {
             submitted_at_ns: 1_000_000_000,
             content_hash: "sha256:abc".to_string(),
         };
-        let json = serde_json::to_string(&ae).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ae).expect("serialize derived Serialize");
         let restored: ArtifactEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ae, restored);
     }
 
@@ -1973,18 +1972,18 @@ mod tests {
             value_millionths: 500_000,
             observed_at_ns: 2_000_000_000,
         };
-        let json = serde_json::to_string(&mo).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mo).expect("serialize derived Serialize");
         let restored: MetricObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mo, restored);
     }
 
     #[test]
     fn governor_config_serde_roundtrip() {
         let cfg = GovernorConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: GovernorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
@@ -2005,9 +2004,9 @@ mod tests {
             },
         ];
         for s in &statuses {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let restored: MoonshotStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, restored);
         }
     }
@@ -2031,9 +2030,9 @@ mod tests {
             GovernorDecisionKind::Resume,
         ];
         for k in &kinds {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let restored: GovernorDecisionKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, restored);
         }
     }
@@ -2194,9 +2193,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: GovernorError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -2351,9 +2350,9 @@ mod tests {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
         let state = &gov.moonshots["mc-test-001"];
-        let json = serde_json::to_string(state).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(state).expect("serialize derived Serialize");
         let back: MoonshotState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*state, back);
     }
 
@@ -2362,9 +2361,9 @@ mod tests {
     #[test]
     fn governor_config_serde_roundtrip_default() {
         let cfg = GovernorConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: GovernorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
@@ -2376,9 +2375,9 @@ mod tests {
             hold_confidence_below_millionths: 400_000,
             scoring_cadence_ns: 1_000_000_000,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: GovernorConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, cfg);
     }
 
@@ -2391,9 +2390,9 @@ mod tests {
             submitted_at_ns: 1_000_000,
             content_hash: "abc123".to_string(),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let back: ArtifactEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, ev);
     }
 
@@ -2404,9 +2403,9 @@ mod tests {
             value_millionths: 950_000,
             observed_at_ns: 2_000_000,
         };
-        let json = serde_json::to_string(&obs).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obs).expect("serialize derived Serialize");
         let back: MetricObservation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, obs);
     }
 
@@ -2425,9 +2424,8 @@ mod tests {
             computed_at_ns: 500_000,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let json = serde_json::to_string(&scorecard).expect("serde deserialization should succeed");
-        let back: Scorecard =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&scorecard).expect("serialize derived Serialize");
+        let back: Scorecard = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, scorecard);
         assert_eq!(back.confidence_millionths, 0);
     }

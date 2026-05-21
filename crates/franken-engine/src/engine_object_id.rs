@@ -969,27 +969,26 @@ mod tests {
             b"content",
         )
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
         let restored: EngineObjectId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, restored);
     }
 
     #[test]
     fn schema_id_serialization_round_trip() {
         let schema = test_schema_id();
-        let json = serde_json::to_string(&schema).expect("serde deserialization should succeed");
-        let restored: SchemaId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&schema).expect("serialize derived Serialize");
+        let restored: SchemaId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(schema, restored);
     }
 
     #[test]
     fn object_domain_serialization_round_trip() {
         for domain in ObjectDomain::ALL {
-            let json = serde_json::to_string(domain).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(domain).expect("serialize derived Serialize");
             let restored: ObjectDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*domain, restored);
         }
     }
@@ -1008,9 +1007,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: IdError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1168,9 +1167,8 @@ mod tests {
             expected: id_a,
             computed: id_b,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let restored: IdError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let restored: IdError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -1261,11 +1259,11 @@ mod tests {
     #[test]
     fn engine_object_id_json_field_presence() {
         let id = EngineObjectId([0xab; OBJECT_ID_LEN]);
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
         // EngineObjectId is a newtype tuple, serializes as array
         assert!(!json.is_empty());
         let back: EngineObjectId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, back);
     }
 
@@ -1414,7 +1412,7 @@ mod tests {
     fn object_domain_serde_variants_all_distinct() {
         let jsons: std::collections::BTreeSet<String> = ObjectDomain::ALL
             .iter()
-            .map(|d| serde_json::to_string(d).expect("serde deserialization should succeed"))
+            .map(|d| serde_json::to_string(d).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(
             jsons.len(),
@@ -1449,7 +1447,7 @@ mod tests {
         ];
         let jsons: std::collections::BTreeSet<String> = errors
             .iter()
-            .map(|e| serde_json::to_string(e).expect("serde deserialization should succeed"))
+            .map(|e| serde_json::to_string(e).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(
             jsons.len(),
@@ -1689,7 +1687,7 @@ mod tests {
             "\"KeyBundle\"",
         ];
         for (domain, exp) in ObjectDomain::ALL.iter().zip(expected.iter()) {
-            let json = serde_json::to_string(domain).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(domain).expect("serialize derived Serialize");
             assert_eq!(json, *exp, "stable JSON name mismatch for {domain:?}");
         }
     }
@@ -1707,7 +1705,7 @@ mod tests {
             expected: 64,
             actual: 8,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         assert!(json.contains("\"InvalidHexLength\""));
         assert!(json.contains("\"expected\""));
         assert!(json.contains("\"actual\""));
@@ -1716,7 +1714,7 @@ mod tests {
     #[test]
     fn id_error_invalid_hex_char_json_fields() {
         let err = IdError::InvalidHexChar { position: 3 };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         assert!(json.contains("\"InvalidHexChar\""));
         assert!(json.contains("\"position\""));
     }
@@ -1726,7 +1724,7 @@ mod tests {
         let err = IdError::NonCanonicalInput {
             reason: "null byte".into(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         assert!(json.contains("\"NonCanonicalInput\""));
         assert!(json.contains("\"reason\""));
     }

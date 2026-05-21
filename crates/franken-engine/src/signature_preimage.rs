@@ -1363,18 +1363,18 @@ mod tests {
     #[test]
     fn signing_key_serialization_round_trip() {
         let sk = test_signing_key();
-        let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sk).expect("serialize derived Serialize");
         let restored: SigningKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sk, restored);
     }
 
     #[test]
     fn verification_key_serialization_round_trip() {
         let vk = test_signing_key().verification_key();
-        let json = serde_json::to_string(&vk).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&vk).expect("serialize derived Serialize");
         let restored: VerificationKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(vk, restored);
     }
 
@@ -1384,9 +1384,9 @@ mod tests {
         let sig = ctx
             .sign(&test_object(), &test_signing_key(), "t-ser")
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sig).expect("serialize derived Serialize");
         let restored: Signature =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sig, restored);
     }
 
@@ -1403,9 +1403,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: SignatureError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1419,9 +1419,9 @@ mod tests {
             domain: ObjectDomain::PolicyObject,
             trace_id: "t-serde".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: SignatureEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1546,8 +1546,8 @@ mod tests {
             ("z".to_string(), CanonicalValue::U64(1)),
         ]));
         // BTreeMap ensures same canonical form regardless of insertion order
-        let json1 = serde_json::to_string(&map1).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&map2).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&map1).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&map2).expect("serialize derived Serialize");
         assert_eq!(json1, json2);
     }
 
@@ -1626,7 +1626,7 @@ mod tests {
     #[test]
     fn enrichment_signature_json_has_lower_upper_fields() {
         let sig = Signature::from_bytes([0xDD; SIGNATURE_LEN]);
-        let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sig).expect("serialize derived Serialize");
         assert!(
             json.contains("\"lower\""),
             "JSON must contain 'lower' field"
@@ -1642,7 +1642,7 @@ mod tests {
         let err = SignatureError::PreimageError {
             detail: "hash collision".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         assert!(
             json.contains("PreimageError"),
             "JSON must contain variant tag 'PreimageError'"
@@ -1662,7 +1662,7 @@ mod tests {
             domain: ObjectDomain::SignedManifest,
             trace_id: "t-json-fields".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"event_type\""));
         assert!(json.contains("\"domain\""));
         assert!(json.contains("\"trace_id\""));
@@ -1678,12 +1678,12 @@ mod tests {
         let [vk_a, vk_b] = keys;
         assert!(vk_a < vk_b, "Ord should order by bytes");
 
-        let json_a = serde_json::to_string(&vk_a).expect("serde deserialization should succeed");
-        let json_b = serde_json::to_string(&vk_b).expect("serde deserialization should succeed");
+        let json_a = serde_json::to_string(&vk_a).expect("serialize derived Serialize");
+        let json_b = serde_json::to_string(&vk_b).expect("serialize derived Serialize");
         let restored_a: VerificationKey =
-            serde_json::from_str(&json_a).expect("serde deserialization should succeed");
+            serde_json::from_str(&json_a).expect("deserialize known-valid JSON");
         let restored_b: VerificationKey =
-            serde_json::from_str(&json_b).expect("serde deserialization should succeed");
+            serde_json::from_str(&json_b).expect("deserialize known-valid JSON");
         assert!(
             restored_a < restored_b,
             "Ord must be preserved after serde roundtrip"
@@ -1819,9 +1819,9 @@ mod tests {
     #[test]
     fn enrichment_signing_key_serde_roundtrip() {
         let sk = test_signing_key();
-        let json = serde_json::to_string(&sk).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sk).expect("serialize derived Serialize");
         let restored: SigningKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sk, restored);
     }
 

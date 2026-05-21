@@ -2598,9 +2598,9 @@ mod tests {
     #[test]
     fn severity_score_serde_roundtrip() {
         let score = SeverityScore::high();
-        let json = serde_json::to_string(&score).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&score).expect("serialize derived Serialize");
         let back: SeverityScore =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(score, back);
     }
 
@@ -2612,9 +2612,9 @@ mod tests {
             kind: CompositionEdgeKind::ParentChild,
             label: "test".to_string(),
         };
-        let json = serde_json::to_string(&edge).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&edge).expect("serialize derived Serialize");
         let back: CompositionEdge =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(edge, back);
     }
 
@@ -2626,10 +2626,9 @@ mod tests {
             CoherenceOutcome::Incoherent,
             CoherenceOutcome::BudgetExhausted,
         ] {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: CoherenceOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, back);
         }
     }
@@ -2640,9 +2639,9 @@ mod tests {
             resource: "test".to_string(),
             limit: 42,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: CoherenceError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -2652,9 +2651,9 @@ mod tests {
             vec!["A", "B"],
             vec![("A", "B", CompositionEdgeKind::ParentChild)],
         );
-        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&g).expect("serialize derived Serialize");
         let back: CompositionGraph =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(g, back);
     }
 
@@ -2665,9 +2664,9 @@ mod tests {
         let result = checker
             .check(&input)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CoherenceCheckResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
     }
 
@@ -3012,9 +3011,9 @@ mod tests {
         input.suspense_components.insert("A".to_string());
         input.hydration_components.insert("B".to_string());
         input.capability_boundary_components.insert("A".to_string());
-        let json = serde_json::to_string(&input).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&input).expect("serialize derived Serialize");
         let back: CoherenceCheckInput =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(input, back);
     }
 
@@ -3038,9 +3037,9 @@ mod tests {
             },
         ];
         for err in &variants {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: CoherenceError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -3060,9 +3059,9 @@ mod tests {
             CompositionEdgeKind::EffectDependency,
         ];
         for kind in &variants {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: CompositionEdgeKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }

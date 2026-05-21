@@ -1118,9 +1118,9 @@ mod tests {
     #[test]
     fn schema_hash_serialization_round_trip() {
         let hash = test_schema();
-        let json = serde_json::to_string(&hash).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&hash).expect("serialize derived Serialize");
         let restored: SchemaHash =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(hash, restored);
     }
 
@@ -1144,9 +1144,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: SerdeError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1305,9 +1305,9 @@ mod tests {
             version: 3,
             schema_hash: SchemaHash::from_definition(b"schema-def"),
         };
-        let json = serde_json::to_string(&def).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&def).expect("serialize derived Serialize");
         let back: SchemaDefinition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(def, back);
     }
 
@@ -1324,9 +1324,9 @@ mod tests {
             CanonicalValue::Null,
         ];
         for val in &values {
-            let json = serde_json::to_string(val).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(val).expect("serialize derived Serialize");
             let back: CanonicalValue =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*val, back);
         }
     }
@@ -1402,7 +1402,7 @@ mod tests {
             version: 5,
             schema_hash: SchemaHash([0xAA; 32]),
         };
-        let json = serde_json::to_string(&def).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&def).expect("serialize derived Serialize");
         assert!(json.contains("\"name\""));
         assert!(json.contains("\"version\""));
         assert!(json.contains("\"schema_hash\""));
@@ -1414,7 +1414,7 @@ mod tests {
             expected: 64,
             actual: 12,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         assert!(json.contains("\"expected\""));
         assert!(json.contains("\"actual\""));
         assert!(json.contains("BufferTooShort"));
@@ -1426,7 +1426,7 @@ mod tests {
             prev_key: "beta".to_string(),
             current_key: "alpha".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         assert!(json.contains("\"prev_key\""));
         assert!(json.contains("\"current_key\""));
         assert!(json.contains("NonLexicographicKeys"));

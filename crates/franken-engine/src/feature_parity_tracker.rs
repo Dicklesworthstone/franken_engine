@@ -1754,18 +1754,18 @@ mod tests {
     #[test]
     fn feature_entry_serde_roundtrip() {
         let entry = FeatureEntry::new(FeatureArea::BigInt, EsVersion::Es2020);
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let parsed: FeatureEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, parsed);
     }
 
     #[test]
     fn waiver_record_serde_roundtrip() {
         let waiver = make_waiver("feat-1", "w-1");
-        let json = serde_json::to_string(&waiver).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&waiver).expect("serialize derived Serialize");
         let parsed: WaiverRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(waiver, parsed);
     }
 
@@ -1773,9 +1773,9 @@ mod tests {
     fn dashboard_snapshot_serde_roundtrip() {
         let tracker = FeatureParityTracker::new();
         let dash = tracker.dashboard();
-        let json = serde_json::to_string(&dash).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dash).expect("serialize derived Serialize");
         let parsed: DashboardSnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(dash, parsed);
     }
 
@@ -1788,9 +1788,9 @@ mod tests {
             overall_test262_pass_rate_millionths: 980_000,
             overall_lockstep_match_rate_millionths: 970_000,
         };
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let parsed: ReleaseGateDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, parsed);
     }
 
@@ -1805,9 +1805,9 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let parsed: ParityEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, parsed);
     }
 
@@ -2046,9 +2046,9 @@ mod tests {
             FeatureStatus::Passing,
             FeatureStatus::Waived,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: FeatureStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -2058,16 +2058,16 @@ mod tests {
         let json = serde_json::to_string(&EsVersion::Es2020)
             .expect("serde deserialization should succeed");
         let restored: EsVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(EsVersion::Es2020, restored);
     }
 
     #[test]
     fn lockstep_runtime_serde_roundtrip() {
         for v in [LockstepRuntime::Node, LockstepRuntime::Bun] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: LockstepRuntime =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, restored);
         }
     }
@@ -2075,9 +2075,9 @@ mod tests {
     #[test]
     fn feature_area_serde_roundtrip() {
         for v in FeatureArea::all() {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: FeatureArea =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -2111,9 +2111,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: ParityTrackerError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2130,9 +2130,9 @@ mod tests {
             passing: 95,
             failing_test_ids: vec!["t1".to_string()],
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let restored: Test262Result =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, restored);
     }
 
@@ -2143,9 +2143,9 @@ mod tests {
             expected: "42".to_string(),
             actual: "43".to_string(),
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: LockstepMismatch =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -2156,9 +2156,9 @@ mod tests {
             min_lockstep_match_rate_millionths: 950_000,
             require_waiver_coverage: true,
         };
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let restored: ReleaseGateCriteria =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, restored);
     }
 
@@ -2169,9 +2169,9 @@ mod tests {
             failure_type: "test262".to_string(),
             test_id: "t1".to_string(),
         };
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let restored: UnwaivedFailure =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f, restored);
     }
 
@@ -2182,9 +2182,9 @@ mod tests {
             decision_id: "d-1".to_string(),
             policy_id: "p-1".to_string(),
         };
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let restored: TrackerContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, restored);
     }
 
@@ -2409,7 +2409,7 @@ mod tests {
             FeatureStatus::Waived,
         ]
         .iter()
-        .map(|s| serde_json::to_string(s).expect("serde deserialization should succeed"))
+        .map(|s| serde_json::to_string(s).expect("serialize derived Serialize"))
         .collect();
         assert_eq!(jsons.len(), 4);
     }
@@ -2418,7 +2418,7 @@ mod tests {
     fn feature_area_serde_all_distinct() {
         let jsons: BTreeSet<String> = FeatureArea::all()
             .iter()
-            .map(|a| serde_json::to_string(a).expect("serde deserialization should succeed"))
+            .map(|a| serde_json::to_string(a).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 10);
     }
@@ -2451,7 +2451,7 @@ mod tests {
         ];
         let jsons: BTreeSet<String> = errors
             .iter()
-            .map(|e| serde_json::to_string(e).expect("serde deserialization should succeed"))
+            .map(|e| serde_json::to_string(e).expect("serialize derived Serialize"))
             .collect();
         assert_eq!(jsons.len(), 8);
     }
@@ -2524,7 +2524,7 @@ mod tests {
     #[test]
     fn feature_entry_json_field_names_stable() {
         let entry = FeatureEntry::new(FeatureArea::BigInt, EsVersion::Es2020);
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         assert!(json.contains("\"feature_id\""));
         assert!(json.contains("\"area\""));
         assert!(json.contains("\"es_version\""));
@@ -2540,7 +2540,7 @@ mod tests {
     #[test]
     fn waiver_record_json_field_names_stable() {
         let waiver = make_waiver("feat-1", "w-1");
-        let json = serde_json::to_string(&waiver).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&waiver).expect("serialize derived Serialize");
         assert!(json.contains("\"waiver_id\""));
         assert!(json.contains("\"feature_id\""));
         assert!(json.contains("\"reason\""));
@@ -2555,7 +2555,7 @@ mod tests {
     #[test]
     fn release_gate_criteria_json_field_names_stable() {
         let c = ReleaseGateCriteria::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         assert!(json.contains("\"min_test262_pass_rate_millionths\""));
         assert!(json.contains("\"min_lockstep_match_rate_millionths\""));
         assert!(json.contains("\"require_waiver_coverage\""));
@@ -2570,7 +2570,7 @@ mod tests {
             overall_test262_pass_rate_millionths: 0,
             overall_lockstep_match_rate_millionths: 0,
         };
-        let json = serde_json::to_string(&decision).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         assert!(json.contains("\"passed\""));
         assert!(json.contains("\"failing_features\""));
         assert!(json.contains("\"unwaived_failures\""));
@@ -2582,7 +2582,7 @@ mod tests {
     fn dashboard_snapshot_json_field_names_stable() {
         let tracker = FeatureParityTracker::new();
         let dash = tracker.dashboard();
-        let json = serde_json::to_string(&dash).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dash).expect("serialize derived Serialize");
         assert!(json.contains("\"total_features\""));
         assert!(json.contains("\"status_counts\""));
         assert!(json.contains("\"total_waivers\""));

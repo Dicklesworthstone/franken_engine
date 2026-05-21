@@ -794,9 +794,9 @@ mod tests {
     #[test]
     fn action_category_serde_roundtrip() {
         for cat in &ActionCategory::ALL {
-            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cat).expect("serialize derived Serialize");
             let back: ActionCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cat, back);
         }
     }
@@ -1339,18 +1339,18 @@ mod tests {
         .expect("serde deserialization should succeed");
 
         let entry = &em.entries()[0];
-        let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(entry).expect("serialize derived Serialize");
         let back: CanonicalEvidenceEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*entry, back);
     }
 
     #[test]
     fn emission_error_serde_roundtrip() {
         let err = EvidenceEmissionError::BufferFull { capacity: 42 };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: EvidenceEmissionError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1365,18 +1365,18 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: EvidenceEmissionEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
     #[test]
     fn emitter_config_serde_roundtrip() {
         let cfg = EmitterConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let back: EmitterConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -1476,9 +1476,9 @@ mod tests {
     #[test]
     fn evidence_entry_id_serde_roundtrip() {
         let id = EvidenceEntryId::new("ev-test-42");
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
         let back: EvidenceEntryId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, back);
     }
 
@@ -1539,9 +1539,9 @@ mod tests {
         )
         .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&em).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&em).expect("serialize derived Serialize");
         let back: CanonicalEvidenceEmitter =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(em.len(), back.len());
         assert_eq!(em.rolling_hash(), back.rolling_hash());
     }
@@ -1551,9 +1551,9 @@ mod tests {
     #[test]
     fn request_serde_roundtrip() {
         let req = make_request(ActionCategory::DecisionContract, "allow");
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: EvidenceEmissionRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, back);
     }
 
@@ -1622,9 +1622,9 @@ mod tests {
             },
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: EvidenceEmissionError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -1818,7 +1818,7 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: Some("buffer_full".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         for field in &[
             "trace_id",
             "decision_id",
@@ -1835,7 +1835,7 @@ mod tests {
     #[test]
     fn enrichment_config_json_fields_present() {
         let cfg = EmitterConfig::default();
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         assert!(json.contains("buffer_capacity"));
         assert!(json.contains("budget_cost_ms"));
     }
@@ -1843,7 +1843,7 @@ mod tests {
     #[test]
     fn enrichment_request_json_fields_present() {
         let req = make_request(ActionCategory::DecisionContract, "allow");
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         for field in &[
             "category",
             "action_name",
@@ -2004,10 +2004,9 @@ mod tests {
         ];
 
         for policy in policies {
-            let json =
-                serde_json::to_string(&policy).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
             let decoded: EvidenceEmissionPolicy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(policy, decoded);
         }
     }

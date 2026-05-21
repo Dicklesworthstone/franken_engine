@@ -548,9 +548,9 @@ mod tests {
             MatrixLaneKind::Next,
             MatrixLaneKind::Pinned,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let back: MatrixLaneKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -639,10 +639,9 @@ mod tests {
     #[test]
     fn matrix_outcome_serde() {
         for outcome in [MatrixOutcome::Pass, MatrixOutcome::Fail] {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: MatrixOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, back);
         }
     }
@@ -655,9 +654,9 @@ mod tests {
             FailureScopeKind::Universal,
             FailureScopeKind::VersionSpecific,
         ] {
-            let json = serde_json::to_string(&scope).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&scope).expect("serialize derived Serialize");
             let back: FailureScopeKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(scope, back);
         }
     }
@@ -1012,9 +1011,9 @@ mod tests {
     #[test]
     fn boundary_matrix_spec_serde_round_trip() {
         let spec = test_spec();
-        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&spec).expect("serialize derived Serialize");
         let back: BoundaryMatrixSpec =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(spec, back);
     }
 
@@ -1022,9 +1021,9 @@ mod tests {
     fn version_matrix_plan_serde_round_trip() {
         let plan =
             derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&plan).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&plan).expect("serialize derived Serialize");
         let back: VersionMatrixPlan =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(plan, back);
     }
 
@@ -1042,9 +1041,9 @@ mod tests {
             failure_fingerprint: None,
             failure_class: None,
         };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: MatrixCellResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1057,9 +1056,9 @@ mod tests {
             universal_failures: 0,
             version_specific_failures: 1,
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: MatrixHealthSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -1071,9 +1070,8 @@ mod tests {
             next: None,
             derivation_notes: vec!["auto".into()],
         };
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let back: VersionSlots =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
+        let back: VersionSlots = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, back);
     }
 
@@ -1271,7 +1269,7 @@ mod tests {
             failure_fingerprint: Some("fp-xyz".into()),
             failure_class: Some("timeout".into()),
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));
@@ -1285,7 +1283,7 @@ mod tests {
     #[test]
     fn enrichment_boundary_matrix_spec_json_fields() {
         let spec = test_spec();
-        let json = serde_json::to_string(&spec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&spec).expect("serialize derived Serialize");
         assert!(json.contains("\"boundary_surface\""));
         assert!(json.contains("\"local_repo\""));
         assert!(json.contains("\"remote_repo\""));
@@ -1298,7 +1296,7 @@ mod tests {
     fn enrichment_version_matrix_plan_json_fields() {
         let plan =
             derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&plan).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&plan).expect("serialize derived Serialize");
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"generated_at_utc\""));
         assert!(json.contains("\"cells\""));
@@ -1316,9 +1314,9 @@ mod tests {
             scope: FailureScopeKind::VersionSpecific,
             failing_cells: vec!["c1".into(), "c2".into(), "c3".into()],
         };
-        let json = serde_json::to_string(&scope).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&scope).expect("serialize derived Serialize");
         let back: MatrixFailureScope =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(scope, back);
     }
 
@@ -1504,7 +1502,7 @@ mod tests {
             failure_fingerprint: None,
             failure_class: None,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(json.contains("\"trace_id\""));
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"policy_id\""));

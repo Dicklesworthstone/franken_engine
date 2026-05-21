@@ -1138,9 +1138,9 @@ mod tests {
     #[test]
     fn flake_severity_serde_roundtrip() {
         for s in [FlakeSeverity::Warning, FlakeSeverity::High] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: FlakeSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -1188,9 +1188,9 @@ mod tests {
             super::QuarantineAction::Observe,
             super::QuarantineAction::QuarantineImmediate,
         ] {
-            let json = serde_json::to_string(&a).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&a).expect("serialize derived Serialize");
             let back: super::QuarantineAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(a, back);
         }
     }
@@ -1220,9 +1220,9 @@ mod tests {
             super::QuarantineStatus::Expired,
             super::QuarantineStatus::Lifted,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: super::QuarantineStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -1257,9 +1257,9 @@ mod tests {
             super::TrendDirection::Stable,
             super::TrendDirection::Degrading,
         ] {
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             let back: super::TrendDirection =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, back);
         }
     }
@@ -1280,9 +1280,8 @@ mod tests {
     #[test]
     fn flake_policy_serde_roundtrip() {
         let p = FlakePolicy::default();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: FlakePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
+        let back: FlakePolicy = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1356,9 +1355,9 @@ mod tests {
             root_cause_hypothesis_artifacts: vec!["h1".into()],
             seed: 42,
         };
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let back: FlakeRunRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rec, back);
     }
 
@@ -1475,9 +1474,9 @@ mod tests {
             impacted_unit_suites: vec!["unit-a".into()],
             root_cause_hypothesis_artifacts: vec!["h1".into()],
         };
-        let json = serde_json::to_string(&evt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evt).expect("serialize derived Serialize");
         let back: super::FlakeWorkflowEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(evt, back);
     }
 
@@ -1504,9 +1503,9 @@ mod tests {
             promotion_outcome: "hold".into(),
             blockers: vec!["high_flake_rate: e2e/sc-1".into()],
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: super::GateConfidenceReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -1527,9 +1526,9 @@ mod tests {
             reason: "flaky test".into(),
             linked_reproducer_bundle_id: "b1".into(),
         };
-        let json = serde_json::to_string(&rec).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rec).expect("serialize derived Serialize");
         let back: super::QuarantineRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rec, back);
     }
 
@@ -2013,7 +2012,7 @@ mod tests {
         let json = serde_json::to_string(&classifications[0])
             .expect("serde deserialization should succeed");
         let back: super::FlakeClassification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(classifications[0], back);
     }
 
@@ -2029,9 +2028,9 @@ mod tests {
             artifact_bundle_ids: vec!["b1".into()],
             run_ids: vec!["r1".into()],
         };
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let back: super::ReproducerBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, back);
     }
 
@@ -2045,9 +2044,9 @@ mod tests {
             flake_burden_millionths: 200_000,
             high_severity_burden_millionths: 100_000,
         };
-        let json = serde_json::to_string(&point).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&point).expect("serialize derived Serialize");
         let back: super::EpochBurdenPoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(point, back);
     }
 
@@ -2157,9 +2156,9 @@ mod tests {
     #[test]
     fn flake_severity_serde_roundtrip_all() {
         for v in [FlakeSeverity::Warning, FlakeSeverity::High] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: FlakeSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }
@@ -2181,9 +2180,9 @@ mod tests {
             QuarantineAction::Observe,
             QuarantineAction::QuarantineImmediate,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: QuarantineAction =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }
@@ -2197,9 +2196,9 @@ mod tests {
             QuarantineStatus::Expired,
             QuarantineStatus::Lifted,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: QuarantineStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }
@@ -2213,9 +2212,9 @@ mod tests {
             TrendDirection::Stable,
             TrendDirection::Degrading,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: TrendDirection =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }
@@ -2225,9 +2224,8 @@ mod tests {
     #[test]
     fn flake_policy_serde_roundtrip_alt() {
         let policy = FlakePolicy::default();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
-        let back: FlakePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
+        let back: FlakePolicy = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, back);
     }
 
@@ -2254,9 +2252,9 @@ mod tests {
             impacted_unit_suites: vec![],
             root_cause_hypothesis_artifacts: vec![],
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let back: FlakeWorkflowEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -2281,9 +2279,9 @@ mod tests {
             impacted_unit_suites: vec!["suite-a".into()],
             root_cause_hypothesis_artifacts: vec!["art-1".into()],
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let back: FlakeWorkflowEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -2363,9 +2361,9 @@ mod tests {
             artifact_bundle_ids: vec!["a1".into(), "a2".into()],
             run_ids: vec!["r1".into(), "r2".into()],
         };
-        let json = serde_json::to_string(&bundle).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let back: ReproducerBundle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle, back);
     }
 
@@ -2381,9 +2379,9 @@ mod tests {
             flake_burden_millionths: 100_000,
             high_severity_burden_millionths: 30_000,
         };
-        let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pt).expect("serialize derived Serialize");
         let back: EpochBurdenPoint =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pt, back);
     }
 
@@ -2401,9 +2399,9 @@ mod tests {
             promotion_outcome: "blocked".into(),
             blockers: vec!["blocker-1".into()],
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: GateConfidenceReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);
     }
 
@@ -2433,9 +2431,9 @@ mod tests {
                 run_ids: vec!["r1".into()],
             },
         };
-        let json = serde_json::to_string(&fc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fc).expect("serialize derived Serialize");
         let back: FlakeClassification =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fc, back);
     }
 
@@ -2454,9 +2452,9 @@ mod tests {
             reason: "high_flake_rate:unit::sc-q".into(),
             linked_reproducer_bundle_id: "b1".into(),
         };
-        let json = serde_json::to_string(&qr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&qr).expect("serialize derived Serialize");
         let back: QuarantineRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(qr, back);
     }
 }

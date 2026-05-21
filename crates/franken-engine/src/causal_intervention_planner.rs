@@ -776,9 +776,8 @@ mod tests {
             NodeKind::Mediator,
             NodeKind::Instrument,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: NodeKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
+            let back: NodeKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -792,9 +791,8 @@ mod tests {
             EdgeKind::Instrumental,
             EdgeKind::Mediated,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
-            let back: EdgeKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
+            let back: EdgeKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, back);
         }
     }
@@ -928,9 +926,8 @@ mod tests {
     #[test]
     fn dag_serde_roundtrip() {
         let dag = build_seed_dag();
-        let json = serde_json::to_string(&dag).expect("serde deserialization should succeed");
-        let back: CausalDag =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dag).expect("serialize derived Serialize");
+        let back: CausalDag = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(dag.node_count(), back.node_count());
         assert_eq!(dag.content_hash(), back.content_hash());
     }
@@ -954,9 +951,9 @@ mod tests {
     #[test]
     fn identifiability_serde() {
         let id = Identifiability::BackDoorIdentifiable;
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
         let back: Identifiability =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, back);
     }
 
@@ -970,9 +967,9 @@ mod tests {
             InterventionPriority::Low,
             InterventionPriority::Deferred,
         ] {
-            let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&p).expect("serialize derived Serialize");
             let back: InterventionPriority =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(p, back);
         }
     }
@@ -1023,9 +1020,9 @@ mod tests {
         let dag = build_seed_dag();
         let planner = CausalInterventionPlanner::new();
         let report = planner.analyze(&dag);
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: PlannerReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report.lever_count, back.lever_count);
     }
 

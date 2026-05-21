@@ -1626,9 +1626,9 @@ mod tests {
         gc.collect("ext-a")
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&gc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&gc).expect("serialize derived Serialize");
         let restored: GcCollector =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(gc.heap_count(), restored.heap_count());
         assert_eq!(gc.event_sequence(), restored.event_sequence());
@@ -1712,9 +1712,9 @@ mod tests {
     #[test]
     fn gc_phase_serde_round_trip() {
         for phase in &[GcPhase::Mark, GcPhase::Sweep, GcPhase::Complete] {
-            let json = serde_json::to_string(phase).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(phase).expect("serialize derived Serialize");
             let decoded: GcPhase =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&decoded, phase);
         }
     }
@@ -1734,9 +1734,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let decoded: GcError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&decoded, err);
         }
     }
@@ -1892,9 +1892,8 @@ mod tests {
             .collect("ext-a")
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
-        let decoded: GcEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
+        let decoded: GcEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, event);
     }
 
@@ -1997,9 +1996,8 @@ mod tests {
             },
         ];
         for config in &configs {
-            let json = serde_json::to_string(config).expect("serde deserialization should succeed");
-            let back: GcConfig =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(config).expect("serialize derived Serialize");
+            let back: GcConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(config.deterministic, back.deterministic);
             assert_eq!(
                 config.pressure_threshold_percent,
@@ -2056,9 +2054,8 @@ mod tests {
             remaining: 100,
             domain: Some(AllocationDomain::ExtensionHeap),
         });
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let decoded: GcError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let decoded: GcError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, err);
     }
 
@@ -2075,9 +2072,8 @@ mod tests {
             references: refs,
             rooted: true,
         };
-        let json = serde_json::to_string(&obj).expect("serde deserialization should succeed");
-        let back: GcObject =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obj).expect("serialize derived Serialize");
+        let back: GcObject = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obj, back);
     }
 
@@ -2089,9 +2085,8 @@ mod tests {
             references: BTreeSet::new(),
             rooted: false,
         };
-        let json = serde_json::to_string(&obj).expect("serde deserialization should succeed");
-        let back: GcObject =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obj).expect("serialize derived Serialize");
+        let back: GcObject = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(obj, back);
     }
 
@@ -2145,9 +2140,9 @@ mod tests {
         heap.unroot(b)
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&heap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&heap).expect("serialize derived Serialize");
         let back: ExtensionHeap =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.extension_id(), "serde-ext");
         assert_eq!(back.object_count(), 2);
         assert_eq!(back.total_bytes(), 300);
@@ -2244,9 +2239,8 @@ mod tests {
     #[test]
     fn gc_phase_serde_roundtrip_all_variants() {
         for v in [GcPhase::Mark, GcPhase::Sweep, GcPhase::Complete] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
-            let back: GcPhase =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
+            let back: GcPhase = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(v, back);
         }
     }

@@ -927,9 +927,9 @@ mod tests {
     #[test]
     fn test_metadata_structure_kind_serde_roundtrip() {
         for kind in MetadataStructureKind::ALL {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: MetadataStructureKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -947,9 +947,9 @@ mod tests {
             SubstrateKind::BTreeIndex,
         ];
         for kind in &all {
-            let json = serde_json::to_string(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(kind).expect("serialize derived Serialize");
             let back: SubstrateKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*kind, back);
         }
     }
@@ -964,9 +964,9 @@ mod tests {
             LocalityGoal::Evictable,
         ];
         for goal in &all {
-            let json = serde_json::to_string(goal).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(goal).expect("serialize derived Serialize");
             let back: LocalityGoal =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*goal, back);
         }
     }
@@ -981,9 +981,9 @@ mod tests {
             FallbackMode::Abstain,
         ];
         for mode in &all {
-            let json = serde_json::to_string(mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(mode).expect("serialize derived Serialize");
             let back: FallbackMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*mode, back);
         }
     }
@@ -998,9 +998,9 @@ mod tests {
             RollbackRule::NoRollback,
         ];
         for rule in &all {
-            let json = serde_json::to_string(rule).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(rule).expect("serialize derived Serialize");
             let back: RollbackRule =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*rule, back);
         }
     }
@@ -1008,9 +1008,9 @@ mod tests {
     #[test]
     fn test_substrate_contract_serde_roundtrip() {
         let contract = make_contract(MetadataStructureKind::ShapeTable, SubstrateKind::SwissTable);
-        let json = serde_json::to_string(&contract).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         let back: SubstrateContract =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(contract, back);
     }
 
@@ -1020,19 +1020,18 @@ mod tests {
             MetadataStructureKind::InlineCacheTable,
             SubstrateKind::FlatArray,
         );
-        let json =
-            serde_json::to_string(&assignment).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&assignment).expect("serialize derived Serialize");
         let back: SubstrateAssignment =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(assignment, back);
     }
 
     #[test]
     fn test_substrate_inventory_serde_roundtrip() {
         let inventory = default_substrate_assignments(test_epoch());
-        let json = serde_json::to_string(&inventory).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inventory).expect("serialize derived Serialize");
         let back: SubstrateInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inventory, back);
     }
 
@@ -1267,9 +1266,9 @@ mod tests {
             expected_substrate: SubstrateKind::HashArray,
             expected_locality: LocalityGoal::L3Cold,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: InventoryEvidenceEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 

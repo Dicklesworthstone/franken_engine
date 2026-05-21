@@ -1143,10 +1143,10 @@ mod tests {
             context_hash: vec![10, 20],
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&key).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: DerivedKey =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(key, restored);
     }
 
@@ -1160,10 +1160,10 @@ mod tests {
             trace_id: "trace-xyz".to_string(),
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: DerivationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1173,10 +1173,10 @@ mod tests {
         ctx.add("ext_id", "abc");
         ctx.add("session", "xyz");
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let restored: DerivationContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctx, restored);
     }
 
@@ -1239,10 +1239,10 @@ mod tests {
         ];
         for err in &errors {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let restored: KeyDerivationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1553,10 +1553,10 @@ mod tests {
             output_len: 32,
         };
         // SAFETY: to_string cannot fail on derived Serialize struct
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
         let back: DerivationRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, req);
     }
 
@@ -1609,10 +1609,10 @@ mod tests {
     fn key_domain_serde_roundtrip_all() {
         for domain in KeyDomain::ALL {
             // SAFETY: to_string cannot fail on derived Serialize enum
-            let json = serde_json::to_string(domain).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(domain).expect("serialize derived Serialize");
             // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
             let back: KeyDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*domain, back);
         }
     }
@@ -1759,7 +1759,7 @@ mod tests {
             algorithm: "DeterministicTestDeriver".to_string(),
             trace_id: "trace-001".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("\"domain\""));
         assert!(json.contains("\"epoch\""));
         assert!(json.contains("\"context_hash\""));
@@ -1775,7 +1775,7 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             context_hash: vec![0],
         };
-        let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&key).expect("serialize derived Serialize");
         assert!(json.contains("\"key_bytes\""));
         assert!(json.contains("\"domain\""));
         assert!(json.contains("\"epoch\""));
@@ -1848,7 +1848,7 @@ mod tests {
             context: DerivationContext::empty(),
             output_len: 64,
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         assert!(json.contains("\"output_len\""));
         assert!(json.contains("64"));
     }

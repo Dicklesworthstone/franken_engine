@@ -1094,7 +1094,7 @@ mod tests {
         let result = IteratorResult::value(IteratorValue::String("test".into()));
         let json = serde_json::to_string(&result).expect("serde serialization should succeed");
         let deserialized: IteratorResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, deserialized);
     }
 
@@ -1126,7 +1126,7 @@ mod tests {
 
         let json = serde_json::to_string(&trace).expect("serde serialization should succeed");
         let deserialized: IterationTrace =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(trace, deserialized);
     }
 
@@ -1155,7 +1155,7 @@ mod tests {
         for event in &events {
             let json = serde_json::to_string(event).expect("serde serialization should succeed");
             let deser: IterationEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*event, deser);
         }
     }
@@ -1171,7 +1171,7 @@ mod tests {
 
         let json = serde_json::to_string(&state).expect("serde serialization should succeed");
         let deser: ForInEnumerationState =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(state, deser);
     }
 
@@ -1182,7 +1182,7 @@ mod tests {
         let err = IteratorProtocolError::next_result_not_object(test_id("r11"), 3);
         let json = serde_json::to_string(&err).expect("serde serialization should succeed");
         let deser: IteratorProtocolError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, deser);
     }
 
@@ -1290,7 +1290,7 @@ mod tests {
         };
         let json = serde_json::to_string(&record).expect("serde serialization should succeed");
         let deser: IteratorRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record, deser);
     }
 
@@ -1500,7 +1500,7 @@ mod tests {
         let comp = IterationCompletion::Normal;
         let json = serde_json::to_string(&comp).expect("serde serialization should succeed");
         let deser: IterationCompletion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(comp, deser);
     }
 
@@ -1509,7 +1509,7 @@ mod tests {
         let comp = IterationCompletion::NotIterable;
         let json = serde_json::to_string(&comp).expect("serde serialization should succeed");
         let deser: IterationCompletion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(comp, deser);
     }
 
@@ -1518,7 +1518,7 @@ mod tests {
         let comp = IterationCompletion::CloseThrew;
         let json = serde_json::to_string(&comp).expect("serde serialization should succeed");
         let deser: IterationCompletion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(comp, deser);
     }
 
@@ -1529,7 +1529,7 @@ mod tests {
         };
         let json = serde_json::to_string(&comp).expect("serde serialization should succeed");
         let deser: IterationCompletion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(comp, deser);
     }
 
@@ -1560,7 +1560,7 @@ mod tests {
         for val in &variants {
             let json = serde_json::to_string(val).expect("serde serialization should succeed");
             let deser: IteratorValue =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*val, deser, "round-trip failed for {val:?}");
         }
     }
@@ -1572,7 +1572,7 @@ mod tests {
         let op = IterationOperation::IteratorComplete { done: true };
         let json = serde_json::to_string(&op).expect("serde serialization should succeed");
         let deser: IterationOperation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(op, deser);
     }
 
@@ -1583,7 +1583,7 @@ mod tests {
         };
         let json = serde_json::to_string(&op).expect("serde serialization should succeed");
         let deser: IterationOperation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(op, deser);
     }
 
@@ -1859,7 +1859,7 @@ mod tests {
         assert_eq!(result.value, IteratorValue::Integer(42));
         let json = serde_json::to_string(&result).expect("serde serialization should succeed");
         let deser: IteratorResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, deser);
     }
 
@@ -1880,7 +1880,7 @@ mod tests {
             };
             let json = serde_json::to_string(&op).expect("serde serialization should succeed");
             let deser: IterationOperation =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(op, deser, "round-trip failed for {reason}");
         }
     }

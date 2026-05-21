@@ -1376,10 +1376,9 @@ mod tests {
             ErrorSeverity::Warning,
             ErrorSeverity::Info,
         ] {
-            let json =
-                serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&severity).expect("serialize derived Serialize");
             let decoded: ErrorSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(decoded, severity);
         }
     }
@@ -1402,9 +1401,9 @@ mod tests {
             ErrorSubsystem::LifecycleMigration,
             ErrorSubsystem::Reserved,
         ] {
-            let json = serde_json::to_string(&sub).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sub).expect("serialize derived Serialize");
             let decoded: ErrorSubsystem =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(decoded, sub);
         }
     }
@@ -1439,9 +1438,9 @@ mod tests {
     #[test]
     fn franken_error_code_serde_round_trip_all() {
         for code in ALL_ERROR_CODES {
-            let json = serde_json::to_string(code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(code).expect("serialize derived Serialize");
             let decoded: FrankenErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(decoded, *code, "serde round-trip failed for {code:?}");
         }
     }
@@ -1820,9 +1819,9 @@ mod tests {
     #[test]
     fn error_code_entry_serde_round_trip() {
         let entry = FrankenErrorCode::CapabilityDeniedError.to_registry_entry();
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let decoded: ErrorCodeEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decoded, entry);
     }
 
@@ -2102,7 +2101,7 @@ mod tests {
         ];
         for (sub, json_str) in expected {
             assert_eq!(
-                serde_json::to_string(&sub).expect("serde deserialization should succeed"),
+                serde_json::to_string(&sub).expect("serialize derived Serialize"),
                 json_str,
                 "serde string mismatch for {sub:?}"
             );

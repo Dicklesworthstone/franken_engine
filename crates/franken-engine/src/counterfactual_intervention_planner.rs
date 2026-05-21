@@ -883,9 +883,8 @@ mod tests {
     #[test]
     fn planner_error_serde_roundtrip() {
         let err = PlannerError::InternalError("test".to_string());
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: PlannerError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let back: PlannerError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -919,9 +918,9 @@ mod tests {
     #[test]
     fn pass_serde_roundtrip() {
         let p = make_pass("test-pass", 300_000, 50_000, 10_000);
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: OptimizationPass =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -942,9 +941,9 @@ mod tests {
     #[test]
     fn intervention_kind_serde_roundtrip() {
         for k in InterventionKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let back: InterventionKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*k, back);
         }
     }
@@ -1310,9 +1309,9 @@ mod tests {
     #[test]
     fn wave_serde_roundtrip() {
         let wave = sample_wave();
-        let json = serde_json::to_string(&wave).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&wave).expect("serialize derived Serialize");
         let back: WaveDefinition =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(wave, back);
     }
 
@@ -1359,9 +1358,9 @@ mod tests {
             content_hash: ContentHash::compute(b""),
         };
         d.seal();
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: PlanningDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -1373,9 +1372,9 @@ mod tests {
         let target = &wave.passes[0].pass_id;
         let scenario = build_counterfactual(&wave, InterventionKind::EnablePass, target);
         let cert = estimate_causal_effect(&scenario, 100_000, 250_000);
-        let json = serde_json::to_string(&cert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cert).expect("serialize derived Serialize");
         let back: UpliftCertificate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cert, back);
     }
 
@@ -1386,9 +1385,9 @@ mod tests {
         let wave = sample_wave();
         let target = &wave.passes[0].pass_id;
         let scenario = build_counterfactual(&wave, InterventionKind::EnablePass, target);
-        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&scenario).expect("serialize derived Serialize");
         let back: CounterfactualScenario =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(scenario, back);
     }
 

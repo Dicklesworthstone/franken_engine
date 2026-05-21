@@ -1580,9 +1580,8 @@ mod tests {
             let mut event: HarnessLogEvent =
                 serde_json::from_str(line).expect("parse security event");
             event.trace_id = bad_trace.to_string();
-            rewritten.push_str(
-                &serde_json::to_string(&event).expect("serde deserialization should succeed"),
-            );
+            rewritten
+                .push_str(&serde_json::to_string(&event).expect("serialize derived Serialize"));
             rewritten.push('\n');
         }
         fs::write(&events_path, rewritten).expect("write corrupted events");
@@ -1661,9 +1660,9 @@ mod tests {
             HarnessLane::Governance,
             HarnessLane::E2e,
         ] {
-            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&lane).expect("serialize derived Serialize");
             let restored: HarnessLane =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(lane, restored);
         }
     }
@@ -1695,10 +1694,9 @@ mod tests {
             BaselineScenarioDomain::Module,
             BaselineScenarioDomain::Security,
         ] {
-            let json =
-                serde_json::to_string(&domain).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&domain).expect("serialize derived Serialize");
             let restored: BaselineScenarioDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(domain, restored);
         }
     }
@@ -1711,10 +1709,9 @@ mod tests {
             BaselineScenarioOutcome::HappyPath,
             BaselineScenarioOutcome::CanonicalFailure,
         ] {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let restored: BaselineScenarioOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, restored);
         }
     }
@@ -1757,9 +1754,9 @@ mod tests {
     #[test]
     fn context_serde_round_trip() {
         let ctx = DeterministicTestContext::new("rgc-052", "fixture-a", HarnessLane::Security, 7);
-        let json = serde_json::to_string(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         let restored: DeterministicTestContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ctx, restored);
     }
 
@@ -1777,9 +1774,9 @@ mod tests {
             timing_us: 123,
             timestamp_unix_ms: 1_700_000_000_000,
         });
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: HarnessLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1796,9 +1793,9 @@ mod tests {
             timestamp_unix_ms: 1_700_000_000_100,
         });
         assert_eq!(event.error_code.as_deref(), Some("FE-SEC-0001"));
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: HarnessLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1809,9 +1806,9 @@ mod tests {
         let ctx = DeterministicTestContext::new("rgc-052", "fixture-a", HarnessLane::E2e, 53);
         let manifest =
             HarnessRunManifest::from_context(&ctx, "run-001", 3, 2, "replay.sh", 1_700_000_000_000);
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let restored: HarnessRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, restored);
     }
 
@@ -1863,9 +1860,9 @@ mod tests {
             ArtifactValidationErrorCode::CountMismatch,
             ArtifactValidationErrorCode::EmptyCommands,
         ] {
-            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&code).expect("serialize derived Serialize");
             let restored: ArtifactValidationErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(code, restored);
         }
     }
@@ -1884,9 +1881,9 @@ mod tests {
             ArtifactBundleValidationErrorCode::MissingRequiredLane,
             ArtifactBundleValidationErrorCode::CorrelationMismatch,
         ] {
-            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&code).expect("serialize derived Serialize");
             let restored: ArtifactBundleValidationErrorCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(code, restored);
         }
     }
@@ -2239,9 +2236,9 @@ mod tests {
             "execute",
             None,
         );
-        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&scenario).expect("serialize derived Serialize");
         let restored: BaselineE2eScenario =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(scenario, restored);
     }
 
@@ -2256,9 +2253,9 @@ mod tests {
             "containment",
             Some("FE-SEC-0001"),
         );
-        let json = serde_json::to_string(&scenario).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&scenario).expect("serialize derived Serialize");
         let restored: BaselineE2eScenario =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(scenario, restored);
         assert_eq!(restored.error_code.as_deref(), Some("FE-SEC-0001"));
     }
@@ -2279,9 +2276,9 @@ mod tests {
             policy_id: Some("policy-001".to_string()),
             findings: Vec::new(),
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: ArtifactValidationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
@@ -2303,9 +2300,9 @@ mod tests {
             lane_reports: Vec::new(),
             findings: Vec::new(),
         };
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: ArtifactBundleValidationReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
@@ -2514,9 +2511,9 @@ mod tests {
             error_code: ArtifactValidationErrorCode::CountMismatch,
             message: "mismatch".to_string(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let restored: ArtifactValidationFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(finding, restored);
     }
 
@@ -2532,9 +2529,9 @@ mod tests {
             remediation_hint: "fix it".to_string(),
             repro_command: "cargo test".to_string(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let restored: ArtifactBundleValidationFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(finding, restored);
     }
 
@@ -2545,9 +2542,9 @@ mod tests {
             seed: 42,
             lanes: vec![HarnessLane::Parser, HarnessLane::Runtime],
         };
-        let json = serde_json::to_string(&sig).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sig).expect("serialize derived Serialize");
         let restored: ArtifactBundleCorrelationSignature =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sig, restored);
     }
 

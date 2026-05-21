@@ -620,9 +620,9 @@ mod tests {
             LifecycleEvent::Terminate,
             LifecycleEvent::Revocation,
         ] {
-            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&event).expect("serialize derived Serialize");
             let restored: LifecycleEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(event, restored);
         }
     }
@@ -692,9 +692,9 @@ mod tests {
     #[test]
     fn cancellation_mode_serde_roundtrip() {
         let mode = CancellationMode::for_event(LifecycleEvent::Quarantine);
-        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
         let restored: CancellationMode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mode, restored);
     }
 
@@ -732,9 +732,9 @@ mod tests {
             cell_id: "c1".to_string(),
             event: LifecycleEvent::Terminate,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: CancellationError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -764,9 +764,9 @@ mod tests {
             obligations_pending: 2,
             budget_consumed_ms: 3,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: CancellationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1255,9 +1255,9 @@ mod tests {
             children_cancelled: 0,
             was_idempotent: false,
         };
-        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
         let restored: CancellationOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(outcome, restored);
     }
 
@@ -1381,9 +1381,9 @@ mod tests {
             LifecycleEvent::Terminate,
             LifecycleEvent::Revocation,
         ] {
-            let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&event).expect("serialize derived Serialize");
             let back: LifecycleEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(event, back);
         }
     }
@@ -1424,9 +1424,9 @@ mod tests {
     #[test]
     fn cancellation_mode_serde_roundtrip_all_events() {
         let mode = CancellationMode::for_event(LifecycleEvent::Quarantine);
-        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
         let back: CancellationMode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(mode, back);
     }
 
@@ -1470,9 +1470,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: CancellationError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1490,9 +1490,9 @@ mod tests {
             obligations_pending: 0,
             budget_consumed_ms: 0,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: CancellationEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1605,7 +1605,7 @@ mod tests {
             children_cancelled: 0,
             was_idempotent: false,
         };
-        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
         for field in [
             "cell_id",
             "event",
@@ -1632,7 +1632,7 @@ mod tests {
             obligations_pending: 3,
             budget_consumed_ms: 100,
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         for field in [
             "trace_id",
             "cell_id",
@@ -1706,7 +1706,7 @@ mod tests {
     #[test]
     fn cancellation_mode_json_field_presence() {
         let mode = CancellationMode::for_event(LifecycleEvent::Unload);
-        let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
         for field in [
             "drain_budget_ticks",
             "force_abort_on_timeout",
@@ -2083,9 +2083,9 @@ mod tests {
             children_cancelled: 0,
             was_idempotent: false,
         };
-        let json = serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
         let back: CancellationOutcome =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(outcome, back);
         assert!(json.contains("obligations_aborted"));
         assert!(json.contains("drain_timeout_escalated"));

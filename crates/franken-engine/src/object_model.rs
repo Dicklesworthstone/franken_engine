@@ -3107,9 +3107,9 @@ mod tests {
     #[test]
     fn property_key_serde_roundtrip() {
         for key in [str_key("foo"), PropertyKey::Symbol(SymbolId(42))] {
-            let json = serde_json::to_string(&key).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&key).expect("serialize derived Serialize");
             let deser: PropertyKey =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(key, deser);
         }
     }
@@ -3126,9 +3126,8 @@ mod tests {
             JsValue::Object(ObjectHandle(3)),
             JsValue::Function(5),
         ] {
-            let json = serde_json::to_string(&val).expect("serde deserialization should succeed");
-            let deser: JsValue =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&val).expect("serialize derived Serialize");
+            let deser: JsValue = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(val, deser);
         }
     }
@@ -3146,9 +3145,9 @@ mod tests {
             },
         ];
         for desc in descs {
-            let json = serde_json::to_string(&desc).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&desc).expect("serialize derived Serialize");
             let deser: PropertyDescriptor =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(desc, deser);
         }
     }
@@ -3163,9 +3162,9 @@ mod tests {
             ObjectError::PrototypeChainTooDeep { depth: 10, max: 5 },
         ];
         for err in errors {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let deser: ObjectError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, deser);
         }
     }
@@ -4454,9 +4453,9 @@ mod tests {
         obj.prototype = Some(ObjectHandle(5));
         obj.class_tag = Some("TestObj".to_string());
 
-        let json = serde_json::to_string(&obj).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&obj).expect("serialize derived Serialize");
         let deser: OrdinaryObject =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser.prototype, Some(ObjectHandle(5)));
         assert_eq!(deser.class_tag.as_deref(), Some("TestObj"));
         assert!(deser.has_own_property(&str_key("x")));
@@ -4473,9 +4472,8 @@ mod tests {
         heap.set_property(h, str_key("key"), str_val("value"))
             .expect("serde deserialization should succeed");
 
-        let json = serde_json::to_string(&heap).expect("serde deserialization should succeed");
-        let deser: ObjectHeap =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&heap).expect("serialize derived Serialize");
+        let deser: ObjectHeap = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser.len(), 1);
         assert_eq!(
             deser
@@ -4495,9 +4493,9 @@ mod tests {
         let mut reg = SymbolRegistry::new();
         let sym = reg.symbol_for("test_key", &mut heap);
 
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let deser: SymbolRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deser.key_for(sym), Some("test_key"));
     }
 
@@ -5669,9 +5667,9 @@ mod tests {
         let handler = heap.alloc_plain();
         let _proxy = heap.alloc_proxy(target, handler);
 
-        let json = serde_json::to_string(&heap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&heap).expect("serialize derived Serialize");
         let restored: ObjectHeap =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.len(), heap.len());
     }
 
@@ -5832,9 +5830,9 @@ mod tests {
         let mut reg = SymbolRegistry::new();
         let _sym = reg.symbol_for("my.symbol", &mut heap);
 
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let restored: SymbolRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(
             restored.key_for(reg.by_description["my.symbol"]),
             Some("my.symbol")
@@ -5983,9 +5981,8 @@ mod tests {
     #[test]
     fn symbol_id_serde_roundtrip() {
         let id = SymbolId(42);
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: SymbolId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let back: SymbolId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, back);
     }
 
@@ -6007,9 +6004,9 @@ mod tests {
             WellKnownSymbol::Split,
         ];
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: WellKnownSymbol =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
         assert_eq!(variants.len(), 13);
@@ -6018,18 +6015,16 @@ mod tests {
     #[test]
     fn object_handle_serde_roundtrip() {
         let h = ObjectHandle(99);
-        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
-        let back: ObjectHandle =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&h).expect("serialize derived Serialize");
+        let back: ObjectHandle = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(h, back);
     }
 
     #[test]
     fn proxy_object_serde_roundtrip() {
         let p = ProxyObject::new(ObjectHandle(1), ObjectHandle(2));
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: ProxyObject =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
+        let back: ProxyObject = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.target, Some(ObjectHandle(1)));
         assert_eq!(back.handler, Some(ObjectHandle(2)));
     }
@@ -6038,9 +6033,8 @@ mod tests {
     fn proxy_object_revoked_serde_roundtrip() {
         let mut p = ProxyObject::new(ObjectHandle(1), ObjectHandle(2));
         p.revoke();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: ProxyObject =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
+        let back: ProxyObject = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.is_revoked());
         assert_eq!(back.target, None);
     }
@@ -6049,9 +6043,9 @@ mod tests {
     fn managed_object_ordinary_serde_roundtrip() {
         let obj = OrdinaryObject::default();
         let m = ManagedObject::Ordinary(obj);
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: ManagedObject =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.as_ordinary().is_some());
     }
 
@@ -6059,9 +6053,9 @@ mod tests {
     fn managed_object_proxy_serde_roundtrip() {
         let p = ProxyObject::new(ObjectHandle(5), ObjectHandle(6));
         let m = ManagedObject::Proxy(p);
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: ManagedObject =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.as_ordinary().is_none());
     }
 
@@ -6138,9 +6132,9 @@ mod tests {
             this_arg: JsValue::Int(42),
             arguments: vec![JsValue::Bool(true), JsValue::Str("x".into())],
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: ReflectApplyRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.target, ObjectHandle(1));
         assert_eq!(back.this_arg, JsValue::Int(42));
         assert_eq!(back.arguments.len(), 2);
@@ -6209,9 +6203,9 @@ mod tests {
             arguments: vec![JsValue::Null],
             new_target: ObjectHandle(5),
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: ReflectConstructRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.target, ObjectHandle(5));
         assert_eq!(back.arguments, vec![JsValue::Null]);
         assert_eq!(back.new_target, ObjectHandle(5));

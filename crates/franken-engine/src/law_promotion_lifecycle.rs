@@ -1031,7 +1031,7 @@ mod tests {
     #[test]
     fn event_kind_display_matches_serde() {
         for k in LifecycleEventKind::ALL {
-            let json = serde_json::to_string(k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(k).expect("serialize derived Serialize");
             let display = k.to_string();
             assert_eq!(json, format!("\"{display}\""));
         }
@@ -1088,9 +1088,9 @@ mod tests {
             },
         ];
         for r in &reasons {
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             let back: RefusalReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, back);
         }
     }
@@ -1136,9 +1136,9 @@ mod tests {
                 detail: "z".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let back: LifecycleError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, back);
         }
     }
@@ -1232,9 +1232,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = LifecycleConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: LifecycleConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1468,9 +1468,9 @@ mod tests {
         let r = accepted_result("serde-1", CandidateKind::Invariant);
         p.promote_law(&c, &r);
 
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: LifecyclePipeline =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p.pipeline_hash, back.pipeline_hash);
     }
 

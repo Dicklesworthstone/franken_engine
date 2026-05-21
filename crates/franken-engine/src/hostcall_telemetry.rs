@@ -805,11 +805,11 @@ mod tests {
         ] {
             // SAFETY: HostcallType derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json = serde_json::to_string(&htype).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&htype).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid HostcallType,
             // so from_str back to HostcallType cannot fail (valid format + matching schema).
             let restored: HostcallType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(htype, restored);
         }
     }
@@ -844,12 +844,11 @@ mod tests {
         ] {
             // SAFETY: HostcallResult derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).
-            let json =
-                serde_json::to_string(&result).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&result).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by to_string of a valid HostcallResult,
             // so from_str back to HostcallResult cannot fail (valid format + matching schema).
             let restored: HostcallResult =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(result, restored);
         }
     }
@@ -869,11 +868,11 @@ mod tests {
         let fl = FlowLabel::new("public", "public");
         // SAFETY: FlowLabel derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&fl).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&fl).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string of a valid FlowLabel,
         // so from_str back to FlowLabel cannot fail (valid format + matching schema).
         let restored: FlowLabel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fl, restored);
     }
 
@@ -896,9 +895,9 @@ mod tests {
             fd_count: 2,
             network_bytes: -1024,
         };
-        let json = serde_json::to_string(&rd).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rd).expect("serialize derived Serialize");
         let restored: ResourceDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rd, restored);
     }
 
@@ -1284,9 +1283,9 @@ mod tests {
             .record(1000, test_input("ext-001", HostcallType::FsRead))
             .expect("serde deserialization should succeed");
         let record = &recorder.records()[0];
-        let json = serde_json::to_string(record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(record).expect("serialize derived Serialize");
         let restored: HostcallTelemetryRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(record.record_id, restored.record_id);
         assert_eq!(record.content_hash, restored.content_hash);
         assert_eq!(record.hostcall_type, restored.hostcall_type);
@@ -1299,9 +1298,9 @@ mod tests {
             .record(1000, test_input("ext-001", HostcallType::FsRead))
             .expect("serde deserialization should succeed");
         recorder.snapshot();
-        let json = serde_json::to_string(&recorder).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&recorder).expect("serialize derived Serialize");
         let restored: TelemetryRecorder =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(recorder.len(), restored.len());
         assert_eq!(recorder.rolling_hash(), restored.rolling_hash());
         assert_eq!(recorder.snapshots().len(), restored.snapshots().len());
@@ -1314,9 +1313,9 @@ mod tests {
             .record(1000, test_input("ext-001", HostcallType::FsRead))
             .expect("serde deserialization should succeed");
         let snap = recorder.snapshot();
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let restored: TelemetrySnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, restored);
     }
 
@@ -1478,9 +1477,9 @@ mod tests {
         let recorder = populate_recorder();
         let query = TelemetryQuery::new(recorder.records());
         let summary = query.extension_summary("ext-001", 0, 10_000);
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let restored: ExtensionSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, restored);
     }
 
@@ -1605,9 +1604,9 @@ mod tests {
     #[test]
     fn config_serde_roundtrip() {
         let config = RecorderConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: RecorderConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.channel_capacity, config.channel_capacity);
     }
 
@@ -1697,9 +1696,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let back: TelemetryError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, back);
         }
     }
@@ -1789,9 +1788,9 @@ mod tests {
             fd_count: -1,
             network_bytes: -2048,
         };
-        let json = serde_json::to_string(&rd).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rd).expect("serialize derived Serialize");
         let back: ResourceDelta =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rd, back);
     }
 
@@ -1842,9 +1841,9 @@ mod tests {
     fn enrichment_hostcall_result_error_code_zero() {
         let err = HostcallResult::Error { code: 0 };
         assert_eq!(err.to_string(), "error: 0");
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let back: HostcallResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
@@ -1885,9 +1884,9 @@ mod tests {
             fd_count: -2,
             network_bytes: 0,
         };
-        let json = serde_json::to_string(&rd).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rd).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v["memory_bytes"], 8192);
         assert_eq!(v["fd_count"], -2);
         assert_eq!(v["network_bytes"], 0);
@@ -1934,9 +1933,9 @@ mod tests {
         recorder
             .record(600, test_input("ext-x", HostcallType::MemAlloc))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&recorder).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&recorder).expect("serialize derived Serialize");
         let restored: TelemetryRecorder =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(restored.len(), 2);
         assert_eq!(restored.rolling_hash(), recorder.rolling_hash());
     }
@@ -2091,9 +2090,9 @@ mod tests {
             .record(42_000, test_input("ext-json", HostcallType::CryptoOp))
             .expect("serde deserialization should succeed");
         let record = &recorder.records()[0];
-        let json = serde_json::to_string(record).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(record).expect("serialize derived Serialize");
         let v: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v["record_id"], 0);
         assert_eq!(v["timestamp_ns"], 42_000);
         assert_eq!(v["extension_id"], "ext-json");

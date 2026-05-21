@@ -2944,27 +2944,26 @@ mod tests {
     #[test]
     fn test_serde_round_trip_verdict() {
         let v = CompressionClaimVerdict::ApprovedWithCaveats;
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let v2: CompressionClaimVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, v2);
     }
 
     #[test]
     fn test_serde_round_trip_surface() {
         let s = ClaimSurface::ProofSurface;
-        let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
-        let s2: ClaimSurface =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&s).expect("serialize derived Serialize");
+        let s2: ClaimSurface = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, s2);
     }
 
     #[test]
     fn test_serde_round_trip_pass_kind() {
         let k = CompressionPassKind::SemanticFolding;
-        let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&k).expect("serialize derived Serialize");
         let k2: CompressionPassKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(k, k2);
     }
 
@@ -2977,9 +2976,9 @@ mod tests {
         let receipt = gate
             .evaluate(&input)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let receipt2: DecisionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, receipt2);
     }
 
@@ -2998,9 +2997,9 @@ mod tests {
             ))
             .expect("serde deserialization should succeed");
         let entry = &ledger.entries()[0];
-        let json = serde_json::to_string(entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(entry).expect("serialize derived Serialize");
         let entry2: ResidualLedgerEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*entry, entry2);
     }
 
@@ -3008,27 +3007,27 @@ mod tests {
     fn test_serde_round_trip_gate_summary() {
         let gate = CompressionResidualGate::new();
         let summary = gate.summary();
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let summary2: GateSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, summary2);
     }
 
     #[test]
     fn test_serde_round_trip_hidden_expansion() {
         let h = simple_hidden_expansion("s1", 1000, 100);
-        let json = serde_json::to_string(&h).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&h).expect("serialize derived Serialize");
         let h2: HiddenExpansionRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(h, h2);
     }
 
     #[test]
     fn test_serde_round_trip_support_cost() {
         let sc = simple_support_cost("s1", 100_000, 50_000);
-        let json = serde_json::to_string(&sc).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sc).expect("serialize derived Serialize");
         let sc2: SupportCostRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sc, sc2);
     }
 

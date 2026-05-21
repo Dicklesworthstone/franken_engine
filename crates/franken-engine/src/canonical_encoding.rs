@@ -1254,9 +1254,9 @@ mod tests {
             },
         ];
         for v in &violations {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let restored: CanonicalViolation =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, restored);
         }
     }
@@ -1269,9 +1269,9 @@ mod tests {
             violation: CanonicalViolation::TrailingBytes { count: 1 },
             trace_id: "t-serde".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: NonCanonicalError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -1288,9 +1288,9 @@ mod tests {
             trace_id: "t-ser".to_string(),
             input_hash: [0x01; 32],
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: GuardEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1805,7 +1805,7 @@ mod tests {
         ];
         let mut serialized = std::collections::BTreeSet::new();
         for v in &violations {
-            let s = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let s = serde_json::to_string(v).expect("serialize derived Serialize");
             serialized.insert(s);
         }
         assert_eq!(
@@ -1826,8 +1826,7 @@ mod tests {
         ];
         let mut serialized = std::collections::BTreeSet::new();
         for t in &types {
-            serialized
-                .insert(serde_json::to_string(t).expect("serde deserialization should succeed"));
+            serialized.insert(serde_json::to_string(t).expect("serialize derived Serialize"));
         }
         assert_eq!(serialized.len(), 3);
     }
@@ -1837,7 +1836,7 @@ mod tests {
     #[test]
     fn canonical_violation_trailing_bytes_field_names() {
         let v = CanonicalViolation::TrailingBytes { count: 7 };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(
             json.contains("TrailingBytes"),
             "variant key must be present"
@@ -1848,7 +1847,7 @@ mod tests {
     #[test]
     fn canonical_violation_leading_padding_field_names() {
         let v = CanonicalViolation::LeadingPadding { byte_count: 3 };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(json.contains("LeadingPadding"));
         assert!(json.contains("byte_count"));
     }
@@ -1860,7 +1859,7 @@ mod tests {
             expected: 0xAB,
             actual: 0xCD,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(json.contains("RoundTripMismatch"));
         assert!(json.contains("first_diff_offset"));
         assert!(json.contains("expected"));
@@ -1873,7 +1872,7 @@ mod tests {
             input_len: 100,
             canonical_len: 99,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(json.contains("LengthMismatch"));
         assert!(json.contains("input_len"));
         assert!(json.contains("canonical_len"));
@@ -1885,7 +1884,7 @@ mod tests {
             tag: 0xFF,
             offset: 5,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         assert!(json.contains("InvalidTag"));
         assert!(json.contains("tag"));
         assert!(json.contains("offset"));
@@ -1899,7 +1898,7 @@ mod tests {
             violation: CanonicalViolation::TrailingBytes { count: 1 },
             trace_id: "t".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         assert!(json.contains("object_class"));
         assert!(json.contains("input_hash"));
         assert!(json.contains("violation"));
@@ -1914,7 +1913,7 @@ mod tests {
             trace_id: "t".to_string(),
             input_hash: [0u8; 32],
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         assert!(json.contains("event_type"));
         assert!(json.contains("object_class"));
         assert!(json.contains("trace_id"));
@@ -2018,18 +2017,18 @@ mod tests {
     #[test]
     fn violation_trailing_bytes_zero_count_serde_roundtrip() {
         let v = CanonicalViolation::TrailingBytes { count: 0 };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: CanonicalViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
     #[test]
     fn violation_leading_padding_zero_bytes_serde_roundtrip() {
         let v = CanonicalViolation::LeadingPadding { byte_count: 0 };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: CanonicalViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2040,9 +2039,9 @@ mod tests {
             expected: 0,
             actual: 255,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: CanonicalViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2054,9 +2053,9 @@ mod tests {
             input_len: 100,
             canonical_len: 100,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: CanonicalViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2066,18 +2065,18 @@ mod tests {
             tag: 0xFF,
             offset: 0,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: CanonicalViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
     #[test]
     fn violation_empty_key_strings_serde_roundtrip() {
         let v = CanonicalViolation::DuplicateKey { key: String::new() };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let restored: CanonicalViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -2089,9 +2088,9 @@ mod tests {
             violation: CanonicalViolation::InvalidTag { tag: 0, offset: 0 },
             trace_id: String::new(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: NonCanonicalError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 
@@ -2103,9 +2102,9 @@ mod tests {
             violation: CanonicalViolation::TrailingBytes { count: usize::MAX },
             trace_id: "max".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: NonCanonicalError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
     }
 

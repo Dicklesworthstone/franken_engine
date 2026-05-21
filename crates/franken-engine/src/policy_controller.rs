@@ -754,9 +754,9 @@ mod tests {
         let mut m = LossMatrix::new();
         m.set("s1", "a1", 100);
         m.set("s2", "a2", 200);
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: LossMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -769,9 +769,9 @@ mod tests {
             guardrail_rejections: vec![("low".to_string(), "cost-cap".to_string())],
             decision_id: "mon-ctrl-000001".to_string(),
         };
-        let json = serde_json::to_string(&sel).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sel).expect("serialize derived Serialize");
         let restored: ActionSelection =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sel, restored);
     }
 
@@ -784,9 +784,9 @@ mod tests {
             safe_default: "high".to_string(),
             policy_id: "p-1".to_string(),
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: ControllerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -803,9 +803,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: PolicyControllerError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -819,18 +819,18 @@ mod tests {
             description: "limits spending".to_string(),
             blocked_actions: vec!["expensive".to_string(), "risky".to_string()],
         };
-        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&g).expect("serialize derived Serialize");
         let restored: Guardrail =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(g, restored);
     }
 
     #[test]
     fn posterior_serde_roundtrip() {
         let p = normal_posterior();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let restored: Posterior =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, restored);
     }
 
@@ -1190,7 +1190,7 @@ mod tests {
             policy_id: "p".to_string(),
         };
         let mut ctrl =
-            PolicyController::new(config, matrix).expect("serde deserialization should succeed");
+            PolicyController::new(config, matrix).expect("constructor with valid inputs");
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
@@ -1262,7 +1262,7 @@ mod tests {
             policy_id: "p".to_string(),
         };
         let mut ctrl =
-            PolicyController::new(config, matrix).expect("serde deserialization should succeed");
+            PolicyController::new(config, matrix).expect("constructor with valid inputs");
         let mut probs = BTreeMap::new();
         probs.insert("s".to_string(), 1_000_000);
         let posterior = Posterior::new(probs);
@@ -1307,7 +1307,7 @@ mod tests {
             policy_id: "p".to_string(),
         };
         let mut ctrl =
-            PolicyController::new(config, matrix).expect("serde deserialization should succeed");
+            PolicyController::new(config, matrix).expect("constructor with valid inputs");
         let mut probs = BTreeMap::new();
         probs.insert("s".to_string(), 1_000_000);
         let posterior = Posterior::new(probs);
@@ -1326,7 +1326,7 @@ mod tests {
                 safe_default: "alpha".to_string(),
                 policy_id: "p".to_string(),
             };
-            PolicyController::new(c, m).expect("serde deserialization should succeed")
+            PolicyController::new(c, m).expect("constructor with valid inputs")
         };
         let sel2 = ctrl2
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t1")
@@ -1355,9 +1355,8 @@ mod tests {
     #[test]
     fn posterior_normal_serde_roundtrip() {
         let p = normal_posterior();
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
-        let back: Posterior =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
+        let back: Posterior = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, back);
     }
 
@@ -1366,9 +1365,8 @@ mod tests {
         let mut m = LossMatrix::new();
         m.set("normal", "low", 100_000);
         m.set("anomalous", "high", 200_000);
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let back: LossMatrix =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
+        let back: LossMatrix = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -1376,9 +1374,9 @@ mod tests {
     fn controller_config_serde_roundtrip() {
         let ctrl = monitoring_controller();
         let config = ctrl.config().clone();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: ControllerConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, back);
     }
 
@@ -1389,9 +1387,9 @@ mod tests {
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&sel).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sel).expect("serialize derived Serialize");
         let back: ActionSelection =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(sel, back);
     }
 
@@ -1402,9 +1400,8 @@ mod tests {
             description: "desc".to_string(),
             blocked_actions: vec!["a".to_string(), "b".to_string()],
         };
-        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
-        let back: Guardrail =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&g).expect("serialize derived Serialize");
+        let back: Guardrail = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(g, back);
     }
 
@@ -1486,10 +1483,9 @@ mod tests {
     fn guardrail_rejection_tuple_serde() {
         // Guardrail rejections are stored as Vec<(action, guardrail_id)>
         let rejections: Vec<(String, String)> = vec![("low".to_string(), "cost-cap".to_string())];
-        let json =
-            serde_json::to_string(&rejections).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rejections).expect("serialize derived Serialize");
         let back: Vec<(String, String)> =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rejections, back);
     }
 

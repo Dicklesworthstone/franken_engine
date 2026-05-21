@@ -1366,7 +1366,7 @@ mod tests {
         let token = build_basic_token(&sk);
         let json = serde_json::to_string(&token).expect("serde serialization should succeed");
         let restored: CapabilityToken =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(token, restored);
     }
 
@@ -1391,7 +1391,7 @@ mod tests {
 
         let json = serde_json::to_string(&token).expect("serde serialization should succeed");
         let restored: CapabilityToken =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(token, restored);
     }
 
@@ -1427,7 +1427,7 @@ mod tests {
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde serialization should succeed");
             let restored: TokenError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1610,7 +1610,7 @@ mod tests {
         for err in &errors {
             let json = serde_json::to_string(err).expect("serde serialization should succeed");
             let restored: TokenError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1637,7 +1637,7 @@ mod tests {
         let p = make_principal(0xCD);
         let json = serde_json::to_string(&p).expect("serde serialization should succeed");
         let restored: PrincipalId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p, restored);
     }
 
@@ -1646,7 +1646,7 @@ mod tests {
         let cr = make_checkpoint_ref(42);
         let json = serde_json::to_string(&cr).expect("serde serialization should succeed");
         let restored: CheckpointRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cr, restored);
     }
 
@@ -1655,7 +1655,7 @@ mod tests {
         let rf = make_revocation_ref(99);
         let json = serde_json::to_string(&rf).expect("serde serialization should succeed");
         let restored: RevocationFreshnessRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(rf, restored);
     }
 
@@ -1664,7 +1664,7 @@ mod tests {
         let v = TokenVersion::V2;
         let json = serde_json::to_string(&v).expect("serde serialization should succeed");
         let restored: TokenVersion =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, restored);
     }
 
@@ -1679,7 +1679,7 @@ mod tests {
         };
         let json = serde_json::to_string(&event).expect("serde serialization should succeed");
         let restored: TokenEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1875,7 +1875,7 @@ mod tests {
         assert_eq!(token.audience.len(), 3);
         let json = serde_json::to_string(&token).expect("serde serialization should succeed");
         let back: CapabilityToken =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(token, back);
     }
 
@@ -2240,7 +2240,7 @@ mod tests {
         assert_eq!(token.capabilities.len(), 16);
         let json = serde_json::to_string(&token).expect("serde serialization should succeed");
         let back: CapabilityToken =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(token, back);
     }
 
@@ -2436,7 +2436,7 @@ mod tests {
         for v in &variants {
             let json = serde_json::to_string(v).expect("serde serialization should succeed");
             let back: TokenEventType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*v, back);
         }
     }
@@ -2500,7 +2500,7 @@ mod tests {
         let json = serde_json::to_string(&token).expect("serde serialization should succeed");
         assert!(json.contains("null") || json.contains("\"checkpoint_binding\":null"));
         let back: CapabilityToken =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(token, back);
     }
 
@@ -2521,7 +2521,7 @@ mod tests {
 
         let json = serde_json::to_string(&token).expect("serde serialization should succeed");
         let back: CapabilityToken =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(token, back);
     }
 

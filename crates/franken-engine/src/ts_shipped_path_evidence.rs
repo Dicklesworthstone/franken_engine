@@ -689,9 +689,9 @@ mod tests {
     #[test]
     fn inventory_serde_roundtrip() {
         let inv = run_shipped_path_corpus();
-        let json = serde_json::to_string(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inv).expect("serialize derived Serialize");
         let back: TsShippedPathEvidenceInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inv, back);
     }
 
@@ -699,9 +699,9 @@ mod tests {
     fn specimen_evidence_serde_roundtrip() {
         let inv = run_shipped_path_corpus();
         for ev in &inv.evidence {
-            let json = serde_json::to_string(ev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(ev).expect("serialize derived Serialize");
             let back: ShippedPathSpecimenEvidence =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*ev, back);
         }
     }
@@ -709,9 +709,9 @@ mod tests {
     #[test]
     fn corpus_specimen_serde_roundtrip() {
         for s in &shipped_path_corpus() {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: ShippedPathSpecimen =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -736,9 +736,9 @@ mod tests {
                 commands_txt: "d.txt".into(),
             },
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: ShippedPathEvidenceRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, back);
     }
 
@@ -753,9 +753,9 @@ mod tests {
             verdict: Some("pass".into()),
             detail: Some("d".into()),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let back: ShippedPathEvidenceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -844,10 +844,9 @@ mod tests {
             ShippedPathExpectedOutcome::NormalizationFailure,
             ShippedPathExpectedOutcome::ParseFailure,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: ShippedPathExpectedOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -860,10 +859,9 @@ mod tests {
             ShippedPathActualOutcome::ParseFailure,
             ShippedPathActualOutcome::OtherFailure,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: ShippedPathActualOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -871,10 +869,9 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         for variant in [ShippedPathVerdict::Pass, ShippedPathVerdict::Fail] {
-            let json =
-                serde_json::to_string(&variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialize derived Serialize");
             let back: ShippedPathVerdict =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(variant, back);
         }
     }
@@ -922,10 +919,9 @@ mod tests {
             ShippedPathExpectedOutcome::NormalizationFailure,
             ShippedPathExpectedOutcome::ParseFailure,
         ] {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: ShippedPathExpectedOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, back);
         }
     }
@@ -938,10 +934,9 @@ mod tests {
             ShippedPathActualOutcome::ParseFailure,
             ShippedPathActualOutcome::OtherFailure,
         ] {
-            let json =
-                serde_json::to_string(&outcome).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&outcome).expect("serialize derived Serialize");
             let back: ShippedPathActualOutcome =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(outcome, back);
         }
     }
@@ -1076,9 +1071,9 @@ mod tests {
             expected_normalization: true,
             expected_outcome: ShippedPathExpectedOutcome::ExecuteSuccess,
         };
-        let json = serde_json::to_string(&specimen).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&specimen).expect("serialize derived Serialize");
         let back: ShippedPathSpecimen =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(specimen, back);
     }
 
@@ -1093,9 +1088,9 @@ mod tests {
             verdict: Some("pass".to_string()),
             detail: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ShippedPathEvidenceEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 }

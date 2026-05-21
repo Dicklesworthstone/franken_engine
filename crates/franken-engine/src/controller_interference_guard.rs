@@ -1058,9 +1058,9 @@ mod tests {
             ConflictResolutionMode::Serialize,
             ConflictResolutionMode::Reject,
         ] {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let back: ConflictResolutionMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, mode);
         }
     }
@@ -1080,9 +1080,9 @@ mod tests {
     #[test]
     fn interference_config_serde_roundtrip() {
         let config = InterferenceConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: InterferenceConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, config);
     }
 
@@ -1139,9 +1139,9 @@ mod tests {
             InterferenceFailureCode::UnauthorizedWrite,
             InterferenceFailureCode::TimescaleConflict,
         ] {
-            let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&code).expect("serialize derived Serialize");
             let back: InterferenceFailureCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, code);
         }
     }
@@ -1759,10 +1759,9 @@ mod tests {
             (&reads, &writes, &subs),
             &metrics,
         ));
-        let json =
-            serde_json::to_string(&evaluation).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evaluation).expect("serialize derived Serialize");
         let back: InterferenceEvaluation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.decision_id, evaluation.decision_id);
         assert_eq!(back.pass, evaluation.pass);
         assert_eq!(back.final_metrics, evaluation.final_metrics);
@@ -1777,9 +1776,9 @@ mod tests {
             controller_ids: vec!["ctrl-a".into()],
             detail: "test".into(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let back: InterferenceFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, finding);
     }
 
@@ -1804,9 +1803,9 @@ mod tests {
             &metrics,
         ));
         for log in &evaluation.logs {
-            let json = serde_json::to_string(log).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(log).expect("serialize derived Serialize");
             let back: InterferenceLogEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(&back, log);
         }
     }
@@ -1821,9 +1820,9 @@ mod tests {
             500_000,
             "ok",
         );
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: ControllerRegistration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, reg);
     }
 
@@ -1834,9 +1833,8 @@ mod tests {
             metric: "cpu".into(),
             value: 100,
         };
-        let json = serde_json::to_string(&update).expect("serde deserialization should succeed");
-        let back: MetricUpdate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&update).expect("serialize derived Serialize");
+        let back: MetricUpdate = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, update);
     }
 
@@ -1945,9 +1943,9 @@ mod tests {
             write_interval_millionths: 1_000_000,
             statement: "every 500ms observe, every 1s write".to_string(),
         };
-        let json = serde_json::to_string(&ts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ts).expect("serialize derived Serialize");
         let back: TimescaleSeparationStatement =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, ts);
     }
 
@@ -1957,9 +1955,9 @@ mod tests {
             controller_id: "ctrl-a".into(),
             metric: "cpu".into(),
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: MetricReadRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, req);
     }
 
@@ -1970,9 +1968,9 @@ mod tests {
             metric: "cpu".into(),
             value: 42,
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: MetricWriteRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, req);
     }
 
@@ -1982,9 +1980,9 @@ mod tests {
             controller_id: "ctrl-a".into(),
             metric: "cpu".into(),
         };
-        let json = serde_json::to_string(&sub).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sub).expect("serialize derived Serialize");
         let back: MetricSubscription =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, sub);
     }
 
@@ -1996,9 +1994,9 @@ mod tests {
             mode: ConflictResolutionMode::Serialize,
             detail: "serialized writes".into(),
         };
-        let json = serde_json::to_string(&res).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&res).expect("serialize derived Serialize");
         let back: InterferenceResolution =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, res);
     }
 
@@ -2165,9 +2163,9 @@ mod tests {
             min_timescale_separation_millionths: 500_000,
             conflict_resolution_mode: ConflictResolutionMode::Serialize,
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let back: InterferenceConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, config);
     }
 
@@ -2432,9 +2430,9 @@ mod tests {
             metric: Some("cpu".to_string()),
             controller_ids: vec!["ctrl-a".to_string()],
         };
-        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&log).expect("serialize derived Serialize");
         let back: InterferenceLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, log);
     }
 
@@ -2448,10 +2446,9 @@ mod tests {
             mode: ConflictResolutionMode::Serialize,
             detail: "serialized writes".into(),
         };
-        let json =
-            serde_json::to_string(&resolution).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&resolution).expect("serialize derived Serialize");
         let back: InterferenceResolution =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, resolution);
     }
 
@@ -2508,9 +2505,9 @@ mod tests {
             write_interval_millionths: 0,
             statement: "zero".to_string(),
         };
-        let json = serde_json::to_string(&ts).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ts).expect("serialize derived Serialize");
         let back: TimescaleSeparationStatement =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, ts);
     }
 
@@ -2555,9 +2552,9 @@ mod tests {
             InterferenceFailureCode::TimescaleConflict,
         ];
         for code in &codes {
-            let json = serde_json::to_string(code).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(code).expect("serialize derived Serialize");
             let back: InterferenceFailureCode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*code, back);
         }
     }
@@ -2568,9 +2565,9 @@ mod tests {
             ConflictResolutionMode::Serialize,
             ConflictResolutionMode::Reject,
         ] {
-            let json = serde_json::to_string(&mode).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&mode).expect("serialize derived Serialize");
             let back: ConflictResolutionMode =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(mode, back);
         }
     }
@@ -2602,9 +2599,9 @@ mod tests {
                 statement: "ok".to_string(),
             },
         };
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: ControllerRegistration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, reg);
         assert!(back.read_metrics.is_empty());
         assert!(back.write_metrics.is_empty());
@@ -2622,10 +2619,9 @@ mod tests {
             (&[], &[], &[]),
             &metrics,
         ));
-        let json =
-            serde_json::to_string(&evaluation).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&evaluation).expect("serialize derived Serialize");
         let back: InterferenceEvaluation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.pass);
         assert!(back.findings.is_empty());
     }
@@ -2638,9 +2634,9 @@ mod tests {
             controller_ids: vec!["ctrl-a".into()],
             detail: "duplicate registration".into(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let back: InterferenceFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.metric, None);
     }
 
@@ -3174,9 +3170,9 @@ mod tests {
             write_interval_millionths: 5_000_000,
             statement: "slow controller".to_string(),
         };
-        let json = serde_json::to_string(&tss).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tss).expect("serialize derived Serialize");
         let back: TimescaleSeparationStatement =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, tss);
     }
 
@@ -3190,9 +3186,9 @@ mod tests {
             5_000_000,
             "fast reader",
         );
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: ControllerRegistration =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, reg);
     }
 
@@ -3202,9 +3198,9 @@ mod tests {
             controller_id: "ctrl-a".to_string(),
             metric: "cpu".to_string(),
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: MetricReadRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, req);
     }
 
@@ -3215,9 +3211,9 @@ mod tests {
             metric: "throttle".to_string(),
             value: 500_000,
         };
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: MetricWriteRequest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, req);
     }
 
@@ -3227,9 +3223,9 @@ mod tests {
             controller_id: "ctrl-b".to_string(),
             metric: "latency".to_string(),
         };
-        let json = serde_json::to_string(&sub).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&sub).expect("serialize derived Serialize");
         let back: MetricSubscription =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, sub);
     }
 
@@ -3240,9 +3236,8 @@ mod tests {
             metric: "cpu".to_string(),
             value: 750_000,
         };
-        let json = serde_json::to_string(&upd).expect("serde deserialization should succeed");
-        let back: MetricUpdate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&upd).expect("serialize derived Serialize");
+        let back: MetricUpdate = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, upd);
     }
 
@@ -3254,9 +3249,9 @@ mod tests {
             controller_ids: vec!["ctrl-a".to_string(), "ctrl-b".to_string()],
             detail: "duplicate detected".to_string(),
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         let back: InterferenceFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, finding);
     }
 
@@ -3268,9 +3263,9 @@ mod tests {
             mode: ConflictResolutionMode::Serialize,
             detail: "serialized access".to_string(),
         };
-        let json = serde_json::to_string(&res).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&res).expect("serialize derived Serialize");
         let back: InterferenceResolution =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, res);
     }
 
@@ -3287,9 +3282,9 @@ mod tests {
             metric: Some("cpu".to_string()),
             controller_ids: vec!["ctrl-a".to_string()],
         };
-        let json = serde_json::to_string(&log).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&log).expect("serialize derived Serialize");
         let back: InterferenceLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, log);
     }
 
@@ -3321,9 +3316,9 @@ mod tests {
             findings: vec![],
             logs: vec![],
         };
-        let json = serde_json::to_string(&eval).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&eval).expect("serialize derived Serialize");
         let back: InterferenceEvaluation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, eval);
     }
 }

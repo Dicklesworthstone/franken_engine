@@ -1036,9 +1036,9 @@ mod tests {
             BulkheadClass::EvidenceFlush,
         ];
         for c in &classes {
-            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(c).expect("serialize derived Serialize");
             let restored: BulkheadClass =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*c, restored);
         }
     }
@@ -1050,9 +1050,9 @@ mod tests {
             max_queue_depth: 128,
             pressure_threshold_pct: 80,
         };
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: BulkheadConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1068,9 +1068,9 @@ mod tests {
             event: "permit_acquired".to_string(),
             permit_id: 42,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: BulkheadEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -1091,9 +1091,9 @@ mod tests {
             },
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: BulkheadError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -1108,9 +1108,9 @@ mod tests {
             max_queue_depth: 20,
             at_pressure: false,
         };
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let restored: BulkheadSnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, restored);
     }
 
@@ -1618,9 +1618,8 @@ mod tests {
     #[test]
     fn permit_id_serde_roundtrip() {
         let pid = PermitId(12345);
-        let json = serde_json::to_string(&pid).expect("serde deserialization should succeed");
-        let restored: PermitId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pid).expect("serialize derived Serialize");
+        let restored: PermitId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pid, restored);
     }
 
@@ -1636,7 +1635,7 @@ mod tests {
             event: "permit_acquired".into(),
             permit_id: 77,
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         for field in [
             "bulkhead_id",
             "current_count",
@@ -1661,7 +1660,7 @@ mod tests {
             max_queue_depth: 10,
             at_pressure: false,
         };
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         for field in [
             "bulkhead_id",
             "active_count",
@@ -1778,9 +1777,9 @@ mod tests {
             max_queue_depth: 0,
             pressure_threshold_pct: 255,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: BulkheadConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
@@ -1791,9 +1790,9 @@ mod tests {
             max_queue_depth: 0,
             pressure_threshold_pct: 0,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
         let restored: BulkheadConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, restored);
     }
 
@@ -1809,9 +1808,9 @@ mod tests {
             event: String::new(),
             permit_id: 0,
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let restored: BulkheadEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, restored);
     }
 
@@ -1827,9 +1826,9 @@ mod tests {
             event: "permit_acquired".into(),
             permit_id: 1,
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let restored: BulkheadEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, restored);
     }
 
@@ -1839,9 +1838,9 @@ mod tests {
         let err = BulkheadError::InvalidConfig {
             reason: reason.clone(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: BulkheadError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
         assert!(restored.to_string().contains(&reason));
     }
@@ -1856,9 +1855,9 @@ mod tests {
             max_queue_depth: 20,
             at_pressure: true,
         };
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let restored: BulkheadSnapshot =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, restored);
         assert!(json.contains("true"));
     }
@@ -1866,18 +1865,16 @@ mod tests {
     #[test]
     fn permit_id_serde_zero_enrichment() {
         let pid = PermitId(0);
-        let json = serde_json::to_string(&pid).expect("serde deserialization should succeed");
-        let restored: PermitId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pid).expect("serialize derived Serialize");
+        let restored: PermitId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pid, restored);
     }
 
     #[test]
     fn permit_id_serde_max_enrichment() {
         let pid = PermitId(u64::MAX);
-        let json = serde_json::to_string(&pid).expect("serde deserialization should succeed");
-        let restored: PermitId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pid).expect("serialize derived Serialize");
+        let restored: PermitId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pid, restored);
     }
 
@@ -2307,9 +2304,9 @@ mod tests {
             .expect("serde deserialization should succeed");
 
         let snap = reg.snapshot();
-        let json = serde_json::to_string(&snap).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let restored: BTreeMap<String, BulkheadSnapshot> =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(snap, restored);
     }
 

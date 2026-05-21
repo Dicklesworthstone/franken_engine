@@ -1045,9 +1045,9 @@ mod tests {
     #[test]
     fn target_serde_roundtrip() {
         for t in PromotionTarget::ALL {
-            let json = serde_json::to_string(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(t).expect("serialize derived Serialize");
             let back: PromotionTarget =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*t, back);
         }
     }
@@ -1078,9 +1078,9 @@ mod tests {
     #[test]
     fn status_serde_roundtrip() {
         for s in PromotionStatus::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: PromotionStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -1101,9 +1101,9 @@ mod tests {
     #[test]
     fn demotion_cause_serde() {
         for c in DemotionCause::ALL {
-            let json = serde_json::to_string(c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(c).expect("serialize derived Serialize");
             let back: DemotionCause =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*c, back);
         }
     }
@@ -1149,9 +1149,9 @@ mod tests {
     #[test]
     fn rejection_serde() {
         let r = RejectionReason::ActiveCounterexamples { count: 5 };
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: RejectionReason =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1185,9 +1185,9 @@ mod tests {
     #[test]
     fn evidence_serde() {
         let e = good_evidence();
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let back: PromotionEvidence =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, back);
     }
 
@@ -1349,9 +1349,9 @@ mod tests {
             kernel_id: "k1".into(),
             reasons: vec![RejectionReason::ProofNotVerified],
         };
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: PromotionDecision =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 
@@ -1385,9 +1385,9 @@ mod tests {
             all_targets(),
             "counterexample discovered",
         );
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: DemotionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1438,9 +1438,9 @@ mod tests {
     #[test]
     fn promoted_kernel_serde() {
         let k = PromotedKernel::new("k1", "orig1", all_targets(), epoch(), 200_000, 980_000);
-        let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&k).expect("serialize derived Serialize");
         let back: PromotedKernel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(k, back);
     }
 
@@ -1557,9 +1557,9 @@ mod tests {
         let mut ledger = PromotionLedger::new();
         let k = PromotedKernel::new("k1", "orig1", baseline_target(), epoch(), 150_000, 960_000);
         ledger.record_promotion(k);
-        let json = serde_json::to_string(&ledger).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         let back: PromotionLedger =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ledger, back);
     }
 
@@ -1629,9 +1629,9 @@ mod tests {
             },
         ];
         let r = PromotionReport::new(epoch(), decisions);
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: PromotionReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1656,9 +1656,9 @@ mod tests {
     #[test]
     fn config_serde() {
         let c = PromotionGateConfig::default();
-        let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: PromotionGateConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
     }
 
@@ -1667,9 +1667,9 @@ mod tests {
     #[test]
     fn gate_serde() {
         let g = PromotionGate::with_defaults();
-        let json = serde_json::to_string(&g).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&g).expect("serialize derived Serialize");
         let back: PromotionGate =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(g, back);
     }
 }

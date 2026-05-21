@@ -1116,9 +1116,9 @@ mod tests {
             exact_fallback_conditions: vec!["uninitialized".to_string()],
             telemetry_fields: vec!["total_reads".to_string()],
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let back: ContractCandidateRow =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(row, back);
     }
 
@@ -1134,9 +1134,9 @@ mod tests {
             writes: 5,
             latest_read_source: "fast_path".to_string(),
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let back: ObservedTelemetryRow =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(row, back);
     }
 
@@ -1148,9 +1148,9 @@ mod tests {
             decision_id: "decision-1".to_string(),
             policy_id: "policy-1".to_string(),
         };
-        let json = serde_json::to_string(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: TraceIdsArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1192,9 +1192,9 @@ mod tests {
             max_retries: 5,
             max_writer_pressure_observations: 3,
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let back: RetryBudgetPolicyRow =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(row, back);
     }
 
@@ -1222,7 +1222,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
         let back: RetryBudgetPolicyArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1236,9 +1236,9 @@ mod tests {
                 "writer_active".to_string(),
             ],
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let back: FallbackMatrixRow =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(row, back);
     }
 
@@ -1259,7 +1259,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
         let back: IncumbentFallbackMatrixArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1276,9 +1276,9 @@ mod tests {
             candidate_id: Some("module-cache-snapshot".to_string()),
             detail: "read_api=ModuleCache::snapshot".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: StructuredLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
     }
 
@@ -1295,9 +1295,9 @@ mod tests {
             candidate_id: None,
             detail: "no optional fields".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: StructuredLogEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, back);
         assert!(json.contains("\"error_code\":null"));
         assert!(json.contains("\"candidate_id\":null"));
@@ -1309,9 +1309,9 @@ mod tests {
             path: "seqlock_reader_writer_contract.json".to_string(),
             sha256: "sha256:abcdef0123456789".to_string(),
         };
-        let json = serde_json::to_string(&reference).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reference).expect("serialize derived Serialize");
         let back: ManifestArtifactReference =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reference, back);
     }
 
@@ -1348,7 +1348,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&artifact).expect("serde deserialization should succeed");
         let back: ReaderWriterContractArtifact =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
     }
 
@@ -1358,7 +1358,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&fixture).expect("serde deserialization should succeed");
         let back: DocsContractFixture =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fixture, back);
     }
 
@@ -1369,9 +1369,9 @@ mod tests {
             max_retries: 7,
             max_writer_pressure_observations: 4,
         };
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let back: DocsCandidatePolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, back);
     }
 

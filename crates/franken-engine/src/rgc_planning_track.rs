@@ -1544,9 +1544,8 @@ mod tests {
             id: "RGC-010".to_string(),
             name: "Planning Track".to_string(),
         };
-        let json = serde_json::to_string(&track).expect("serde deserialization should succeed");
-        let back: TrackRef =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&track).expect("serialize derived Serialize");
+        let back: TrackRef = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.id, "RGC-010");
         assert_eq!(back.name, "Planning Track");
     }
@@ -1691,7 +1690,7 @@ mod tests {
             id: "RGC-010".into(),
             name: "planning-track".into(),
         };
-        let json = serde_json::to_string(&tr).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&tr).expect("serialize derived Serialize");
         assert!(json.contains("RGC-010"));
         assert!(json.contains("planning-track"));
     }

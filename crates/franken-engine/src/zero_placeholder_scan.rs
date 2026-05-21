@@ -1215,11 +1215,10 @@ mod tests {
     fn zero_placeholder_subsystem_serde_round_trip() {
         for subsystem in ZeroPlaceholderSubsystem::ALL {
             // SAFETY: ZeroPlaceholderSubsystem derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&subsystem).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&subsystem).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ZeroPlaceholderSubsystem serialization
             let back: ZeroPlaceholderSubsystem =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, subsystem);
             assert!(!subsystem.as_str().is_empty());
         }
@@ -1234,11 +1233,10 @@ mod tests {
             ZeroPlaceholderStatus::Resolved,
         ] {
             // SAFETY: ZeroPlaceholderStatus derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ZeroPlaceholderStatus serialization
             let back: ZeroPlaceholderStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, status);
             assert!(!status.as_str().is_empty());
         }
@@ -1252,11 +1250,10 @@ mod tests {
             ZeroPlaceholderSeverity::Low,
         ] {
             // SAFETY: ZeroPlaceholderSeverity derives Serialize and has no non-serializable fields
-            let json =
-                serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&severity).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ZeroPlaceholderSeverity serialization
             let back: ZeroPlaceholderSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, severity);
             assert!(!severity.as_str().is_empty());
         }
@@ -1327,10 +1324,10 @@ mod tests {
             diagnostic_code: Some("FE-TEST-0001".to_string()),
         };
         // SAFETY: ZeroPlaceholderFinding derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ZeroPlaceholderFinding serialization
         let back: ZeroPlaceholderFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, finding);
     }
 
@@ -1348,9 +1345,9 @@ mod tests {
             finding_id: Some("parser::test".to_string()),
             detail: Some("test detail".to_string()),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: ZeroPlaceholderScanEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
@@ -1655,13 +1652,13 @@ mod tests {
             finding_id: None,
             detail: None,
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         // None fields with skip_serializing_if should be absent from JSON
         assert!(!json.contains("subsystem"));
         assert!(!json.contains("finding_id"));
         assert!(!json.contains("detail"));
         let back: ZeroPlaceholderScanEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
@@ -1680,10 +1677,10 @@ mod tests {
             required_behavior: "required".to_string(),
             diagnostic_code: None,
         };
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         assert!(!json.contains("diagnostic_code"));
         let back: ZeroPlaceholderFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, finding);
     }
 
@@ -1796,9 +1793,9 @@ mod tests {
     #[test]
     fn zero_placeholder_subsystem_serde_roundtrip() {
         for s in ZeroPlaceholderSubsystem::ALL {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: ZeroPlaceholderSubsystem =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -1820,9 +1817,9 @@ mod tests {
             ZeroPlaceholderStatus::FailClosed,
             ZeroPlaceholderStatus::Resolved,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: ZeroPlaceholderStatus =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -1834,9 +1831,9 @@ mod tests {
             ZeroPlaceholderSeverity::Medium,
             ZeroPlaceholderSeverity::High,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let back: ZeroPlaceholderSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -1955,8 +1952,7 @@ mod tests {
     #[test]
     fn subsystem_serde_json_value_matches_as_str() {
         for subsystem in ZeroPlaceholderSubsystem::ALL {
-            let json =
-                serde_json::to_string(&subsystem).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&subsystem).expect("serialize derived Serialize");
             let expected = format!("\"{}\"", subsystem.as_str());
             assert_eq!(
                 json, expected,
@@ -1973,8 +1969,7 @@ mod tests {
             ZeroPlaceholderStatus::FailClosed,
             ZeroPlaceholderStatus::Resolved,
         ] {
-            let json =
-                serde_json::to_string(&status).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&status).expect("serialize derived Serialize");
             let expected = format!("\"{}\"", status.as_str());
             assert_eq!(
                 json, expected,
@@ -1990,8 +1985,7 @@ mod tests {
             ZeroPlaceholderSeverity::Medium,
             ZeroPlaceholderSeverity::Low,
         ] {
-            let json =
-                serde_json::to_string(&severity).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&severity).expect("serialize derived Serialize");
             let expected = format!("\"{}\"", severity.as_str());
             assert_eq!(
                 json, expected,
@@ -2443,9 +2437,9 @@ mod tests {
             fail_closed_finding_count: 1,
             resolved_finding_count: 2,
         };
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: ZeroPlaceholderSubsystemSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, summary);
     }
 
@@ -2458,9 +2452,9 @@ mod tests {
             events_jsonl: "events.jsonl".to_string(),
             commands_txt: "commands.txt".to_string(),
         };
-        let json = serde_json::to_string(&paths).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&paths).expect("serialize derived Serialize");
         let back: ZeroPlaceholderScanArtifactPaths =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, paths);
     }
 
@@ -2474,9 +2468,9 @@ mod tests {
             policy_id: ZERO_PLACEHOLDER_SCAN_POLICY_ID.to_string(),
             inventory_hash: "deadbeef".to_string(),
         };
-        let json = serde_json::to_string(&trace_ids).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&trace_ids).expect("serialize derived Serialize");
         let back: ZeroPlaceholderScanTraceIds =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, trace_ids);
     }
 
@@ -2508,9 +2502,9 @@ mod tests {
                 commands_txt: "c.txt".to_string(),
             },
         };
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: ZeroPlaceholderScanRunManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, manifest);
     }
 
@@ -2533,9 +2527,9 @@ mod tests {
                 diagnostic_code: Some("CODE".to_string()),
             }],
         };
-        let json = serde_json::to_string(&inventory).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&inventory).expect("serialize derived Serialize");
         let back: ZeroPlaceholderInventory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, inventory);
     }
 

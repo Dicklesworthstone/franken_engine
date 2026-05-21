@@ -860,9 +860,9 @@ mod tests {
         emitter.emit_budget_error(&err, "trace");
 
         let report = emitter.build_report();
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let round: DiagnosticReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);
     }
 
@@ -895,9 +895,9 @@ mod tests {
         emitter.emit_budget_error(&err, "trace");
 
         let diag = &emitter.diagnostics()[0];
-        let json = serde_json::to_string(diag).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(diag).expect("serialize derived Serialize");
         let round: ControlPlaneDiagnostic =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*diag, round);
     }
 
@@ -909,9 +909,9 @@ mod tests {
             DiagnosticSeverity::Error,
             DiagnosticSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&sev).expect("serialize derived Serialize");
             let round: DiagnosticSeverity =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(sev, round);
         }
     }
@@ -925,9 +925,9 @@ mod tests {
             doc_refs: vec!["docs/TEST.md".to_owned()],
             auto_remediable: true,
         };
-        let json = serde_json::to_string(&guidance).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&guidance).expect("serialize derived Serialize");
         let round: RemediationGuidance =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(guidance, round);
     }
 
@@ -957,7 +957,7 @@ mod tests {
             DiagnosticSeverity::Critical,
         ] {
             let json: String = serde_json::from_str(
-                &serde_json::to_string(&sev).expect("serde deserialization should succeed"),
+                &serde_json::to_string(&sev).expect("serialize derived Serialize"),
             )
             .expect("serde deserialization should succeed");
             assert_eq!(json, sev.as_str());
@@ -973,9 +973,9 @@ mod tests {
             DiagnosticCategory::MockSeamLeakage,
             DiagnosticCategory::ContextThreading,
         ] {
-            let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&cat).expect("serialize derived Serialize");
             let back: DiagnosticCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, cat);
         }
     }
@@ -1026,9 +1026,9 @@ mod tests {
     #[test]
     fn test_error_code_serde_roundtrip() {
         let code = DiagnosticErrorCode::budget("001", DiagnosticSeverity::Error);
-        let json = serde_json::to_string(&code).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&code).expect("serialize derived Serialize");
         let back: DiagnosticErrorCode =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(code, back);
     }
 
@@ -1157,9 +1157,9 @@ mod tests {
         };
         emitter.emit_budget_error(&err, "trace-serde");
 
-        let json = serde_json::to_string(&emitter).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&emitter).expect("serialize derived Serialize");
         let back: DiagnosticEmitter =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(emitter.diagnostics().len(), back.diagnostics().len());
     }
 

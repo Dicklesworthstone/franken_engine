@@ -2570,9 +2570,9 @@ mod tests {
     #[test]
     fn task_label_serialization_round_trip() {
         let label = cancel_label("trace-1");
-        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&label).expect("serialize derived Serialize");
         let restored: TaskLabel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(label, restored);
     }
 
@@ -2585,9 +2585,9 @@ mod tests {
             submitted_at: 0,
             payload_id: "p1".to_string(),
         };
-        let json = serde_json::to_string(&task).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&task).expect("serialize derived Serialize");
         let restored: ScheduledTask =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(task, restored);
     }
 
@@ -2601,9 +2601,9 @@ mod tests {
             tasks_completed: 7,
             tasks_timed_out: 1,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let restored: LaneMetrics =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, restored);
     }
 
@@ -2629,9 +2629,9 @@ mod tests {
             LaneError::TaskIdExhausted,
         ];
         for err in &errors {
-            let json = serde_json::to_string(err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(err).expect("serialize derived Serialize");
             let restored: LaneError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*err, restored);
         }
     }
@@ -2677,9 +2677,9 @@ mod tests {
             queue_position: 0,
             event: "submit".to_string(),
         };
-        let json = serde_json::to_string(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let restored: SchedulerEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, restored);
     }
 
@@ -3239,9 +3239,9 @@ mod tests {
             SchedulerLane::Timed,
             SchedulerLane::Ready,
         ] {
-            let json = serde_json::to_string(&lane).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&lane).expect("serialize derived Serialize");
             let back: SchedulerLane =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(lane, back);
         }
     }
@@ -3267,9 +3267,8 @@ mod tests {
             TaskType::SagaStepExec,
         ];
         for tt in &types {
-            let json = serde_json::to_string(tt).expect("serde deserialization should succeed");
-            let back: TaskType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(tt).expect("serialize derived Serialize");
+            let back: TaskType = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*tt, back);
         }
     }
@@ -3331,9 +3330,8 @@ mod tests {
             ready_max_depth: 300,
             ready_min_throughput: 5,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: LaneConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
+        let back: LaneConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 
@@ -3423,7 +3421,7 @@ mod tests {
     #[test]
     fn task_label_json_field_presence() {
         let label = cancel_label("field-check");
-        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&label).expect("serialize derived Serialize");
         assert!(json.contains("\"lane\""));
         assert!(json.contains("\"task_type\""));
         assert!(json.contains("\"trace_id\""));
@@ -3439,7 +3437,7 @@ mod tests {
             submitted_at: 10,
             payload_id: "p-field".to_string(),
         };
-        let json = serde_json::to_string(&task).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&task).expect("serialize derived Serialize");
         assert!(json.contains("\"task_id\""));
         assert!(json.contains("\"label\""));
         assert!(json.contains("\"deadline_tick\""));
@@ -3457,7 +3455,7 @@ mod tests {
             tasks_completed: 4,
             tasks_timed_out: 5,
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         assert!(json.contains("\"lane\""));
         assert!(json.contains("\"queue_depth\""));
         assert!(json.contains("\"tasks_submitted\""));
@@ -3476,9 +3474,9 @@ mod tests {
             lane: "ready".to_string(),
             max_depth: 4096,
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let restored: LaneError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, restored);
         assert!(json.contains("4096"));
     }
@@ -3612,9 +3610,8 @@ mod tests {
     fn task_id_serde_roundtrip() {
         for val in [0, 1, 42, u64::MAX] {
             let id = TaskId(val);
-            let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-            let back: TaskId =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+            let back: TaskId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(id, back);
         }
     }
@@ -3683,9 +3680,8 @@ mod tests {
     #[test]
     fn task_label_serde_timed_lane() {
         let label = timed_label("trace-timed-serde");
-        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
-        let back: TaskLabel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&label).expect("serialize derived Serialize");
+        let back: TaskLabel = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(label, back);
         assert!(json.contains("\"Timed\"") || json.contains("\"timed\""));
     }
@@ -3693,9 +3689,8 @@ mod tests {
     #[test]
     fn task_label_serde_ready_lane() {
         let label = ready_label("trace-ready-serde");
-        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
-        let back: TaskLabel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&label).expect("serialize derived Serialize");
+        let back: TaskLabel = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(label, back);
     }
 
@@ -3707,9 +3702,8 @@ mod tests {
             trace_id: "priority-test".to_string(),
             priority_sub_band: 42,
         };
-        let json = serde_json::to_string(&label).expect("serde deserialization should succeed");
-        let back: TaskLabel =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&label).expect("serialize derived Serialize");
+        let back: TaskLabel = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(label, back);
         assert!(json.contains("42"));
     }
@@ -4226,27 +4220,24 @@ mod tests {
             declared_lane: "timed".to_string(),
             required_lane: "ready".to_string(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: LaneError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let back: LaneError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
     #[test]
     fn lane_error_empty_trace_id_serde_roundtrip() {
         let err = LaneError::EmptyTraceId;
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: LaneError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let back: LaneError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
     }
 
     #[test]
     fn lane_error_task_not_found_serde_roundtrip() {
         let err = LaneError::TaskNotFound { task_id: u64::MAX };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
-        let back: LaneError =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
+        let back: LaneError = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(err, back);
         assert!(json.contains(&u64::MAX.to_string()));
     }
@@ -4263,9 +4254,8 @@ mod tests {
             ready_max_depth: 1,
             ready_min_throughput: 0,
         };
-        let json = serde_json::to_string(&cfg).expect("serde deserialization should succeed");
-        let back: LaneConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cfg).expect("serialize derived Serialize");
+        let back: LaneConfig = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cfg, back);
     }
 

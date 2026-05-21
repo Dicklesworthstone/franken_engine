@@ -923,10 +923,10 @@ mod tests {
         ];
         for cat in &categories {
             // SAFETY: ForbiddenCallCategory derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(cat).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(cat).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid ForbiddenCallCategory serialization
             let restored: ForbiddenCallCategory =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*cat, restored);
         }
     }
@@ -942,10 +942,10 @@ mod tests {
             line: 42,
         };
         // SAFETY: Exemption derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&ex).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ex).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid Exemption serialization
         let restored: Exemption =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ex, restored);
     }
 
@@ -963,10 +963,10 @@ mod tests {
             exempted: false,
         };
         // SAFETY: AuditFinding derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&finding).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&finding).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid AuditFinding serialization
         let restored: AuditFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(finding, restored);
     }
 
@@ -980,10 +980,10 @@ mod tests {
             passed: true,
         };
         // SAFETY: AuditResult derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid AuditResult serialization
         let restored: AuditResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -991,10 +991,10 @@ mod tests {
     fn audit_config_serialization_round_trip() {
         let config = AuditConfig::standard();
         // SAFETY: AuditConfig derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid AuditConfig serialization
         let restored: AuditConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
     }
 
@@ -1024,10 +1024,10 @@ mod tests {
             suggested_alternative: "use safe api".to_string(),
         };
         // SAFETY: ForbiddenPattern derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&pattern).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pattern).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ForbiddenPattern serialization
         let restored: ForbiddenPattern =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pattern, restored);
     }
 
@@ -1043,10 +1043,10 @@ mod tests {
             line: 0,
         });
         // SAFETY: ExemptionRegistry derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid ExemptionRegistry serialization
         let restored: ExemptionRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, restored);
     }
 
@@ -1463,10 +1463,10 @@ mod tests {
             passed: false,
         };
         // SAFETY: AuditResult derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid AuditResult serialization
         let restored: AuditResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 
@@ -1778,7 +1778,7 @@ mod tests {
         let mut jsons = BTreeSet::new();
         for v in &variants {
             // SAFETY: ForbiddenCallCategory derives Serialize and has no non-serializable fields
-            jsons.insert(serde_json::to_string(v).expect("serde deserialization should succeed"));
+            jsons.insert(serde_json::to_string(v).expect("serialize derived Serialize"));
         }
         assert_eq!(
             jsons.len(),
@@ -1899,7 +1899,7 @@ mod tests {
             line: 7,
         };
         // SAFETY: Exemption derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&ex).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ex).expect("serialize derived Serialize");
         assert!(json.contains("\"exemption_id\""));
         assert!(json.contains("\"module_path\""));
         assert!(json.contains("\"pattern_id\""));
@@ -1922,7 +1922,7 @@ mod tests {
             exempted: false,
         };
         // SAFETY: AuditFinding derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         assert!(json.contains("\"module_path\""));
         assert!(json.contains("\"forbidden_api\""));
         assert!(json.contains("\"pattern_id\""));
@@ -1944,7 +1944,7 @@ mod tests {
             suggested_alternative: "alt".to_string(),
         };
         // SAFETY: ForbiddenPattern derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&p).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         assert!(json.contains("\"pattern_id\""));
         assert!(json.contains("\"category\""));
         assert!(json.contains("\"pattern\""));
@@ -1962,7 +1962,7 @@ mod tests {
             passed: false,
         };
         // SAFETY: AuditResult derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         assert!(json.contains("\"findings\""));
         assert!(json.contains("\"violation_count\""));
         assert!(json.contains("\"exemption_count\""));
@@ -2087,10 +2087,10 @@ mod tests {
             exempted: true,
         };
         // SAFETY: AuditFinding derives Serialize and has no non-serializable fields
-        let json = serde_json::to_string(&f).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid AuditFinding serialization
         let restored: AuditFinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(f, restored);
         assert!(restored.exempted);
     }
@@ -2143,9 +2143,9 @@ mod tests {
         });
         config.audit_module("engine::raw");
         config.audit_module("engine::io");
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let restored: AuditConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, restored);
         assert_eq!(restored.patterns.len(), 15);
         assert!(restored.audited_modules.contains("engine::raw"));
@@ -2164,9 +2164,9 @@ mod tests {
                 line: i as usize,
             });
         }
-        let json = serde_json::to_string(&reg).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let restored: ExemptionRegistry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, restored);
         assert_eq!(restored.len(), 5);
     }
@@ -2193,9 +2193,9 @@ mod tests {
             passed: false,
             findings,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let restored: AuditResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, restored);
     }
 

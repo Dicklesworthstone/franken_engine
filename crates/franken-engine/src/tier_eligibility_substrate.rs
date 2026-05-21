@@ -1328,9 +1328,9 @@ mod tests {
             ExecutionTier::Specialized,
             ExecutionTier::Deoptimized,
         ] {
-            let json = serde_json::to_string(&tier).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&tier).expect("serialize derived Serialize");
             let restored: ExecutionTier =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(tier, restored);
         }
     }
@@ -1346,10 +1346,9 @@ mod tests {
             DeoptReason::MissingFeedback,
             DeoptReason::PolicyRejection,
         ] {
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             let restored: DeoptReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(reason, restored);
         }
     }
@@ -1363,9 +1362,9 @@ mod tests {
             ProbeKind::CallFrequency,
             ProbeKind::InlineCacheState,
         ] {
-            let json = serde_json::to_string(&kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&kind).expect("serialize derived Serialize");
             let restored: ProbeKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(kind, restored);
         }
     }
@@ -1382,9 +1381,9 @@ mod tests {
             &SecurityEpoch::from_raw(1),
         );
 
-        let json = serde_json::to_string(&profile).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&profile).expect("serialize derived Serialize");
         let restored: TierProfile =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(profile, restored);
     }
 
@@ -1394,18 +1393,18 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(5);
         let report = build_eligibility_report(&[], &policy, &epoch);
 
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let restored: TierEligibilityReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, restored);
     }
 
     #[test]
     fn serde_roundtrip_policy() {
         let policy = TierEligibilityPolicy::default();
-        let json = serde_json::to_string(&policy).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: TierEligibilityPolicy =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(policy, restored);
     }
 
@@ -1684,10 +1683,9 @@ mod tests {
             TierTransitionReason::PolicyOverride,
             TierTransitionReason::ManualProbe,
         ] {
-            let json =
-                serde_json::to_string(&reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&reason).expect("serialize derived Serialize");
             let restored: TierTransitionReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(reason, restored);
         }
     }

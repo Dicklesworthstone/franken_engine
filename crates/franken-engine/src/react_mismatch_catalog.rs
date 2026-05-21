@@ -1796,9 +1796,9 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_entry() {
         let e = test_entry("m1", MismatchDomain::CompileOutput, MismatchSeverity::Error);
-        let json = serde_json::to_string(&e).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let parsed: MismatchEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(e, parsed);
     }
 
@@ -1811,18 +1811,18 @@ mod tests {
             MismatchSeverity::Error,
         ))
         .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&cat).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cat).expect("serialize derived Serialize");
         let parsed: MismatchCatalog =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cat, parsed);
     }
 
     #[test]
     fn test_serde_roundtrip_config() {
         let config = CatalogConfig::default();
-        let json = serde_json::to_string(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&config).expect("serialize derived Serialize");
         let parsed: CatalogConfig =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, parsed);
     }
 
@@ -1831,9 +1831,9 @@ mod tests {
         let v = GateVerdict::Fail {
             reasons: vec!["test".to_string()],
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let parsed: GateVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, parsed);
     }
 
@@ -1847,9 +1847,9 @@ mod tests {
         ))
         .expect("serde deserialization should succeed");
         let report = cat.report();
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let parsed: CatalogReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, parsed);
     }
 
@@ -1863,10 +1863,9 @@ mod tests {
         ))
         .expect("serde deserialization should succeed");
         let advisories = generate_advisories(&cat);
-        let json =
-            serde_json::to_string(&advisories[0]).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&advisories[0]).expect("serialize derived Serialize");
         let parsed: MismatchAdvisory =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(advisories[0], parsed);
     }
 

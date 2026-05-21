@@ -1489,18 +1489,16 @@ mod tests {
     fn binding_cell_serde_roundtrip() {
         let mut cell = make_cell("mod_a", "foo");
         cell.initialize_millionths(42);
-        let json = serde_json::to_string(&cell).expect("serde deserialization should succeed");
-        let back: BindingCell =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cell).expect("serialize derived Serialize");
+        let back: BindingCell = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cell, back);
     }
 
     #[test]
     fn binding_id_serde_roundtrip() {
         let id = BindingId::new("mod_a", "foo");
-        let json = serde_json::to_string(&id).expect("serde deserialization should succeed");
-        let back: BindingId =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&id).expect("serialize derived Serialize");
+        let back: BindingId = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(id, back);
     }
 
@@ -1517,9 +1515,9 @@ mod tests {
             },
             source_hash: ContentHash::compute(b"source"),
         };
-        let json = serde_json::to_string(&ns).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ns).expect("serialize derived Serialize");
         let back: NamespaceObject =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ns, back);
     }
 
@@ -1531,9 +1529,9 @@ mod tests {
             target: BindingId::new("mod_a", "x"),
             is_namespace: false,
         };
-        let json = serde_json::to_string(&ib).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ib).expect("serialize derived Serialize");
         let back: ImportBinding =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ib, back);
     }
 
@@ -1543,9 +1541,8 @@ mod tests {
             binding_id: BindingId::new("mod_a", "x"),
             binding_type: BindingType::Direct,
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
-        let back: BindingEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
+        let back: BindingEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(ev, back);
     }
 
@@ -1554,9 +1551,9 @@ mod tests {
         let mut map = LiveBindingMap::new();
         let cell = make_cell("mod_a", "x");
         map.register_cell(cell);
-        let json = serde_json::to_string(&map).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&map).expect("serialize derived Serialize");
         let back: LiveBindingMap =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(map, back);
     }
 
@@ -1574,9 +1571,9 @@ mod tests {
             BindingCellState::Initialized,
             BindingCellState::Dead,
         ] {
-            let json = serde_json::to_string(&state).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&state).expect("serialize derived Serialize");
             let back: BindingCellState =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(state, back);
         }
     }
@@ -1907,9 +1904,9 @@ mod tests {
             },
         ];
         for event in &events {
-            let json = serde_json::to_string(event).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(event).expect("serialize derived Serialize");
             let back: BindingEvent =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*event, back);
         }
     }

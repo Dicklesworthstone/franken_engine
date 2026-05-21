@@ -5326,7 +5326,7 @@ mod tests {
             ReplayStatus::Failed,
             ReplayStatus::NoEvents,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let restored: ReplayStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, s);
@@ -5340,7 +5340,7 @@ mod tests {
             DashboardSeverity::Warning,
             DashboardSeverity::Critical,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let restored: DashboardSeverity =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, s);
@@ -5354,7 +5354,7 @@ mod tests {
             DecisionOutcomeKind::Deny,
             DecisionOutcomeKind::Fallback,
         ] {
-            let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&k).expect("serialize derived Serialize");
             let restored: DecisionOutcomeKind =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, k);
@@ -5368,7 +5368,7 @@ mod tests {
             ObligationState::Fulfilled,
             ObligationState::Failed,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let restored: ObligationState =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, s);
@@ -5384,7 +5384,7 @@ mod tests {
             CancellationKind::Terminate,
             CancellationKind::Revocation,
         ] {
-            let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&k).expect("serialize derived Serialize");
             let restored: CancellationKind =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, k);
@@ -5398,7 +5398,7 @@ mod tests {
             UpdateKind::Delta,
             UpdateKind::Heartbeat,
         ] {
-            let json = serde_json::to_string(&k).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&k).expect("serialize derived Serialize");
             let restored: UpdateKind =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, k);
@@ -5417,7 +5417,7 @@ mod tests {
             AdapterStream::ReplacementProgressDashboard,
             AdapterStream::ProofSpecializationLineageDashboard,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let restored: AdapterStream =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, s);
@@ -5431,7 +5431,7 @@ mod tests {
             ReplayHealthStatus::Fail,
             ReplayHealthStatus::Unknown,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let restored: ReplayHealthStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, s);
@@ -5445,7 +5445,7 @@ mod tests {
             RecoveryStatus::Recovered,
             RecoveryStatus::Waived,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let restored: RecoveryStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, s);
@@ -5460,7 +5460,7 @@ mod tests {
             SchemaCompatibilityStatus::NeedsMigration,
             SchemaCompatibilityStatus::Incompatible,
         ] {
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             let restored: SchemaCompatibilityStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, s);
@@ -5476,7 +5476,7 @@ mod tests {
             DashboardAlertMetric::CancellationEventCount,
             DashboardAlertMetric::FallbackActivationCount,
         ] {
-            let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&m).expect("serialize derived Serialize");
             let restored: DashboardAlertMetric =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, m);
@@ -5492,7 +5492,7 @@ mod tests {
             ThresholdComparator::LessOrEqual,
             ThresholdComparator::Equal,
         ] {
-            let json = serde_json::to_string(&c).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&c).expect("serialize derived Serialize");
             let restored: ThresholdComparator =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(restored, c);
@@ -5506,7 +5506,7 @@ mod tests {
     #[test]
     fn replay_event_view_serde_roundtrip() {
         let ev = ReplayEventView::new(1, "engine", "start", "ok", 100);
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let restored: ReplayEventView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored, ev);
@@ -5518,7 +5518,7 @@ mod tests {
             action: "contain".to_string(),
             expected_loss_millionths: 50_000,
         };
-        let json = serde_json::to_string(&ac).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ac).expect("serialize derived Serialize");
         let restored: ActionCandidateView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored, ac);
@@ -5530,7 +5530,7 @@ mod tests {
             name: "risk_score".to_string(),
             contribution_millionths: 300_000,
         };
-        let json = serde_json::to_string(&dv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&dv).expect("serialize derived Serialize");
         let restored: DriverView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored, dv);
@@ -5543,7 +5543,7 @@ mod tests {
             value: 42,
             unit: "ms".to_string(),
         };
-        let json = serde_json::to_string(&mv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&mv).expect("serialize derived Serialize");
         let restored: DashboardMetricView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored, mv);
@@ -5556,7 +5556,7 @@ mod tests {
             state: "running".to_string(),
             trust_level: "trusted".to_string(),
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let restored: ExtensionStatusRow =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored, row);
@@ -5568,7 +5568,7 @@ mod tests {
             evidence_stream_refresh_secs: 10,
             aggregate_refresh_secs: 120,
         };
-        let json = serde_json::to_string(&rp).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rp).expect("serialize derived Serialize");
         let restored: DashboardRefreshPolicy =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored, rp);
@@ -5582,7 +5582,7 @@ mod tests {
             latency_p95_ms: 12,
             memory_peak_mb: 512,
         };
-        let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pt).expect("serialize derived Serialize");
         let restored: BenchmarkTrendPointView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored, pt);
@@ -5676,7 +5676,7 @@ mod tests {
                 contribution_millionths: 600_000,
             }],
         };
-        let json = serde_json::to_string(&partial).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&partial).expect("serialize derived Serialize");
         let restored: PolicyExplanationPartial =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(restored, partial);
@@ -5713,7 +5713,7 @@ mod tests {
             FlowSensitivityLevel::High,
             FlowSensitivityLevel::Critical,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: FlowSensitivityLevel =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5726,7 +5726,7 @@ mod tests {
             DeclassificationOutcome::Approved,
             DeclassificationOutcome::Denied,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: DeclassificationOutcome =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5740,7 +5740,7 @@ mod tests {
             ConfinementStatus::Partial,
             ConfinementStatus::Degraded,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: ConfinementStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5754,7 +5754,7 @@ mod tests {
             ReplacementRiskLevel::Medium,
             ReplacementRiskLevel::High,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: ReplacementRiskLevel =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5768,7 +5768,7 @@ mod tests {
             RollbackStatus::Resolved,
             RollbackStatus::Waived,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: RollbackStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5782,7 +5782,7 @@ mod tests {
             ProofInventoryKind::FlowProof,
             ProofInventoryKind::ReplayMotif,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: ProofInventoryKind =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5797,7 +5797,7 @@ mod tests {
             ProofValidityStatus::Expired,
             ProofValidityStatus::Revoked,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: ProofValidityStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5811,7 +5811,7 @@ mod tests {
             ProofSpecializationInvalidationReason::ProofExpired,
             ProofSpecializationInvalidationReason::ProofRevoked,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: ProofSpecializationInvalidationReason =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5826,7 +5826,7 @@ mod tests {
             SpecializationFallbackReason::ProofRevoked,
             SpecializationFallbackReason::ValidationFailed,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: SpecializationFallbackReason =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5841,7 +5841,7 @@ mod tests {
             OverrideReviewStatus::Rejected,
             OverrideReviewStatus::Waived,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: OverrideReviewStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5856,7 +5856,7 @@ mod tests {
             GrantExpiryStatus::Expired,
             GrantExpiryStatus::NotApplicable,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let restored: GrantExpiryStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, restored);
@@ -5924,7 +5924,7 @@ mod tests {
             updated_at_unix_ms: 900,
             detail: "pending check".to_string(),
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let restored: ObligationStatusRowView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(row, restored);
@@ -5940,7 +5940,7 @@ mod tests {
             detail: "policy violation".to_string(),
             timestamp_unix_ms: 5000,
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let restored: CancellationEventView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ev, restored);
@@ -5954,7 +5954,7 @@ mod tests {
             description: "PII label".to_string(),
             extension_overlays: vec!["ext-a".to_string()],
         };
-        let json = serde_json::to_string(&node).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&node).expect("serialize derived Serialize");
         let restored: LabelMapNodeView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(node, restored);
@@ -5972,7 +5972,7 @@ mod tests {
             health: "healthy".to_string(),
             lineage_ref: "ref-1".to_string(),
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let restored: SlotStatusOverviewRow =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(row, restored);
@@ -5989,7 +5989,7 @@ mod tests {
             lineage_ref: "ref-a".to_string(),
             evidence_ref: "ref-b".to_string(),
         };
-        let json = serde_json::to_string(&ev).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ev).expect("serialize derived Serialize");
         let restored: RollbackEventView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ev, restored);
@@ -6006,7 +6006,7 @@ mod tests {
             enabled_specialization_ids: vec!["s-1".to_string()],
             proof_ref: "ref-p".to_string(),
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let restored: ProofInventoryRowView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(row, restored);
@@ -6028,7 +6028,7 @@ mod tests {
             receipt_ref: "ref-r".to_string(),
             replay_ref: "ref-rp".to_string(),
         };
-        let json = serde_json::to_string(&ov).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&ov).expect("serialize derived Serialize");
         let restored: OverrideRationaleView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(ov, restored);
@@ -6043,7 +6043,7 @@ mod tests {
             reason: "over-privileged".to_string(),
             generated_at_unix_ms: 4000,
         };
-        let json = serde_json::to_string(&alert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&alert).expect("serialize derived Serialize");
         let restored: CapabilityDeltaAlertView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(alert, restored);
@@ -6083,7 +6083,7 @@ mod tests {
             "scenario-1",
             vec![],
         ));
-        let json = serde_json::to_string(&payload).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&payload).expect("serialize derived Serialize");
         let restored: FrankentuiViewPayload =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(payload, restored);
@@ -6093,7 +6093,7 @@ mod tests {
     fn incident_replay_view_serde_roundtrip() {
         let ev = ReplayEventView::new(0, "engine", "init", "ok", 100);
         let view = IncidentReplayView::snapshot("trace-1", "scenario-1", vec![ev]);
-        let json = serde_json::to_string(&view).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&view).expect("serialize derived Serialize");
         let restored: IncidentReplayView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(view, restored);
@@ -6117,7 +6117,7 @@ mod tests {
             error_code: None,
             timestamp_unix_ms: 1000,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let restored: EvidenceStreamEntryView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(entry, restored);
@@ -6133,7 +6133,7 @@ mod tests {
             threshold: 100_000,
             severity: DashboardSeverity::Critical,
         };
-        let json = serde_json::to_string(&rule).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rule).expect("serialize derived Serialize");
         let restored: DashboardAlertRule =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(rule, restored);
@@ -6150,7 +6150,7 @@ mod tests {
             severity: DashboardSeverity::Warning,
             triggered_at_unix_ms: 2000,
         };
-        let json = serde_json::to_string(&alert).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&alert).expect("serialize derived Serialize");
         let restored: TriggeredAlertView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(alert, restored);
@@ -6164,7 +6164,7 @@ mod tests {
             route_policy_id: Some("policy-1".to_string()),
             route_enabled: true,
         };
-        let json = serde_json::to_string(&edge).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&edge).expect("serialize derived Serialize");
         let restored: LabelMapEdgeView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(edge, restored);
@@ -6188,7 +6188,7 @@ mod tests {
             error_code: None,
             occurred_at_unix_ms: 3000,
         };
-        let json = serde_json::to_string(&flow).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&flow).expect("serialize derived Serialize");
         let restored: BlockedFlowView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(flow, restored);
@@ -6200,7 +6200,7 @@ mod tests {
             timestamp_unix_ms: 5000,
             native_coverage_millionths: 900_000,
         };
-        let json = serde_json::to_string(&pt).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pt).expect("serialize derived Serialize");
         let restored: CoverageTrendPoint =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(pt, restored);
@@ -6653,7 +6653,7 @@ mod tests {
             DecisionOutcomeKind::Deny,
             DecisionOutcomeKind::Fallback,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: DecisionOutcomeKind =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6667,7 +6667,7 @@ mod tests {
             ObligationState::Fulfilled,
             ObligationState::Failed,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: ObligationState =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6683,7 +6683,7 @@ mod tests {
             CancellationKind::Terminate,
             CancellationKind::Revocation,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: CancellationKind =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6697,7 +6697,7 @@ mod tests {
             ReplayHealthStatus::Fail,
             ReplayHealthStatus::Unknown,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: ReplayHealthStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6711,7 +6711,7 @@ mod tests {
             RecoveryStatus::Recovered,
             RecoveryStatus::Waived,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: RecoveryStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6726,7 +6726,7 @@ mod tests {
             SchemaCompatibilityStatus::NeedsMigration,
             SchemaCompatibilityStatus::Incompatible,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: SchemaCompatibilityStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6739,7 +6739,7 @@ mod tests {
             DeclassificationOutcome::Approved,
             DeclassificationOutcome::Denied,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: DeclassificationOutcome =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6753,7 +6753,7 @@ mod tests {
             ConfinementStatus::Partial,
             ConfinementStatus::Degraded,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: ConfinementStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6767,7 +6767,7 @@ mod tests {
             ReplacementRiskLevel::Medium,
             ReplacementRiskLevel::High,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: ReplacementRiskLevel =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6781,7 +6781,7 @@ mod tests {
             RollbackStatus::Resolved,
             RollbackStatus::Waived,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: RollbackStatus =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6795,7 +6795,7 @@ mod tests {
             ProofInventoryKind::FlowProof,
             ProofInventoryKind::ReplayMotif,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: ProofInventoryKind =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6809,7 +6809,7 @@ mod tests {
             ProofSpecializationInvalidationReason::ProofExpired,
             ProofSpecializationInvalidationReason::ProofRevoked,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: ProofSpecializationInvalidationReason =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6824,7 +6824,7 @@ mod tests {
             SpecializationFallbackReason::ProofRevoked,
             SpecializationFallbackReason::ValidationFailed,
         ] {
-            let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&v).expect("serialize derived Serialize");
             let back: SpecializationFallbackReason =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, back);
@@ -6842,7 +6842,7 @@ mod tests {
             value: 42_000,
             unit: "ms".into(),
         };
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let back: DashboardMetricView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(m, back);
@@ -6855,7 +6855,7 @@ mod tests {
             state: "active".into(),
             trust_level: "trusted".into(),
         };
-        let json = serde_json::to_string(&row).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&row).expect("serialize derived Serialize");
         let back: ExtensionStatusRow =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(row, back);
@@ -6871,7 +6871,7 @@ mod tests {
             lineage_ref: "lineage-001".into(),
             evidence_ref: "evidence-001".into(),
         };
-        let json = serde_json::to_string(&bpv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&bpv).expect("serialize derived Serialize");
         let back: BlockedPromotionView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(bpv, back);
@@ -6888,7 +6888,7 @@ mod tests {
             risk_reduction_millionths: 200_000,
             rationale: "high-value slot".into(),
         };
-        let json = serde_json::to_string(&rov).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&rov).expect("serialize derived Serialize");
         let back: ReplacementOpportunityView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(rov, back);
@@ -6908,7 +6908,7 @@ mod tests {
             activated_at_unix_ms: 1000,
             recovered_at_unix_ms: Some(2000),
         };
-        let json = serde_json::to_string(&view).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&view).expect("serialize derived Serialize");
         let back: SafeModeActivationView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(view, back);
@@ -6921,7 +6921,7 @@ mod tests {
             divergence_count: 3,
             last_replay_timestamp_unix_ms: Some(9000),
         };
-        let json = serde_json::to_string(&view).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&view).expect("serialize derived Serialize");
         let back: ReplayHealthPanelView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(view, back);
@@ -6940,7 +6940,7 @@ mod tests {
             latency_p95_ceiling_ms: 50,
             memory_peak_ceiling_mb: 512,
         };
-        let json = serde_json::to_string(&view).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&view).expect("serialize derived Serialize");
         let back: BenchmarkTrendsPanelView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(view, back);
@@ -6956,7 +6956,7 @@ mod tests {
             closed_at_unix_ms: None,
             quiescent_close_time_ms: None,
         };
-        let json = serde_json::to_string(&view).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&view).expect("serialize derived Serialize");
         let back: RegionLifecycleRowView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(view, back);
@@ -6979,7 +6979,7 @@ mod tests {
             region_destructions_in_window: 2,
             average_quiescent_close_time_ms: 150,
         };
-        let json = serde_json::to_string(&panel).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&panel).expect("serialize derived Serialize");
         let back: RegionLifecyclePanelView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(panel, back);
@@ -7004,7 +7004,7 @@ mod tests {
             activated_at_unix_ms: 5000,
             recovered_at_unix_ms: None,
         };
-        let json = serde_json::to_string(&view).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&view).expect("serialize derived Serialize");
         assert!(json.contains("\"recovered_at_unix_ms\":null"));
         let back: SafeModeActivationView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
@@ -7056,7 +7056,7 @@ mod tests {
         ];
         let mut names = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: DashboardAlertMetric =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, &back);
@@ -7076,7 +7076,7 @@ mod tests {
         ];
         let mut names = std::collections::BTreeSet::new();
         for v in &variants {
-            let json = serde_json::to_string(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(v).expect("serialize derived Serialize");
             let back: ThresholdComparator =
                 serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
             assert_eq!(v, &back);
@@ -8213,7 +8213,7 @@ mod tests {
         );
         let bytes = env.encode_json().expect("encode");
         let restored: AdapterEnvelope =
-            serde_json::from_slice(&bytes).expect("serde deserialization should succeed");
+            serde_json::from_slice(&bytes).expect("deserialize known-valid JSON");
         assert_eq!(env, restored);
     }
 
@@ -8336,7 +8336,7 @@ mod tests {
             fallback_count: 2,
             average_expected_loss_millionths: 150_000,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: DecisionOutcomesPanelView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8349,7 +8349,7 @@ mod tests {
             fulfilled_count: 80,
             failed_count: 3,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ObligationStatusPanelView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8362,7 +8362,7 @@ mod tests {
             last_migration_unix_ms: Some(1_700_000_000_000),
             compatibility_status: SchemaCompatibilityStatus::Compatible,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: SchemaVersionPanelView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8376,7 +8376,7 @@ mod tests {
             latency_p95_ms: 12,
             memory_peak_mb: 256,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: BenchmarkTrendPointView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8393,7 +8393,7 @@ mod tests {
                 native_coverage_millionths: 750_000,
             }],
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: NativeCoverageMeter =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8408,7 +8408,7 @@ mod tests {
             invocation_frequency_per_minute: 100,
             risk_reduction_millionths: 200_000,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ReplacementOpportunityInput =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8437,7 +8437,7 @@ mod tests {
                 m
             },
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ControlDashboardView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8463,7 +8463,7 @@ mod tests {
                 incident_counts: BTreeMap::new(),
             }),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: AdapterEnvelope =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8477,7 +8477,7 @@ mod tests {
             aggregate_throughput_increase_millionths: 200_000,
             specialization_coverage_millionths: 750_000,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: SpecializationPerformanceImpactView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8499,7 +8499,7 @@ mod tests {
             confinement_proofs: vec![],
             alert_indicators: vec![],
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: FlowDecisionDashboardView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8524,7 +8524,7 @@ mod tests {
             },
             alert_indicators: vec![],
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ProofSpecializationLineageDashboardView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8545,7 +8545,7 @@ mod tests {
             alert_indicators: vec![],
             event_subscription_cursor: None,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: CapabilityDeltaDashboardView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8569,7 +8569,7 @@ mod tests {
             rollback_events: vec![],
             next_best_replacements: vec![],
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ReplacementProgressDashboardView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8585,7 +8585,7 @@ mod tests {
             blocked_flow_count: 3,
             generated_at_unix_ms: 1_000,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: FlowDecisionAlertView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8600,7 +8600,7 @@ mod tests {
             affected_count: 2,
             generated_at_unix_ms: 2_000,
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ProofSpecializationAlertView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8616,7 +8616,7 @@ mod tests {
             proof_rows: vec![],
             uncovered_flow_refs: vec![],
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: ConfinementProofView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8628,7 +8628,7 @@ mod tests {
             nodes: vec![],
             edges: vec![],
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: LabelMapView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8650,7 +8650,7 @@ mod tests {
             receipt_ref: "ref-1".to_string(),
             replay_ref: "replay-1".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: CapabilityDeltaEscrowEventView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);
@@ -8666,7 +8666,7 @@ mod tests {
             generated_at_unix_ms: 1_000,
             workflow_ref: "wf-1".to_string(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let back: CapabilityPromotionBatchReviewView =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
         assert_eq!(v, back);

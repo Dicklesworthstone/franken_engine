@@ -777,9 +777,9 @@ mod tests {
     #[test]
     fn domain_serde_roundtrip() {
         for d in ArtifactDomain::ALL {
-            let json = serde_json::to_string(d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(d).expect("serialize derived Serialize");
             let back: ArtifactDomain =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*d, back);
         }
     }
@@ -808,9 +808,9 @@ mod tests {
     #[test]
     fn strategy_serde_roundtrip() {
         for s in CompressionStrategy::ALL {
-            let json = serde_json::to_string(s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(s).expect("serialize derived Serialize");
             let back: CompressionStrategy =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*s, back);
         }
     }
@@ -875,9 +875,9 @@ mod tests {
             },
         ];
         for r in &reasons {
-            let json = serde_json::to_string(r).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(r).expect("serialize derived Serialize");
             let back: CompressionRefusalReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*r, back);
         }
     }
@@ -930,9 +930,9 @@ mod tests {
             result_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: CompressionResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -973,9 +973,9 @@ mod tests {
             receipt_hash: ContentHash::compute(b"placeholder"),
         };
         r.recompute_hash();
-        let json = serde_json::to_string(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: CompressionReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);
     }
 
@@ -1133,9 +1133,9 @@ mod tests {
             None,
         );
         pipeline.process_artifact(&d);
-        let json = serde_json::to_string(&pipeline).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&pipeline).expect("serialize derived Serialize");
         let back: CompressionPipeline =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(pipeline, back);
     }
 
@@ -1251,9 +1251,9 @@ mod tests {
                 detail: "z".to_string(),
             },
         ] {
-            let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&err).expect("serialize derived Serialize");
             let back: CompressionError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(err, back);
         }
     }
@@ -1913,9 +1913,9 @@ mod tests {
             None,
         ));
         let summary = pipeline.summary_report();
-        let json = serde_json::to_string(&summary).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: CompressionSummary =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(summary, back);
     }
 
@@ -2093,9 +2093,8 @@ mod tests {
             domain: ArtifactDomain::Evidence,
             size_saved_bytes: 4096,
         };
-        let json = serde_json::to_string(&entry).expect("serde deserialization should succeed");
-        let back: DedupEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
+        let back: DedupEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
     }
 
@@ -2107,9 +2106,9 @@ mod tests {
             original_bytes: 100_000,
             compressed_bytes: 20_000,
         };
-        let json = serde_json::to_string(&breakdown).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&breakdown).expect("serialize derived Serialize");
         let back: StrategyBreakdown =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(breakdown, back);
     }
 
@@ -2122,9 +2121,9 @@ mod tests {
             9999,
             Some(b"canonical-bytes"),
         );
-        let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&d).expect("serialize derived Serialize");
         let back: ArtifactDescriptor =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(d, back);
     }
 

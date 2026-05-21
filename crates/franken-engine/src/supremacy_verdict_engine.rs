@@ -1587,9 +1587,9 @@ mod tests {
     #[test]
     fn test_cell_measurement_serde_roundtrip() {
         let m = make_measurement("cell_a", 500, 1000);
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
         let m2: CellMeasurement =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, m2);
     }
 
@@ -1603,9 +1603,9 @@ mod tests {
             .collect();
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&report).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let report2: VerdictReport =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, report2);
     }
 
@@ -1626,9 +1626,9 @@ mod tests {
             threshold: 1_000,
             detail: "crash rate too high".into(),
         };
-        let json = serde_json::to_string(&v).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&v).expect("serialize derived Serialize");
         let v2: SideConstraintViolation =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(v, v2);
     }
 
@@ -1645,9 +1645,8 @@ mod tests {
             final_llr: 12345,
             mean_improvement_ratio: 400_000,
         };
-        let json = serde_json::to_string(&cv).expect("serde deserialization should succeed");
-        let cv2: CellVerdict =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&cv).expect("serialize derived Serialize");
+        let cv2: CellVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(cv, cv2);
     }
 

@@ -2449,9 +2449,8 @@ mod tests {
         let mut m = make_module("test.js", "const x = 1");
         m.add_import(ImportEntry::new("dep.js", "foo", "foo"));
         m.add_export(ExportEntry::direct("bar", "bar"));
-        let json = serde_json::to_string(&m).expect("serde deserialization should succeed");
-        let m2: EsmModule =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&m).expect("serialize derived Serialize");
+        let m2: EsmModule = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(m, m2);
     }
 
@@ -2464,9 +2463,8 @@ mod tests {
         graph
             .add_module(make_module("b.js", ""))
             .expect("serde deserialization should succeed");
-        let json = serde_json::to_string(&graph).expect("serde deserialization should succeed");
-        let g2: ModuleGraph =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&graph).expect("serialize derived Serialize");
+        let g2: ModuleGraph = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(g2.len(), 2);
         assert_eq!(g2.entry_point(), Some("a.js"));
     }
@@ -2481,9 +2479,8 @@ mod tests {
                 stack_snapshot: vec!["a.js".into(), "b.js".into()],
             }],
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let r2: LinkResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
+        let r2: LinkResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r2.linked_count, 3);
         assert_eq!(r2.cycle_count, 1);
     }
@@ -2494,9 +2491,8 @@ mod tests {
             eval_order: vec!["a.js".into(), "b.js".into()],
             evaluated_count: 2,
         };
-        let json = serde_json::to_string(&result).expect("serde deserialization should succeed");
-        let r2: EvalResult =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&result).expect("serialize derived Serialize");
+        let r2: EvalResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r2.evaluated_count, 2);
         assert_eq!(r2.eval_order.len(), 2);
     }
@@ -2508,9 +2504,9 @@ mod tests {
             BindingType::ReExport,
             BindingType::StarReExport,
         ] {
-            let json = serde_json::to_string(&bt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&bt).expect("serialize derived Serialize");
             let bt2: BindingType =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(bt, bt2);
         }
     }
@@ -2522,9 +2518,9 @@ mod tests {
             specifier: "main.js".into(),
             dependency: "missing.js".into(),
         };
-        let json = serde_json::to_string(&err).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let val: serde_json::Value =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(val.get("UnresolvedDependency").is_some());
     }
 

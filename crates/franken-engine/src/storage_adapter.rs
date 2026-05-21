@@ -1669,8 +1669,7 @@ mod tests {
     fn store_kind_serde_round_trip() {
         let kind = StoreKind::PlasWitness;
         let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
-        let back: StoreKind =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StoreKind = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, kind);
     }
 
@@ -2485,8 +2484,7 @@ mod tests {
             revision: 42,
         };
         let json = serde_json::to_string(&record).expect("serde serialization should succeed");
-        let back: StoreRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StoreRecord = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, record);
     }
 
@@ -2502,8 +2500,7 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde serialization should succeed");
-        let back: StorageEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StorageEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, event);
     }
 
@@ -2520,7 +2517,7 @@ mod tests {
         };
         let json = serde_json::to_string(&receipt).expect("serde serialization should succeed");
         let back: MigrationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, receipt);
     }
 
@@ -2533,7 +2530,7 @@ mod tests {
         };
         let json = serde_json::to_string(&entry).expect("serde serialization should succeed");
         let back: BatchPutEntry =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, entry);
     }
 
@@ -2592,8 +2589,7 @@ mod tests {
             limit: Some(10),
         };
         let json = serde_json::to_string(&query).expect("serde serialization should succeed");
-        let back: StoreQuery =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StoreQuery = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(query, back);
     }
 
@@ -2601,8 +2597,7 @@ mod tests {
     fn event_context_serde_roundtrip() {
         let context = ctx();
         let json = serde_json::to_string(&context).expect("serde serialization should succeed");
-        let back: EventContext =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: EventContext = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(context, back);
     }
 
@@ -2646,7 +2641,7 @@ mod tests {
         for error in &errors {
             let json = serde_json::to_string(error).expect("serde serialization should succeed");
             let back: StorageError =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(error, &back);
         }
     }
@@ -2770,7 +2765,7 @@ mod tests {
         };
         let json = serde_json::to_string(&receipt).expect("serde serialization should succeed");
         let back: MigrationReceipt =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(receipt, back);
         assert!(back.stores_touched.is_empty());
     }
@@ -2787,8 +2782,7 @@ mod tests {
             error_code: None,
         };
         let json = serde_json::to_string(&event).expect("serde serialization should succeed");
-        let back: StorageEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StorageEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert!(back.error_code.is_none());
     }
 
@@ -2843,7 +2837,7 @@ mod tests {
         ] {
             let json = serde_json::to_string(&kind).expect("serde serialization should succeed");
             let back: StoreKind =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(back, kind, "StoreKind::{kind:?}");
         }
     }
@@ -2992,8 +2986,7 @@ mod tests {
             error_code: Some("FE-STOR-0002".into()),
         };
         let json = serde_json::to_string(&event).expect("serde serialization should succeed");
-        let back: StorageEvent =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StorageEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.error_code, Some("FE-STOR-0002".into()));
     }
 
@@ -3010,8 +3003,7 @@ mod tests {
             revision: 1,
         };
         let json = serde_json::to_string(&record).expect("serde serialization should succeed");
-        let back: StoreRecord =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+        let back: StoreRecord = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.metadata.len(), 2);
         assert_eq!(back.metadata.get("env"), Some(&"prod".to_string()));
     }
@@ -3065,7 +3057,7 @@ mod tests {
             .expect("serde serialization should succeed");
         let json = serde_json::to_string(&adapter).expect("serde serialization should succeed");
         let back: InMemoryStorageAdapter =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(
             back.current_schema_version(),
             adapter.current_schema_version()

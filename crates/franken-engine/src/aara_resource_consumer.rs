@@ -1231,10 +1231,10 @@ mod tests {
             Subsystem::HostcallGate,
         ] {
             // SAFETY: Subsystem derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&s).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&s).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid Subsystem serialization
             let back: Subsystem =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(s, back);
         }
     }
@@ -1248,10 +1248,10 @@ mod tests {
             BudgetDecision::Abstain,
         ] {
             // SAFETY: BudgetDecision derives Serialize and has no non-serializable fields
-            let json = serde_json::to_string(&d).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(&d).expect("serialize derived Serialize");
             // SAFETY: JSON was just produced by valid BudgetDecision serialization
             let back: BudgetDecision =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, back);
         }
     }
@@ -1287,9 +1287,9 @@ mod tests {
         let cert = good_certificate();
         consumer.consume(&cert);
         let manifest = ConsumptionManifest::from_consumer(&consumer);
-        let json = serde_json::to_string(&manifest).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: ConsumptionManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest.schema_version, back.schema_version);
         assert_eq!(manifest.manifest_hash, back.manifest_hash);
     }
@@ -1659,7 +1659,7 @@ mod tests {
         let json =
             serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed");
         let back: ConsumptionManifest =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
     }
 
@@ -1688,9 +1688,9 @@ mod tests {
             DenialReason::CriticalAssumptions,
         ];
         for reason in &reasons {
-            let json = serde_json::to_string(reason).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(reason).expect("serialize derived Serialize");
             let back: DenialReason =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*reason, back);
         }
     }
@@ -1736,9 +1736,9 @@ mod tests {
     fn test_consumer_serde_roundtrip() {
         let mut consumer = ResourceConsumer::with_defaults(epoch());
         consumer.consume(&good_certificate());
-        let json = serde_json::to_string(&consumer).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&consumer).expect("serialize derived Serialize");
         let back: ResourceConsumer =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.receipts().len(), consumer.receipts().len());
         assert_eq!(back.epoch, consumer.epoch);
     }
@@ -1748,10 +1748,9 @@ mod tests {
         let mut consumer = ResourceConsumer::with_defaults(epoch());
         consumer.consume(&good_certificate());
         for receipt in consumer.receipts() {
-            let json =
-                serde_json::to_string(receipt).expect("serde deserialization should succeed");
+            let json = serde_json::to_string(receipt).expect("serialize derived Serialize");
             let back: ConsumptionReceipt =
-                serde_json::from_str(&json).expect("serde deserialization should succeed");
+                serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(*receipt, back);
         }
     }
@@ -1759,9 +1758,9 @@ mod tests {
     #[test]
     fn test_subsystem_requirement_serde_roundtrip() {
         let req = SubsystemRequirement::specializer();
-        let json = serde_json::to_string(&req).expect("serde deserialization should succeed");
+        let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let back: SubsystemRequirement =
-            serde_json::from_str(&json).expect("serde deserialization should succeed");
+            serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(req, back);
     }
 

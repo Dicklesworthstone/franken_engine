@@ -204,7 +204,7 @@ impl fmt::Display for EngineObjectId {
         // Zero-allocation path: write directly into the formatter.
         let mut buf = [0u8; OBJECT_ID_LEN * 2];
         for (i, &byte) in self.0.iter().enumerate() {
-            buf[i * 2]     = HEX_LUT[(byte >> 4) as usize];
+            buf[i * 2] = HEX_LUT[(byte >> 4) as usize];
             buf[i * 2 + 1] = HEX_LUT[(byte & 0x0F) as usize];
         }
         f.write_str(std::str::from_utf8(&buf).expect("HEX_LUT yields valid ASCII"))

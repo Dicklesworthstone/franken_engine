@@ -9,7 +9,7 @@
 use std::fs;
 use std::path::Path;
 
-use franken_engine::{
+use frankenengine_engine::{
     ast::Expression,
     effect_set::EffectKind,
     lowering_pipeline::{LoweringPipelineError, lower_ir0_to_ir1},

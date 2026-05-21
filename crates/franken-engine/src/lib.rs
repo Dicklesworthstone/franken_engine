@@ -164,6 +164,7 @@ pub mod extension_registry;
 pub mod feature_parity_tracker;
 pub mod flamegraph_pipeline;
 pub mod fleet_convergence;
+pub mod fleet_convergence_harness;
 pub mod fleet_immune_protocol;
 pub mod fleet_simulator;
 pub mod flow_envelope;

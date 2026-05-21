@@ -1,0 +1,32 @@
+{
+  "schema_version": "franken-engine.repro-lock.v1",
+  "schema_hash": "sha256:repro-lock-schema-v1",
+  "generated_at_utc": "2026-05-21T19:11:00Z",
+  "lock_id": "runtime-comparison-node-22-lock-v1",
+  "manifest_id": "runtime-comparison-manifest-v1",
+  "source_commit": "bd-cixqu.5.1",
+  "determinism": {
+    "allow_network": false,
+    "allow_wall_clock": false,
+    "allow_randomness": false,
+    "max_clock_skew_seconds": 0
+  },
+  "runtime_pins": {
+    "node_lts": "22.13.1",
+    "node_command": "node",
+    "measurement_mode": "DirectLinuxWait4"
+  },
+  "commands": [
+    "cargo bench -p frankenengine-engine --bench comparative_node -- --noplot",
+    "frankenctl benchmark compare --manifest benchmarks/runtime_comparison/manifest.json"
+  ],
+  "methodology": {
+    "wall_time_measurement": "pidfd+wait4 on Linux, fallback to process timing",
+    "peak_rss_measurement": "rusage.maxrss from wait4 syscall",
+    "commit_reference": "d728d81a"
+  },
+  "verification": {
+    "command": "cargo bench -p frankenengine-engine --bench comparative_node -- --noplot",
+    "expected_verdict": "pass"
+  }
+}

@@ -58,7 +58,7 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-011` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:58` | `observed` | allow observed red-team compromise-rate comparison with baseline validation | `bd-1vwza` |
 | `FE-CLAIM-012` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:59-60` | `observed` | allow observed signal-to-action timestamp computation with latency artifacts | `bd-38mby` |
 | `FE-CLAIM-013` | replay | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `observed` | allow observed replay coverage gate plus byte-identical fixed-input CLI artifact proof | `bd-2488a` |
-| `FE-CLAIM-014` | capability | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `target` | require three named production feature proof bundles | `bd-1qkrc` |
+| `FE-CLAIM-014` | capability | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `observed` | three named production feature proof bundles ship (IFC declassification, deterministic replay, red-team compromise rate) — F.5 gate `scripts/run_rgc_production_feature_catalog.sh` validates all three with per-feature sha256 manifest hashes | `bd-cixqu.6.6` |
 | `FE-CLAIM-015` | ifc | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:96` | `observed` | allow observed IFC with signed declassification receipts | `bd-dpfvh` |
 | `FE-CLAIM-016` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:50` | `hypothesis` | downgrade until formal mathematical specification exists | `bd-csnqb` |
 | `FE-CLAIM-017` | compiler | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:593` | `hypothesis` | downgrade until proof-carrying compilation artifacts exist | `bd-csnqb` |

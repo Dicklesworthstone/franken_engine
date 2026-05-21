@@ -145,6 +145,7 @@ The table below mirrors [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PRO
 | Cross-runtime Node/Bun denominator throughput | TARGETED | Hot-path workloads are real; Node/Bun denominator artifacts are still needed. `MockCertificate` / `hot_paths_simulation` artifacts are rejected by the gate. |
 | Proof-carrying compilation, formal policy semantics, theorem-backed compiler | HYPOTHESIS | Tracked in the matrix and downgraded in-tree by `bd-csnqb`. |
 | Universal artifact-publication enforcement ("No artifact, no claim.") | OBSERVED | `scripts/run_claim_to_proof_matrix_gate.sh` refuses any OBSERVED row whose artifact lacks a `repro.lock` partner (`bd-cixqu.4.3`); all currently-OBSERVED rows have reproducibility bundles per `docs/REPRODUCIBILITY_CONTRACT.md` (`bd-cixqu.4.4`). |
+| At-least-three production features impossible by default in Node/Bun | OBSERVED | `scripts/run_rgc_production_feature_catalog.sh` validates the F.5 unified catalog of three named feature bundles (signed IFC declassification, deterministic replay coverage, red-team compromise-rate reduction) with per-feature sha256 manifest hashes (`bd-cixqu.6.5`, `bd-cixqu.6.6`). |
 
 ---
 

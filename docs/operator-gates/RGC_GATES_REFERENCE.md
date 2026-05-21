@@ -2350,4 +2350,125 @@ This gate integrates with:
 | Receipt verification failure | Verifier input is stale or the receipt ID does not match the bundle | Run `frankenctl verify receipt --input <verifier_input.json> --receipt-id <id> --summary` and inspect the rendered verdict |
 | Benchmark publication gate fails | Claim bundle or publication input is incomplete, stale, or below the scoring threshold | Run `frankenctl benchmark verify --bundle <dir> --summary --output <report.json>` and `frankenctl benchmark score --input <publication_gate_input.json> --output <results.json>` |
 
+## Universal artifact publication enforcement
+
+(Added by `bd-cixqu.4.5` — companion to the `bd-cixqu.4.3` gate
+extension and the `bd-cixqu.4.4` matrix promotion.)
+
+### What enforces what
+
+The matrix gate at `scripts/run_claim_to_proof_matrix_gate.sh` (see
+also the [Claim-to-Proof Matrix Gate](#) section above) was extended
+by `bd-cixqu.4.3` so that any row in `docs/claim_to_proof_matrix_v1.json`
+with `allowed_state == "observed"` is rejected unless its
+`artifact_path` has a sibling `repro.lock` file conforming to
+`docs/REPRODUCIBILITY_CONTRACT.md`. Rejection emits the stable error
+code `ClaimMatrixError::MissingReproducibilityBundle` in the structured
+event log and on stderr.
+
+`FE-CLAIM-009` ("Every published performance and security claim ships
+with reproducible artifact bundles.") is itself OBSERVED as of
+`bd-cixqu.4.4` (commit `1b0de84c`); the gate now self-attests against
+its own contract.
+
+### What the error message means
+
+```
+FE-CLAIM-XXX: ClaimMatrixError::MissingReproducibilityBundle: observed claim artifact has no repro.lock alongside <path>; reproducibility lock is required for any claim whose allowed_state is 'observed' (bd-cixqu.4.3)
+```
+
+Translation: the matrix row claims this is OBSERVED, but the
+artifact-publication contract was not satisfied for the matched
+bundle. Either the bundle was never written (gate run never produced
+a `repro.lock`), the bundle was moved/renamed, or the row points at
+the wrong path.
+
+### How to remediate
+
+1. Audit which rows are missing locks:
+
+   ```
+   runbooks/scripts/audit_repro_lock_coverage.sh
+   ```
+
+   Output: per-claim `lock_status` (present / missing / stale) plus
+   a JSON report under `artifacts/repro_lock_coverage_audit/<ts>/`.
+   Exit code 0 = all present, 1 = at least one missing, plus a
+   stderr warning for stale locks (older than
+   `REPRO_LOCK_STALE_THRESHOLD_DAYS`, default 30).
+
+2. For each missing row, regenerate the lock alongside its existing
+   artifact bundle:
+
+   ```
+   runbooks/scripts/backfill_repro_lock.sh \
+       <gate-name> \
+       <artifact_path> \
+       '<verification command that re-derives the bundle>'
+   ```
+
+   The script writes a `repro.lock` conforming to
+   `frankenengine.reproducibility.lock.v1`, with `source_commit`
+   pinned to `git rev-parse HEAD` and the supplied
+   verification command in `replay.command_sequence`. It refuses to
+   clobber an existing lock unless `BACKFILL_REPRO_LOCK_OVERWRITE=1`.
+
+3. Re-run the audit to confirm coverage, then re-run the matrix gate:
+
+   ```
+   runbooks/scripts/audit_repro_lock_coverage.sh
+   ./scripts/run_claim_to_proof_matrix_gate.sh ci
+   ```
+
+### Stale-lock policy
+
+The audit script flags any `repro.lock` whose file mtime is older
+than `REPRO_LOCK_STALE_THRESHOLD_DAYS` (default 30) as `severity:
+warning`. The matrix gate does not currently *reject* on stale
+locks — that is a follow-up tightening tracked separately. Operators
+should re-run the verification command to refresh the bundle when a
+stale warning fires.
+
+### Selftest
+
+Both scripts ship a deterministic selftest using the in-tree fixture
+matrix from `bd-cixqu.4.3`:
+
+```
+scripts/e2e/repro_lock_runbook_smoke.sh run
+```
+
+Smoke asserts (8 PASS in `run` mode):
+1. Shell syntax + shellcheck clean.
+2. `audit selftest` exits 0.
+3. `audit json` emits the canonical schema.
+4. `audit audit` (default mode) produces a structured summary on the
+   real in-tree matrix.
+5. `backfill` refuses to clobber without `BACKFILL_REPRO_LOCK_OVERWRITE=1`.
+6. `backfill` writes a fresh schema-valid `repro.lock`.
+7. The written lock satisfies the production validator.
+8. The audit picks up the backfilled lock as `present` on the next
+   pass.
+
+### Artifacts
+
+The audit emits to
+`artifacts/repro_lock_coverage_audit/<timestamp>/`:
+
+- `repro_lock_coverage_report.json` (schema:
+  `franken-engine.repro-lock-coverage-audit.v1`).
+- `repro_lock_coverage_summary.md` (operator-readable).
+
+The backfill writes directly to `<bundle>/repro.lock` (no separate
+artifact dir).
+
+### Out of scope (tracked for follow-up)
+
+- FrankenTUI panel surfacing the audit report — requires the
+  `frankentui` integration which is not in this bead's scope.
+- Hard rejection on stale locks (currently warning-only).
+- `frankenctl repro verify --bundle <path>` integration — the
+  current scripts are bash-side helpers; the Rust verifier integration
+  lands separately.
+
 ## Limitations

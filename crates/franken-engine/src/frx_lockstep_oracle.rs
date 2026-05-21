@@ -878,6 +878,292 @@ fn ensure_monotonic_events(
     Ok(())
 }
 
+/// Run lockstep oracle comparing Node.js execution traces against FrankenEngine traces.
+///
+/// This function works similarly to `run_lockstep_oracle` but compares Node.js traces
+/// (as the baseline) against FrankenEngine traces for differential checking.
+pub fn run_node_lockstep_oracle(
+    node_traces_dir: &Path,
+    franken_traces_dir: &Path,
+    context: FrxLockstepRunContext,
+    fixture_ref_filter: Option<&str>,
+) -> Result<FrxLockstepReport, FrxLockstepOracleError> {
+    run_runtime_lockstep_oracle(
+        node_traces_dir,
+        franken_traces_dir,
+        context,
+        fixture_ref_filter,
+        "Node.js",
+    )
+}
+
+/// Run lockstep oracle comparing Bun execution traces against FrankenEngine traces.
+///
+/// This function works similarly to `run_lockstep_oracle` but compares Bun traces
+/// (as the baseline) against FrankenEngine traces for differential checking.
+pub fn run_bun_lockstep_oracle(
+    bun_traces_dir: &Path,
+    franken_traces_dir: &Path,
+    context: FrxLockstepRunContext,
+    fixture_ref_filter: Option<&str>,
+) -> Result<FrxLockstepReport, FrxLockstepOracleError> {
+    run_runtime_lockstep_oracle(
+        bun_traces_dir,
+        franken_traces_dir,
+        context,
+        fixture_ref_filter,
+        "Bun",
+    )
+}
+
+/// Internal implementation for runtime-specific lockstep oracle operations.
+///
+/// This generalizes the comparison logic to work with any two trace directories,
+/// where the first directory contains baseline runtime traces and the second
+/// contains FrankenEngine traces for comparison.
+fn run_runtime_lockstep_oracle(
+    baseline_traces_dir: &Path,
+    franken_traces_dir: &Path,
+    context: FrxLockstepRunContext,
+    fixture_ref_filter: Option<&str>,
+    runtime_name: &str,
+) -> Result<FrxLockstepReport, FrxLockstepOracleError> {
+    if context.trace_id.trim().is_empty() {
+        return Err(FrxLockstepOracleError::InvalidInput(
+            "run context trace_id must not be empty".to_string(),
+        ));
+    }
+    if context.decision_id.trim().is_empty() {
+        return Err(FrxLockstepOracleError::InvalidInput(
+            "run context decision_id must not be empty".to_string(),
+        ));
+    }
+    if context.policy_id.trim().is_empty() {
+        return Err(FrxLockstepOracleError::InvalidInput(
+            "run context policy_id must not be empty".to_string(),
+        ));
+    }
+
+    let filter = fixture_ref_filter
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let baseline_files = list_trace_files(baseline_traces_dir)?;
+    if baseline_files.is_empty() {
+        return Err(FrxLockstepOracleError::InvalidInput(format!(
+            "no .trace.json files found in `{}`",
+            baseline_traces_dir.display()
+        )));
+    }
+
+    let mut case_results = Vec::new();
+    for baseline_path in baseline_files {
+        let fixture_ref = fixture_ref_from_trace_filename(baseline_path.as_path())?;
+        if let Some(target_fixture_ref) = filter
+            && fixture_ref != target_fixture_ref
+        {
+            continue;
+        }
+
+        let baseline_trace = load_trace_file(baseline_path.as_path())?;
+        let franken_path = franken_traces_dir.join(baseline_path.file_name().ok_or_else(|| {
+            FrxLockstepOracleError::InvalidInput(format!(
+                "trace path `{}` missing filename",
+                baseline_path.display()
+            ))
+        })?);
+
+        if !franken_path.exists() {
+            case_results.push(missing_runtime_trace_result(
+                fixture_ref,
+                baseline_trace,
+                baseline_path,
+                franken_path,
+                runtime_name,
+            ));
+            continue;
+        }
+
+        let franken_trace = load_trace_file(franken_path.as_path())?;
+        let scenario_id = baseline_trace.scenario_id.clone();
+
+        // Create case input with runtime trace as baseline and franken trace as comparison
+        let case_input = FrxLockstepCaseInput {
+            fixture_ref,
+            scenario_id,
+            react_trace: baseline_trace, // Using baseline trace in the react_trace field
+            franken_trace,
+            react_trace_path: Some(baseline_path),
+            franken_trace_path: Some(franken_path),
+        };
+        let invalid_case_context = FrxInvalidCaseContext::from_input(&case_input);
+
+        match evaluate_case(case_input) {
+            Ok(result) => case_results.push(result),
+            Err(err) => {
+                case_results.push(invalid_case_result(invalid_case_context, err));
+            }
+        }
+    }
+
+    if case_results.is_empty() {
+        return Err(FrxLockstepOracleError::InvalidInput(
+            "fixture_ref filter excluded all traces".to_string(),
+        ));
+    }
+
+    let summary = summarize(&case_results);
+
+    Ok(FrxLockstepReport {
+        schema_version: FRX_LOCKSTEP_REPORT_SCHEMA_VERSION.to_string(),
+        generated_at_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
+        trace_id: context.trace_id,
+        decision_id: context.decision_id,
+        policy_id: context.policy_id,
+        component: FRX_LOCKSTEP_COMPONENT.to_string(),
+        react_traces_dir: baseline_traces_dir.display().to_string(),
+        franken_traces_dir: franken_traces_dir.display().to_string(),
+        summary,
+        case_results,
+    })
+}
+
+/// Create trace files in FrxObservableTrace format for runtime comparison benchmarks.
+///
+/// This function generates trace files suitable for lockstep oracle comparison from
+/// benchmark execution results. Each workload execution is captured as a trace with
+/// events for execution phases (start, console output, completion).
+pub fn create_runtime_benchmark_trace(
+    workload_id: &str,
+    runtime_name: &str,
+    execution_result: RuntimeBenchmarkResult,
+    output_path: &Path,
+) -> Result<(), FrxLockstepOracleError> {
+    let timestamp = Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
+    let trace_id = format!("trace-{runtime_name}-{workload_id}-{timestamp}");
+    let decision_id = format!("decision-{runtime_name}-{workload_id}-{timestamp}");
+
+    let mut events = Vec::new();
+    let mut seq = 1_u64;
+
+    // Execution start event
+    events.push(FrxTraceEvent {
+        seq,
+        phase: "execution".to_string(),
+        actor: runtime_name.to_string(),
+        event: "start".to_string(),
+        decision_path: format!("benchmark/{workload_id}"),
+        timing_us: 0, // Relative timing from execution start
+        outcome: "ok".to_string(),
+    });
+    seq += 1;
+
+    // Console output event (if present)
+    if !execution_result.stdout.trim().is_empty() {
+        events.push(FrxTraceEvent {
+            seq,
+            phase: "execution".to_string(),
+            actor: runtime_name.to_string(),
+            event: format!("console_output:{}", execution_result.stdout.trim()),
+            decision_path: format!("benchmark/{workload_id}"),
+            timing_us: execution_result.wall_time_ns / 1000, // Convert to microseconds
+            outcome: "ok".to_string(),
+        });
+        seq += 1;
+    }
+
+    // Execution completion event
+    let completion_outcome = if execution_result.exit_success {
+        "ok"
+    } else {
+        "error"
+    };
+    events.push(FrxTraceEvent {
+        seq,
+        phase: "execution".to_string(),
+        actor: runtime_name.to_string(),
+        event: "completion".to_string(),
+        decision_path: format!("benchmark/{workload_id}"),
+        timing_us: execution_result.wall_time_ns / 1000, // Convert to microseconds
+        outcome: completion_outcome.to_string(),
+    });
+
+    let trace = FrxObservableTrace {
+        schema_version: FRX_LOCKSTEP_TRACE_SCHEMA_VERSION.to_string(),
+        trace_id,
+        decision_id,
+        policy_id: format!("policy-runtime-comparison-{runtime_name}-v1"),
+        component: "runtime_comparison_benchmark".to_string(),
+        scenario_id: format!("benchmark-{workload_id}"),
+        fixture_ref: workload_id.to_string(),
+        seed: 42, // Fixed seed for deterministic comparison
+        events,
+        outcome: completion_outcome.to_string(),
+        error_code: if execution_result.exit_success {
+            None
+        } else {
+            Some(format!(
+                "exit_code_{}",
+                execution_result.exit_code.unwrap_or(-1)
+            ))
+        },
+    };
+
+    let json = serde_json::to_string_pretty(&trace).map_err(|err| {
+        FrxLockstepOracleError::InvalidInput(format!("failed to serialize trace: {err}"))
+    })?;
+
+    fs::write(output_path, json).map_err(|source| FrxLockstepOracleError::ReadFile {
+        path: output_path.display().to_string(),
+        source,
+    })?;
+
+    Ok(())
+}
+
+/// Runtime benchmark execution result for trace generation.
+#[derive(Debug, Clone)]
+pub struct RuntimeBenchmarkResult {
+    pub stdout: String,
+    pub stderr: String,
+    pub wall_time_ns: u64,
+    pub peak_rss_bytes: u64,
+    pub exit_success: bool,
+    pub exit_code: Option<i32>,
+}
+
+fn missing_runtime_trace_result(
+    fixture_ref: String,
+    baseline_trace: FrxObservableTrace,
+    baseline_path: PathBuf,
+    franken_path: PathBuf,
+    runtime_name: &str,
+) -> FrxLockstepCaseResult {
+    let replay_command = build_replay_run_command(
+        baseline_path.parent().unwrap_or_else(|| Path::new(".")),
+        franken_path.parent().unwrap_or_else(|| Path::new(".")),
+        fixture_ref.as_str(),
+    );
+    FrxLockstepCaseResult {
+        fixture_ref,
+        scenario_id: baseline_trace.scenario_id,
+        react_trace_id: baseline_trace.trace_id,
+        franken_trace_id: "missing".to_string(),
+        pass: false,
+        divergence: Some(FrxDivergenceDetail {
+            class: FrxDivergenceClass::SchemaViolation,
+            message: format!(
+                "missing FrankenEngine trace file `{}` for {runtime_name} baseline `{}`",
+                franken_path.display(),
+                baseline_path.display()
+            ),
+            event_index: None,
+            react_signature: None,
+            franken_signature: None,
+        }),
+        replay_command,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1914,5 +2200,154 @@ mod tests {
         let back: FrxTraceEventSignature =
             serde_json::from_str(&json).expect("serde deserialization should succeed");
         assert_eq!(sig, back);
+    }
+
+    // ====================================================================
+    // Runtime lockstep oracle tests (PearlTower bd-cixqu.9.1)
+    // ====================================================================
+
+    #[test]
+    fn runtime_benchmark_result_basic_construction() {
+        let result = RuntimeBenchmarkResult {
+            stdout: "Hello, World!".to_string(),
+            stderr: "".to_string(),
+            wall_time_ns: 1_000_000,
+            peak_rss_bytes: 4096,
+            exit_success: true,
+            exit_code: Some(0),
+        };
+
+        assert_eq!(result.stdout, "Hello, World!");
+        assert_eq!(result.wall_time_ns, 1_000_000);
+        assert!(result.exit_success);
+        assert_eq!(result.exit_code, Some(0));
+    }
+
+    #[test]
+    fn create_runtime_benchmark_trace_successful_execution() {
+        let result = RuntimeBenchmarkResult {
+            stdout: "42".to_string(),
+            stderr: "".to_string(),
+            wall_time_ns: 500_000,
+            peak_rss_bytes: 2048,
+            exit_success: true,
+            exit_code: Some(0),
+        };
+
+        let temp_dir = std::env::temp_dir().join("frx_runtime_trace_test");
+        let _ = fs::create_dir_all(&temp_dir);
+        let trace_path = temp_dir.join("test_workload.trace.json");
+
+        let create_result =
+            create_runtime_benchmark_trace("test_workload", "Node.js", result, &trace_path);
+
+        assert!(create_result.is_ok(), "trace creation should succeed");
+        assert!(trace_path.exists(), "trace file should be created");
+
+        // Verify the trace file can be loaded and has correct structure
+        let loaded_trace = load_trace_file(&trace_path).expect("should load created trace");
+        assert_eq!(loaded_trace.fixture_ref, "test_workload");
+        assert_eq!(loaded_trace.component, "runtime_comparison_benchmark");
+        assert_eq!(loaded_trace.outcome, "ok");
+        assert!(
+            loaded_trace.events.len() >= 2,
+            "should have start and completion events"
+        );
+
+        // Check that console output is captured as an event
+        let console_event = loaded_trace
+            .events
+            .iter()
+            .find(|e| e.event.starts_with("console_output:"));
+        assert!(console_event.is_some(), "should have console output event");
+        assert!(console_event.unwrap().event.contains("42"));
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn create_runtime_benchmark_trace_failed_execution() {
+        let result = RuntimeBenchmarkResult {
+            stdout: "".to_string(),
+            stderr: "Error: something went wrong".to_string(),
+            wall_time_ns: 100_000,
+            peak_rss_bytes: 1024,
+            exit_success: false,
+            exit_code: Some(1),
+        };
+
+        let temp_dir = std::env::temp_dir().join("frx_runtime_trace_test_fail");
+        let _ = fs::create_dir_all(&temp_dir);
+        let trace_path = temp_dir.join("failed_workload.trace.json");
+
+        let create_result =
+            create_runtime_benchmark_trace("failed_workload", "Bun", result, &trace_path);
+
+        assert!(
+            create_result.is_ok(),
+            "trace creation should succeed even for failed execution"
+        );
+
+        let loaded_trace = load_trace_file(&trace_path).expect("should load created trace");
+        assert_eq!(loaded_trace.outcome, "error");
+        assert!(loaded_trace.error_code.is_some(), "should have error code");
+        assert!(loaded_trace.error_code.unwrap().contains("exit_code_1"));
+
+        // Check completion event has error outcome
+        let completion_event = loaded_trace.events.iter().find(|e| e.event == "completion");
+        assert!(completion_event.is_some(), "should have completion event");
+        assert_eq!(completion_event.unwrap().outcome, "error");
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn run_node_lockstep_oracle_empty_directory() {
+        let temp_dir = std::env::temp_dir().join("frx_node_oracle_empty_test");
+        let node_dir = temp_dir.join("node_traces");
+        let franken_dir = temp_dir.join("franken_traces");
+
+        let _ = fs::create_dir_all(&node_dir);
+        let _ = fs::create_dir_all(&franken_dir);
+
+        let context =
+            FrxLockstepRunContext::deterministic("test-trace", "test-decision", "test-policy");
+
+        let result = run_node_lockstep_oracle(&node_dir, &franken_dir, context, None);
+        assert!(
+            result.is_err(),
+            "should fail with empty node traces directory"
+        );
+
+        let err = result.unwrap_err();
+        match err {
+            FrxLockstepOracleError::InvalidInput(msg) => {
+                assert!(msg.contains("no .trace.json files found"));
+            }
+            _ => panic!("expected InvalidInput error for empty directory"),
+        }
+
+        let _ = fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn run_bun_lockstep_oracle_empty_directory() {
+        let temp_dir = std::env::temp_dir().join("frx_bun_oracle_empty_test");
+        let bun_dir = temp_dir.join("bun_traces");
+        let franken_dir = temp_dir.join("franken_traces");
+
+        let _ = fs::create_dir_all(&bun_dir);
+        let _ = fs::create_dir_all(&franken_dir);
+
+        let context =
+            FrxLockstepRunContext::deterministic("test-trace", "test-decision", "test-policy");
+
+        let result = run_bun_lockstep_oracle(&bun_dir, &franken_dir, context, None);
+        assert!(
+            result.is_err(),
+            "should fail with empty bun traces directory"
+        );
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }

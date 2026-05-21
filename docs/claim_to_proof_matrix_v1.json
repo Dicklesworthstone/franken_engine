@@ -419,6 +419,26 @@
         "start_line": 828
       },
       "verification_command": "TBD: implement Policy Theorem Engine with formal theorem validation"
+    },
+    {
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-022",
+      "claim_id": "FE-CLAIM-022",
+      "claim_scope": "runtime",
+      "claim_text": "Cross-runtime lockstep oracle with differential Node/Bun harness and divergence classification.",
+      "decision": "allow_observed",
+      "downgrade_text": "Target: cross-runtime lockstep oracle with Node/Bun comparison; differential harness implementation in progress.",
+      "freshness_days": 7,
+      "owning_bead": "bd-cixqu.9",
+      "reason": "Complete lockstep oracle pipeline implemented (I.1-I.4) with Node/Bun runtime integration, divergence classification taxonomy, RGC gate script, replay wrapper, and operator documentation.",
+      "source_path": "README.md",
+      "source_span": {
+        "end_line": 1377,
+        "must_contain": "Cross-runtime lockstep oracle",
+        "start_line": 1377
+      },
+      "verification_command": "./scripts/run_rgc_lockstep_oracle_pipeline.sh ci"
     }
   ],
   "generated_by": "manual-ga-proof-audit",

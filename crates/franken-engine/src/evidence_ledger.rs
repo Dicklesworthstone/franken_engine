@@ -58,13 +58,23 @@ pub fn current_schema_version() -> SchemaVersion {
 const DEFAULT_EVIDENCE_PRODUCER_ID: &str = "franken-engine.evidence-ledger.builder";
 const DEFAULT_EVIDENCE_SIGNING_KEY_BYTES: [u8; 32] = [0x7B; 32];
 
+// Module-scope cache
+static DEFAULT_EVIDENCE_SIGNING_KEY: std::sync::LazyLock<SigningKey> =
+    std::sync::LazyLock::new(|| {
+        SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES)
+            .expect("default evidence signing key bytes are non-zero (const)")
+    });
+
+static DEFAULT_EVIDENCE_VERIFICATION_KEY: std::sync::LazyLock<VerificationKey> =
+    std::sync::LazyLock::new(|| DEFAULT_EVIDENCE_SIGNING_KEY.verification_key());
+
 fn default_evidence_signing_key() -> SigningKey {
-    SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES)
-        .expect("default evidence signing key is non-zero")
+    // Cheap byte-array copy of the cached SigningKey. No curve work.
+    DEFAULT_EVIDENCE_SIGNING_KEY.clone()
 }
 
 fn default_evidence_verification_key() -> VerificationKey {
-    default_evidence_signing_key().verification_key()
+    DEFAULT_EVIDENCE_VERIFICATION_KEY.clone()
 }
 
 // ---------------------------------------------------------------------------

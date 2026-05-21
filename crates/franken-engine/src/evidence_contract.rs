@@ -374,6 +374,9 @@ pub struct ReceiptRecord {
     /// Additional metadata for verification (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification_metadata: Option<VerificationMetadata>,
+    /// TEE attestation binding (optional, present when generated on TEE-capable worker).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tee_attestation_binding: Option<TeeAttestationBinding>,
 }
 
 /// Posterior distribution snapshot.
@@ -473,6 +476,38 @@ pub struct VerificationMetadata {
     pub trace_id: Option<String>,
 }
 
+/// TEE attestation binding for receipts generated on TEE-capable workers.
+///
+/// Contains cryptographic binding between the decision receipt and a live
+/// TEE attestation quote, proving the decision was made within a trusted
+/// execution environment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TeeAttestationBinding {
+    /// Hash digest of the TEE quote used for attestation.
+    pub quote_digest: String,
+    /// Platform-specific measurement identifier that was attested.
+    pub measurement_id: String,
+    /// Key ID of the signer that was attested within the TEE.
+    pub attested_signer_key_id: String,
+    /// Cryptographic nonce to prevent replay attacks.
+    pub nonce: String,
+    /// Validity time window for this attestation (ISO8601).
+    pub validity_window: AttestationValidityWindow,
+    /// TEE platform that generated this attestation.
+    pub tee_platform: String,
+    /// Attestation quote algorithm used.
+    pub quote_algorithm: String,
+}
+
+/// Time validity window for TEE attestation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AttestationValidityWindow {
+    /// Start of validity period (ISO8601 timestamp).
+    pub valid_from: String,
+    /// End of validity period (ISO8601 timestamp).
+    pub valid_until: String,
+}
+
 impl ReceiptRecord {
     /// Create a new receipt record with the current schema version.
     #[allow(clippy::too_many_arguments)]
@@ -501,12 +536,19 @@ impl ReceiptRecord {
                 .as_millis() as u64,
             signature_bundle,
             verification_metadata: None,
+            tee_attestation_binding: None,
         }
     }
 
     /// Set verification metadata.
     pub fn with_verification_metadata(mut self, metadata: VerificationMetadata) -> Self {
         self.verification_metadata = Some(metadata);
+        self
+    }
+
+    /// Set TEE attestation binding (for TEE-capable workers).
+    pub fn with_tee_attestation_binding(mut self, binding: TeeAttestationBinding) -> Self {
+        self.tee_attestation_binding = Some(binding);
         self
     }
 

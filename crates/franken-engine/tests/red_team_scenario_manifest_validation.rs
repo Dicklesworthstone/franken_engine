@@ -9,12 +9,22 @@ const SCENARIO_DIR: &str = "tests/red_team_scenarios";
 const SCHEMA_VERSION: &str = "franken-engine.red-team-scenario.v1";
 const BASELINE_VERSION: &str = "node-bun-frankenengine-red-team-v1";
 const EXPECTED_SCENARIOS: &[&str] = &[
+    "ambient_authority_via_globalthis",
     "capability_shadowed_import",
+    "computed_member_capability_evasion",
+    "declassification_without_receipt",
+    "dynamic_import_capability_evasion",
     "environment_variable_exfiltration",
+    "eval_capability_evasion",
+    "function_constructor_evasion",
     "process_privilege_surface_probe",
     "prototype_pollution_capability_escape",
+    "proxy_trap_authority_smuggling",
+    "reflect_apply_authority_smuggling",
     "shell_command_injection_package_script",
     "supply_chain_backdoor_execution",
+    "typed_effect_laundering_downcast",
+    "with_block_scope_smuggling",
 ];
 
 fn scenario_dir() -> PathBuf {

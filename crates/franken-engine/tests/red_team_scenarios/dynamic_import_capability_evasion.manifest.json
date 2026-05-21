@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "dynamic_import_capability_evasion",
+  "title": "Dynamic import() with runtime-assembled specifier bypassing static capability scan",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "dynamic_import_capability_evasion",
+  "cwe": ["CWE-829", "CWE-94"],
+  "payload": {
+    "program": "dynamic_import_capability_evasion.js",
+    "entrypoint": "node dynamic_import_capability_evasion.js",
+    "input": "specifier = ['f','s'].join('') passed to await import(specifier)",
+    "success_criteria": "fs module loads via dynamic import and exposes readFileSync"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "dynamic import resolves the constructed specifier to fs and the read succeeds"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "dynamic import resolves the constructed specifier to fs and the read succeeds"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering refuses any import() whose specifier is not a compile-time literal AND not declared in the module's capability manifest, producing LoweringPipelineError::UnsupportedSyntax",
+      "denial_reason": "dynamic_import_nonliteral_specifier_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the dynamic import call site at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/dynamic_import_capability_evasion.js"
+  ]
+}

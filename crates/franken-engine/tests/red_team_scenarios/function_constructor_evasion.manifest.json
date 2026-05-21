@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "function_constructor_evasion",
+  "title": "new Function(body) reaches ambient process binding via runtime compilation",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "function_constructor_evasion",
+  "cwe": ["CWE-95", "CWE-94"],
+  "payload": {
+    "program": "function_constructor_evasion.js",
+    "entrypoint": "node function_constructor_evasion.js",
+    "input": "new Function('return process')() then read .env.PATH from the returned ambient binding",
+    "success_criteria": "the runtime-compiled function body returns the ambient process object and PATH is leaked"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "Function constructor compiles 'return process' and PATH is read from ambient process.env"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "Function constructor compiles 'return process' and PATH is read from ambient process.env"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering treats new Function(body) as equivalent to eval and refuses unless the calling scope holds runtime.eval, producing LoweringPipelineError::UnsupportedSyntax",
+      "denial_reason": "function_constructor_without_runtime_eval_capability_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the Function constructor call site at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/function_constructor_evasion.js"
+  ]
+}

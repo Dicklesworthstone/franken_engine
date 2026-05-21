@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "typed_effect_laundering_downcast",
+  "title": "Typed-effect laundering by passing effect-carrying value to less-privileged callee",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "typed_effect_laundering_downcast",
+  "cwe": ["CWE-269", "CWE-732"],
+  "payload": {
+    "program": "typed_effect_laundering_downcast.js",
+    "entrypoint": "node typed_effect_laundering_downcast.js",
+    "input": "fs.readFileSync passed as an argument to a downcast sink that invokes it on /etc/passwd",
+    "success_criteria": "downcast sink invokes the effect-carrying argument and returns the file contents"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "downcast sink invokes the laundered fs.readFileSync and returns /etc/passwd contents"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "downcast sink invokes the laundered fs.readFileSync and returns /etc/passwd contents"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering refuses the call: the argument's effect set is wider than the callee's declared required capabilities, producing LoweringPipelineError::UnauthorizedFlow",
+      "denial_reason": "typed_effect_laundering_argument_widens_callee_effect_set"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the call site (LoweringPipelineError::UnauthorizedFlow) and the downcast sink is never invoked"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/typed_effect_laundering_downcast.js"
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "reflect_apply_authority_smuggling",
+  "title": "Reflect.apply meta-call hides the underlying authority target from call-site scan",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "reflect_apply_authority_smuggling",
+  "cwe": ["CWE-470", "CWE-749"],
+  "payload": {
+    "program": "reflect_apply_authority_smuggling.js",
+    "entrypoint": "node reflect_apply_authority_smuggling.js",
+    "input": "Reflect.apply(execSync, null, ['printf reflected-canary'])",
+    "success_criteria": "execSync runs via Reflect.apply and emits the canary"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "execSync executes through Reflect.apply and the canary returns"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "execSync executes through Reflect.apply and the canary returns"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering treats Reflect.apply / Reflect.construct / Function.prototype.apply etc. as opaque call sites, propagates the target's effect set to the calling scope, and refuses the call when the scope does not declare the capability — LoweringPipelineError::UnauthorizedFlow",
+      "denial_reason": "reflect_meta_call_propagates_target_effect_set_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the Reflect.apply call site at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/reflect_apply_authority_smuggling.js"
+  ]
+}

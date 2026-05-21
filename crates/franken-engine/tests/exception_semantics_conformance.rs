@@ -605,7 +605,6 @@ fn conformance_source_continue_from_try_finally_executes_finally_each_iteration(
 }
 
 #[test]
-#[ignore = "blocked on real function/closure lowering: arrow functions lower inline and do not materialize callable closure values yet"]
 fn conformance_source_catch_binding_can_be_captured_by_closure_after_unwinding() {
     let source = r#"
         let reader = null;
@@ -638,6 +637,73 @@ fn conformance_source_catch_binding_can_be_captured_by_closure_after_unwinding()
     );
 
     assert_eq!(eval_source(source), "7");
+}
+
+#[test]
+fn conformance_source_catch_binding_inside_finally_must_not_escape_unwinder() {
+    // Edge case: catch-binding inside finally MUST NOT escape the unwinder.
+    // Pattern: try { throw e } catch (e) { } finally { try { } catch (e2) { /* uses outer e? must not */ } }
+    // This tests that the binding scope is correctly bounded; closures created in finally don't accidentally pick up the catch binding.
+    let source = r#"
+        let outer_e_accessed = false;
+        let inner_e_value = null;
+
+        try {
+            throw "outer_error";
+        } catch (e) {
+            // e is bound to "outer_error" here
+        } finally {
+            try {
+                throw "inner_error";
+            } catch (e2) {
+                // e2 is bound to "inner_error" here
+                inner_e_value = e2;
+
+                // This closure should NOT be able to access the outer catch binding 'e'
+                // The outer 'e' should not be in scope inside this finally block
+                let test_closure = () => {
+                    try {
+                        // This should fail - outer 'e' should not be accessible
+                        return e; // ReferenceError: e is not defined
+                    } catch (ref_err) {
+                        return "reference_error"; // Expected: catch binding isolated
+                    }
+                };
+                outer_e_accessed = (test_closure() !== "reference_error");
+            }
+        }
+
+        // Verify: inner catch worked, outer catch binding was isolated
+        inner_e_value + ":" + (!outer_e_accessed ? "isolated" : "leaked");
+    "#;
+
+    // Lower and verify IR3 has proper scope isolation
+    let ir3 = lower_source_to_ir3(source);
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::BeginTry { .. })),
+        "nested try source must lower to BeginTry"
+    );
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::EnterFinally)),
+        "finally block source must lower to EnterFinally"
+    );
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. })),
+        "nested catch source must lower to EnterCatch"
+    );
+
+    // Execute and verify catch binding isolation
+    let result = eval_source(source);
+    assert_eq!(
+        result, "inner_error:isolated",
+        "Catch binding inside finally must be isolated from outer catch binding"
+    );
 }
 
 // ---------------------------------------------------------------------------

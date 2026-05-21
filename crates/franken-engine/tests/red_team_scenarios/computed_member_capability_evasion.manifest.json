@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "computed_member_capability_evasion",
+  "title": "Computed-member access on process bypasses dot-notation capability scan",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "computed_member_capability_evasion",
+  "cwe": ["CWE-470", "CWE-749"],
+  "payload": {
+    "program": "computed_member_capability_evasion.js",
+    "entrypoint": "node computed_member_capability_evasion.js",
+    "input": "process['exit'](0) via const computedKey = 'exit'; ambient[computedKey](0)",
+    "success_criteria": "process.exit reached via computed-member access; process terminates"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "process exits with status 0 via the computed-member invocation"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "process exits with status 0 via the computed-member invocation"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering classifies the receiver as ambient regardless of dot- vs bracket-notation key and refuses the call with LoweringPipelineError::UnauthorizedFlow",
+      "denial_reason": "computed_member_on_ambient_receiver_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the computed-member call at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/computed_member_capability_evasion.js"
+  ]
+}

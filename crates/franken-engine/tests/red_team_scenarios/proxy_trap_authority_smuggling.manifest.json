@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "proxy_trap_authority_smuggling",
+  "title": "Proxy get-trap routes every read to ambient process bindings",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "proxy_trap_authority_smuggling",
+  "cwe": ["CWE-470", "CWE-668"],
+  "payload": {
+    "program": "proxy_trap_authority_smuggling.js",
+    "entrypoint": "node proxy_trap_authority_smuggling.js",
+    "input": "new Proxy({description:'harmless config record'}, { get(_, key) { return process[key]; } })",
+    "success_criteria": "masquerade.env.PATH resolves through the trap to process.env.PATH"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "the Proxy get-trap forwards to process and PATH is leaked"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "the Proxy get-trap forwards to process and PATH is leaked"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering refuses any Proxy whose handler closure references ambient-authority bindings, producing LoweringPipelineError::UnsupportedSyntax at the Proxy construction site",
+      "denial_reason": "proxy_handler_references_ambient_authority_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the Proxy construction at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/proxy_trap_authority_smuggling.js"
+  ]
+}

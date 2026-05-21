@@ -179,8 +179,8 @@ fn run_node_with_measurement(node: &Path, path: &Path) -> std::io::Result<NodeMe
 
     if !wait_for_pidfd(&pidfd, timeout)? {
         let status = force_terminate_child(&mut child)?;
-        let stdout = read_child_stdout(child.stdout.take())?;
-        let stderr = read_child_stderr(child.stderr.take())?;
+        let _stdout = read_child_stdout(child.stdout.take())?;
+        let _stderr = read_child_stderr(child.stderr.take())?;
         return Err(std::io::Error::other(format!(
             "Node timed out after 30s, exit_code={:?}",
             status.code()

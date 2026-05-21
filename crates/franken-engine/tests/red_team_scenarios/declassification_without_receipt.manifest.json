@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "declassification_without_receipt",
+  "title": "Cross-clearance downgrade emitted without a signed declassification receipt",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "declassification_without_receipt",
+  "cwe": ["CWE-200", "CWE-359"],
+  "payload": {
+    "program": "declassification_without_receipt.js",
+    "entrypoint": "node declassification_without_receipt.js",
+    "input": "high-clearance string value (secret://hsm/rotated-key#7) emitted to stdout via an unsupervised downgrade helper",
+    "success_criteria": "the high-clearance value reaches a low-clearance sink with no declassification record"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "stdout receives the secret token; no declassification audit anywhere in the chain"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "stdout receives the secret token; no declassification audit anywhere in the chain"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "IFC lattice rejects the cross-clearance flow with no declassification witness, producing LoweringPipelineError::UnauthorizedFlow naming source=Confidential and sink=Public",
+      "denial_reason": "declassification_without_signed_receipt_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the emit site (LoweringPipelineError::UnauthorizedFlow) until a signed declassification record covers the downgrade"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/declassification_without_receipt.js"
+  ]
+}

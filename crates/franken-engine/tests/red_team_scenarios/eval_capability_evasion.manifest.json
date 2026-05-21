@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "eval_capability_evasion",
+  "title": "eval() of attacker-supplied source reaches capability surfaces hidden from static scan",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "eval_capability_evasion",
+  "cwe": ["CWE-95", "CWE-94"],
+  "payload": {
+    "program": "eval_capability_evasion.js",
+    "entrypoint": "node eval_capability_evasion.js",
+    "input": "eval(\"require('fs').readFileSync('/etc/hostname','utf8')\")",
+    "success_criteria": "eval reaches require('fs') and the read returns the hostname"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "eval string is parsed and the hostname is leaked to stdout"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "eval string is parsed and the hostname is leaked to stdout"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering refuses the eval call: program scope does not hold the runtime.eval capability, and the LoweringPipelineError::UnsupportedSyntax diagnostic names the eval site",
+      "denial_reason": "eval_without_runtime_eval_capability_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the eval call site at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/eval_capability_evasion.js"
+  ]
+}

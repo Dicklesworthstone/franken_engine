@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "with_block_scope_smuggling",
+  "title": "with-block opens scope chain over process making exit() a free identifier",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "with_block_scope_smuggling",
+  "cwe": ["CWE-470", "CWE-732"],
+  "payload": {
+    "program": "with_block_scope_smuggling.js",
+    "entrypoint": "node with_block_scope_smuggling.js",
+    "input": "with (process) { exit(0) } executed in non-strict mode",
+    "success_criteria": "exit resolves on the with-scope and the process terminates"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "non-strict with-block resolves exit on process and the process exits"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "non-strict with-block resolves exit on process and the process exits"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering refuses with unconditionally (strict ES2020 plus the with-scope-chain capability-evasion concern), producing LoweringPipelineError::UnsupportedSyntax",
+      "denial_reason": "with_statement_unconditionally_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the with-statement at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/with_block_scope_smuggling.js"
+  ]
+}

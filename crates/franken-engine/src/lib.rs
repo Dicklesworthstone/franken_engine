@@ -497,6 +497,7 @@ pub mod trace_fusion_superinstruction;
 pub mod transfer_governance_gate;
 pub mod translation_validation;
 pub mod translation_validation_receipt;
+pub mod transparency_log;
 pub mod transport_certificate_ledger;
 pub mod tropical_semiring;
 pub mod trust_card;

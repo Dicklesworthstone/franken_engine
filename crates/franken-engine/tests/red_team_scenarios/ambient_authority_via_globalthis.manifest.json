@@ -1,0 +1,36 @@
+{
+  "schema_version": "franken-engine.red-team-scenario.v1",
+  "name": "ambient_authority_via_globalthis",
+  "title": "Ambient authority reached via globalThis.process bypassing free-identifier scans",
+  "baseline_version": "node-bun-frankenengine-red-team-v1",
+  "attack_vector": "ambient_authority_via_globalthis",
+  "cwe": ["CWE-732", "CWE-749"],
+  "payload": {
+    "program": "ambient_authority_via_globalthis.js",
+    "entrypoint": "node ambient_authority_via_globalthis.js",
+    "input": "globalThis.process.env.PATH",
+    "success_criteria": "PATH is read off the ambient process object via globalThis"
+  },
+  "expected_outcome": {
+    "node": {
+      "outcome": "succeeds",
+      "observable": "globalThis.process resolves to the ambient binding and PATH is leaked"
+    },
+    "bun": {
+      "outcome": "succeeds",
+      "observable": "globalThis.process resolves to the ambient binding and PATH is leaked"
+    },
+    "frankenengine": {
+      "outcome": "fail_closed",
+      "observable": "capability-typed lowering recognises globalThis member access whose resolved binding is an ambient-authority surface and refuses the read with LoweringPipelineError::UnauthorizedFlow",
+      "denial_reason": "globalthis_ambient_member_access_rejected"
+    }
+  },
+  "measurement": {
+    "success_signal": "attack_succeeded == true",
+    "failure_signal": "lowering refuses the globalThis.process member access at compile time"
+  },
+  "reproduction": [
+    "node crates/franken-engine/tests/red_team_scenarios/ambient_authority_via_globalthis.js"
+  ]
+}

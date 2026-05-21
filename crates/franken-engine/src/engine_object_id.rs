@@ -14,6 +14,7 @@
 use std::fmt;
 
 use franken_engine_deterministic_trait::Deterministic;
+use franken_engine_deterministic_derive::Deterministic;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------

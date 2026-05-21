@@ -6,10 +6,10 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::Output;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use std::os::unix::process::ExitStatusExt;
 
 use chrono::Utc;
 

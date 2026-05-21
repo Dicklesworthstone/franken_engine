@@ -902,7 +902,7 @@ write_matrix_summary() {
 
   jq -n \
     --arg schema_version "franken-engine.rgc-cross-platform-matrix.summary.v1" \
-    --arg bead_id "bd-1lsy.11.13" \
+    --arg bead_id "bd-cixqu.11.4" \
     --arg policy_id "$policy_id" \
     --arg component "$component" \
     --arg generated_at_utc "$timestamp" \
@@ -1023,7 +1023,7 @@ write_manifest() {
   {
     echo '{'
     echo '  "schema_version": "franken-engine.rgc-cross-platform-matrix.run-manifest.v1",'
-    echo '  "bead_id": "bd-1lsy.11.13",'
+    echo '  "bead_id": "bd-cixqu.11.4",'
     echo "  \"component\": \"${component}\","
     echo "  \"scenario_id\": \"${scenario_id}\","
     echo "  \"mode\": \"${mode}\","

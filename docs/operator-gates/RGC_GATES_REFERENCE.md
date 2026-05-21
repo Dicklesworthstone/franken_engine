@@ -2471,4 +2471,141 @@ artifact dir).
   current scripts are bash-side helpers; the Rust verifier integration
   lands separately.
 
+## Production Feature Catalog
+
+(Added by `bd-cixqu.6.7` — operator surface for the F.5 unified
+production-feature catalog gate.)
+
+### Schema overview
+
+`docs/production_feature_catalog_v1.json` declares N (today: 3) named
+production features. Each entry pairs a **canonical feature id** (e.g.
+`signed_ifc_declassification_receipts`) with the source `FE-CLAIM-N`
+row in `docs/claim_to_proof_matrix_v1.json` and the bundle requirements
+the operator must satisfy before the feature can be claimed OBSERVED.
+
+The on-disk sub-bundles live under
+`artifacts/production_feature_catalog/<short-name>/<timestamp>/` and
+each ship a `feature_catalog_manifest.json` conforming to
+`franken-engine.production-feature-catalog-bundle.v1`. The short
+bundle-dir names are different from the canonical feature ids:
+
+| Canonical feature id                    | Bundle dir                                              | Source claim |
+|---|---|---|
+| `signed_ifc_declassification_receipts`  | `signed_ifc_declassification/`                          | FE-CLAIM-015 |
+| `deterministic_replay_coverage`         | `deterministic_replay/`                                 | FE-CLAIM-013 |
+| `red_team_compromise_rate_reduction`    | `red_team_compromise_rate/`                             | FE-CLAIM-011 |
+
+The unified F.5 gate
+(`scripts/run_rgc_production_feature_catalog.sh`) auto-detects the
+latest sub-bundle per feature, validates each against the
+sub-bundle schema, and emits
+`production_feature_catalog_manifest.json` with **per-feature sha256
+manifest hashes**. The matrix row `FE-CLAIM-014` is OBSERVED when all
+three sub-bundles pass.
+
+### When to refresh
+
+Refresh a feature's bundle when:
+- The underlying `FE-CLAIM-N` evidence has changed (e.g. a new
+  reproducibility bundle landed under
+  `artifacts/reproducibility_bundles/FE-CLAIM-N/`).
+- The audit script flags a feature as `stale` (manifest mtime older
+  than `FEATURE_CATALOG_STALE_THRESHOLD_DAYS`, default 30).
+- The F.5 unified gate's verdict drops to `degraded` or `fail`.
+
+### How to interpret a stale-bundle warning
+
+`runbooks/scripts/audit_feature_catalog.sh` reports `freshness_status
+= stale` when a sub-bundle's `feature_catalog_manifest.json` mtime is
+older than the threshold. Stale is currently warning-only — the F.5
+gate continues to admit the feature, but downstream
+`FE-CLAIM-014`-derived claims should be treated as **provisional**
+until the bundle is refreshed.
+
+### How to remediate
+
+```
+# 1. Audit per-feature freshness:
+runbooks/scripts/audit_feature_catalog.sh
+
+# 2. Refresh a single feature (or ALL):
+runbooks/scripts/refresh_feature_bundle.sh signed_ifc_declassification_receipts
+runbooks/scripts/refresh_feature_bundle.sh ALL
+
+# 3. Re-audit to confirm:
+runbooks/scripts/audit_feature_catalog.sh
+```
+
+The refresh script regenerates the sub-bundle's
+`feature_catalog_manifest.json` carrying forward the prior
+`evidence_bundle_references` and `verification_commands` so the lift
+from `FE-CLAIM-N` stays stable. It also re-runs the F.5 unified gate
+at the end to confirm coverage. Idempotent: running it twice in
+succession produces two timestamped sub-bundle dirs without
+corrupting prior state.
+
+### How to add a 4th or 5th named feature
+
+1. Add a new entry to `docs/production_feature_catalog_v1.json`'s
+   `features[]` array. Mandatory fields: `feature_id` (canonical,
+   snake_case with descriptive suffix), `source_claim` (the parent
+   `FE-CLAIM-N`), `operator_description`,
+   `required_bundle_contents[]`, `impossible_in_node_bun`,
+   `artifact_root`.
+2. Bump `docs/production_feature_catalog_v1.json`'s
+   `minimum_feature_count` if the policy requires the new feature
+   to count toward the OBSERVED threshold.
+3. Add the canonical id to the `FEATURE_IDS=(...)` array in
+   `scripts/run_rgc_production_feature_catalog.sh` and add the
+   canonical→bundle-dir translation case to:
+   - `canonical_id_to_bundle_dirname()` in
+     `runbooks/scripts/audit_feature_catalog.sh`.
+   - `canonical_to_bundle_dirname()` in
+     `runbooks/scripts/refresh_feature_bundle.sh`.
+4. Ship the sub-bundle's first instance under
+   `artifacts/production_feature_catalog/<new-short-name>/<ts>/`.
+5. Re-run the F.5 gate to confirm.
+
+### What "lift from FE-CLAIM-N" means
+
+Each F.x sub-bundle (`F.2 → FE-CLAIM-015`, `F.3 → FE-CLAIM-013`,
+`F.4 → FE-CLAIM-011`) packages the *existing* evidence of an
+already-OBSERVED matrix row into the
+`franken-engine.production-feature-catalog-bundle.v1` shape. The
+catalog does NOT regenerate the underlying evidence; it packages it
+so a downstream consumer (e.g. the GA-exit evidence pack) can
+present a self-contained "three named features" artifact without
+chasing the source `FE-CLAIM-N` bundle paths separately.
+
+### Selftest
+
+`scripts/e2e/feature_catalog_runbook_smoke.sh run` (8 PASS in `run`
+mode) covers:
+1. Shell syntax + shellcheck clean.
+2. Audit selftest exits 0.
+3. Audit json mode schema-valid + 3 features.
+4. Audit run produces structured summary.
+5. Refresh `--list` shows three canonical feature ids.
+6. Refresh single-feature exits 0 and re-runs F.5 ci=pass.
+7. Refresh ALL exits 0 and re-runs F.5 ci=pass.
+8. Audit picks up refreshed bundles as `present` + within freshness
+   threshold.
+
+### Artifacts
+
+- `runbooks/scripts/audit_feature_catalog.sh` emits to
+  `artifacts/feature_catalog_audit/<timestamp>/` (JSON report +
+  markdown summary).
+- `runbooks/scripts/refresh_feature_bundle.sh` writes directly under
+  `artifacts/production_feature_catalog/<short-name>/<new-ts>/`.
+
+### Out of scope (tracked for follow-up)
+
+- FrankenTUI panel surfacing per-feature freshness with one-click
+  refresh — requires the `frankentui` integration which is not in
+  this bead's scope.
+- Hard rejection on stale bundles (currently warning-only).
+- 4th and 5th named features beyond the F.1-declared three.
+
 ## Limitations

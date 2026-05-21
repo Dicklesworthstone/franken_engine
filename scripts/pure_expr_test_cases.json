@@ -1,0 +1,4019 @@
+{
+  "metadata": {
+    "description": "Pure expression test cases for translation validation pilot",
+    "version": "1.0.0",
+    "generator": "generate_pure_expr_test_cases.py",
+    "total_cases": 116,
+    "generated_for": "bd-cixqu.7.6"
+  },
+  "test_cases": [
+    {
+      "name": "arithmetic_add_basic",
+      "description": "Basic + operation",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Add",
+        "left": {
+          "type": "number",
+          "value": 42
+        },
+        "right": {
+          "type": "number",
+          "value": 7
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "arithmetic_subtract_basic",
+      "description": "Basic - operation",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Subtract",
+        "left": {
+          "type": "number",
+          "value": 42
+        },
+        "right": {
+          "type": "number",
+          "value": 7
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "arithmetic_multiply_basic",
+      "description": "Basic * operation",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Multiply",
+        "left": {
+          "type": "number",
+          "value": 42
+        },
+        "right": {
+          "type": "number",
+          "value": 7
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "arithmetic_divide_basic",
+      "description": "Basic / operation",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Divide",
+        "left": {
+          "type": "number",
+          "value": 42
+        },
+        "right": {
+          "type": "number",
+          "value": 7
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "arithmetic_remainder_basic",
+      "description": "Basic % operation",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Remainder",
+        "left": {
+          "type": "number",
+          "value": 42
+        },
+        "right": {
+          "type": "number",
+          "value": 7
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "logical_logicaland_truthy",
+      "description": "Logical && with truthy values",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LogicalAnd",
+        "left": {
+          "type": "boolean",
+          "value": true
+        },
+        "right": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "logical_logicalor_truthy",
+      "description": "Logical || with truthy values",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LogicalOr",
+        "left": {
+          "type": "boolean",
+          "value": true
+        },
+        "right": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "comparison_equal_mixed",
+      "description": "Comparison == with mixed types",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Equal",
+        "left": {
+          "type": "string",
+          "value": "42"
+        },
+        "right": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "comparison_strictequal_mixed",
+      "description": "Comparison === with mixed types",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "StrictEqual",
+        "left": {
+          "type": "string",
+          "value": "42"
+        },
+        "right": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "comparison_lessthan_mixed",
+      "description": "Comparison < with mixed types",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LessThan",
+        "left": {
+          "type": "string",
+          "value": "42"
+        },
+        "right": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "comparison_greaterthan_mixed",
+      "description": "Comparison > with mixed types",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "GreaterThan",
+        "left": {
+          "type": "string",
+          "value": "42"
+        },
+        "right": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "unary_negate_basic",
+      "description": "Unary - operation",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "Negate",
+        "operand": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "unary_logicalnot_basic",
+      "description": "Unary ! operation",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "LogicalNot",
+        "operand": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "unary_typeof_basic",
+      "description": "Unary typeof operation",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "Typeof",
+        "operand": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "string",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "unary_void_basic",
+      "description": "Unary void operation",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "Void",
+        "operand": {
+          "type": "number",
+          "value": 42
+        }
+      },
+      "expected_type": "undefined",
+      "test_environments": [
+        {}
+      ]
+    },
+    {
+      "name": "nested_arithmetic_complex",
+      "description": "Complex nested arithmetic: (a + b) * (c - d)",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Multiply",
+        "left": {
+          "type": "binary",
+          "operator": "Add",
+          "left": {
+            "type": "identifier",
+            "name": "a"
+          },
+          "right": {
+            "type": "identifier",
+            "name": "b"
+          }
+        },
+        "right": {
+          "type": "binary",
+          "operator": "Subtract",
+          "left": {
+            "type": "identifier",
+            "name": "c"
+          },
+          "right": {
+            "type": "identifier",
+            "name": "d"
+          }
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "a": 10,
+          "b": 5,
+          "c": 20,
+          "d": 8
+        },
+        {
+          "a": 0,
+          "b": 0,
+          "c": 1,
+          "d": 1
+        },
+        {
+          "a": -5,
+          "b": 15,
+          "c": -10,
+          "d": -5
+        }
+      ]
+    },
+    {
+      "name": "random_case_0001",
+      "description": "Randomly generated pure expression #1",
+      "ir0_expression": {
+        "type": "string",
+        "value": "true"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": -1000000.0,
+          "y": null,
+          "z": -1000000.0,
+          "b": "undefined",
+          "result": null,
+          "temp": -1
+        },
+        {
+          "x": true,
+          "z": 3.14,
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0002",
+      "description": "Randomly generated pure expression #2",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LeftShift",
+        "left": {
+          "type": "binary",
+          "operator": "BitwiseOr",
+          "left": {
+            "type": "number",
+            "value": Infinity
+          },
+          "right": {
+            "type": "identifier",
+            "name": "y"
+          }
+        },
+        "right": {
+          "type": "identifier",
+          "name": "y"
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": "42",
+          "y": false,
+          "b": true,
+          "result": null,
+          "temp": "undefined",
+          "value": ""
+        },
+        {
+          "x": -3.14,
+          "y": false,
+          "z": null,
+          "a": null,
+          "b": true,
+          "temp": "undefined",
+          "value": "undefined"
+        },
+        {
+          "x": true,
+          "y": 1,
+          "z": false,
+          "a": null,
+          "b": null,
+          "result": "undefined",
+          "value": -1000000.0
+        },
+        {
+          "z": "undefined",
+          "a": -42,
+          "temp": -42
+        }
+      ]
+    },
+    {
+      "name": "random_case_0003",
+      "description": "Randomly generated pure expression #3",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "result"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "z": null,
+          "a": "false",
+          "b": true,
+          "result": null
+        },
+        {
+          "x": true,
+          "a": "undefined",
+          "result": true,
+          "value": " "
+        }
+      ]
+    },
+    {
+      "name": "random_case_0004",
+      "description": "Randomly generated pure expression #4",
+      "ir0_expression": {
+        "type": "boolean",
+        "value": true
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "z": 0,
+          "a": 1,
+          "b": " ",
+          "result": false,
+          "temp": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0005",
+      "description": "Randomly generated pure expression #5",
+      "ir0_expression": {
+        "type": "number",
+        "value": 3.14
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": -Infinity,
+          "y": null,
+          "b": true,
+          "result": false,
+          "temp": null,
+          "value": -1000000.0
+        },
+        {
+          "x": "undefined",
+          "result": null,
+          "temp": null
+        },
+        {
+          "x": -42,
+          "a": "undefined",
+          "result": false,
+          "temp": -1000000.0,
+          "value": ""
+        },
+        {
+          "x": null,
+          "y": "undefined",
+          "z": "undefined",
+          "a": true,
+          "b": false,
+          "result": "undefined",
+          "temp": "undefined",
+          "value": Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0006",
+      "description": "Randomly generated pure expression #6",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Equal",
+        "left": {
+          "type": "binary",
+          "operator": "NotEqual",
+          "left": {
+            "type": "string",
+            "value": " "
+          },
+          "right": {
+            "type": "identifier",
+            "name": "y"
+          }
+        },
+        "right": {
+          "type": "null",
+          "value": null
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "z": false,
+          "a": "hello",
+          "result": false
+        },
+        {
+          "a": "undefined",
+          "b": -1,
+          "result": -1,
+          "temp": "undefined",
+          "value": "true"
+        },
+        {
+          "z": "",
+          "a": null,
+          "result": "42",
+          "value": null
+        },
+        {
+          "x": null,
+          "y": Infinity,
+          "z": "\n",
+          "a": true,
+          "b": 42,
+          "value": "undefined"
+        },
+        {
+          "y": "undefined",
+          "b": true,
+          "temp": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0007",
+      "description": "Randomly generated pure expression #7",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Exponentiate",
+        "left": {
+          "type": "null",
+          "value": null
+        },
+        "right": {
+          "type": "null",
+          "value": null
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": null,
+          "y": true,
+          "z": false,
+          "a": -42,
+          "b": "undefined",
+          "result": "undefined",
+          "temp": -42,
+          "value": ""
+        },
+        {
+          "x": null,
+          "y": "undefined",
+          "a": null,
+          "result": 0,
+          "temp": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0008",
+      "description": "Randomly generated pure expression #8",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "GreaterThanOrEqual",
+        "left": {
+          "type": "identifier",
+          "name": "result"
+        },
+        "right": {
+          "type": "string",
+          "value": "\n"
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "y": "\n",
+          "z": null,
+          "b": false,
+          "result": 42,
+          "temp": "undefined"
+        },
+        {
+          "x": null,
+          "y": false,
+          "temp": "undefined",
+          "value": false
+        },
+        {
+          "x": true,
+          "y": false,
+          "b": "undefined",
+          "result": null,
+          "temp": true
+        }
+      ]
+    },
+    {
+      "name": "random_case_0009",
+      "description": "Randomly generated pure expression #9",
+      "ir0_expression": {
+        "type": "null",
+        "value": null
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "z": 1000000.0,
+          "result": null
+        },
+        {
+          "x": "undefined",
+          "y": false,
+          "z": false,
+          "b": false,
+          "result": "true",
+          "temp": "\n",
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "random_case_0010",
+      "description": "Randomly generated pure expression #10",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "a"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "\n",
+          "y": -3.14,
+          "z": "undefined",
+          "b": "undefined",
+          "result": -42
+        }
+      ]
+    },
+    {
+      "name": "random_case_0011",
+      "description": "Randomly generated pure expression #11",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "value"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": null,
+          "y": "undefined",
+          "temp": null,
+          "value": -Infinity
+        },
+        {
+          "x": null,
+          "y": "undefined",
+          "z": null,
+          "a": null,
+          "b": null,
+          "result": -1000000.0,
+          "temp": "true"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0012",
+      "description": "Randomly generated pure expression #12",
+      "ir0_expression": {
+        "type": "boolean",
+        "value": true
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": null,
+          "a": false,
+          "temp": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0013",
+      "description": "Randomly generated pure expression #13",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "b"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": true,
+          "z": true,
+          "b": "undefined",
+          "value": -3.14
+        }
+      ]
+    },
+    {
+      "name": "random_case_0014",
+      "description": "Randomly generated pure expression #14",
+      "ir0_expression": {
+        "type": "undefined",
+        "value": "undefined"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": null,
+          "z": " ",
+          "b": "undefined",
+          "temp": "undefined"
+        },
+        {
+          "x": "undefined",
+          "y": true,
+          "z": null,
+          "a": null,
+          "b": null,
+          "result": null,
+          "value": false
+        },
+        {
+          "y": "undefined",
+          "a": 42,
+          "b": null,
+          "result": false,
+          "value": Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0015",
+      "description": "Randomly generated pure expression #15",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "b"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": null,
+          "a": " ",
+          "b": "true",
+          "result": false,
+          "temp": "undefined"
+        },
+        {
+          "y": null,
+          "z": "undefined",
+          "b": "hello",
+          "temp": "42",
+          "value": "undefined"
+        },
+        {
+          "x": -1000000.0,
+          "y": false,
+          "z": 1000000.0,
+          "a": "42",
+          "result": null,
+          "temp": 1,
+          "value": Infinity
+        },
+        {
+          "y": true,
+          "z": null,
+          "result": "undefined",
+          "temp": null,
+          "value": "undefined"
+        },
+        {
+          "y": "undefined",
+          "z": 42,
+          "b": -1,
+          "result": true,
+          "temp": "undefined",
+          "value": -42
+        }
+      ]
+    },
+    {
+      "name": "random_case_0016",
+      "description": "Randomly generated pure expression #16",
+      "ir0_expression": {
+        "type": "boolean",
+        "value": false
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "z": "undefined",
+          "a": false,
+          "result": false,
+          "temp": "undefined"
+        },
+        {
+          "x": null,
+          "b": null,
+          "result": "undefined",
+          "temp": null
+        },
+        {
+          "y": true,
+          "b": -1,
+          "result": null,
+          "value": "undefined"
+        },
+        {
+          "x": null,
+          "z": null,
+          "a": 3.14,
+          "b": null,
+          "result": null,
+          "value": null
+        },
+        {
+          "x": "null",
+          "y": null,
+          "b": "undefined",
+          "result": 3.14,
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0017",
+      "description": "Randomly generated pure expression #17",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "b"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": " ",
+          "z": Infinity,
+          "result": 1,
+          "temp": 1
+        },
+        {
+          "x": "\n",
+          "z": null,
+          "b": "undefined",
+          "result": true,
+          "value": null
+        },
+        {
+          "x": "undefined",
+          "y": -42,
+          "a": null,
+          "result": null,
+          "temp": "undefined"
+        },
+        {
+          "x": "true",
+          "z": null,
+          "a": null,
+          "b": null,
+          "value": false
+        },
+        {
+          "y": "undefined",
+          "z": 1000000.0,
+          "a": null,
+          "b": false,
+          "value": "null"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0018",
+      "description": "Randomly generated pure expression #18",
+      "ir0_expression": {
+        "type": "string",
+        "value": "\n"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "a": "undefined",
+          "b": -Infinity
+        },
+        {
+          "x": 1,
+          "y": "",
+          "z": 3.14,
+          "a": false,
+          "b": true,
+          "result": "undefined"
+        },
+        {
+          "x": "undefined",
+          "y": null,
+          "a": 1000000.0,
+          "temp": null
+        },
+        {
+          "y": null,
+          "a": "true",
+          "temp": null,
+          "value": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0019",
+      "description": "Randomly generated pure expression #19",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Add",
+        "left": {
+          "type": "unary",
+          "operator": "LogicalNot",
+          "operand": {
+            "type": "undefined",
+            "value": "undefined"
+          }
+        },
+        "right": {
+          "type": "unary",
+          "operator": "LogicalNot",
+          "operand": {
+            "type": "identifier",
+            "name": "result"
+          }
+        }
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {},
+        {
+          "y": null,
+          "z": "42",
+          "a": "null",
+          "result": false,
+          "temp": "42",
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0020",
+      "description": "Randomly generated pure expression #20",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Divide",
+        "left": {
+          "type": "boolean",
+          "value": true
+        },
+        "right": {
+          "type": "unary",
+          "operator": "Typeof",
+          "operand": {
+            "type": "identifier",
+            "name": "x"
+          }
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": null,
+          "y": "undefined",
+          "b": false,
+          "result": "undefined",
+          "temp": "undefined",
+          "value": 1000000.0
+        },
+        {
+          "y": null,
+          "z": -42,
+          "b": true,
+          "result": "\n",
+          "temp": false
+        },
+        {
+          "a": "true",
+          "b": false,
+          "result": "\n"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0021",
+      "description": "Randomly generated pure expression #21",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "LogicalNot",
+        "operand": {
+          "type": "null",
+          "value": null
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "z": -Infinity,
+          "a": true,
+          "b": "undefined",
+          "result": true,
+          "temp": true,
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "random_case_0022",
+      "description": "Randomly generated pure expression #22",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "y"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "true",
+          "y": 0,
+          "z": null,
+          "a": 3.14,
+          "b": 42,
+          "temp": "undefined",
+          "value": -Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0023",
+      "description": "Randomly generated pure expression #23",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "Void",
+        "operand": {
+          "type": "identifier",
+          "name": "y"
+        }
+      },
+      "expected_type": "undefined",
+      "test_environments": [
+        {
+          "x": true,
+          "y": "undefined",
+          "a": "undefined",
+          "result": null,
+          "temp": null,
+          "value": -Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0024",
+      "description": "Randomly generated pure expression #24",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "BitwiseNot",
+        "operand": {
+          "type": "unary",
+          "operator": "LogicalNot",
+          "operand": {
+            "type": "unary",
+            "operator": "BitwiseNot",
+            "operand": {
+              "type": "string",
+              "value": "undefined"
+            }
+          }
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "y": false,
+          "z": Infinity,
+          "b": true,
+          "result": "undefined",
+          "temp": -Infinity
+        },
+        {
+          "x": Infinity,
+          "y": 42,
+          "z": null,
+          "a": -1000000.0,
+          "b": "true"
+        },
+        {
+          "a": "",
+          "b": "null",
+          "result": true,
+          "temp": null,
+          "value": Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0025",
+      "description": "Randomly generated pure expression #25",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "BitwiseNot",
+        "operand": {
+          "type": "identifier",
+          "name": "b"
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "y": -1,
+          "z": "undefined",
+          "a": -Infinity,
+          "b": "undefined",
+          "result": "true",
+          "value": null
+        },
+        {
+          "x": "undefined",
+          "y": "",
+          "z": "undefined",
+          "a": false,
+          "value": -Infinity
+        },
+        {
+          "x": null,
+          "y": false,
+          "z": 1000000.0,
+          "result": "undefined",
+          "temp": null,
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0026",
+      "description": "Randomly generated pure expression #26",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Exponentiate",
+        "left": {
+          "type": "unary",
+          "operator": "Void",
+          "operand": {
+            "type": "identifier",
+            "name": "y"
+          }
+        },
+        "right": {
+          "type": "unary",
+          "operator": "Negate",
+          "operand": {
+            "type": "null",
+            "value": null
+          }
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": -42,
+          "z": true,
+          "a": 42,
+          "result": true,
+          "temp": "true",
+          "value": true
+        },
+        {
+          "x": null,
+          "y": "undefined",
+          "a": "undefined",
+          "temp": "42",
+          "value": null
+        },
+        {
+          "x": "false",
+          "y": "\n",
+          "z": null,
+          "a": -42,
+          "b": -1000000.0,
+          "result": "undefined",
+          "temp": Infinity
+        },
+        {
+          "x": null,
+          "y": 3.14,
+          "a": true,
+          "b": null,
+          "temp": "undefined",
+          "value": "false"
+        },
+        {
+          "x": "",
+          "a": -3.14,
+          "b": "undefined",
+          "temp": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0027",
+      "description": "Randomly generated pure expression #27",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LeftShift",
+        "left": {
+          "type": "unary",
+          "operator": "UnaryPlus",
+          "operand": {
+            "type": "string",
+            "value": "\n"
+          }
+        },
+        "right": {
+          "type": "unary",
+          "operator": "Void",
+          "operand": {
+            "type": "identifier",
+            "name": "y"
+          }
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": -1,
+          "z": null,
+          "a": true,
+          "b": -1000000.0,
+          "value": "42"
+        },
+        {
+          "x": true,
+          "y": "undefined",
+          "a": null,
+          "b": "true"
+        },
+        {
+          "y": false,
+          "result": "undefined",
+          "value": "undefined"
+        },
+        {
+          "x": null,
+          "b": "",
+          "value": -1000000.0
+        }
+      ]
+    },
+    {
+      "name": "random_case_0028",
+      "description": "Randomly generated pure expression #28",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Multiply",
+        "left": {
+          "type": "binary",
+          "operator": "LogicalAnd",
+          "left": {
+            "type": "null",
+            "value": null
+          },
+          "right": {
+            "type": "boolean",
+            "value": false
+          }
+        },
+        "right": {
+          "type": "binary",
+          "operator": "Add",
+          "left": {
+            "type": "identifier",
+            "name": "x"
+          },
+          "right": {
+            "type": "identifier",
+            "name": "result"
+          }
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": 0,
+          "y": -Infinity,
+          "z": true,
+          "a": null,
+          "result": null,
+          "temp": 0,
+          "value": false
+        },
+        {
+          "x": "true",
+          "y": -Infinity,
+          "a": 1000000.0,
+          "b": Infinity,
+          "result": false,
+          "temp": "undefined",
+          "value": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0029",
+      "description": "Randomly generated pure expression #29",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "y"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": "undefined",
+          "z": "undefined",
+          "a": null,
+          "result": null,
+          "value": 1
+        },
+        {
+          "x": 3.14,
+          "y": "\n",
+          "z": false,
+          "b": true,
+          "result": null,
+          "temp": true
+        },
+        {
+          "y": "\n",
+          "z": "undefined",
+          "a": 42,
+          "b": 3.14,
+          "result": "undefined"
+        },
+        {
+          "y": false,
+          "a": "undefined",
+          "b": 1,
+          "result": false,
+          "temp": -42,
+          "value": "undefined"
+        },
+        {
+          "y": null,
+          "z": 3.14,
+          "b": -Infinity,
+          "result": true,
+          "temp": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0030",
+      "description": "Randomly generated pure expression #30",
+      "ir0_expression": {
+        "type": "boolean",
+        "value": true
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": null,
+          "a": false,
+          "result": -1000000.0,
+          "temp": "false",
+          "value": Infinity
+        },
+        {
+          "x": null,
+          "z": " ",
+          "a": "undefined",
+          "b": null,
+          "result": true,
+          "temp": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0031",
+      "description": "Randomly generated pure expression #31",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "UnsignedRightShift",
+        "left": {
+          "type": "identifier",
+          "name": "b"
+        },
+        "right": {
+          "type": "boolean",
+          "value": false
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": true,
+          "y": null,
+          "z": "undefined",
+          "a": null,
+          "result": "undefined",
+          "value": null
+        },
+        {
+          "z": null,
+          "b": "hello",
+          "result": "undefined",
+          "temp": "undefined"
+        },
+        {
+          "x": false,
+          "y": -1000000.0,
+          "z": true,
+          "a": false,
+          "result": "hello",
+          "temp": "undefined",
+          "value": "\n"
+        },
+        {
+          "x": true,
+          "y": "undefined",
+          "result": -Infinity
+        },
+        {
+          "x": -Infinity,
+          "y": " ",
+          "z": null,
+          "a": -1,
+          "b": null,
+          "result": "42",
+          "temp": "null"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0032",
+      "description": "Randomly generated pure expression #32",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "NullishCoalescing",
+        "left": {
+          "type": "binary",
+          "operator": "NotEqual",
+          "left": {
+            "type": "binary",
+            "operator": "LogicalAnd",
+            "left": {
+              "type": "boolean",
+              "value": true
+            },
+            "right": {
+              "type": "string",
+              "value": "undefined"
+            }
+          },
+          "right": {
+            "type": "unary",
+            "operator": "UnaryPlus",
+            "operand": {
+              "type": "string",
+              "value": "null"
+            }
+          }
+        },
+        "right": {
+          "type": "identifier",
+          "name": "z"
+        }
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": " ",
+          "z": null,
+          "a": true,
+          "b": -Infinity,
+          "result": null,
+          "temp": -3.14,
+          "value": "null"
+        },
+        {
+          "y": null,
+          "z": "undefined",
+          "a": "undefined",
+          "b": null,
+          "result": "undefined",
+          "temp": "undefined"
+        },
+        {
+          "x": 3.14,
+          "y": "42",
+          "z": "undefined",
+          "a": Infinity,
+          "temp": true,
+          "value": "undefined"
+        },
+        {
+          "x": null,
+          "a": "\n",
+          "result": "undefined",
+          "temp": -Infinity,
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0033",
+      "description": "Randomly generated pure expression #33",
+      "ir0_expression": {
+        "type": "undefined",
+        "value": "undefined"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": -1,
+          "z": "undefined",
+          "b": true,
+          "result": 1000000.0,
+          "temp": false
+        },
+        {
+          "x": "undefined",
+          "b": true,
+          "result": null,
+          "temp": "42",
+          "value": "undefined"
+        },
+        {
+          "x": "false",
+          "z": false,
+          "a": false,
+          "value": null
+        },
+        {
+          "x": "false",
+          "y": "undefined",
+          "z": null,
+          "temp": "hello",
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0034",
+      "description": "Randomly generated pure expression #34",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "UnaryPlus",
+        "operand": {
+          "type": "identifier",
+          "name": "b"
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": -1000000.0,
+          "z": true,
+          "a": " ",
+          "b": true,
+          "value": null
+        },
+        {
+          "x": false,
+          "y": 1,
+          "a": -1,
+          "b": true,
+          "temp": null,
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "random_case_0035",
+      "description": "Randomly generated pure expression #35",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "BitwiseOr",
+        "left": {
+          "type": "binary",
+          "operator": "StrictNotEqual",
+          "left": {
+            "type": "identifier",
+            "name": "value"
+          },
+          "right": {
+            "type": "undefined",
+            "value": "undefined"
+          }
+        },
+        "right": {
+          "type": "unary",
+          "operator": "LogicalNot",
+          "operand": {
+            "type": "number",
+            "value": 1000000.0
+          }
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "y": "false",
+          "z": true,
+          "result": null,
+          "temp": 1,
+          "value": false
+        },
+        {
+          "x": true,
+          "y": false,
+          "b": "undefined",
+          "result": "true",
+          "temp": -1,
+          "value": "undefined"
+        },
+        {
+          "temp": true
+        }
+      ]
+    },
+    {
+      "name": "random_case_0036",
+      "description": "Randomly generated pure expression #36",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "value"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "value": -1000000.0
+        },
+        {
+          "y": "undefined",
+          "z": "undefined",
+          "b": "undefined",
+          "result": "\n",
+          "temp": false,
+          "value": "undefined"
+        },
+        {
+          "x": -1000000.0,
+          "y": "undefined",
+          "z": null,
+          "b": 0,
+          "temp": 1,
+          "value": 1
+        },
+        {
+          "y": "undefined",
+          "z": false,
+          "a": null,
+          "b": null,
+          "result": "undefined",
+          "temp": "hello",
+          "value": "undefined"
+        },
+        {
+          "x": true,
+          "b": "undefined",
+          "result": null,
+          "value": "42"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0037",
+      "description": "Randomly generated pure expression #37",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "y"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": 1,
+          "z": -Infinity,
+          "b": 42,
+          "result": -42,
+          "temp": "undefined",
+          "value": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0038",
+      "description": "Randomly generated pure expression #38",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "b"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": null,
+          "z": Infinity,
+          "temp": null,
+          "value": "undefined"
+        },
+        {
+          "y": null,
+          "z": "undefined",
+          "a": "undefined",
+          "b": false,
+          "temp": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0039",
+      "description": "Randomly generated pure expression #39",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "Typeof",
+        "operand": {
+          "type": "unary",
+          "operator": "UnaryPlus",
+          "operand": {
+            "type": "identifier",
+            "name": "y"
+          }
+        }
+      },
+      "expected_type": "string",
+      "test_environments": [
+        {
+          "y": true,
+          "z": "undefined",
+          "result": "undefined",
+          "value": null
+        },
+        {
+          "x": "false",
+          "z": true
+        },
+        {
+          "x": false,
+          "z": "undefined",
+          "b": "\n",
+          "temp": null
+        },
+        {
+          "x": false,
+          "y": 42,
+          "a": "undefined",
+          "result": null,
+          "temp": false,
+          "value": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0040",
+      "description": "Randomly generated pure expression #40",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "Typeof",
+        "operand": {
+          "type": "binary",
+          "operator": "StrictEqual",
+          "left": {
+            "type": "unary",
+            "operator": "Void",
+            "operand": {
+              "type": "identifier",
+              "name": "value"
+            }
+          },
+          "right": {
+            "type": "identifier",
+            "name": "result"
+          }
+        }
+      },
+      "expected_type": "string",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "b": -Infinity,
+          "result": -Infinity,
+          "temp": true,
+          "value": null
+        },
+        {
+          "x": "undefined",
+          "result": "undefined",
+          "temp": -Infinity,
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "random_case_0041",
+      "description": "Randomly generated pure expression #41",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "y"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": true,
+          "z": "false",
+          "b": null,
+          "result": true,
+          "temp": -Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0042",
+      "description": "Randomly generated pure expression #42",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "BitwiseNot",
+        "operand": {
+          "type": "identifier",
+          "name": "x"
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "y": null,
+          "a": 0,
+          "b": "undefined",
+          "result": -Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0043",
+      "description": "Randomly generated pure expression #43",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "result"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": null,
+          "a": "undefined",
+          "b": null,
+          "temp": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0044",
+      "description": "Randomly generated pure expression #44",
+      "ir0_expression": {
+        "type": "undefined",
+        "value": "undefined"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": null,
+          "y": Infinity,
+          "a": "",
+          "temp": false,
+          "value": null
+        },
+        {
+          "x": "undefined",
+          "z": "undefined",
+          "a": true,
+          "b": false
+        },
+        {
+          "x": -Infinity,
+          "y": "hello",
+          "z": false,
+          "a": "undefined",
+          "b": -Infinity,
+          "result": "undefined",
+          "temp": "undefined",
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0045",
+      "description": "Randomly generated pure expression #45",
+      "ir0_expression": {
+        "type": "undefined",
+        "value": "undefined"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": false,
+          "y": "false",
+          "z": true,
+          "a": "undefined",
+          "b": 42,
+          "temp": "undefined",
+          "value": 0
+        },
+        {
+          "y": "undefined",
+          "z": " ",
+          "a": "undefined",
+          "b": "true",
+          "result": false,
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0046",
+      "description": "Randomly generated pure expression #46",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "GreaterThan",
+        "left": {
+          "type": "identifier",
+          "name": "result"
+        },
+        "right": {
+          "type": "undefined",
+          "value": "undefined"
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "z": null,
+          "b": "hello",
+          "value": null
+        },
+        {
+          "x": "true",
+          "y": false,
+          "a": "undefined",
+          "b": null,
+          "result": null,
+          "temp": "\n",
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "random_case_0047",
+      "description": "Randomly generated pure expression #47",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "x"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "z": "undefined",
+          "a": -1000000.0,
+          "result": "undefined",
+          "temp": "undefined",
+          "value": "undefined"
+        },
+        {
+          "y": -42,
+          "z": -1,
+          "a": " ",
+          "result": " ",
+          "temp": null,
+          "value": ""
+        },
+        {
+          "y": "hello",
+          "a": true,
+          "b": "\n",
+          "result": null,
+          "temp": null
+        },
+        {
+          "x": null,
+          "y": "undefined",
+          "a": null,
+          "b": true,
+          "result": -1000000.0,
+          "temp": "true",
+          "value": " "
+        },
+        {
+          "x": "undefined",
+          "z": "null",
+          "value": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0048",
+      "description": "Randomly generated pure expression #48",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "result"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": -1,
+          "y": null,
+          "z": "undefined",
+          "a": false
+        }
+      ]
+    },
+    {
+      "name": "random_case_0049",
+      "description": "Randomly generated pure expression #49",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "LogicalNot",
+        "operand": {
+          "type": "identifier",
+          "name": "value"
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "x": "",
+          "y": false,
+          "a": null,
+          "b": null,
+          "result": null,
+          "temp": 42,
+          "value": "true"
+        },
+        {
+          "x": false,
+          "y": null,
+          "z": -42,
+          "result": 1000000.0,
+          "temp": null,
+          "value": false
+        },
+        {
+          "y": "null",
+          "a": 42,
+          "b": "undefined"
+        },
+        {
+          "x": "undefined",
+          "y": true,
+          "a": "undefined",
+          "b": "undefined",
+          "result": "false",
+          "temp": "undefined"
+        },
+        {
+          "y": null,
+          "result": true,
+          "temp": "true"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0050",
+      "description": "Randomly generated pure expression #50",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "UnaryPlus",
+        "operand": {
+          "type": "binary",
+          "operator": "LeftShift",
+          "left": {
+            "type": "unary",
+            "operator": "Negate",
+            "operand": {
+              "type": "null",
+              "value": null
+            }
+          },
+          "right": {
+            "type": "binary",
+            "operator": "UnsignedRightShift",
+            "left": {
+              "type": "binary",
+              "operator": "LogicalAnd",
+              "left": {
+                "type": "binary",
+                "operator": "BitwiseOr",
+                "left": {
+                  "type": "number",
+                  "value": 1000000.0
+                },
+                "right": {
+                  "type": "identifier",
+                  "name": "y"
+                }
+              },
+              "right": {
+                "type": "unary",
+                "operator": "UnaryPlus",
+                "operand": {
+                  "type": "identifier",
+                  "name": "a"
+                }
+              }
+            },
+            "right": {
+              "type": "unary",
+              "operator": "LogicalNot",
+              "operand": {
+                "type": "identifier",
+                "name": "result"
+              }
+            }
+          }
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "result": null,
+          "temp": false,
+          "value": null
+        },
+        {
+          "x": false,
+          "y": "hello",
+          "a": "42",
+          "b": "true",
+          "result": 0,
+          "temp": 42,
+          "value": null
+        },
+        {
+          "x": "hello",
+          "z": false,
+          "a": null,
+          "b": 3.14,
+          "temp": true,
+          "value": "undefined"
+        },
+        {
+          "x": false,
+          "y": true,
+          "b": true,
+          "temp": -3.14,
+          "value": null
+        },
+        {
+          "x": true,
+          "y": Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0051",
+      "description": "Randomly generated pure expression #51",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "a"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": 42,
+          "y": -Infinity,
+          "z": "undefined",
+          "b": "null",
+          "result": "undefined",
+          "temp": "undefined"
+        },
+        {
+          "a": Infinity,
+          "b": -3.14,
+          "result": "undefined",
+          "value": null
+        },
+        {
+          "x": "undefined",
+          "y": false,
+          "z": 42,
+          "b": "undefined",
+          "result": -3.14
+        },
+        {
+          "x": 1,
+          "y": "undefined",
+          "z": true,
+          "a": true,
+          "b": "\n",
+          "result": "42",
+          "temp": "hello"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0052",
+      "description": "Randomly generated pure expression #52",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "GreaterThanOrEqual",
+        "left": {
+          "type": "string",
+          "value": "hello"
+        },
+        "right": {
+          "type": "identifier",
+          "name": "value"
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "x": null,
+          "z": false,
+          "temp": "undefined",
+          "value": 1000000.0
+        },
+        {
+          "x": true,
+          "a": null,
+          "b": false,
+          "temp": 1,
+          "value": -1000000.0
+        },
+        {
+          "z": null,
+          "result": 0,
+          "temp": "false"
+        },
+        {
+          "x": " ",
+          "b": true,
+          "result": null,
+          "temp": "undefined",
+          "value": 0
+        },
+        {
+          "y": "hello",
+          "z": false,
+          "a": -1,
+          "result": false,
+          "value": -1000000.0
+        }
+      ]
+    },
+    {
+      "name": "random_case_0053",
+      "description": "Randomly generated pure expression #53",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "Negate",
+        "operand": {
+          "type": "null",
+          "value": null
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": "null",
+          "z": "null",
+          "a": true,
+          "result": "undefined",
+          "temp": 1000000.0,
+          "value": 42
+        },
+        {
+          "x": null,
+          "y": -Infinity,
+          "b": "42",
+          "result": false,
+          "temp": -42
+        }
+      ]
+    },
+    {
+      "name": "random_case_0054",
+      "description": "Randomly generated pure expression #54",
+      "ir0_expression": {
+        "type": "null",
+        "value": null
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": null,
+          "z": true,
+          "a": true,
+          "b": null,
+          "result": -42,
+          "value": -Infinity
+        },
+        {
+          "x": true,
+          "a": 0,
+          "b": "undefined",
+          "result": null,
+          "temp": null
+        },
+        {
+          "x": true,
+          "y": null,
+          "a": "undefined",
+          "temp": "undefined",
+          "value": -1
+        },
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "result": "undefined",
+          "value": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0055",
+      "description": "Randomly generated pure expression #55",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "LogicalNot",
+        "operand": {
+          "type": "identifier",
+          "name": "a"
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "z": null,
+          "a": "undefined",
+          "temp": false,
+          "value": 42
+        }
+      ]
+    },
+    {
+      "name": "random_case_0056",
+      "description": "Randomly generated pure expression #56",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Exponentiate",
+        "left": {
+          "type": "identifier",
+          "name": "result"
+        },
+        "right": {
+          "type": "string",
+          "value": "42"
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "b": false,
+          "result": 42,
+          "temp": null,
+          "value": "undefined"
+        },
+        {
+          "x": false,
+          "b": -1
+        },
+        {
+          "y": null,
+          "z": "false",
+          "a": false,
+          "value": "undefined"
+        },
+        {
+          "a": "undefined",
+          "result": "42",
+          "temp": Infinity,
+          "value": "undefined"
+        },
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "z": "undefined",
+          "a": null,
+          "b": 3.14,
+          "result": -Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0057",
+      "description": "Randomly generated pure expression #57",
+      "ir0_expression": {
+        "type": "string",
+        "value": "true"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": 0,
+          "z": null,
+          "result": null,
+          "temp": null,
+          "value": null
+        },
+        {
+          "y": true,
+          "z": 3.14,
+          "a": Infinity,
+          "result": 1,
+          "temp": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0058",
+      "description": "Randomly generated pure expression #58",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "Void",
+        "operand": {
+          "type": "identifier",
+          "name": "z"
+        }
+      },
+      "expected_type": "undefined",
+      "test_environments": [
+        {
+          "x": true,
+          "y": "undefined",
+          "b": "false",
+          "result": -1000000.0,
+          "value": ""
+        }
+      ]
+    },
+    {
+      "name": "random_case_0059",
+      "description": "Randomly generated pure expression #59",
+      "ir0_expression": {
+        "type": "string",
+        "value": " "
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": true,
+          "a": -3.14,
+          "b": "hello",
+          "temp": "undefined",
+          "value": null
+        },
+        {
+          "x": null,
+          "y": false,
+          "z": true,
+          "a": "\n",
+          "b": "undefined",
+          "result": -1000000.0,
+          "temp": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0060",
+      "description": "Randomly generated pure expression #60",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "value"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": -1000000.0,
+          "b": null,
+          "result": true,
+          "value": null
+        },
+        {
+          "x": null,
+          "y": false,
+          "z": -Infinity,
+          "a": "\n",
+          "b": Infinity,
+          "result": null,
+          "temp": true,
+          "value": "undefined"
+        },
+        {
+          "a": -1000000.0,
+          "temp": null,
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0061",
+      "description": "Randomly generated pure expression #61",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "b"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "z": null,
+          "b": true
+        },
+        {
+          "x": "false",
+          "y": null,
+          "result": " ",
+          "value": null
+        },
+        {
+          "y": null,
+          "z": null,
+          "value": true
+        },
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "a": true,
+          "result": null,
+          "temp": "true",
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0062",
+      "description": "Randomly generated pure expression #62",
+      "ir0_expression": {
+        "type": "number",
+        "value": 1000000.0
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": null,
+          "y": "null",
+          "z": "hello",
+          "a": null,
+          "b": "undefined",
+          "temp": true
+        },
+        {
+          "x": null,
+          "y": -1,
+          "b": "false",
+          "value": null
+        },
+        {
+          "y": false,
+          "z": "undefined",
+          "b": -Infinity,
+          "result": "undefined",
+          "value": 3.14
+        },
+        {
+          "a": "true",
+          "b": true
+        },
+        {
+          "result": null,
+          "temp": Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0063",
+      "description": "Randomly generated pure expression #63",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "value"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": true,
+          "y": null,
+          "z": "\n",
+          "b": "hello",
+          "result": false,
+          "temp": "null",
+          "value": " "
+        },
+        {
+          "y": "undefined",
+          "z": "undefined",
+          "a": true,
+          "result": "undefined",
+          "temp": true
+        },
+        {
+          "x": "undefined",
+          "a": true,
+          "b": false,
+          "temp": "true"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0064",
+      "description": "Randomly generated pure expression #64",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "value"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": null,
+          "z": null,
+          "a": 3.14,
+          "value": -Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0065",
+      "description": "Randomly generated pure expression #65",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "result"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": null,
+          "y": "42",
+          "z": -42,
+          "a": "undefined",
+          "b": "undefined",
+          "value": null
+        },
+        {
+          "x": true,
+          "a": true,
+          "result": -1,
+          "temp": -Infinity,
+          "value": "undefined"
+        },
+        {
+          "y": -Infinity,
+          "a": -3.14,
+          "b": " ",
+          "temp": -Infinity,
+          "value": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0066",
+      "description": "Randomly generated pure expression #66",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "temp"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": 1000000.0,
+          "z": false,
+          "result": null,
+          "temp": 42
+        }
+      ]
+    },
+    {
+      "name": "random_case_0067",
+      "description": "Randomly generated pure expression #67",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "NotEqual",
+        "left": {
+          "type": "number",
+          "value": -Infinity
+        },
+        "right": {
+          "type": "identifier",
+          "name": "z"
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "y": -Infinity,
+          "z": "false",
+          "a": 0,
+          "result": "undefined",
+          "value": Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0068",
+      "description": "Randomly generated pure expression #68",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LessThanOrEqual",
+        "left": {
+          "type": "binary",
+          "operator": "Multiply",
+          "left": {
+            "type": "identifier",
+            "name": "z"
+          },
+          "right": {
+            "type": "null",
+            "value": null
+          }
+        },
+        "right": {
+          "type": "unary",
+          "operator": "BitwiseNot",
+          "operand": {
+            "type": "identifier",
+            "name": "value"
+          }
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "z": -1,
+          "a": "undefined",
+          "b": "undefined",
+          "temp": null
+        },
+        {
+          "result": null,
+          "temp": null,
+          "value": 3.14
+        },
+        {
+          "x": "undefined",
+          "z": "undefined",
+          "a": "\n",
+          "b": "undefined",
+          "result": false,
+          "temp": null,
+          "value": "undefined"
+        },
+        {
+          "z": false,
+          "result": null,
+          "temp": "false",
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "random_case_0069",
+      "description": "Randomly generated pure expression #69",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "y"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": null,
+          "z": -Infinity,
+          "a": null,
+          "b": "undefined",
+          "result": Infinity
+        },
+        {
+          "x": null,
+          "z": 1000000.0,
+          "a": "undefined",
+          "b": " ",
+          "result": true,
+          "temp": "\n",
+          "value": Infinity
+        },
+        {
+          "x": null,
+          "y": "undefined",
+          "z": -3.14,
+          "a": false,
+          "b": null,
+          "result": "undefined",
+          "temp": null,
+          "value": "undefined"
+        },
+        {
+          "y": null,
+          "z": -3.14,
+          "b": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0070",
+      "description": "Randomly generated pure expression #70",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "y"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "z": null,
+          "a": "undefined",
+          "temp": "false",
+          "value": true
+        },
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "temp": "undefined"
+        },
+        {
+          "z": false,
+          "result": "undefined",
+          "temp": null
+        },
+        {
+          "y": null,
+          "a": 0,
+          "result": false,
+          "value": -42
+        }
+      ]
+    },
+    {
+      "name": "random_case_0071",
+      "description": "Randomly generated pure expression #71",
+      "ir0_expression": {
+        "type": "string",
+        "value": " "
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "z": false,
+          "a": "",
+          "result": "\n",
+          "temp": "true"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0072",
+      "description": "Randomly generated pure expression #72",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "result"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": false,
+          "z": -1,
+          "b": -1000000.0,
+          "result": false,
+          "temp": null
+        },
+        {
+          "x": false,
+          "y": "undefined",
+          "a": "undefined",
+          "b": 3.14,
+          "result": true,
+          "value": "undefined"
+        },
+        {
+          "x": 42,
+          "z": "true",
+          "result": "undefined"
+        },
+        {
+          "x": " ",
+          "y": "undefined",
+          "a": 3.14,
+          "b": -1000000.0,
+          "temp": "undefined"
+        },
+        {
+          "x": "undefined",
+          "y": -Infinity,
+          "z": "undefined",
+          "a": -1000000.0,
+          "b": -Infinity,
+          "value": -3.14
+        }
+      ]
+    },
+    {
+      "name": "random_case_0073",
+      "description": "Randomly generated pure expression #73",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "x"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": -Infinity,
+          "z": "undefined",
+          "result": null,
+          "value": 1
+        },
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "z": -1000000.0,
+          "a": "hello",
+          "b": null,
+          "result": -1000000.0,
+          "temp": null
+        },
+        {
+          "y": false,
+          "temp": -1000000.0,
+          "value": -Infinity
+        },
+        {
+          "x": 3.14,
+          "y": "undefined",
+          "z": true,
+          "b": Infinity
+        }
+      ]
+    },
+    {
+      "name": "random_case_0074",
+      "description": "Randomly generated pure expression #74",
+      "ir0_expression": {
+        "type": "string",
+        "value": "hello"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": "null",
+          "z": true,
+          "a": 3.14,
+          "b": "false",
+          "temp": "undefined",
+          "value": "undefined"
+        },
+        {
+          "x": "true",
+          "b": "42",
+          "temp": null,
+          "value": "false"
+        },
+        {
+          "x": Infinity,
+          "y": "42",
+          "a": 0,
+          "value": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0075",
+      "description": "Randomly generated pure expression #75",
+      "ir0_expression": {
+        "type": "undefined",
+        "value": "undefined"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": false,
+          "z": "undefined",
+          "b": null,
+          "result": -1000000.0,
+          "temp": true
+        },
+        {
+          "x": true,
+          "y": "undefined",
+          "result": "",
+          "temp": null,
+          "value": "null"
+        },
+        {
+          "x": false,
+          "y": null,
+          "a": "hello",
+          "result": "false",
+          "temp": "undefined",
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0076",
+      "description": "Randomly generated pure expression #76",
+      "ir0_expression": {
+        "type": "undefined",
+        "value": "undefined"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": false,
+          "y": " ",
+          "b": false,
+          "result": -42,
+          "temp": true,
+          "value": -3.14
+        },
+        {
+          "z": null,
+          "a": "undefined",
+          "b": null,
+          "result": Infinity,
+          "temp": "undefined",
+          "value": "undefined"
+        },
+        {
+          "x": false,
+          "z": null,
+          "a": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0077",
+      "description": "Randomly generated pure expression #77",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "value"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "z": null,
+          "temp": "undefined",
+          "value": " "
+        },
+        {
+          "x": -3.14,
+          "y": -1000000.0,
+          "result": "undefined",
+          "temp": "undefined",
+          "value": Infinity
+        },
+        {
+          "y": -Infinity,
+          "a": "",
+          "result": null,
+          "value": "undefined"
+        },
+        {
+          "a": null,
+          "b": null,
+          "value": "undefined"
+        },
+        {
+          "y": true,
+          "b": -3.14,
+          "value": "hello"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0078",
+      "description": "Randomly generated pure expression #78",
+      "ir0_expression": {
+        "type": "unary",
+        "operator": "Void",
+        "operand": {
+          "type": "binary",
+          "operator": "BitwiseAnd",
+          "left": {
+            "type": "binary",
+            "operator": "BitwiseXor",
+            "left": {
+              "type": "identifier",
+              "name": "temp"
+            },
+            "right": {
+              "type": "null",
+              "value": null
+            }
+          },
+          "right": {
+            "type": "unary",
+            "operator": "UnaryPlus",
+            "operand": {
+              "type": "identifier",
+              "name": "value"
+            }
+          }
+        }
+      },
+      "expected_type": "undefined",
+      "test_environments": [
+        {
+          "y": null,
+          "temp": true,
+          "value": null
+        },
+        {
+          "b": null,
+          "temp": 1000000.0
+        },
+        {
+          "x": 3.14,
+          "y": -3.14,
+          "a": "undefined",
+          "b": false,
+          "result": false,
+          "temp": "undefined",
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "random_case_0079",
+      "description": "Randomly generated pure expression #79",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "NotEqual",
+        "left": {
+          "type": "identifier",
+          "name": "y"
+        },
+        "right": {
+          "type": "binary",
+          "operator": "GreaterThan",
+          "left": {
+            "type": "identifier",
+            "name": "temp"
+          },
+          "right": {
+            "type": "identifier",
+            "name": "a"
+          }
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "x": -1000000.0,
+          "y": "undefined",
+          "a": "true",
+          "result": null,
+          "temp": "42",
+          "value": -1000000.0
+        },
+        {
+          "x": -42,
+          "a": null,
+          "result": false,
+          "value": null
+        },
+        {
+          "z": "hello",
+          "a": true,
+          "result": "\n",
+          "temp": "true",
+          "value": null
+        },
+        {
+          "z": false,
+          "a": false,
+          "b": false,
+          "temp": false,
+          "value": true
+        },
+        {
+          "y": 1,
+          "temp": 3.14
+        }
+      ]
+    },
+    {
+      "name": "random_case_0080",
+      "description": "Randomly generated pure expression #80",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LogicalOr",
+        "left": {
+          "type": "identifier",
+          "name": "temp"
+        },
+        "right": {
+          "type": "undefined",
+          "value": "undefined"
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "x": null,
+          "y": "undefined",
+          "z": "undefined",
+          "result": 1000000.0,
+          "temp": Infinity,
+          "value": Infinity
+        },
+        {
+          "y": "true",
+          "z": "undefined",
+          "a": false,
+          "b": null,
+          "temp": null,
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "random_case_0081",
+      "description": "Randomly generated pure expression #81",
+      "ir0_expression": {
+        "type": "string",
+        "value": "true"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": null,
+          "y": false,
+          "a": null,
+          "b": "undefined",
+          "result": " ",
+          "temp": "undefined"
+        },
+        {
+          "x": 0,
+          "y": " ",
+          "a": "false",
+          "b": "undefined",
+          "result": "null",
+          "temp": -Infinity
+        },
+        {
+          "x": "undefined",
+          "z": "null",
+          "a": "undefined",
+          "b": null,
+          "temp": " "
+        },
+        {
+          "x": false,
+          "y": "undefined",
+          "z": -Infinity,
+          "a": "false",
+          "temp": null
+        },
+        {
+          "z": null,
+          "a": true,
+          "b": false,
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "random_case_0082",
+      "description": "Randomly generated pure expression #82",
+      "ir0_expression": {
+        "type": "number",
+        "value": 1000000.0
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": null,
+          "y": Infinity,
+          "z": null,
+          "a": false,
+          "b": true,
+          "result": true,
+          "temp": "null"
+        },
+        {
+          "x": "undefined",
+          "z": true,
+          "a": null,
+          "temp": "undefined"
+        },
+        {
+          "x": " ",
+          "y": 3.14,
+          "z": false,
+          "a": "undefined",
+          "temp": null,
+          "value": null
+        },
+        {
+          "y": -42,
+          "z": 42,
+          "a": "undefined",
+          "b": true
+        },
+        {
+          "x": 42,
+          "y": "undefined",
+          "b": "undefined",
+          "temp": -42,
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0083",
+      "description": "Randomly generated pure expression #83",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "UnsignedRightShift",
+        "left": {
+          "type": "identifier",
+          "name": "result"
+        },
+        "right": {
+          "type": "boolean",
+          "value": true
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": -1,
+          "a": true,
+          "b": "undefined",
+          "result": null,
+          "value": -1
+        },
+        {
+          "x": null,
+          "y": null,
+          "z": "undefined",
+          "b": false,
+          "temp": 1,
+          "value": false
+        },
+        {
+          "x": "null",
+          "y": -1000000.0,
+          "z": " ",
+          "b": 42,
+          "temp": null,
+          "value": false
+        },
+        {
+          "x": null,
+          "z": 1000000.0,
+          "b": 1000000.0,
+          "result": "undefined",
+          "temp": Infinity
+        },
+        {
+          "y": false,
+          "temp": true
+        }
+      ]
+    },
+    {
+      "name": "random_case_0084",
+      "description": "Randomly generated pure expression #84",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "b"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": null,
+          "y": "undefined",
+          "a": false,
+          "b": null,
+          "result": "undefined",
+          "value": 1000000.0
+        }
+      ]
+    },
+    {
+      "name": "random_case_0085",
+      "description": "Randomly generated pure expression #85",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "BitwiseAnd",
+        "left": {
+          "type": "undefined",
+          "value": "undefined"
+        },
+        "right": {
+          "type": "identifier",
+          "name": "z"
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "y": "undefined",
+          "z": -1000000.0,
+          "b": null,
+          "temp": "null",
+          "value": "hello"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0086",
+      "description": "Randomly generated pure expression #86",
+      "ir0_expression": {
+        "type": "number",
+        "value": -1
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": null,
+          "z": -3.14,
+          "b": "undefined",
+          "result": "true",
+          "value": false
+        },
+        {
+          "z": -3.14,
+          "result": "undefined",
+          "temp": -42,
+          "value": true
+        }
+      ]
+    },
+    {
+      "name": "random_case_0087",
+      "description": "Randomly generated pure expression #87",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "temp"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": true,
+          "y": "undefined",
+          "z": Infinity,
+          "a": null,
+          "result": -1,
+          "temp": "undefined",
+          "value": false
+        },
+        {
+          "z": "null",
+          "a": null,
+          "result": true,
+          "temp": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0088",
+      "description": "Randomly generated pure expression #88",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LogicalAnd",
+        "left": {
+          "type": "unary",
+          "operator": "Negate",
+          "operand": {
+            "type": "binary",
+            "operator": "BitwiseXor",
+            "left": {
+              "type": "string",
+              "value": ""
+            },
+            "right": {
+              "type": "identifier",
+              "name": "a"
+            }
+          }
+        },
+        "right": {
+          "type": "identifier",
+          "name": "result"
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "b": "undefined",
+          "temp": -1,
+          "value": "true"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0089",
+      "description": "Randomly generated pure expression #89",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "StrictNotEqual",
+        "left": {
+          "type": "identifier",
+          "name": "a"
+        },
+        "right": {
+          "type": "string",
+          "value": " "
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "z": "",
+          "b": 3.14,
+          "result": null,
+          "temp": 42
+        },
+        {
+          "b": "undefined",
+          "result": "undefined",
+          "temp": "\n"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0090",
+      "description": "Randomly generated pure expression #90",
+      "ir0_expression": {
+        "type": "null",
+        "value": null
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": -42,
+          "a": "hello",
+          "b": -42,
+          "result": "undefined",
+          "temp": true,
+          "value": false
+        },
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "a": true,
+          "b": null,
+          "result": "undefined",
+          "temp": null,
+          "value": "true"
+        },
+        {
+          "x": "undefined",
+          "a": " ",
+          "result": true,
+          "value": 0
+        },
+        {
+          "x": "undefined",
+          "b": 1000000.0,
+          "result": true,
+          "temp": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0091",
+      "description": "Randomly generated pure expression #91",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "x"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": true,
+          "z": "undefined",
+          "a": null,
+          "result": null
+        },
+        {
+          "y": -Infinity,
+          "z": null,
+          "a": 1000000.0,
+          "result": true,
+          "temp": null,
+          "value": -Infinity
+        },
+        {
+          "x": null,
+          "z": "null",
+          "b": "undefined",
+          "result": -3.14
+        },
+        {
+          "x": "undefined",
+          "z": "undefined",
+          "b": null,
+          "result": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0092",
+      "description": "Randomly generated pure expression #92",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "z"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "z": "undefined",
+          "a": true,
+          "result": "undefined",
+          "value": true
+        },
+        {
+          "x": "undefined",
+          "y": -1,
+          "result": null,
+          "temp": "42"
+        },
+        {
+          "x": true,
+          "a": "undefined",
+          "result": true,
+          "temp": null,
+          "value": "undefined"
+        },
+        {
+          "x": "42",
+          "z": true,
+          "a": 0,
+          "temp": true,
+          "value": null
+        }
+      ]
+    },
+    {
+      "name": "random_case_0093",
+      "description": "Randomly generated pure expression #93",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LogicalAnd",
+        "left": {
+          "type": "unary",
+          "operator": "BitwiseNot",
+          "operand": {
+            "type": "unary",
+            "operator": "Void",
+            "operand": {
+              "type": "undefined",
+              "value": "undefined"
+            }
+          }
+        },
+        "right": {
+          "type": "null",
+          "value": null
+        }
+      },
+      "expected_type": "boolean",
+      "test_environments": [
+        {
+          "y": false,
+          "a": null,
+          "b": 1000000.0,
+          "result": "false",
+          "temp": null,
+          "value": -1
+        },
+        {
+          "x": null,
+          "y": "undefined",
+          "z": "undefined",
+          "result": null,
+          "temp": Infinity
+        },
+        {
+          "z": "42",
+          "b": -Infinity,
+          "result": "undefined"
+        },
+        {
+          "z": "undefined",
+          "a": false,
+          "b": true,
+          "temp": -42
+        }
+      ]
+    },
+    {
+      "name": "random_case_0094",
+      "description": "Randomly generated pure expression #94",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "LeftShift",
+        "left": {
+          "type": "boolean",
+          "value": true
+        },
+        "right": {
+          "type": "identifier",
+          "name": "x"
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": null,
+          "y": 1000000.0,
+          "z": "undefined",
+          "b": null,
+          "result": "undefined",
+          "temp": "undefined",
+          "value": "undefined"
+        },
+        {
+          "y": true,
+          "z": "",
+          "a": Infinity,
+          "b": -Infinity,
+          "temp": "\n",
+          "value": null
+        },
+        {
+          "y": -Infinity,
+          "z": null,
+          "temp": null,
+          "value": "null"
+        },
+        {
+          "x": "undefined",
+          "y": true,
+          "z": "undefined",
+          "b": "undefined",
+          "value": "undefined"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0095",
+      "description": "Randomly generated pure expression #95",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "NullishCoalescing",
+        "left": {
+          "type": "binary",
+          "operator": "Remainder",
+          "left": {
+            "type": "unary",
+            "operator": "Typeof",
+            "operand": {
+              "type": "unary",
+              "operator": "BitwiseNot",
+              "operand": {
+                "type": "undefined",
+                "value": "undefined"
+              }
+            }
+          },
+          "right": {
+            "type": "identifier",
+            "name": "b"
+          }
+        },
+        "right": {
+          "type": "identifier",
+          "name": "x"
+        }
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": 42,
+          "a": "null",
+          "b": true,
+          "value": -1000000.0
+        }
+      ]
+    },
+    {
+      "name": "random_case_0096",
+      "description": "Randomly generated pure expression #96",
+      "ir0_expression": {
+        "type": "number",
+        "value": 3.14
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "z": true,
+          "a": " ",
+          "value": null
+        },
+        {
+          "y": " ",
+          "a": -42,
+          "b": "\n",
+          "result": false
+        },
+        {
+          "x": false,
+          "z": null,
+          "result": null,
+          "temp": -42
+        },
+        {
+          "x": 1,
+          "y": false,
+          "z": "true",
+          "a": true,
+          "b": 1,
+          "result": -1000000.0,
+          "temp": " "
+        }
+      ]
+    },
+    {
+      "name": "random_case_0097",
+      "description": "Randomly generated pure expression #97",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Remainder",
+        "left": {
+          "type": "undefined",
+          "value": "undefined"
+        },
+        "right": {
+          "type": "identifier",
+          "name": "a"
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": "",
+          "a": 0,
+          "b": "",
+          "result": "true",
+          "temp": false,
+          "value": " "
+        }
+      ]
+    },
+    {
+      "name": "random_case_0098",
+      "description": "Randomly generated pure expression #98",
+      "ir0_expression": {
+        "type": "binary",
+        "operator": "Remainder",
+        "left": {
+          "type": "number",
+          "value": -1000000.0
+        },
+        "right": {
+          "type": "boolean",
+          "value": false
+        }
+      },
+      "expected_type": "number",
+      "test_environments": [
+        {
+          "x": false,
+          "y": true,
+          "z": "\n",
+          "a": true,
+          "b": 0,
+          "result": null,
+          "temp": "undefined"
+        },
+        {
+          "z": "false",
+          "a": true,
+          "temp": true
+        },
+        {
+          "y": null,
+          "z": null,
+          "a": true,
+          "value": "null"
+        },
+        {
+          "x": Infinity,
+          "y": null,
+          "a": "42",
+          "b": null,
+          "value": -1000000.0
+        },
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "z": false,
+          "a": "true",
+          "result": null,
+          "temp": "\n"
+        }
+      ]
+    },
+    {
+      "name": "random_case_0099",
+      "description": "Randomly generated pure expression #99",
+      "ir0_expression": {
+        "type": "undefined",
+        "value": "undefined"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "x": "undefined",
+          "y": "undefined",
+          "z": null,
+          "a": null,
+          "b": Infinity,
+          "temp": null
+        },
+        {
+          "x": true,
+          "b": true,
+          "result": "undefined",
+          "value": false
+        },
+        {
+          "x": "undefined",
+          "b": "undefined",
+          "temp": false,
+          "value": "undefined"
+        },
+        {
+          "y": "undefined",
+          "a": "",
+          "b": "undefined",
+          "result": "undefined",
+          "temp": null,
+          "value": false
+        }
+      ]
+    },
+    {
+      "name": "random_case_0100",
+      "description": "Randomly generated pure expression #100",
+      "ir0_expression": {
+        "type": "identifier",
+        "name": "temp"
+      },
+      "expected_type": "dynamic",
+      "test_environments": [
+        {
+          "y": true,
+          "z": 1000000.0,
+          "result": false
+        },
+        {
+          "a": null,
+          "b": null,
+          "result": true,
+          "temp": 42
+        },
+        {
+          "x": "undefined",
+          "y": Infinity,
+          "z": "hello",
+          "a": -1000000.0,
+          "value": Infinity
+        }
+      ]
+    }
+  ]
+}

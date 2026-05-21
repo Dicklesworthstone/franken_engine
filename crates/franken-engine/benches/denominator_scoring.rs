@@ -12,8 +12,8 @@ use std::hint::black_box;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use frankenengine_engine::benchmark_denominator::{
-    BaselineEngine, BenchmarkCase, PublicationContext, PublicationGateInput,
-    NativeCoveragePoint, evaluate_publication_gate, weighted_geometric_mean,
+    BaselineEngine, BenchmarkCase, NativeCoveragePoint, PublicationContext, PublicationGateInput,
+    evaluate_publication_gate, weighted_geometric_mean,
 };
 
 /// Creates a typical benchmark case for performance testing.
@@ -127,13 +127,11 @@ fn test_publication_input_small() -> PublicationGateInput {
     PublicationGateInput {
         node_cases: small_case_set(),
         bun_cases: small_case_set(),
-        native_coverage_progression: vec![
-            NativeCoveragePoint {
-                recorded_at_utc: "2026-05-21T00:00:00Z".to_string(),
-                native_slots: 85,
-                total_slots: 100,
-            }
-        ],
+        native_coverage_progression: vec![NativeCoveragePoint {
+            recorded_at_utc: "2026-05-21T00:00:00Z".to_string(),
+            native_slots: 85,
+            total_slots: 100,
+        }],
         replacement_lineage_ids: vec!["bench-lineage-001".to_string()],
     }
 }
@@ -143,13 +141,11 @@ fn test_publication_input_medium() -> PublicationGateInput {
     PublicationGateInput {
         node_cases: medium_case_set(),
         bun_cases: medium_case_set(),
-        native_coverage_progression: vec![
-            NativeCoveragePoint {
-                recorded_at_utc: "2026-05-21T00:00:00Z".to_string(),
-                native_slots: 85,
-                total_slots: 100,
-            }
-        ],
+        native_coverage_progression: vec![NativeCoveragePoint {
+            recorded_at_utc: "2026-05-21T00:00:00Z".to_string(),
+            native_slots: 85,
+            total_slots: 100,
+        }],
         replacement_lineage_ids: vec!["bench-lineage-001".to_string()],
     }
 }
@@ -165,7 +161,7 @@ fn bench_denominator_scoring(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 weighted_geometric_mean(&cases, BaselineEngine::Node)
-                    .expect("small uniform cases should succeed")
+                    .expect("small uniform cases should succeed"),
             );
         });
     });
@@ -175,7 +171,7 @@ fn bench_denominator_scoring(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 weighted_geometric_mean(&cases, BaselineEngine::Node)
-                    .expect("medium uniform cases should succeed")
+                    .expect("medium uniform cases should succeed"),
             );
         });
     });
@@ -185,7 +181,7 @@ fn bench_denominator_scoring(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 weighted_geometric_mean(&cases, BaselineEngine::Node)
-                    .expect("large uniform cases should succeed")
+                    .expect("large uniform cases should succeed"),
             );
         });
     });
@@ -195,7 +191,7 @@ fn bench_denominator_scoring(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 weighted_geometric_mean(&cases, BaselineEngine::Bun)
-                    .expect("small weighted cases should succeed")
+                    .expect("small weighted cases should succeed"),
             );
         });
     });
@@ -208,7 +204,7 @@ fn bench_denominator_scoring(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 evaluate_publication_gate(&input, &ctx)
-                    .expect("small publication gate should succeed")
+                    .expect("small publication gate should succeed"),
             );
         });
     });
@@ -219,7 +215,7 @@ fn bench_denominator_scoring(c: &mut Criterion) {
         b.iter(|| {
             black_box(
                 evaluate_publication_gate(&input, &ctx)
-                    .expect("medium publication gate should succeed")
+                    .expect("medium publication gate should succeed"),
             );
         });
     });

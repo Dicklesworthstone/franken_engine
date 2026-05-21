@@ -24,6 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use franken_engine_deterministic_trait::Deterministic;
 use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{CanonicalValue, encode_value};
@@ -42,7 +43,9 @@ pub const BEAD_ID: &str = "bd-1lsy.10.12";
 // ---------------------------------------------------------------------------
 
 /// React JSX runtime transformation mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ReactRuntimeMode {
     /// Classic React.createElement calls.
@@ -84,7 +87,9 @@ impl fmt::Display for ReactRuntimeMode {
 // ---------------------------------------------------------------------------
 
 /// Target environment for React compilation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ReactBuildTarget {
     /// Client-side browser bundle.
@@ -126,7 +131,9 @@ impl fmt::Display for ReactBuildTarget {
 // ---------------------------------------------------------------------------
 
 /// React-specific operator commands available through frankenctl.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ReactOperatorCommand {
     /// Compile JSX/TSX to lowered output.
@@ -192,7 +199,7 @@ impl fmt::Display for ReactOperatorCommand {
 // ---------------------------------------------------------------------------
 
 /// Input validation contract for React compilation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Deterministic)]
 pub struct ReactCompileInput {
     /// Source file path.
     pub source_path: String,
@@ -211,7 +218,9 @@ pub struct ReactCompileInput {
 }
 
 /// Input language for React compilation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ReactInputLanguage {
     Jsx,
@@ -238,7 +247,7 @@ impl fmt::Display for ReactInputLanguage {
 // ---------------------------------------------------------------------------
 
 /// Output artifact from React compilation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Deterministic)]
 pub struct ReactCompileOutput {
     /// Output content hash.
     pub output_hash: ContentHash,
@@ -263,7 +272,9 @@ pub struct ReactCompileOutput {
 // ---------------------------------------------------------------------------
 
 /// Severity of a React-specific diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticSeverity {
     Error,
@@ -290,7 +301,9 @@ impl fmt::Display for DiagnosticSeverity {
 }
 
 /// Category of React-specific diagnostic.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DiagnosticCategory {
     /// JSX syntax error.
@@ -333,7 +346,7 @@ impl fmt::Display for DiagnosticCategory {
 }
 
 /// A React-specific diagnostic with remediation guidance.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Deterministic)]
 pub struct ReactDiagnostic {
     /// Diagnostic code (e.g., "FE-REACT-0001").
     pub code: String,
@@ -357,7 +370,9 @@ pub struct ReactDiagnostic {
 ///
 /// These states describe the target runtime surface that the contract is
 /// reporting, not the lifecycle of this enum itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum FeatureSupport {
     /// Fully supported and tested.
@@ -401,7 +416,7 @@ impl fmt::Display for FeatureSupport {
 }
 
 /// A feature in the React operator surface contract.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Deterministic)]
 pub struct ReactFeatureContract {
     pub name: String,
     pub support: FeatureSupport,
@@ -411,7 +426,7 @@ pub struct ReactFeatureContract {
 }
 
 /// The complete React operator surface contract.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Deterministic)]
 pub struct ReactOperatorContract {
     pub version: String,
     pub commands: Vec<CommandContract>,
@@ -421,7 +436,7 @@ pub struct ReactOperatorContract {
 }
 
 /// Contract for a single operator command.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Deterministic)]
 pub struct CommandContract {
     pub command: ReactOperatorCommand,
     pub shipped: bool,

@@ -14,13 +14,14 @@
 
 use std::fmt;
 
+use franken_engine_deterministic_trait::Deterministic;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 /// Errors from fallible hash APIs used by deterministic safe-mode callers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Deterministic)]
 pub enum HashError {
     /// A keyed hash primitive could not be initialized or executed.
     KeyedHashUnavailable {
@@ -65,7 +66,9 @@ impl std::error::Error for HashError {}
 ///
 /// Scope: intra-process, ephemeral, NOT persisted across restarts, NOT
 /// security-relevant.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 pub struct IntegrityHash(pub u64);
 
 impl IntegrityHash {
@@ -100,7 +103,18 @@ impl fmt::Display for IntegrityHash {
 /// Scope: persisted, deterministic across platforms, NOT used for
 /// authentication.
 #[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    Deterministic,
 )]
 pub struct ContentHash(pub [u8; 32]);
 
@@ -153,7 +167,9 @@ impl fmt::Display for ContentHash {
 /// HMAC-based idempotency keys, evidence chain integrity.
 ///
 /// Scope: security-critical, epoch-scoped, used with signing keys.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 pub struct AuthenticityHash(pub [u8; 32]);
 
 impl AuthenticityHash {
@@ -222,7 +238,9 @@ impl fmt::Display for AuthenticityHash {
 // ---------------------------------------------------------------------------
 
 /// Metadata identifying which hash tier a value belongs to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Deterministic,
+)]
 pub enum HashTier {
     /// Tier 1: hot integrity (non-cryptographic, ephemeral).
     Integrity,
@@ -251,7 +269,9 @@ impl fmt::Display for HashTier {
 /// Note: `SipInspiredCr` is a legacy stable identifier retained for
 /// serialized/event compatibility even though Tier 2 content hashing is now
 /// backed by SHA-256.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Deterministic,
+)]
 pub enum HashAlgorithm {
     /// Tier 1: wyhash-inspired fast hash.
     WyhashInspired,
@@ -287,7 +307,7 @@ impl fmt::Display for HashAlgorithm {
 // ---------------------------------------------------------------------------
 
 /// Structured audit event for hash operations at Tier 2 and Tier 3.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Deterministic)]
 pub struct HashEvent {
     pub tier: HashTier,
     pub algorithm: HashAlgorithm,

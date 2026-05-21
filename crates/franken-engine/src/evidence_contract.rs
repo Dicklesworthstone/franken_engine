@@ -10,6 +10,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
+use franken_engine_deterministic_trait::Deterministic;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -20,7 +21,9 @@ use serde::{Deserialize, Serialize};
 ///
 /// Versioning enables backward-compatible evolution: old contracts remain
 /// valid while new required fields can be added in later versions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Deterministic,
+)]
 pub struct ContractVersion {
     pub major: u32,
     pub minor: u32,
@@ -52,7 +55,7 @@ impl fmt::Display for ContractVersion {
 /// EV assessment tier (from alien-graveyard methodology, Section 5.3).
 ///
 /// Proposals must achieve EV >= 2.0 to proceed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Deterministic)]
 pub enum EvTier {
     /// EV < 1.0 — net negative, reject.
     Reject,
@@ -101,7 +104,7 @@ impl fmt::Display for EvTier {
 // ---------------------------------------------------------------------------
 
 /// Staged rollout strategy per Section 8.8.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Deterministic)]
 pub enum RolloutStage {
     Shadow,
     Canary,
@@ -169,7 +172,7 @@ pub struct EvidenceContract {
 // ---------------------------------------------------------------------------
 
 /// Validation errors for evidence contracts.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Deterministic)]
 pub enum ContractValidationError {
     /// A required text field is empty or whitespace-only.
     MissingField { field: String },

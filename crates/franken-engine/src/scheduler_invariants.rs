@@ -5,6 +5,7 @@
 //! for formal verification of scheduler correctness.
 
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
+use franken_engine_deterministic_trait::Deterministic;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,7 +18,9 @@ fn invariant_schema() -> SchemaId {
 // ---------------------------------------------------------------------------
 
 /// A state in the scheduler state machine.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 pub struct StateId(pub String);
 
 impl StateId {
@@ -27,7 +30,9 @@ impl StateId {
 }
 
 /// A transition label (event/action).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 pub struct TransitionLabel(pub String);
 
 impl TransitionLabel {
@@ -37,7 +42,7 @@ impl TransitionLabel {
 }
 
 /// A single transition in the automaton.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Deterministic)]
 pub struct Transition {
     pub from: StateId,
     pub label: TransitionLabel,
@@ -47,7 +52,7 @@ pub struct Transition {
 }
 
 /// Finite-state automaton modelling scheduler lifecycle.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Deterministic)]
 pub struct SchedulerAutomaton {
     pub name: String,
     pub states: BTreeSet<StateId>,

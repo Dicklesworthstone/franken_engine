@@ -13,6 +13,7 @@
 
 use std::fmt;
 
+use franken_engine_deterministic_trait::Deterministic;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -31,7 +32,9 @@ pub const OBJECT_ID_LEN: usize = 32;
 /// Each variant has a unique, well-known ASCII string that is included in the
 /// hash preimage. New object classes must register a variant here to prevent
 /// cross-domain collisions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 pub enum ObjectDomain {
     /// Policy objects (capability profiles, runtime policies).
     PolicyObject,
@@ -107,7 +110,9 @@ impl fmt::Display for ObjectDomain {
 ///
 /// Derived from the schema definition itself (not from a mutable version
 /// label). Two schemas with identical definitions produce the same SchemaId.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 pub struct SchemaId(pub [u8; OBJECT_ID_LEN]);
 
 impl SchemaId {
@@ -147,7 +152,9 @@ impl fmt::Display for SchemaId {
 /// hash(len(domain_tag) || domain_tag || len(zone) || zone || schema_id || canonical_bytes)
 /// ```
 /// where lengths are encoded as 4-byte big-endian u32.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+)]
 pub struct EngineObjectId(pub [u8; OBJECT_ID_LEN]);
 
 impl Default for EngineObjectId {
@@ -202,7 +209,7 @@ impl fmt::Display for EngineObjectId {
 // ---------------------------------------------------------------------------
 
 /// Errors from EngineObjectId operations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Deterministic)]
 pub enum IdError {
     /// Canonical bytes are empty.
     EmptyCanonicalBytes,

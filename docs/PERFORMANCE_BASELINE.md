@@ -74,6 +74,28 @@ FrankenEngine is NOT appropriate when you need:
 - **Low-latency applications** with tight timing requirements
 - **Existing Node.js performance expectations** without security needs
 
+## Cached defaults: invariants for static cryptographic material
+
+FrankenEngine caches frequently-accessed cryptographic keys using `LazyLock` to avoid repeated curve operations while maintaining security guarantees:
+
+```rust
+// Module-scope cache in evidence_ledger.rs
+static DEFAULT_EVIDENCE_SIGNING_KEY: std::sync::LazyLock<SigningKey> =
+    std::sync::LazyLock::new(|| {
+        SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES)
+            .expect("default evidence signing key bytes are non-zero (const)")
+    });
+
+static DEFAULT_EVIDENCE_VERIFICATION_KEY: std::sync::LazyLock<VerificationKey> =
+    std::sync::LazyLock::new(|| DEFAULT_EVIDENCE_SIGNING_KEY.verification_key());
+```
+
+**Invariant:** The cached signing key is guaranteed to be byte-identical to a freshly-constructed key from the same constant bytes. This invariant is preserved automatically by ed25519-dalek's deterministic key construction API, which produces identical `SigningKey` instances from identical 32-byte seeds. The cache avoids expensive elliptic curve computation while maintaining cryptographic correctness and deterministic behavior required for evidence replay.
+
+For evidence supporting this optimization, see `tests/artifacts/perf/20260520T214829Z-prof-pass1/06_HYPOTHESIS_LEDGER.md#h1`.
+
+**Note:** Any additional cached cryptographic material must follow this same pattern: deterministic construction from constant bytes with LazyLock initialization to ensure thread-safety and replay compatibility.
+
 ## Future Performance Roadmap
 
 ### Planned Optimizations (Future Releases)

@@ -1914,4 +1914,52 @@ mod tests {
             );
         }
     }
+
+    // PERF-H3.3 tests for hex output equivalence
+
+    fn naive_hex(id: &EngineObjectId) -> String {
+        let mut s = String::with_capacity(OBJECT_ID_LEN * 2);
+        for b in &id.0 { s.push_str(&format!("{b:02x}")); }
+        s
+    }
+
+    #[test]
+    fn to_hex_matches_naive_on_known_ids() {
+        for seed in [0u8, 1, 0x7B, 0xAA, 0xFF, 0x33] {
+            let id = EngineObjectId([seed; OBJECT_ID_LEN]);
+            assert_eq!(id.to_hex(), naive_hex(&id),
+                "to_hex must match naive impl for uniform seed {seed:#x}");
+            assert_eq!(format!("{id}"), naive_hex(&id),
+                "Display must match naive impl for uniform seed {seed:#x}");
+        }
+    }
+
+    #[test]
+    fn hex_roundtrip() {
+        for seed in 0..=255u8 {
+            let id = EngineObjectId([seed; OBJECT_ID_LEN]);
+            let hex = id.to_hex();
+            let back = EngineObjectId::from_hex(&hex).expect("valid hex");
+            assert_eq!(id, back);
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_bytes_roundtrip(bytes in any::<[u8; OBJECT_ID_LEN]>()) {
+            let id = EngineObjectId(bytes);
+            let hex = id.to_hex();
+            let back = EngineObjectId::from_hex(&hex).unwrap();
+            prop_assert_eq!(id, back);
+            // Also: Display must yield the same string as to_hex.
+            prop_assert_eq!(format!("{id}"), hex);
+        }
+    }
+
+    #[test]
+    fn hex_length_is_64() {
+        let id = EngineObjectId([0; OBJECT_ID_LEN]);
+        assert_eq!(id.to_hex().len(), 64);
+        assert_eq!(format!("{id}").len(), 64);
+    }
 }

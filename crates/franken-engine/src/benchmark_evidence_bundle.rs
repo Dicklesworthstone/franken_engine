@@ -26,6 +26,7 @@ use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
+use crate::reproducibility_provenance_pack::ReproducibilityPack;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -386,6 +387,8 @@ pub struct EvidenceBundle {
     pub reference_environment: Option<EnvironmentSnapshot>,
     /// Environment drift entries detected across runs.
     pub environment_drifts: Vec<String>,
+    /// Reproducibility pack for full third-party verification (env.json, manifest.json, repro.lock).
+    pub reproducibility_pack: Option<ReproducibilityPack>,
     /// Bundle content hash.
     pub bundle_hash: ContentHash,
 }
@@ -403,6 +406,7 @@ impl EvidenceBundle {
             parity_verdicts: Vec::new(),
             reference_environment: None,
             environment_drifts: Vec::new(),
+            reproducibility_pack: None,
             bundle_hash: ContentHash::compute(b"empty"),
         }
     }
@@ -469,6 +473,18 @@ impl EvidenceBundle {
             });
         }
         self.parity_verdicts.push(verdict);
+        self.recompute_hash();
+        Ok(())
+    }
+
+    /// Set the reproducibility pack for third-party verification.
+    pub fn set_reproducibility_pack(&mut self, pack: ReproducibilityPack) -> Result<(), BundleError> {
+        if self.status != BundleStatus::Assembling {
+            return Err(BundleError::BundleSealed {
+                bundle_id: self.bundle_id.clone(),
+            });
+        }
+        self.reproducibility_pack = Some(pack);
         self.recompute_hash();
         Ok(())
     }
@@ -597,6 +613,9 @@ impl EvidenceBundle {
         }
         for drift in &self.environment_drifts {
             hasher.update(drift.as_bytes());
+        }
+        if let Some(ref pack) = self.reproducibility_pack {
+            hasher.update(pack.pack_hash.as_bytes());
         }
         self.bundle_hash = ContentHash::compute(&hasher.finalize());
     }
@@ -806,6 +825,8 @@ pub struct BundleReport {
     pub environment_drift_count: usize,
     /// Categories covered.
     pub categories: BTreeSet<WorkloadCategory>,
+    /// Whether reproducibility pack is included for third-party verification.
+    pub has_reproducibility_pack: bool,
     /// Gate verdict.
     pub verdict: BundleVerdict,
     /// Report hash.
@@ -1038,6 +1059,7 @@ pub fn generate_report(bundle: &EvidenceBundle, config: &BundleConfig) -> Bundle
         parity_pass_count: parity_pass,
         environment_drift_count: bundle.environment_drifts.len(),
         categories: bundle.categories(),
+        has_reproducibility_pack: bundle.reproducibility_pack.is_some(),
         verdict,
         report_hash,
     }

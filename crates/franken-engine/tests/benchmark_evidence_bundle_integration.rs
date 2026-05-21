@@ -14,6 +14,9 @@ use frankenengine_engine::benchmark_evidence_bundle::{
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::reproducibility_provenance_pack::{
+    ReproducibilityPack, PackBuilder, BuildEnvironment, ToolchainFingerprint, GitFingerprint
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -891,4 +894,153 @@ fn max_environment_drift_respected() {
     assert!(b.environment_drifts.len() > MAX_ENVIRONMENT_DRIFT);
     let v = evaluate_bundle(&b, &default_config());
     assert!(matches!(v, BundleVerdict::Fail { .. }));
+}
+
+// ---------------------------------------------------------------------------
+// Reproducibility pack integration tests
+// ---------------------------------------------------------------------------
+
+fn test_toolchain() -> ToolchainFingerprint {
+    ToolchainFingerprint {
+        rustc_version: "1.79.0-nightly".to_string(),
+        cargo_version: "1.79.0-nightly".to_string(),
+        llvm_version: Some("18.1.0".to_string()),
+        linker: "cc".to_string(),
+        target_triple: "x86_64-unknown-linux-gnu".to_string(),
+        edition: "2024".to_string(),
+        profile: "release".to_string(),
+        rustflags: vec!["-C linker=cc".to_string()],
+    }
+}
+
+fn test_git() -> GitFingerprint {
+    GitFingerprint {
+        commit_sha: "abcdef1234567890abcdef1234567890abcdef12".to_string(),
+        tree_hash: "1234567890abcdef1234567890abcdef12345678".to_string(),
+        branch: Some("main".to_string()),
+        dirty: false,
+        tags: vec!["v0.1.0".to_string()],
+    }
+}
+
+fn test_build_env() -> BuildEnvironment {
+    BuildEnvironment {
+        os_name: "Linux".to_string(),
+        os_version: "6.8.0".to_string(),
+        arch: "x86_64".to_string(),
+        cpu_count: 16,
+        memory_mb: 65536,
+        container_digest: None,
+        ci_system: Some("github-actions".to_string()),
+        ci_run_id: Some("12345".to_string()),
+        toolchain: test_toolchain(),
+        git: test_git(),
+        extra: std::collections::BTreeMap::new(),
+    }
+}
+
+fn test_reproducibility_pack(claim_id: &str) -> ReproducibilityPack {
+    PackBuilder::new(claim_id.to_string(), epoch(10))
+        .environment(test_build_env())
+        .build()
+        .expect("PackBuilder should succeed with valid environment")
+}
+
+#[test]
+fn bundle_without_reproducibility_pack() {
+    let mut b = EvidenceBundle::new("bundle-no-repro".into(), epoch(1));
+    b.add_provenance(prov("w1", WorkloadCategory::Micro)).unwrap();
+    b.add_run(run("r1", "w1", 100, 1)).unwrap();
+
+    assert!(b.reproducibility_pack.is_none());
+    let report = generate_report(&b, &default_config());
+    assert!(!report.has_reproducibility_pack);
+}
+
+#[test]
+fn bundle_with_reproducibility_pack() {
+    let mut b = EvidenceBundle::new("bundle-with-repro".into(), epoch(1));
+    let pack = test_reproducibility_pack("FRX-BUNDLE-01");
+
+    b.add_provenance(prov("w1", WorkloadCategory::Micro)).unwrap();
+    b.add_run(run("r1", "w1", 100, 1)).unwrap();
+    b.set_reproducibility_pack(pack.clone()).unwrap();
+
+    assert!(b.reproducibility_pack.is_some());
+    assert_eq!(b.reproducibility_pack.as_ref().unwrap().claim_id, "FRX-BUNDLE-01");
+
+    let report = generate_report(&b, &default_config());
+    assert!(report.has_reproducibility_pack);
+}
+
+#[test]
+fn bundle_hash_changes_with_reproducibility_pack() {
+    let mut b1 = EvidenceBundle::new("bundle-hash-test".into(), epoch(1));
+    b1.add_provenance(prov("w1", WorkloadCategory::Micro)).unwrap();
+    b1.add_run(run("r1", "w1", 100, 1)).unwrap();
+    let hash_without_pack = b1.bundle_hash;
+
+    let mut b2 = EvidenceBundle::new("bundle-hash-test".into(), epoch(1));
+    b2.add_provenance(prov("w1", WorkloadCategory::Micro)).unwrap();
+    b2.add_run(run("r1", "w1", 100, 1)).unwrap();
+    let pack = test_reproducibility_pack("FRX-HASH-TEST");
+    b2.set_reproducibility_pack(pack).unwrap();
+    let hash_with_pack = b2.bundle_hash;
+
+    assert_ne!(hash_without_pack, hash_with_pack, "Bundle hash should change when reproducibility pack is added");
+}
+
+#[test]
+fn cannot_set_reproducibility_pack_on_sealed_bundle() {
+    let mut b = EvidenceBundle::new("bundle-sealed".into(), epoch(1));
+    b.add_provenance(prov("w1", WorkloadCategory::Micro)).unwrap();
+    b.add_run(run("r1", "w1", 100, 1)).unwrap();
+    b.seal().unwrap();
+
+    let pack = test_reproducibility_pack("FRX-SEALED-TEST");
+    let result = b.set_reproducibility_pack(pack);
+
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), BundleError::BundleSealed { .. }));
+}
+
+#[test]
+fn reproducibility_pack_survives_serde_roundtrip() {
+    let mut b = EvidenceBundle::new("bundle-serde".into(), epoch(1));
+    let pack = test_reproducibility_pack("FRX-SERDE-TEST");
+
+    b.add_provenance(prov("w1", WorkloadCategory::Micro)).unwrap();
+    b.add_run(run("r1", "w1", 100, 1)).unwrap();
+    b.set_reproducibility_pack(pack.clone()).unwrap();
+
+    // Serialize and deserialize
+    let json = serde_json::to_string(&b).expect("Bundle should serialize to JSON");
+    let b_restored: EvidenceBundle = serde_json::from_str(&json).expect("Bundle should deserialize from JSON");
+
+    // Verify reproducibility pack survived the roundtrip
+    assert!(b_restored.reproducibility_pack.is_some());
+    let restored_pack = b_restored.reproducibility_pack.as_ref().unwrap();
+    assert_eq!(restored_pack.claim_id, pack.claim_id);
+    assert_eq!(restored_pack.pack_id, pack.pack_id);
+    assert_eq!(restored_pack.pack_hash, pack.pack_hash);
+    assert_eq!(b_restored.bundle_hash, b.bundle_hash);
+}
+
+#[test]
+fn report_reflects_reproducibility_pack_status() {
+    // Test bundle without reproducibility pack
+    let mut b1 = EvidenceBundle::new("bundle-report-1".into(), epoch(1));
+    b1.add_provenance(prov("w1", WorkloadCategory::Micro)).unwrap();
+    b1.add_run(run("r1", "w1", 100, 1)).unwrap();
+    let report1 = generate_report(&b1, &default_config());
+    assert!(!report1.has_reproducibility_pack);
+
+    // Test bundle with reproducibility pack
+    let mut b2 = EvidenceBundle::new("bundle-report-2".into(), epoch(1));
+    let pack = test_reproducibility_pack("FRX-REPORT-TEST");
+    b2.add_provenance(prov("w1", WorkloadCategory::Micro)).unwrap();
+    b2.add_run(run("r1", "w1", 100, 1)).unwrap();
+    b2.set_reproducibility_pack(pack).unwrap();
+    let report2 = generate_report(&b2, &default_config());
+    assert!(report2.has_reproducibility_pack);
 }

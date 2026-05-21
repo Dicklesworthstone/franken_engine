@@ -89,8 +89,8 @@ if ! jq -e '.schema_version == "franken-engine.rgc-production-feature-catalog.ma
 fi
 
 source_verdict="$(jq -r '.verdict' "${source_manifest}")"
-source_features="$(jq -c '[.catalog.subbundles[].feature_id] | sort' "${source_catalog}")"
-source_hashes="$(jq -c '[.catalog.subbundles[] | {feature_id, sha: .manifest_sha256}] | sort_by(.feature_id)' "${source_catalog}")"
+source_features="$(jq -c '[.subbundles[].feature_id] | sort' "${source_catalog}")"
+source_hashes="$(jq -c '[.subbundles[] | {feature_id, sha: .manifest_sha256}] | sort_by(.feature_id)' "${source_catalog}")"
 
 echo "source verdict=${source_verdict}"
 echo "source features=${source_features}"
@@ -112,8 +112,8 @@ if [[ ! -f "${replay_manifest}" || ! -f "${replay_catalog}" ]]; then
 fi
 
 replay_verdict="$(jq -r '.verdict' "${replay_manifest}")"
-replay_features="$(jq -c '[.catalog.subbundles[].feature_id] | sort' "${replay_catalog}")"
-replay_hashes="$(jq -c '[.catalog.subbundles[] | {feature_id, sha: .manifest_sha256}] | sort_by(.feature_id)' "${replay_catalog}")"
+replay_features="$(jq -c '[.subbundles[].feature_id] | sort' "${replay_catalog}")"
+replay_hashes="$(jq -c '[.subbundles[] | {feature_id, sha: .manifest_sha256}] | sort_by(.feature_id)' "${replay_catalog}")"
 
 echo "replay verdict=${replay_verdict}"
 echo "replay features=${replay_features}"

@@ -1,0 +1,40 @@
+{
+  "schema_version": "franken-engine.capability-verdict.v1",
+  "test_case": "filesystem_read_profile_basic",
+  "timestamp": "2026-05-20T14:35:00Z",
+  "capability_profile": {
+    "profile_type": "filesystem_read_only",
+    "allowed_capabilities": ["filesystem_read", "compute", "memory_allocation"],
+    "denied_capabilities": ["filesystem_write", "network_access", "system_calls"]
+  },
+  "test_scenario": {
+    "extension_id": "test_fs_read_extension",
+    "requested_operations": [
+      {"operation": "read_file", "path": "/app/config.json"},
+      {"operation": "attempt_write_file", "path": "/tmp/output.txt"},
+      {"operation": "list_directory", "path": "/app/data"}
+    ]
+  },
+  "verdict": {
+    "overall_result": "ALLOWED_WITH_RESTRICTIONS",
+    "allowed_operations": ["read_file", "list_directory"],
+    "denied_operations": ["attempt_write_file"],
+    "security_violations": [
+      {
+        "operation": "attempt_write_file",
+        "violation_type": "write_capability_denied",
+        "enforcement_action": "deny_with_log"
+      }
+    ]
+  },
+  "enforcement_trace": {
+    "security_epoch": 1001,
+    "enforcement_node": "node_12",
+    "trace_hash": "sha256:a2b3c4d5e6f7890123456789012345678901abcdef234567890abcdef234567"
+  },
+  "regression_baseline": {
+    "prior_ci_run": "ci_run_20260520_143500",
+    "expected_verdict": "ALLOWED_WITH_RESTRICTIONS",
+    "expected_violations": 1
+  }
+}

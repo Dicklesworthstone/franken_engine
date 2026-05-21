@@ -1,0 +1,11 @@
+{
+  "schema_version": "franken-engine.fixture-manifest.v1",
+  "directory": "decision_traces",
+  "generated_at": "2026-05-21T20:00:52Z",
+  "content_hashes": {
+    "trace_001_quarantine_decision.json": "6ef0afb629f52cec854fa171ad4750e596d85251728f0a96a8c88d97baf48635",
+    "trace_002_readmission_approval.json": "450b3373e86720d049911a5dd68cf1faf6cd6e5d267f46bad3483757c77b1aeb",
+    "README.md": "3ceb2d836cb63bc5b4eb1cd264b3f88cf7428dc1ca833e4bdb2d81afaa5676e4",
+    "trace_003_policy_update.json": "3d6c918ef169ab79b63e33cd88cdbde246494ccd9c0b66b855c4b11f3409bdf6"
+  }
+}

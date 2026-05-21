@@ -1,0 +1,43 @@
+{
+  "schema_version": "franken-decision.decision-record.v1",
+  "decision_id": "dec_readm_002",
+  "trace_id": "trace_002",
+  "timestamp": "2026-05-21T20:15:00Z",
+  "decision_type": "readmission",
+  "policy_context": {
+    "policy_id": "policy_v1_security",
+    "security_epoch": 1002,
+    "enforcement_level": "strict"
+  },
+  "subject": {
+    "extension_id": "ext_rehabilitated_002",
+    "extension_version": "1.3.1",
+    "runtime_context": "node_worker",
+    "prior_quarantine_decision": "dec_quar_001"
+  },
+  "evidence": {
+    "rehabilitation_proof": "code_audit_passed",
+    "evidence_hash": "sha256:b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234567",
+    "audit_report_hash": "sha256:c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234568",
+    "operator_signature": "op_alice_2026_05_21",
+    "review_timestamp": "2026-05-21T20:10:00Z"
+  },
+  "verdict": {
+    "action": "readmit_with_restricted_capabilities",
+    "reason": "Code audit passed, operator approval granted",
+    "confidence": 0.98,
+    "capability_restrictions": ["no_filesystem_write", "compute_only_enhanced"],
+    "probation_period": "30_days"
+  },
+  "operator_approval": {
+    "operator_id": "alice_security_lead",
+    "approval_timestamp": "2026-05-21T20:12:00Z",
+    "digital_signature": "sig_readm_alice_002",
+    "approval_reason": "Extension fixed capability violation, audit confirms compliance"
+  },
+  "provenance": {
+    "deciding_node": "node_7",
+    "consensus_participants": ["node_7", "node_12", "node_23", "node_45"],
+    "signature": "sig_readmission_002"
+  }
+}

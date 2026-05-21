@@ -1,0 +1,8 @@
+{
+  "schema_version": "franken-engine.fixture-manifest.v1",
+  "directory": "fleet_partition_profiles",
+  "generated_at": "2026-05-21T20:00:53Z",
+  "content_hashes": {
+    "README.md": "fd635b816852e71c961bb46974ec5151d4062324687614ac68293f4cc06c9a8a"
+  }
+}

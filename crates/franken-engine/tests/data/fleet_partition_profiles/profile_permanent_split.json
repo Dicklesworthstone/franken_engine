@@ -1,0 +1,13 @@
+{
+  "schema_version": "franken-engine.fleet-partition-fault-profiles.v1",
+  "profile_name": "permanent_split_test",
+  "description": "Permanent network partition for testing convergence refusal",
+  "partition_mode": "degraded",
+  "message_success_rate": 0,
+  "local_partition_size": 1,
+  "total_fleet_size": 7,
+  "expected_convergence": false,
+  "convergence_impossible_reason": "permanent_network_partition",
+  "failure_mode": "quorum_impossible",
+  "gate_verdict": "convergence-impossible"
+}

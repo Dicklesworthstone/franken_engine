@@ -1,0 +1,16 @@
+{
+  "schema_version": "franken-engine.lockstep-divergence.v1",
+  "divergence_id": "div_fp_001",
+  "timestamp": "2026-05-21T20:00:00Z",
+  "divergence_type": "floating_point_precision",
+  "detection_metadata": {
+    "instruction_offset": 1024,
+    "runtime_a_result": "1.0000000000000002",
+    "runtime_b_result": "1.0000000000000004",
+    "threshold_exceeded": 1e-15
+  },
+  "root_cause": "Different floating point implementations between runtimes",
+  "severity": "low",
+  "operator_action": "monitor_only",
+  "escalation_criteria": "divergence_count > 100 in 24h"
+}

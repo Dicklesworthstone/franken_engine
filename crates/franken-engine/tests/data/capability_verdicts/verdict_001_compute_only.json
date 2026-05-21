@@ -1,0 +1,40 @@
+{
+  "schema_version": "franken-engine.capability-verdict.v1",
+  "test_case": "compute_only_profile_basic",
+  "timestamp": "2026-05-20T14:30:00Z",
+  "capability_profile": {
+    "profile_type": "compute_only",
+    "allowed_capabilities": ["cpu_bound_computation", "memory_allocation"],
+    "denied_capabilities": ["filesystem_access", "network_access", "system_calls"]
+  },
+  "test_scenario": {
+    "extension_id": "test_compute_extension",
+    "requested_operations": [
+      {"operation": "allocate_memory", "size": 1048576},
+      {"operation": "cpu_computation", "duration": "100ms"},
+      {"operation": "attempt_file_read", "path": "/tmp/test.txt"}
+    ]
+  },
+  "verdict": {
+    "overall_result": "ALLOWED_WITH_RESTRICTIONS",
+    "allowed_operations": ["allocate_memory", "cpu_computation"],
+    "denied_operations": ["attempt_file_read"],
+    "security_violations": [
+      {
+        "operation": "attempt_file_read",
+        "violation_type": "capability_boundary_exceeded",
+        "enforcement_action": "deny_with_log"
+      }
+    ]
+  },
+  "enforcement_trace": {
+    "security_epoch": 1001,
+    "enforcement_node": "node_7",
+    "trace_hash": "sha256:f1e2d3c4b5a6978012345678901234567890abcdef1234567890abcdef123456"
+  },
+  "regression_baseline": {
+    "prior_ci_run": "ci_run_20260520_143000",
+    "expected_verdict": "ALLOWED_WITH_RESTRICTIONS",
+    "expected_violations": 1
+  }
+}

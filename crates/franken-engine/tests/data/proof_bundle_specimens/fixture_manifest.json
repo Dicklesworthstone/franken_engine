@@ -1,0 +1,8 @@
+{
+  "schema_version": "franken-engine.fixture-manifest.v1",
+  "directory": "proof_bundle_specimens",
+  "generated_at": "2026-05-21T20:00:53Z",
+  "content_hashes": {
+    "README.md": "939800037367eade77312bbf0fd8ae015d58af3ee3404e08192d21bcc4844bbf"
+  }
+}

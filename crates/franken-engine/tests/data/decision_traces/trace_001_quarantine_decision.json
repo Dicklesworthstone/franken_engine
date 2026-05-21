@@ -1,0 +1,35 @@
+{
+  "schema_version": "franken-decision.decision-record.v1",
+  "decision_id": "dec_quar_001",
+  "trace_id": "trace_001",
+  "timestamp": "2026-05-21T19:45:00Z",
+  "decision_type": "quarantine",
+  "policy_context": {
+    "policy_id": "policy_v1_security",
+    "security_epoch": 1001,
+    "enforcement_level": "strict"
+  },
+  "subject": {
+    "extension_id": "ext_suspicious_001",
+    "extension_version": "1.2.3",
+    "runtime_context": "node_worker"
+  },
+  "evidence": {
+    "violation_type": "unauthorized_capability_access",
+    "evidence_hash": "sha256:a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+    "capability_requested": "filesystem_write",
+    "capability_authorized": "compute_only",
+    "detection_timestamp": "2026-05-21T19:44:30Z"
+  },
+  "verdict": {
+    "action": "quarantine_immediate",
+    "reason": "Capability boundary violation detected",
+    "confidence": 0.95,
+    "operator_review_required": false
+  },
+  "provenance": {
+    "deciding_node": "node_7",
+    "consensus_participants": ["node_7", "node_12", "node_23"],
+    "signature": "sig_quarantine_001"
+  }
+}

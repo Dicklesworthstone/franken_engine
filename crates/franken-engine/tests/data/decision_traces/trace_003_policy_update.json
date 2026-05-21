@@ -1,0 +1,42 @@
+{
+  "schema_version": "franken-decision.decision-record.v1",
+  "decision_id": "dec_policy_003",
+  "trace_id": "trace_003",
+  "timestamp": "2026-05-21T18:30:00Z",
+  "decision_type": "policy_update",
+  "policy_context": {
+    "policy_id": "policy_v2_security",
+    "security_epoch": 1003,
+    "enforcement_level": "strict",
+    "previous_policy_id": "policy_v1_security"
+  },
+  "subject": {
+    "policy_change": "capability_profile_enhancement",
+    "affected_extensions": ["all_extensions"],
+    "runtime_context": "fleet_wide"
+  },
+  "evidence": {
+    "change_justification": "Enhanced capability model for algebraic effects",
+    "evidence_hash": "sha256:d4e5f6789012345678901234567890abcdef1234567890abcdef12345678901",
+    "security_review_hash": "sha256:e5f6789012345678901234567890abcdef1234567890abcdef123456789012",
+    "compatibility_analysis": "backward_compatible_with_restrictions"
+  },
+  "verdict": {
+    "action": "approve_policy_update",
+    "reason": "Security review passed, backward compatibility maintained",
+    "confidence": 0.99,
+    "rollout_strategy": "gradual_fleet_deployment",
+    "rollback_plan": "revert_to_policy_v1_security"
+  },
+  "security_review": {
+    "reviewer_id": "bob_security_architect",
+    "review_timestamp": "2026-05-21T18:15:00Z",
+    "digital_signature": "sig_policy_bob_003",
+    "review_status": "approved_with_monitoring"
+  },
+  "provenance": {
+    "deciding_node": "node_1",
+    "consensus_participants": ["node_1", "node_7", "node_12", "node_23", "node_45"],
+    "signature": "sig_policy_update_003"
+  }
+}

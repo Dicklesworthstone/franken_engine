@@ -1,0 +1,10 @@
+{
+  "schema_version": "franken-engine.fixture-manifest.v1",
+  "directory": "red_team_cosmetic_variants",
+  "generated_at": "2026-05-21T20:00:53Z",
+  "content_hashes": {
+    "variant_002_whitespace_change.js": "056d4ae8db67b7052ee67c000752ea74004986f4b60388aa4d591b59919933fe",
+    "README.md": "fb7cac0590bcab99efac4a3e593852233c6bf0db3583b8fef14aa47a0aea01c4",
+    "variant_001_variable_rename.js": "11f5e23dbb887ac3ddab7be978300512010593b3f166916e2a6784c246fb9aec"
+  }
+}

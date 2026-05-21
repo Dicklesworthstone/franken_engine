@@ -63,6 +63,28 @@
       "convergence_impossible_reason": "split_brain_partition",
       "failure_mode": "quorum_impossible",
       "gate_verdict": "convergence-impossible"
+    },
+    "repeated_short_partitions": {
+      "description": "Repeated short partitions: link drops for short windows then heals, on a 30s cycle. Convergence must be reached eventually because each healing window restores quorum. Added by bd-cixqu.2.4 (chaos vector).",
+      "partition_mode": "intermittent",
+      "message_success_rate": 65,
+      "local_partition_size": 3,
+      "total_fleet_size": 7,
+      "partition_cycle_seconds": 30,
+      "partition_duration_per_cycle_seconds": 8,
+      "expected_convergence": true,
+      "convergence_timeout_ms": 12000,
+      "chaos_vector": "intermittent_partition_cycle"
+    },
+    "message_loss_without_partition": {
+      "description": "All nodes reachable but a uniformly random 25% of inter-node messages are dropped. Tests convergence under loss without topology change. Added by bd-cixqu.2.4 (chaos vector).",
+      "partition_mode": "lossy_full_mesh",
+      "message_success_rate": 75,
+      "local_partition_size": 7,
+      "total_fleet_size": 7,
+      "expected_convergence": true,
+      "convergence_timeout_ms": 6000,
+      "chaos_vector": "uniform_random_message_loss"
     }
   },
   "gate_configuration": {

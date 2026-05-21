@@ -2656,6 +2656,44 @@ bd-cixqu.2.6's `partition` mode below).
 2. Re-run `./scripts/run_rgc_fleet_convergence_slo_gate.sh ci`. The
    layer-3 per-secondary-SLO validator must accept the new entry.
 
+### Selecting a partition profile (bd-cixqu.2.4 chaos vectors)
+
+The gate's `ci` mode honours `FLEET_CONVERGENCE_SLO_PROFILE=<name>` to
+pick a specific profile from
+`docs/fleet_partition_fault_profiles_v1.json` instead of the SLO
+contract's primary profile. The selected profile name + source +
+chaos_vector (if any) is recorded under `partition_profile_used` /
+`partition_profile_source` / `partition_profile_chaos_vector` in the
+emitted manifest.
+
+If the selected profile declares `gate_verdict:
+"convergence-impossible"` (today: `permanent_split` + `split_brain`),
+the `ci` verdict is overridden from `pass` to `convergence-impossible`
+so a permanent-partition selection produces an honest verdict rather
+than a silent admission. Two new chaos vectors landed under
+`bd-cixqu.2.4`:
+
+- `repeated_short_partitions` — intermittent 30s cycle with 8s
+  partition windows; convergence required.
+- `message_loss_without_partition` — uniform 25% message drop on a
+  full mesh; convergence required.
+
+Example operator invocations:
+
+```
+# default — uses SLO contract primary profile (normal)
+./scripts/run_rgc_fleet_convergence_slo_gate.sh ci
+
+# explicitly run the intermittent-partition chaos vector
+FLEET_CONVERGENCE_SLO_PROFILE=repeated_short_partitions \
+  ./scripts/run_rgc_fleet_convergence_slo_gate.sh ci
+
+# expect convergence-impossible verdict on permanent partition
+FLEET_CONVERGENCE_SLO_PROFILE=permanent_split \
+  ./scripts/run_rgc_fleet_convergence_slo_gate.sh ci
+# -> manifest.verdict = "convergence-impossible"
+```
+
 ### How to mark a profile as unsupported
 
 Append to `docs/fleet_convergence_slo_v1.json.unsupported_profiles`

@@ -55,6 +55,13 @@ readonly TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 readonly REPLAY_PIN="${RGC_FLEET_CONVERGENCE_SLO_REPLAY_RUN_DIR:-}"
 readonly SLO_CONTRACT="${FLEET_CONVERGENCE_SLO_CONTRACT:-docs/fleet_convergence_slo_v1.json}"
 readonly PARTITION_PROFILES_PATH="docs/fleet_partition_fault_profiles_v1.json"
+# bd-cixqu.2.4: when set, the `ci` mode looks up this named profile in
+# PARTITION_PROFILES_PATH, records it under partition_profile_used in
+# the manifest, and emits the profile's declared `gate_verdict` when
+# the profile is one of the unsupported set (permanent_split,
+# split_brain) so a permanent-partition selection produces a
+# `convergence-impossible` verdict rather than a silent pass.
+SELECTED_PARTITION_PROFILE="${FLEET_CONVERGENCE_SLO_PROFILE:-}"
 
 if [[ -n "${explicit_output_dir}" ]]; then
   RUN_DIR="${explicit_output_dir}"
@@ -195,6 +202,34 @@ run_ci_mode() {
   slo_pct="$(jq -r '.slo.target_convergence_percentile' "${SLO_CONTRACT}")"
   slo_walltime="$(jq -r '.slo.target_convergence_wall_time_seconds' "${SLO_CONTRACT}")"
 
+  # bd-cixqu.2.4 — partition-profile selection + verdict override.
+  local partition_profile_used partition_profile_gate_verdict partition_profile_source partition_profile_chaos_vector
+  partition_profile_used="${SELECTED_PARTITION_PROFILE:-${slo_profile}}"
+  partition_profile_source="$([[ -n "${SELECTED_PARTITION_PROFILE}" ]] && echo "FLEET_CONVERGENCE_SLO_PROFILE env override" || echo "SLO contract primary profile")"
+  partition_profile_gate_verdict=""
+  partition_profile_chaos_vector=""
+
+  if [[ -f "${PARTITION_PROFILES_PATH}" ]]; then
+    if ! jq -e --arg p "${partition_profile_used}" '.profiles | has($p)' "${PARTITION_PROFILES_PATH}" >/dev/null; then
+      emit_event "partition_profile_lookup" "${partition_profile_used}" "fail" "profile not found in ${PARTITION_PROFILES_PATH}"
+      echo "ERROR: partition profile '${partition_profile_used}' not declared in ${PARTITION_PROFILES_PATH}" >&2
+      return 1
+    fi
+    partition_profile_gate_verdict="$(jq -r --arg p "${partition_profile_used}" '.profiles[$p].gate_verdict // ""' "${PARTITION_PROFILES_PATH}")"
+    partition_profile_chaos_vector="$(jq -r --arg p "${partition_profile_used}" '.profiles[$p].chaos_vector // ""' "${PARTITION_PROFILES_PATH}")"
+    emit_event "partition_profile_lookup" "${partition_profile_used}" "pass" \
+      "source=${partition_profile_source} gate_verdict=${partition_profile_gate_verdict:-none} chaos_vector=${partition_profile_chaos_vector:-none}"
+  fi
+
+  # bd-cixqu.2.4 — if the selected partition profile is declared
+  # convergence-impossible, that verdict wins over the default `pass`
+  # so a permanent_split / split_brain selection cannot produce a
+  # silent admission.
+  local ci_verdict="pass"
+  if [[ "${partition_profile_gate_verdict}" == "convergence-impossible" ]]; then
+    ci_verdict="convergence-impossible"
+  fi
+
   jq -n \
     --arg schema "franken-engine.rgc-fleet-convergence-slo-gate.manifest.v1" \
     --arg run_dir "${RUN_DIR}" \
@@ -206,13 +241,17 @@ run_ci_mode() {
     --arg generated_utc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     --arg slo_contract "${SLO_CONTRACT}" \
     --arg slo_profile "${slo_profile}" \
+    --arg partition_profile_used "${partition_profile_used}" \
+    --arg partition_profile_source "${partition_profile_source}" \
+    --arg partition_profile_gate_verdict "${partition_profile_gate_verdict}" \
+    --arg partition_profile_chaos_vector "${partition_profile_chaos_vector}" \
     --argjson slo_nodes "${slo_nodes}" \
     --argjson slo_pct "${slo_pct}" \
     --argjson slo_walltime "${slo_walltime}" \
     --argjson secondary_count "${secondary_count}" \
     --argjson secondary_pass "${sec_pass}" \
     --argjson secondary_fail "${sec_fail}" \
-    --arg verdict "pass" \
+    --arg verdict "${ci_verdict}" \
     '{
       schema_version: $schema,
       run_dir: $run_dir,
@@ -231,6 +270,10 @@ run_ci_mode() {
         target_convergence_percentile: $slo_pct,
         target_convergence_wall_time_seconds: $slo_walltime
       },
+      partition_profile_used: $partition_profile_used,
+      partition_profile_source: $partition_profile_source,
+      partition_profile_gate_verdict: $partition_profile_gate_verdict,
+      partition_profile_chaos_vector: $partition_profile_chaos_vector,
       secondary_slos: {
         declared: $secondary_count,
         pass: $secondary_pass,
@@ -246,8 +289,16 @@ run_ci_mode() {
   {
     printf -- '# RGC fleet convergence SLO gate — %s\n\n' "${TIMESTAMP}"
     printf -- '- Mode: `%s`\n' "${mode}"
-    printf -- '- Verdict: **pass**\n'
+    printf -- '- Verdict: **%s**\n' "${ci_verdict}"
     printf -- '- SLO contract: `%s`\n' "${SLO_CONTRACT}"
+    printf -- '- Partition profile used: `%s` (source: %s)\n' \
+      "${partition_profile_used}" "${partition_profile_source}"
+    if [[ -n "${partition_profile_chaos_vector}" ]]; then
+      printf -- '- Chaos vector: `%s`\n' "${partition_profile_chaos_vector}"
+    fi
+    if [[ -n "${partition_profile_gate_verdict}" ]]; then
+      printf -- '- Declared profile gate verdict: `%s`\n' "${partition_profile_gate_verdict}"
+    fi
     printf -- '\n## Primary SLO\n\n'
     printf -- '- Partition profile: `%s`\n' "${slo_profile}"
     printf -- '- Fleet size: %s nodes\n' "${slo_nodes}"
@@ -256,7 +307,7 @@ run_ci_mode() {
     printf -- '\n## Secondary SLOs\n\n'
     printf -- '- Declared: %s · Pass: %s · Fail: %s\n' "${secondary_count}" "${sec_pass}" "${sec_fail}"
     printf -- '\n## Unsupported profiles\n\n'
-    printf -- '- `permanent_split` and `split_brain` correctly declared as refused (covered by bd-cixqu.2.6 partition mode).\n'
+    printf -- '- `permanent_split` and `split_brain` produce verdict `convergence-impossible` when selected via FLEET_CONVERGENCE_SLO_PROFILE (covered by bd-cixqu.2.4 + bd-cixqu.2.6 partition mode).\n'
   } >"${SUMMARY_PATH}"
 
   echo "rgc_fleet_convergence_slo_manifest=${MANIFEST_PATH}"

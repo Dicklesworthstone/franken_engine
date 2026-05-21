@@ -609,7 +609,7 @@ pub fn verify_receipt_inclusion(
             head_root: head.root_hash,
         });
     }
-    verify_inclusion(receipt_hash, proof).map_err(TransparencyLogError::from)
+    verify_inclusion(receipt_hash, proof.marker_index, proof).map_err(TransparencyLogError::from)
 }
 
 /// Verify that a consistency proof links a trusted-earlier `old_root`
@@ -750,7 +750,7 @@ mod tests {
         }
         for i in 0..32u64 {
             let proof = log.inclusion_proof_for(i).expect("proof");
-            verify_inclusion(&leaf(i as u8), &proof).expect("verify");
+            verify_inclusion(&leaf(i as u8), i, &proof).expect("verify");
             assert_eq!(proof.marker_index, i);
             assert_eq!(proof.stream_length, 32);
             assert_eq!(proof.proof_type, ProofType::Inclusion);

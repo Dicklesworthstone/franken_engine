@@ -3781,4 +3781,102 @@ mod tests {
         assert_eq!(actual.schema_version, DOCS_CONTRACT_SCHEMA_VERSION);
         assert_eq!(actual, expected);
     }
+
+    // PERF-H1.3 tests for cached default signing key
+
+    #[test]
+    fn default_signing_key_byte_equal_across_calls() {
+        let a = default_evidence_signing_key();
+        let b = default_evidence_signing_key();
+        assert_eq!(a.to_bytes(), b.to_bytes(),
+            "cached SigningKey must return byte-identical bytes across calls");
+    }
+
+    #[test]
+    fn cached_signing_key_matches_eager_construction() {
+        let cached = default_evidence_signing_key();
+        let eager = SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES)
+            .expect("const bytes are non-zero");
+        assert_eq!(cached.to_bytes(), eager.to_bytes(),
+            "cache must return byte-identical key to the eager construction");
+        // Also verify the verifying key matches.
+        assert_eq!(
+            cached.verification_key().to_bytes(),
+            eager.verification_key().to_bytes(),
+            "derived VerifyingKey must also match"
+        );
+    }
+
+    #[test]
+    fn signature_byte_equal_with_cached_key() {
+        let payload = b"frankenengine-h1-perf-pass-fixed-payload";
+        let cached_sig = sign_preimage(&default_evidence_signing_key(), payload)
+            .expect("sign must succeed with valid key");
+        let eager_sig = sign_preimage(
+            &SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES).unwrap(),
+            payload,
+        ).expect("sign must succeed");
+        assert_eq!(cached_sig.to_bytes(), eager_sig.to_bytes(),
+            "signatures must be byte-equal; Ed25519 is deterministic given same key and payload");
+    }
+
+    #[test]
+    fn cached_signing_key_safe_under_concurrent_first_access() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+        const N: usize = 32;
+        let barrier = Arc::new(Barrier::new(N));
+        let mut handles = Vec::with_capacity(N);
+        for _ in 0..N {
+            let b = barrier.clone();
+            handles.push(thread::spawn(move || {
+                b.wait();
+                // All threads race here. LazyLock must ensure exactly one init.
+                default_evidence_signing_key().to_bytes()
+            }));
+        }
+        let mut bytes_set = std::collections::BTreeSet::new();
+        for h in handles {
+            bytes_set.insert(h.join().expect("thread must not panic"));
+        }
+        assert_eq!(bytes_set.len(), 1,
+            "all threads must observe the same SigningKey bytes");
+    }
+
+    #[test]
+    fn evidence_entry_signature_unchanged_post_cache() {
+        // Build one entry with the cached helper (now default).
+        let cached_entry = EvidenceEntryBuilder::new(
+            "trace-h1", "decision-h1", "policy-h1",
+            SecurityEpoch::from_raw(1),
+            DecisionType::ContractEvaluation,
+        )
+        .timestamp_ns(1_700_000_000_000_000_001)
+        .candidate(CandidateAction::new("do-nothing", 0))
+        .chosen(ChosenAction {
+            action_name: "do-nothing".into(),
+            expected_loss_millionths: 0,
+            rationale: "h1 fixed entry".into(),
+        })
+        .build()
+        .expect("entry must build");
+
+        // The signature bytes are the load-bearing output we must protect.
+        // The expected bytes are derived once (during this test's first
+        // execution) and hard-coded into the test for future regression
+        // detection. Update the literal only if the canonical preimage
+        // shape changes — which is itself a separate signed-decision.
+        let observed_sig_hex = hex::encode(cached_entry.envelope().signature.to_bytes());
+        let snapshot_path = std::path::PathBuf::from(
+            env!("CARGO_MANIFEST_DIR")
+        ).join("tests/golden/evidence_h1_fixed_signature.hex");
+        if std::env::var("BLESS_GOLDEN").is_ok() {
+            std::fs::write(&snapshot_path, &observed_sig_hex).unwrap();
+        } else {
+            let golden = std::fs::read_to_string(&snapshot_path)
+                .expect("golden must exist; re-run with BLESS_GOLDEN=1 the first time");
+            assert_eq!(observed_sig_hex, golden.trim(),
+                "evidence signature must match the golden; if intentional, BLESS_GOLDEN=1");
+        }
+    }
 }

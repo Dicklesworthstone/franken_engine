@@ -323,6 +323,7 @@ pub mod policy_theorem_compiler;
 pub mod policy_theorem_engine;
 pub mod polymorphic_inline_cache;
 pub mod portfolio_governor;
+pub mod pre_signed_demotion_fallback;
 pub mod primitive_adoption_schema;
 pub mod principal_key_roles;
 pub mod privacy_learning_contract;

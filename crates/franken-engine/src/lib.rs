@@ -269,6 +269,7 @@ pub mod module_resolver;
 pub mod monitor_scheduler;
 pub mod moonshot_contract;
 pub mod moonshot_disruption_track;
+pub mod moonshot_weekly_report;
 pub mod native_addon_cohort_gate;
 pub mod native_addon_membrane;
 pub mod native_addon_parity_gate;

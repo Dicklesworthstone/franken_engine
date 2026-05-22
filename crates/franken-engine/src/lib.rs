@@ -245,6 +245,7 @@ pub mod lowering_gap_inventory;
 pub mod lowering_parity_evidence;
 pub mod lowering_pipeline;
 pub mod marker_stream;
+pub mod martingale_decision_ledger;
 pub mod metadata_locality_governance_gate;
 pub mod metadata_substrate_governance;
 pub mod metadata_substrate_inventory;

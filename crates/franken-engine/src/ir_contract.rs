@@ -520,9 +520,9 @@ impl Ir1Op {
                 ("op", CanonicalValue::str("call_method")),
                 ("arg_count", CanonicalValue::U64(u64::from(*arg_count))),
             ]),
-            Self::Return => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("return")),
-            ]),
+            Self::Return => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("return"))])
+            }
             Self::ImportModule { specifier } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("import_module")),
                 ("specifier", CanonicalValue::str(specifier.clone())),
@@ -532,16 +532,12 @@ impl Ir1Op {
                 ("binding_id", CanonicalValue::U64(u64::from(*binding_id))),
                 ("name", CanonicalValue::str(name.clone())),
             ]),
-            Self::Await => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("await")),
-            ]),
+            Self::Await => CanonicalValue::map_from_entries([("op", CanonicalValue::str("await"))]),
             Self::Yield { delegate } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("yield")),
                 ("delegate", CanonicalValue::Bool(*delegate)),
             ]),
-            Self::Nop => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("nop")),
-            ]),
+            Self::Nop => CanonicalValue::map_from_entries([("op", CanonicalValue::str("nop"))]),
             Self::BinaryOp { operator } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("binary_op")),
                 ("operator", CanonicalValue::str(operator.as_str())),
@@ -602,27 +598,26 @@ impl Ir1Op {
                 ("op", CanonicalValue::str("new_object")),
                 ("count", CanonicalValue::U64(u64::from(*count))),
             ]),
-            Self::ArrayPush => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("array_push")),
-            ]),
-            Self::ArraySlice => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("array_slice")),
-            ]),
-            Self::SpreadIntoArray => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("spread_into_array")),
-            ]),
-            Self::SpreadIntoObject => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("spread_into_object")),
-            ]),
-            Self::Throw => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("throw")),
-            ]),
-            Self::LoadThis => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("load_this")),
-            ]),
-            Self::LoadSuper => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("load_super")),
-            ]),
+            Self::ArrayPush => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("array_push"))])
+            }
+            Self::ArraySlice => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("array_slice"))])
+            }
+            Self::SpreadIntoArray => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("spread_into_array"))])
+            }
+            Self::SpreadIntoObject => CanonicalValue::map_from_entries([(
+                "op",
+                CanonicalValue::str("spread_into_object"),
+            )]),
+            Self::Throw => CanonicalValue::map_from_entries([("op", CanonicalValue::str("throw"))]),
+            Self::LoadThis => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("load_this"))])
+            }
+            Self::LoadSuper => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("load_super"))])
+            }
             Self::DeclareFunction {
                 name,
                 binding_id,
@@ -637,7 +632,10 @@ impl Ir1Op {
                 (
                     "param_names",
                     CanonicalValue::Array(
-                        param_names.iter().map(|s| CanonicalValue::str(s.clone())).collect(),
+                        param_names
+                            .iter()
+                            .map(|s| CanonicalValue::str(s.clone()))
+                            .collect(),
                     ),
                 ),
                 (
@@ -647,7 +645,10 @@ impl Ir1Op {
                 (
                     "free_vars",
                     CanonicalValue::Array(
-                        free_vars.iter().map(|s| CanonicalValue::str(s.clone())).collect(),
+                        free_vars
+                            .iter()
+                            .map(|s| CanonicalValue::str(s.clone()))
+                            .collect(),
                     ),
                 ),
                 ("is_generator", CanonicalValue::Bool(*is_generator)),
@@ -668,7 +669,10 @@ impl Ir1Op {
                 (
                     "param_names",
                     CanonicalValue::Array(
-                        param_names.iter().map(|s| CanonicalValue::str(s.clone())).collect(),
+                        param_names
+                            .iter()
+                            .map(|s| CanonicalValue::str(s.clone()))
+                            .collect(),
                     ),
                 ),
                 (
@@ -678,7 +682,10 @@ impl Ir1Op {
                 (
                     "free_vars",
                     CanonicalValue::Array(
-                        free_vars.iter().map(|s| CanonicalValue::str(s.clone())).collect(),
+                        free_vars
+                            .iter()
+                            .map(|s| CanonicalValue::str(s.clone()))
+                            .collect(),
                     ),
                 ),
                 ("is_generator", CanonicalValue::Bool(*is_generator)),
@@ -697,28 +704,26 @@ impl Ir1Op {
                     },
                 ),
             ]),
-            Self::EndTry => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("end_try")),
-            ]),
-            Self::EnterFinally => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("enter_finally")),
-            ]),
-            Self::EndFinally => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("end_finally")),
-            ]),
-            Self::Pop => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("pop")),
-            ]),
-            Self::ForInInit => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("for_in_init")),
-            ]),
+            Self::EndTry => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("end_try"))])
+            }
+            Self::EnterFinally => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("enter_finally"))])
+            }
+            Self::EndFinally => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("end_finally"))])
+            }
+            Self::Pop => CanonicalValue::map_from_entries([("op", CanonicalValue::str("pop"))]),
+            Self::ForInInit => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("for_in_init"))])
+            }
             Self::ForInNext { done_label } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("for_in_next")),
                 ("done_label", CanonicalValue::U64(u64::from(*done_label))),
             ]),
-            Self::ForOfInit => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("for_of_init")),
-            ]),
+            Self::ForOfInit => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("for_of_init"))])
+            }
             Self::ForOfNext { done_label } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("for_of_next")),
                 ("done_label", CanonicalValue::U64(u64::from(*done_label))),
@@ -1500,9 +1505,7 @@ impl Ir3Instruction {
                 ("parts", parts.canonical_value()),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
             ]),
-            Self::Halt => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("halt")),
-            ]),
+            Self::Halt => CanonicalValue::map_from_entries([("op", CanonicalValue::str("halt"))]),
             Self::LoadThis { dst } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("load_this")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
@@ -1516,7 +1519,10 @@ impl Ir3Instruction {
                 finally_target,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("begin_try")),
-                ("catch_target", CanonicalValue::U64(u64::from(*catch_target))),
+                (
+                    "catch_target",
+                    CanonicalValue::U64(u64::from(*catch_target)),
+                ),
                 (
                     "finally_target",
                     match finally_target {
@@ -1525,9 +1531,9 @@ impl Ir3Instruction {
                     },
                 ),
             ]),
-            Self::EndTry => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("end_try")),
-            ]),
+            Self::EndTry => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("end_try"))])
+            }
             Self::Throw { value } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("throw")),
                 ("value", CanonicalValue::U64(u64::from(*value))),
@@ -1536,12 +1542,12 @@ impl Ir3Instruction {
                 ("op", CanonicalValue::str("enter_catch")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
             ]),
-            Self::EnterFinally => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("enter_finally")),
-            ]),
-            Self::EndFinally => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("end_finally")),
-            ]),
+            Self::EnterFinally => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("enter_finally"))])
+            }
+            Self::EndFinally => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("end_finally"))])
+            }
             Self::Mod { dst, lhs, rhs } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("mod")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
@@ -1693,25 +1699,37 @@ impl Ir3Instruction {
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("create_closure")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
-                ("function_index", CanonicalValue::U64(u64::from(*function_index))),
-                ("capture_count", CanonicalValue::U64(u64::from(*capture_count))),
+                (
+                    "function_index",
+                    CanonicalValue::U64(u64::from(*function_index)),
+                ),
+                (
+                    "capture_count",
+                    CanonicalValue::U64(u64::from(*capture_count)),
+                ),
             ]),
             Self::PushCapture { name_pool_index } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("push_capture")),
-                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
             ]),
-            Self::PushScope => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("push_scope")),
-            ]),
-            Self::PopScope => CanonicalValue::map_from_entries([
-                ("op", CanonicalValue::str("pop_scope")),
-            ]),
+            Self::PushScope => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("push_scope"))])
+            }
+            Self::PopScope => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("pop_scope"))])
+            }
             Self::DeclareBinding {
                 name_pool_index,
                 kind,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("declare_binding")),
-                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
                 ("kind", CanonicalValue::U64(u64::from(*kind))),
             ]),
             Self::LoadScoped {
@@ -1720,7 +1738,10 @@ impl Ir3Instruction {
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("load_scoped")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
-                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
             ]),
             Self::StoreScoped {
                 src,
@@ -1728,14 +1749,20 @@ impl Ir3Instruction {
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("store_scoped")),
                 ("src", CanonicalValue::U64(u64::from(*src))),
-                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
             ]),
             Self::InitBinding {
                 name_pool_index,
                 src,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("init_binding")),
-                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
                 ("src", CanonicalValue::U64(u64::from(*src))),
             ]),
             Self::ImportModule { specifier, dst } => CanonicalValue::map_from_entries([
@@ -1748,7 +1775,10 @@ impl Ir3Instruction {
                 src,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("export_binding")),
-                ("name_pool_index", CanonicalValue::U64(u64::from(*name_pool_index))),
+                (
+                    "name_pool_index",
+                    CanonicalValue::U64(u64::from(*name_pool_index)),
+                ),
                 ("src", CanonicalValue::U64(u64::from(*src))),
             ]),
             Self::CreateGenerator {
@@ -1758,8 +1788,14 @@ impl Ir3Instruction {
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("create_generator")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
-                ("function_index", CanonicalValue::U64(u64::from(*function_index))),
-                ("capture_count", CanonicalValue::U64(u64::from(*capture_count))),
+                (
+                    "function_index",
+                    CanonicalValue::U64(u64::from(*function_index)),
+                ),
+                (
+                    "capture_count",
+                    CanonicalValue::U64(u64::from(*capture_count)),
+                ),
             ]),
             Self::Yield {
                 value,
@@ -1778,8 +1814,14 @@ impl Ir3Instruction {
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("create_async_function")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
-                ("function_index", CanonicalValue::U64(u64::from(*function_index))),
-                ("capture_count", CanonicalValue::U64(u64::from(*capture_count))),
+                (
+                    "function_index",
+                    CanonicalValue::U64(u64::from(*function_index)),
+                ),
+                (
+                    "capture_count",
+                    CanonicalValue::U64(u64::from(*capture_count)),
+                ),
             ]),
             Self::AwaitValue { promise_reg } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("await_value")),
@@ -1800,8 +1842,14 @@ impl Ir3Instruction {
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("create_async_generator")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
-                ("function_index", CanonicalValue::U64(u64::from(*function_index))),
-                ("capture_count", CanonicalValue::U64(u64::from(*capture_count))),
+                (
+                    "function_index",
+                    CanonicalValue::U64(u64::from(*function_index)),
+                ),
+                (
+                    "capture_count",
+                    CanonicalValue::U64(u64::from(*capture_count)),
+                ),
             ]),
         }
     }

@@ -1919,7 +1919,9 @@ mod tests {
 
     fn naive_hex(id: &EngineObjectId) -> String {
         let mut s = String::with_capacity(OBJECT_ID_LEN * 2);
-        for b in &id.0 { s.push_str(&format!("{b:02x}")); }
+        for b in &id.0 {
+            s.push_str(&format!("{b:02x}"));
+        }
         s
     }
 
@@ -1927,10 +1929,16 @@ mod tests {
     fn to_hex_matches_naive_on_known_ids() {
         for seed in [0u8, 1, 0x7B, 0xAA, 0xFF, 0x33] {
             let id = EngineObjectId([seed; OBJECT_ID_LEN]);
-            assert_eq!(id.to_hex(), naive_hex(&id),
-                "to_hex must match naive impl for uniform seed {seed:#x}");
-            assert_eq!(format!("{id}"), naive_hex(&id),
-                "Display must match naive impl for uniform seed {seed:#x}");
+            assert_eq!(
+                id.to_hex(),
+                naive_hex(&id),
+                "to_hex must match naive impl for uniform seed {seed:#x}"
+            );
+            assert_eq!(
+                format!("{id}"),
+                naive_hex(&id),
+                "Display must match naive impl for uniform seed {seed:#x}"
+            );
         }
     }
 

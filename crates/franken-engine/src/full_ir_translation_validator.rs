@@ -146,8 +146,12 @@ impl FullIrValidationContext {
 
     /// Add a transformation step to the pipeline.
     pub fn add_transformation_step(&mut self, step: IrTransformationStep) {
-        self.verification_coverage.ir_levels_covered.insert(step.source_level);
-        self.verification_coverage.ir_levels_covered.insert(step.target_level);
+        self.verification_coverage
+            .ir_levels_covered
+            .insert(step.source_level);
+        self.verification_coverage
+            .ir_levels_covered
+            .insert(step.target_level);
         self.verification_coverage.transformation_steps_verified += 1;
         self.pipeline_stages.push(step);
     }
@@ -159,7 +163,9 @@ impl FullIrValidationContext {
                 invariant_id: "type_safety_preservation".to_string(),
                 invariant_type: GlobalInvariantType::TypeSafety,
                 description: "Type information preserved across all IR transformations".to_string(),
-                maintained_across_levels: [IrLevel::IR0, IrLevel::IR1, IrLevel::IR2, IrLevel::IR3].into_iter().collect(),
+                maintained_across_levels: [IrLevel::IR0, IrLevel::IR1, IrLevel::IR2, IrLevel::IR3]
+                    .into_iter()
+                    .collect(),
                 proof_obligations: vec![
                     "Well-typed IR0 implies well-typed IR1".to_string(),
                     "Well-typed IR1 implies well-typed IR2".to_string(),
@@ -180,7 +186,9 @@ impl FullIrValidationContext {
                 invariant_id: "semantic_equivalence_end_to_end".to_string(),
                 invariant_type: GlobalInvariantType::SemanticEquivalence,
                 description: "End-to-end semantic equivalence from IR0 to IR3".to_string(),
-                maintained_across_levels: [IrLevel::IR0, IrLevel::IR1, IrLevel::IR2, IrLevel::IR3].into_iter().collect(),
+                maintained_across_levels: [IrLevel::IR0, IrLevel::IR1, IrLevel::IR2, IrLevel::IR3]
+                    .into_iter()
+                    .collect(),
                 proof_obligations: vec![
                     "Operational semantics preserved IR0 → IR1".to_string(),
                     "Operational semantics preserved IR1 → IR2".to_string(),
@@ -192,7 +200,9 @@ impl FullIrValidationContext {
                 invariant_id: "control_flow_integrity".to_string(),
                 invariant_type: GlobalInvariantType::ControlFlowIntegrity,
                 description: "Control flow structure integrity maintained".to_string(),
-                maintained_across_levels: [IrLevel::IR0, IrLevel::IR1, IrLevel::IR2, IrLevel::IR3].into_iter().collect(),
+                maintained_across_levels: [IrLevel::IR0, IrLevel::IR1, IrLevel::IR2, IrLevel::IR3]
+                    .into_iter()
+                    .collect(),
                 proof_obligations: vec![
                     "CFG structure preserved across transformations".to_string(),
                     "Branch targets remain valid after lowering".to_string(),
@@ -206,7 +216,9 @@ impl FullIrValidationContext {
 
         // Update coverage tracking
         for invariant in &self.global_invariants {
-            self.verification_coverage.global_invariant_coverage.insert(invariant.invariant_type.clone(), false);
+            self.verification_coverage
+                .global_invariant_coverage
+                .insert(invariant.invariant_type.clone(), false);
         }
 
         Ok(invariant_count)
@@ -221,7 +233,9 @@ impl FullIrValidationContext {
             if self.validate_transformation_step(step) {
                 result.verified_transformation_steps += 1;
             } else {
-                result.failed_transformation_steps.push(step.transformation_name.clone());
+                result
+                    .failed_transformation_steps
+                    .push(step.transformation_name.clone());
             }
         }
 
@@ -239,11 +253,12 @@ impl FullIrValidationContext {
         result.complete_coverage_achieved = self.check_complete_coverage();
 
         // Overall pipeline success
-        result.pipeline_validation_successful =
-            result.failed_transformation_steps.is_empty() &&
-            result.expression_validation_result.semantic_preservation_proven &&
-            result.statement_validation_successful &&
-            result.global_invariants_maintained;
+        result.pipeline_validation_successful = result.failed_transformation_steps.is_empty()
+            && result
+                .expression_validation_result
+                .semantic_preservation_proven
+            && result.statement_validation_successful
+            && result.global_invariants_maintained;
 
         // End-to-end semantic equivalence
         result.semantic_equivalence_end_to_end =
@@ -255,19 +270,24 @@ impl FullIrValidationContext {
     /// Validate a single transformation step.
     fn validate_transformation_step(&self, step: &IrTransformationStep) -> bool {
         // Simplified validation - in reality would invoke formal verification tools
-        !step.source_representation.is_empty() &&
-        !step.target_representation.is_empty() &&
-        step.source_level != step.target_level &&
-        !step.validation_lemmas.is_empty()
+        !step.source_representation.is_empty()
+            && !step.target_representation.is_empty()
+            && step.source_level != step.target_level
+            && !step.validation_lemmas.is_empty()
     }
 
     /// Validate expression semantics (G.4 coverage).
     fn validate_expressions(&mut self) -> ExpressionValidationResult {
         // Simulate expression validation from G.4
-        let operators = ["add", "sub", "mul", "div", "mod", "eq", "ne", "lt", "le", "gt", "ge", "and", "or", "not"];
+        let operators = [
+            "add", "sub", "mul", "div", "mod", "eq", "ne", "lt", "le", "gt", "ge", "and", "or",
+            "not",
+        ];
 
         for op in &operators {
-            self.expression_validator.validated_operators.insert(op.to_string());
+            self.expression_validator
+                .validated_operators
+                .insert(op.to_string());
         }
 
         self.expression_validator.semantic_preservation_proven = true;
@@ -293,10 +313,9 @@ impl FullIrValidationContext {
                 GlobalInvariantType::VariableLifetimeCorrectness => true,
             };
 
-            self.verification_coverage.global_invariant_coverage.insert(
-                invariant.invariant_type.clone(),
-                verification_success,
-            );
+            self.verification_coverage
+                .global_invariant_coverage
+                .insert(invariant.invariant_type.clone(), verification_success);
 
             if !verification_success {
                 return false;
@@ -316,9 +335,9 @@ impl FullIrValidationContext {
         }
 
         // Must have high coverage percentages
-        self.verification_coverage.expression_coverage_percentage >= 95.0 &&
-        self.verification_coverage.statement_coverage_percentage >= 95.0 &&
-        self.verification_coverage.control_flow_coverage_percentage >= 95.0
+        self.verification_coverage.expression_coverage_percentage >= 95.0
+            && self.verification_coverage.statement_coverage_percentage >= 95.0
+            && self.verification_coverage.control_flow_coverage_percentage >= 95.0
     }
 }
 
@@ -389,7 +408,9 @@ pub fn generate_full_ir_test_cases() -> Vec<FullIrTestCase> {
         },
         FullIrTestCase {
             name: "nested_functions_with_capabilities".to_string(),
-            source_code: "function outer() { function inner() { return sensitive_data; } return inner(); }".to_string(),
+            source_code:
+                "function outer() { function inner() { return sensitive_data; } return inner(); }"
+                    .to_string(),
             expected_ir_levels: 4,
             contains_expressions: true,
             contains_statements: true,
@@ -445,8 +466,16 @@ mod tests {
 
         assert_eq!(ctx.pipeline_stages.len(), 1);
         assert_eq!(ctx.verification_coverage.transformation_steps_verified, 1);
-        assert!(ctx.verification_coverage.ir_levels_covered.contains(&IrLevel::IR0));
-        assert!(ctx.verification_coverage.ir_levels_covered.contains(&IrLevel::IR1));
+        assert!(
+            ctx.verification_coverage
+                .ir_levels_covered
+                .contains(&IrLevel::IR0)
+        );
+        assert!(
+            ctx.verification_coverage
+                .ir_levels_covered
+                .contains(&IrLevel::IR1)
+        );
     }
 
     #[test]
@@ -458,8 +487,11 @@ mod tests {
         assert!(!ctx.global_invariants.is_empty());
 
         // Check that we have all expected invariant types
-        let invariant_types: BTreeSet<_> = ctx.global_invariants.iter()
-            .map(|inv| &inv.invariant_type).collect();
+        let invariant_types: BTreeSet<_> = ctx
+            .global_invariants
+            .iter()
+            .map(|inv| &inv.invariant_type)
+            .collect();
         assert!(invariant_types.contains(&GlobalInvariantType::TypeSafety));
         assert!(invariant_types.contains(&GlobalInvariantType::SemanticEquivalence));
         assert!(invariant_types.contains(&GlobalInvariantType::CapabilityConfinement));
@@ -506,7 +538,11 @@ mod tests {
         let result = ctx.validate_full_pipeline();
         assert!(result.pipeline_validation_successful);
         assert_eq!(result.verified_transformation_steps, 3);
-        assert!(result.expression_validation_result.semantic_preservation_proven);
+        assert!(
+            result
+                .expression_validation_result
+                .semantic_preservation_proven
+        );
     }
 
     #[test]
@@ -514,7 +550,8 @@ mod tests {
         let test_cases = generate_full_ir_test_cases();
         assert!(!test_cases.is_empty());
 
-        let conditional_case = test_cases.iter()
+        let conditional_case = test_cases
+            .iter()
             .find(|tc| tc.name == "conditional_with_expressions")
             .unwrap();
 

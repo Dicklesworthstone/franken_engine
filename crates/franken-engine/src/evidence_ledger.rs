@@ -3788,8 +3788,11 @@ mod tests {
     fn default_signing_key_byte_equal_across_calls() {
         let a = default_evidence_signing_key();
         let b = default_evidence_signing_key();
-        assert_eq!(a.to_bytes(), b.to_bytes(),
-            "cached SigningKey must return byte-identical bytes across calls");
+        assert_eq!(
+            a.to_bytes(),
+            b.to_bytes(),
+            "cached SigningKey must return byte-identical bytes across calls"
+        );
     }
 
     #[test]
@@ -3797,8 +3800,11 @@ mod tests {
         let cached = default_evidence_signing_key();
         let eager = SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES)
             .expect("const bytes are non-zero");
-        assert_eq!(cached.to_bytes(), eager.to_bytes(),
-            "cache must return byte-identical key to the eager construction");
+        assert_eq!(
+            cached.to_bytes(),
+            eager.to_bytes(),
+            "cache must return byte-identical key to the eager construction"
+        );
         // Also verify the verifying key matches.
         assert_eq!(
             cached.verification_key().to_bytes(),
@@ -3815,9 +3821,13 @@ mod tests {
         let eager_sig = sign_preimage(
             &SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES).unwrap(),
             payload,
-        ).expect("sign must succeed");
-        assert_eq!(cached_sig.to_bytes(), eager_sig.to_bytes(),
-            "signatures must be byte-equal; Ed25519 is deterministic given same key and payload");
+        )
+        .expect("sign must succeed");
+        assert_eq!(
+            cached_sig.to_bytes(),
+            eager_sig.to_bytes(),
+            "signatures must be byte-equal; Ed25519 is deterministic given same key and payload"
+        );
     }
 
     #[test]
@@ -3839,15 +3849,20 @@ mod tests {
         for h in handles {
             bytes_set.insert(h.join().expect("thread must not panic"));
         }
-        assert_eq!(bytes_set.len(), 1,
-            "all threads must observe the same SigningKey bytes");
+        assert_eq!(
+            bytes_set.len(),
+            1,
+            "all threads must observe the same SigningKey bytes"
+        );
     }
 
     #[test]
     fn evidence_entry_signature_unchanged_post_cache() {
         // Build one entry with the cached helper (now default).
         let cached_entry = EvidenceEntryBuilder::new(
-            "trace-h1", "decision-h1", "policy-h1",
+            "trace-h1",
+            "decision-h1",
+            "policy-h1",
             SecurityEpoch::from_raw(1),
             DecisionType::ContractEvaluation,
         )
@@ -3867,16 +3882,18 @@ mod tests {
         // detection. Update the literal only if the canonical preimage
         // shape changes — which is itself a separate signed-decision.
         let observed_sig_hex = hex::encode(cached_entry.envelope().signature.to_bytes());
-        let snapshot_path = std::path::PathBuf::from(
-            env!("CARGO_MANIFEST_DIR")
-        ).join("tests/golden/evidence_h1_fixed_signature.hex");
+        let snapshot_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/golden/evidence_h1_fixed_signature.hex");
         if std::env::var("BLESS_GOLDEN").is_ok() {
             std::fs::write(&snapshot_path, &observed_sig_hex).unwrap();
         } else {
             let golden = std::fs::read_to_string(&snapshot_path)
                 .expect("golden must exist; re-run with BLESS_GOLDEN=1 the first time");
-            assert_eq!(observed_sig_hex, golden.trim(),
-                "evidence signature must match the golden; if intentional, BLESS_GOLDEN=1");
+            assert_eq!(
+                observed_sig_hex,
+                golden.trim(),
+                "evidence signature must match the golden; if intentional, BLESS_GOLDEN=1"
+            );
         }
     }
 }

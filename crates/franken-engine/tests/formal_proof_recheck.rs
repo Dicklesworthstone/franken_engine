@@ -7,8 +7,8 @@
 //!
 //! Failure on any proof regression prevents deployment until fixed.
 
-use std::process::{Command, Stdio};
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 /// Test that the formal proof recheck script exists and is executable.
 #[test]
@@ -20,7 +20,9 @@ fn formal_proof_recheck_script_exists() {
         script_path
     );
 
-    let metadata = script_path.metadata().expect("Should be able to read script metadata");
+    let metadata = script_path
+        .metadata()
+        .expect("Should be able to read script metadata");
     assert!(
         metadata.permissions().mode() & 0o111 != 0,
         "Formal proof recheck script must be executable"
@@ -70,8 +72,8 @@ fn lean_proof_directory_structure_valid() {
             proof_path
         );
 
-        let proof_content = std::fs::read_to_string(&proof_path)
-            .expect("Should be able to read proof file");
+        let proof_content =
+            std::fs::read_to_string(&proof_path).expect("Should be able to read proof file");
         assert!(
             !proof_content.trim().is_empty(),
             "Proof file must not be empty: {:?}",
@@ -88,10 +90,7 @@ fn lean_toolchain_version_valid() {
         .expect("Should be able to read lean-toolchain file");
 
     let version = toolchain_content.trim();
-    assert!(
-        !version.is_empty(),
-        "lean-toolchain must specify a version"
-    );
+    assert!(!version.is_empty(), "lean-toolchain must specify a version");
 
     // Check that it looks like a version number (basic validation)
     assert!(
@@ -105,8 +104,8 @@ fn lean_toolchain_version_valid() {
 #[test]
 fn lakefile_dependencies_present() {
     let lakefile_path = Path::new("proofs/lean4/lakefile.lean");
-    let lakefile_content = std::fs::read_to_string(lakefile_path)
-        .expect("Should be able to read lakefile.lean");
+    let lakefile_content =
+        std::fs::read_to_string(lakefile_path).expect("Should be able to read lakefile.lean");
 
     // Check for mathlib dependency (required for formal verification)
     assert!(
@@ -150,9 +149,9 @@ fn formal_proof_recheck_smoke_test() {
 
     // Should either complete verification or indicate Lean is not available
     assert!(
-        stdout.contains("SUCCESS") ||
-        stdout.contains("Lean 4 not found") ||
-        stdout.contains("proof checking skipped"),
+        stdout.contains("SUCCESS")
+            || stdout.contains("Lean 4 not found")
+            || stdout.contains("proof checking skipped"),
         "Script should either verify proofs or indicate Lean unavailability\nOutput: {}",
         stdout
     );
@@ -173,16 +172,16 @@ fn proof_files_syntactically_valid() {
 
     for proof_file in &proof_files {
         let proof_path = proof_dir.join(proof_file);
-        let proof_content = std::fs::read_to_string(&proof_path)
-            .expect("Should be able to read proof file");
+        let proof_content =
+            std::fs::read_to_string(&proof_path).expect("Should be able to read proof file");
 
         // Basic syntactic checks for Lean code
         assert!(
-            proof_content.contains("theorem") ||
-            proof_content.contains("def") ||
-            proof_content.contains("lemma") ||
-            proof_content.contains("structure") ||
-            proof_content.contains("inductive"),
+            proof_content.contains("theorem")
+                || proof_content.contains("def")
+                || proof_content.contains("lemma")
+                || proof_content.contains("structure")
+                || proof_content.contains("inductive"),
             "Proof file should contain Lean definitions or theorems: {:?}",
             proof_path
         );
@@ -213,7 +212,9 @@ fn proof_files_contain_verification_content() {
     let cap_spec = std::fs::read_to_string(proof_dir.join("CapabilityAlgebraSpecification.lean"))
         .expect("Should read capability algebra specification");
     assert!(
-        cap_spec.contains("algebra") || cap_spec.contains("capability") || cap_spec.contains("structure"),
+        cap_spec.contains("algebra")
+            || cap_spec.contains("capability")
+            || cap_spec.contains("structure"),
         "Capability algebra specification should contain algebraic definitions"
     );
 
@@ -221,7 +222,9 @@ fn proof_files_contain_verification_content() {
     let translation = std::fs::read_to_string(proof_dir.join("translation_validation.lean"))
         .expect("Should read translation validation proofs");
     assert!(
-        translation.contains("semantic") || translation.contains("equiv") || translation.contains("translation"),
+        translation.contains("semantic")
+            || translation.contains("equiv")
+            || translation.contains("translation"),
         "Translation validation should contain semantic preservation proofs"
     );
 }

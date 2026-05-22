@@ -17,7 +17,9 @@ fn frankenctl_verify_receipt_uses_cached_default_key() {
     // when given identical inputs (proving cache stability).
 
     let entry1 = EvidenceEntryBuilder::new(
-        "test-trace-1", "test-decision-1", "test-policy-1",
+        "test-trace-1",
+        "test-decision-1",
+        "test-policy-1",
         SecurityEpoch::from_raw(42),
         DecisionType::ContractEvaluation,
     )
@@ -32,7 +34,9 @@ fn frankenctl_verify_receipt_uses_cached_default_key() {
     .expect("first entry must build successfully");
 
     let entry2 = EvidenceEntryBuilder::new(
-        "test-trace-1", "test-decision-1", "test-policy-1",
+        "test-trace-1",
+        "test-decision-1",
+        "test-policy-1",
         SecurityEpoch::from_raw(42),
         DecisionType::ContractEvaluation,
     )

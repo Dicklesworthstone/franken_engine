@@ -259,7 +259,8 @@ impl PolicyTheoremEngine {
         for low_level in &security_levels {
             for high_level in &security_levels {
                 if high_level > low_level {
-                    let theorem_id = format!("noninterference_{}_{}",
+                    let theorem_id = format!(
+                        "noninterference_{}_{}",
                         format!("{:?}", low_level).to_lowercase(),
                         format!("{:?}", high_level).to_lowercase()
                     );
@@ -272,7 +273,10 @@ impl PolicyTheoremEngine {
                                 high_level, low_level
                             ),
                             quantifiers: vec!["h_input".to_string(), "l_output".to_string()],
-                            domain_constraints: vec!["(Input h_input)".to_string(), "(Output l_output)".to_string()],
+                            domain_constraints: vec![
+                                "(Input h_input)".to_string(),
+                                "(Output l_output)".to_string(),
+                            ],
                             verification_method: self.smt_context.solver_backend.clone(),
                         },
                         SmtAssertion {
@@ -281,8 +285,16 @@ impl PolicyTheoremEngine {
                                 "(forall ((h1 Input) (h2 Input) (l_ctx Context)) (=> (and (security_level h1 {:?}) (security_level h2 {:?}) (security_level l_ctx {:?})) (equal (observe l_ctx h1) (observe l_ctx h2))))",
                                 high_level, high_level, low_level
                             ),
-                            quantifiers: vec!["h1".to_string(), "h2".to_string(), "l_ctx".to_string()],
-                            domain_constraints: vec!["(Input h1)".to_string(), "(Input h2)".to_string(), "(Context l_ctx)".to_string()],
+                            quantifiers: vec![
+                                "h1".to_string(),
+                                "h2".to_string(),
+                                "l_ctx".to_string(),
+                            ],
+                            domain_constraints: vec![
+                                "(Input h1)".to_string(),
+                                "(Input h2)".to_string(),
+                                "(Context l_ctx)".to_string(),
+                            ],
                             verification_method: self.smt_context.solver_backend.clone(),
                         },
                     ];
@@ -290,7 +302,10 @@ impl PolicyTheoremEngine {
                     let theorem = PolicyTheorem {
                         theorem_id: theorem_id.clone(),
                         property: PolicyProperty::NonInterference,
-                        hypothesis: format!("{:?} inputs do not interfere with {:?} outputs", high_level, low_level),
+                        hypothesis: format!(
+                            "{:?} inputs do not interfere with {:?} outputs",
+                            high_level, low_level
+                        ),
                         conclusion: "Information flow control policy enforced".to_string(),
                         proof_obligations,
                         verification_status: VerificationStatus::Unknown,
@@ -312,7 +327,8 @@ impl PolicyTheoremEngine {
 
         for (parent_cap, children) in &self.capability_hierarchy {
             for child_cap in children {
-                let theorem_id = format!("attenuation_{}_{}",
+                let theorem_id = format!(
+                    "attenuation_{}_{}",
                     parent_cap.replace(' ', "_"),
                     child_cap.replace(' ', "_")
                 );
@@ -389,7 +405,8 @@ impl PolicyTheoremEngine {
                 }
             }
 
-            self.verification_cache.insert(theorem.theorem_id.clone(), verification_result);
+            self.verification_cache
+                .insert(theorem.theorem_id.clone(), verification_result);
         }
 
         let total_time = start_time.elapsed();
@@ -400,13 +417,19 @@ impl PolicyTheoremEngine {
             failed_theorems: failed_verifications.len(),
             failed_theorem_ids: failed_verifications,
             verification_time_ms: total_time.as_millis() as u64,
-            monotonicity_proven: self.theorems.iter()
+            monotonicity_proven: self
+                .theorems
+                .iter()
                 .filter(|t| t.property == PolicyProperty::Monotonicity)
                 .all(|t| t.verification_status == VerificationStatus::Proven),
-            non_interference_proven: self.theorems.iter()
+            non_interference_proven: self
+                .theorems
+                .iter()
                 .filter(|t| t.property == PolicyProperty::NonInterference)
                 .all(|t| t.verification_status == VerificationStatus::Proven),
-            attenuation_proven: self.theorems.iter()
+            attenuation_proven: self
+                .theorems
+                .iter()
                 .filter(|t| t.property == PolicyProperty::Attenuation)
                 .all(|t| t.verification_status == VerificationStatus::Proven),
         })
@@ -420,21 +443,33 @@ impl PolicyTheoremEngine {
         // For now, simulate SMT verification based on theorem structure
         let verification_status = match theorem.property {
             PolicyProperty::Monotonicity => {
-                if theorem.proof_obligations.iter().all(|po| po.smt_formula.contains("forall")) {
+                if theorem
+                    .proof_obligations
+                    .iter()
+                    .all(|po| po.smt_formula.contains("forall"))
+                {
                     VerificationStatus::Proven
                 } else {
                     VerificationStatus::Unknown
                 }
             }
             PolicyProperty::NonInterference => {
-                if theorem.proof_obligations.iter().any(|po| po.smt_formula.contains("not (influences")) {
+                if theorem
+                    .proof_obligations
+                    .iter()
+                    .any(|po| po.smt_formula.contains("not (influences"))
+                {
                     VerificationStatus::Proven
                 } else {
                     VerificationStatus::Unknown
                 }
             }
             PolicyProperty::Attenuation => {
-                if theorem.proof_obligations.iter().any(|po| po.smt_formula.contains("not (exists")) {
+                if theorem
+                    .proof_obligations
+                    .iter()
+                    .any(|po| po.smt_formula.contains("not (exists"))
+                {
                     VerificationStatus::Proven
                 } else {
                     VerificationStatus::Unknown
@@ -443,17 +478,17 @@ impl PolicyTheoremEngine {
             _ => VerificationStatus::Unknown,
         };
 
-        let proof_steps = vec![
-            ProofStep {
-                step_id: format!("{}_step_1", theorem.theorem_id),
-                rule_applied: "SMT solver application".to_string(),
-                premise_formulas: theorem.proof_obligations.iter()
-                    .map(|po| po.smt_formula.clone())
-                    .collect(),
-                conclusion_formula: theorem.conclusion.clone(),
-                justification: format!("Verified via {:?}", self.smt_context.solver_backend),
-            }
-        ];
+        let proof_steps = vec![ProofStep {
+            step_id: format!("{}_step_1", theorem.theorem_id),
+            rule_applied: "SMT solver application".to_string(),
+            premise_formulas: theorem
+                .proof_obligations
+                .iter()
+                .map(|po| po.smt_formula.clone())
+                .collect(),
+            conclusion_formula: theorem.conclusion.clone(),
+            justification: format!("Verified via {:?}", self.smt_context.solver_backend),
+        }];
 
         let verification_time = start_time.elapsed();
 
@@ -465,10 +500,18 @@ impl PolicyTheoremEngine {
             counterexample: None,
             proof_steps,
             verification_metadata: [
-                ("solver".to_string(), format!("{:?}", self.smt_context.solver_backend)),
+                (
+                    "solver".to_string(),
+                    format!("{:?}", self.smt_context.solver_backend),
+                ),
                 ("logic".to_string(), format!("{:?}", self.smt_context.logic)),
-                ("timeout".to_string(), self.smt_context.timeout_seconds.to_string()),
-            ].into_iter().collect(),
+                (
+                    "timeout".to_string(),
+                    self.smt_context.timeout_seconds.to_string(),
+                ),
+            ]
+            .into_iter()
+            .collect(),
         })
     }
 
@@ -544,17 +587,20 @@ pub fn generate_policy_test_cases() -> Vec<PolicyTestCase> {
                 ("user_input".to_string(), SecurityLevel::Public),
                 ("api_key".to_string(), SecurityLevel::Internal),
                 ("database_credentials".to_string(), SecurityLevel::Secret),
-            ].into_iter().collect(),
-            policy_rules: vec![
-                PolicyRule {
-                    rule_id: "access_control".to_string(),
-                    rule_type: PolicyProperty::Monotonicity,
-                    premise: "User requests resource access".to_string(),
-                    conclusion: "Access granted only if clearance >= resource classification".to_string(),
-                    security_context: [("user".to_string(), SecurityLevel::Internal)].into_iter().collect(),
-                    capability_constraints: vec!["read_access".to_string()],
-                }
-            ],
+            ]
+            .into_iter()
+            .collect(),
+            policy_rules: vec![PolicyRule {
+                rule_id: "access_control".to_string(),
+                rule_type: PolicyProperty::Monotonicity,
+                premise: "User requests resource access".to_string(),
+                conclusion: "Access granted only if clearance >= resource classification"
+                    .to_string(),
+                security_context: [("user".to_string(), SecurityLevel::Internal)]
+                    .into_iter()
+                    .collect(),
+                capability_constraints: vec!["read_access".to_string()],
+            }],
             expected_theorems: 2,
             expected_verification_status: VerificationStatus::Proven,
         },
@@ -564,17 +610,17 @@ pub fn generate_policy_test_cases() -> Vec<PolicyTestCase> {
             security_classifications: [
                 ("full_admin".to_string(), SecurityLevel::Secret),
                 ("read_only".to_string(), SecurityLevel::Public),
-            ].into_iter().collect(),
-            policy_rules: vec![
-                PolicyRule {
-                    rule_id: "delegation".to_string(),
-                    rule_type: PolicyProperty::Attenuation,
-                    premise: "Admin delegates capability to user".to_string(),
-                    conclusion: "Delegated capability is subset of admin capability".to_string(),
-                    security_context: BTreeMap::new(),
-                    capability_constraints: vec!["admin_access".to_string(), "user_access".to_string()],
-                }
-            ],
+            ]
+            .into_iter()
+            .collect(),
+            policy_rules: vec![PolicyRule {
+                rule_id: "delegation".to_string(),
+                rule_type: PolicyProperty::Attenuation,
+                premise: "Admin delegates capability to user".to_string(),
+                conclusion: "Delegated capability is subset of admin capability".to_string(),
+                security_context: BTreeMap::new(),
+                capability_constraints: vec!["admin_access".to_string(), "user_access".to_string()],
+            }],
             expected_theorems: 2,
             expected_verification_status: VerificationStatus::Proven,
         },
@@ -584,20 +630,22 @@ pub fn generate_policy_test_cases() -> Vec<PolicyTestCase> {
             security_classifications: [
                 ("secret_data".to_string(), SecurityLevel::Secret),
                 ("public_log".to_string(), SecurityLevel::Public),
-            ].into_iter().collect(),
-            policy_rules: vec![
-                PolicyRule {
-                    rule_id: "no_downgrade".to_string(),
-                    rule_type: PolicyProperty::NonInterference,
-                    premise: "Secret data processed".to_string(),
-                    conclusion: "Public outputs independent of secret inputs".to_string(),
-                    security_context: [
-                        ("input".to_string(), SecurityLevel::Secret),
-                        ("output".to_string(), SecurityLevel::Public),
-                    ].into_iter().collect(),
-                    capability_constraints: Vec::new(),
-                }
-            ],
+            ]
+            .into_iter()
+            .collect(),
+            policy_rules: vec![PolicyRule {
+                rule_id: "no_downgrade".to_string(),
+                rule_type: PolicyProperty::NonInterference,
+                premise: "Secret data processed".to_string(),
+                conclusion: "Public outputs independent of secret inputs".to_string(),
+                security_context: [
+                    ("input".to_string(), SecurityLevel::Secret),
+                    ("output".to_string(), SecurityLevel::Public),
+                ]
+                .into_iter()
+                .collect(),
+                capability_constraints: Vec::new(),
+            }],
             expected_theorems: 4, // Non-interference generates multiple level pairs
             expected_verification_status: VerificationStatus::Proven,
         },
@@ -635,7 +683,10 @@ mod tests {
         engine.add_security_classification("admin_key".to_string(), SecurityLevel::Secret);
 
         assert_eq!(engine.security_lattice.len(), 2);
-        assert_eq!(engine.security_lattice["user_data"], SecurityLevel::Internal);
+        assert_eq!(
+            engine.security_lattice["user_data"],
+            SecurityLevel::Internal
+        );
         assert_eq!(engine.security_lattice["admin_key"], SecurityLevel::Secret);
     }
 
@@ -670,7 +721,9 @@ mod tests {
         let theorem_count = engine.generate_non_interference_theorems().unwrap();
         assert!(theorem_count > 0); // Should generate theorems for security level pairs
 
-        let ni_theorems: Vec<_> = engine.theorems.iter()
+        let ni_theorems: Vec<_> = engine
+            .theorems
+            .iter()
             .filter(|t| t.property == PolicyProperty::NonInterference)
             .collect();
 
@@ -680,8 +733,12 @@ mod tests {
         for theorem in ni_theorems {
             assert!(theorem.theorem_id.contains("noninterference"));
             assert!(!theorem.proof_obligations.is_empty());
-            assert!(theorem.proof_obligations.iter()
-                .any(|po| po.smt_formula.contains("not (influences")));
+            assert!(
+                theorem
+                    .proof_obligations
+                    .iter()
+                    .any(|po| po.smt_formula.contains("not (influences"))
+            );
         }
     }
 
@@ -697,7 +754,9 @@ mod tests {
         let theorem_count = engine.generate_attenuation_theorems().unwrap();
         assert_eq!(theorem_count, 2); // Two children capabilities
 
-        let attenuation_theorems: Vec<_> = engine.theorems.iter()
+        let attenuation_theorems: Vec<_> = engine
+            .theorems
+            .iter()
             .filter(|t| t.property == PolicyProperty::Attenuation)
             .collect();
 
@@ -706,8 +765,12 @@ mod tests {
         for theorem in attenuation_theorems {
             assert!(theorem.theorem_id.contains("attenuation"));
             assert_eq!(theorem.proof_obligations.len(), 2);
-            assert!(theorem.proof_obligations.iter()
-                .any(|po| po.smt_formula.contains("permits")));
+            assert!(
+                theorem
+                    .proof_obligations
+                    .iter()
+                    .any(|po| po.smt_formula.contains("permits"))
+            );
         }
     }
 
@@ -763,7 +826,8 @@ mod tests {
         let test_cases = generate_policy_test_cases();
         assert!(!test_cases.is_empty());
 
-        let monotonic_case = test_cases.iter()
+        let monotonic_case = test_cases
+            .iter()
             .find(|tc| tc.name == "monotonic_security_policy")
             .unwrap();
 

@@ -9,7 +9,7 @@ use frankenengine_core::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterError, LaneRouter, RoutedResult,
 };
 use frankenengine_core::ir_contract::{Ir3Instruction, Reg};
-use frankenengine_core::lowering_pipeline::{LoweringPipeline, LoweringError};
+use frankenengine_core::lowering_pipeline::{LoweringError, LoweringPipeline};
 use frankenengine_core::object_model::JsValue;
 use frankenengine_core::parser::{CanonicalEs2020Parser, ParseError};
 use frankenengine_core::promise_model::{PromiseHandle, PromiseState, PromiseStore};
@@ -59,7 +59,9 @@ fn test_async_function_declaration() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::CreateAsyncFunction { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::CreateAsyncFunction { .. })),
         "async function should generate CreateAsyncFunction instruction"
     );
 }
@@ -77,7 +79,10 @@ fn test_async_function_invocation() {
     let result = execute_async_program(instructions).expect("execution should succeed");
 
     // Async function should return a Promise
-    assert!(result.return_value.is_promise(), "async function should return a Promise");
+    assert!(
+        result.return_value.is_promise(),
+        "async function should return a Promise"
+    );
 }
 
 #[test]
@@ -94,7 +99,9 @@ fn test_async_function_await_simple() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "await should generate AwaitValue instruction"
     );
 }
@@ -116,7 +123,8 @@ fn test_async_function_await_chaining() {
     "#;
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
-    let await_count = instructions.iter()
+    let await_count = instructions
+        .iter()
         .filter(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. }))
         .count();
     assert_eq!(await_count, 2, "should have two await operations");
@@ -135,7 +143,9 @@ fn test_async_function_return() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AsyncReturn { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AsyncReturn { .. })),
         "async return should generate AsyncReturn instruction"
     );
 }
@@ -150,7 +160,9 @@ fn test_async_function_throw() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AsyncThrow { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AsyncThrow { .. })),
         "async throw should generate AsyncThrow instruction"
     );
 }
@@ -169,7 +181,9 @@ fn test_async_arrow_function() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::CreateAsyncFunction { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::CreateAsyncFunction { .. })),
         "async arrow function should create async function"
     );
 }
@@ -224,7 +238,10 @@ fn test_async_closure_invocation() {
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     let result = execute_async_program(instructions).expect("execution should succeed");
 
-    assert!(result.return_value.is_promise(), "async closure should return Promise");
+    assert!(
+        result.return_value.is_promise(),
+        "async closure should return Promise"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +260,9 @@ fn test_await_resolved_promise() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "should await resolved promise"
     );
 }
@@ -263,7 +282,9 @@ fn test_await_rejected_promise() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "should await rejected promise with try-catch"
     );
 }
@@ -281,7 +302,9 @@ fn test_await_promise_chain() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "should await promise chain"
     );
 }
@@ -303,7 +326,8 @@ fn test_await_multiple_promises() {
     "#;
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
-    let await_count = instructions.iter()
+    let await_count = instructions
+        .iter()
         .filter(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. }))
         .count();
     assert_eq!(await_count, 3, "should have three await operations");
@@ -325,7 +349,9 @@ fn test_promise_all_await() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "should await Promise.all"
     );
 }
@@ -348,7 +374,10 @@ fn test_async_function_dynamic_call() {
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     let result = execute_async_program(instructions).expect("execution should succeed");
 
-    assert!(result.return_value.is_promise(), "dynamic async call should return Promise");
+    assert!(
+        result.return_value.is_promise(),
+        "dynamic async call should return Promise"
+    );
 }
 
 #[test]
@@ -366,7 +395,10 @@ fn test_async_method_call() {
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     let result = execute_async_program(instructions).expect("execution should succeed");
 
-    assert!(result.return_value.is_promise(), "async method call should return Promise");
+    assert!(
+        result.return_value.is_promise(),
+        "async method call should return Promise"
+    );
 }
 
 #[test]
@@ -381,7 +413,10 @@ fn test_async_function_apply() {
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     let result = execute_async_program(instructions).expect("execution should succeed");
 
-    assert!(result.return_value.is_promise(), "async function apply should return Promise");
+    assert!(
+        result.return_value.is_promise(),
+        "async function apply should return Promise"
+    );
 }
 
 #[test]
@@ -396,7 +431,10 @@ fn test_async_function_call() {
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     let result = execute_async_program(instructions).expect("execution should succeed");
 
-    assert!(result.return_value.is_promise(), "async function call should return Promise");
+    assert!(
+        result.return_value.is_promise(),
+        "async function call should return Promise"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +453,9 @@ fn test_async_generator_creation() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::CreateAsyncGenerator { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::CreateAsyncGenerator { .. })),
         "async generator should generate CreateAsyncGenerator instruction"
     );
 }
@@ -431,7 +471,9 @@ fn test_async_generator_yield() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::Yield { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::Yield { .. })),
         "async generator should have yield instruction"
     );
 }
@@ -453,7 +495,9 @@ fn test_async_iterator_protocol() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::ForOfNext { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::ForOfNext { .. })),
         "for-await-of should generate ForOfNext instruction"
     );
 }
@@ -477,7 +521,9 @@ fn test_async_iterator_manual() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "manual async iterator should await next() calls"
     );
 }
@@ -504,7 +550,9 @@ fn test_async_error_propagation_throw() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AsyncThrow { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AsyncThrow { .. })),
         "should have async throw instruction"
     );
 }
@@ -525,7 +573,9 @@ fn test_async_error_propagation_await() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "should await promise that can reject"
     );
 }
@@ -551,10 +601,14 @@ fn test_async_error_chain_propagation() {
     "#;
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
-    let await_count = instructions.iter()
+    let await_count = instructions
+        .iter()
         .filter(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. }))
         .count();
-    assert!(await_count >= 2, "should have multiple await operations in error chain");
+    assert!(
+        await_count >= 2,
+        "should have multiple await operations in error chain"
+    );
 }
 
 #[test]
@@ -573,7 +627,9 @@ fn test_async_finally_block() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "should await in try block with finally"
     );
 }
@@ -602,7 +658,9 @@ fn test_async_parallel_execution() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::CreateAsyncFunction { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::CreateAsyncFunction { .. })),
         "should create multiple async functions"
     );
 }
@@ -621,7 +679,9 @@ fn test_async_recursive_function() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "recursive async function should await recursive call"
     );
 }
@@ -659,7 +719,9 @@ fn test_async_pipeline_pattern() {
 
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
     assert!(
-        instructions.iter().any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
+        instructions
+            .iter()
+            .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. })),
         "async pipeline should await transform functions"
     );
 }
@@ -712,12 +774,15 @@ fn test_async_boundary_comprehensive() {
     let instructions = parse_and_lower(source).expect("parsing and lowering should succeed");
 
     // Verify presence of all major async constructs
-    let has_async_function = instructions.iter().any(|inst|
-        matches!(inst, Ir3Instruction::CreateAsyncFunction { .. }));
-    let has_await = instructions.iter().any(|inst|
-        matches!(inst, Ir3Instruction::AwaitValue { .. }));
-    let has_async_generator = instructions.iter().any(|inst|
-        matches!(inst, Ir3Instruction::CreateAsyncGenerator { .. }));
+    let has_async_function = instructions
+        .iter()
+        .any(|inst| matches!(inst, Ir3Instruction::CreateAsyncFunction { .. }));
+    let has_await = instructions
+        .iter()
+        .any(|inst| matches!(inst, Ir3Instruction::AwaitValue { .. }));
+    let has_async_generator = instructions
+        .iter()
+        .any(|inst| matches!(inst, Ir3Instruction::CreateAsyncGenerator { .. }));
 
     assert!(has_async_function, "should have async function creation");
     assert!(has_await, "should have await operations");

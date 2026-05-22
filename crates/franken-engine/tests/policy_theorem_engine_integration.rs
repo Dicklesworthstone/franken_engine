@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::policy_theorem_engine::{
-    PolicyTheoremEngine, PolicyProperty, SecurityLevel, PolicyRule, SmtSolver,
-    SmtLogic, VerificationStatus, generate_policy_test_cases,
+    PolicyProperty, PolicyRule, PolicyTheoremEngine, SecurityLevel, SmtLogic, SmtSolver,
+    VerificationStatus, generate_policy_test_cases,
 };
 
 /// Test basic policy theorem engine creation and configuration.
@@ -33,8 +33,14 @@ fn policy_theorem_engine_creation_and_configuration() {
     engine.add_security_classification("master_secret".to_string(), SecurityLevel::Secret);
 
     assert_eq!(engine.security_lattice.len(), 4);
-    assert_eq!(engine.security_lattice["public_data"], SecurityLevel::Public);
-    assert_eq!(engine.security_lattice["master_secret"], SecurityLevel::Secret);
+    assert_eq!(
+        engine.security_lattice["public_data"],
+        SecurityLevel::Public
+    );
+    assert_eq!(
+        engine.security_lattice["master_secret"],
+        SecurityLevel::Secret
+    );
 }
 
 /// Test monotonicity theorem generation and verification.
@@ -56,7 +62,9 @@ fn monotonicity_theorem_generation_and_verification() {
         security_context: [
             ("user".to_string(), SecurityLevel::Internal),
             ("resource".to_string(), SecurityLevel::Internal),
-        ].into_iter().collect(),
+        ]
+        .into_iter()
+        .collect(),
         capability_constraints: vec!["read_access".to_string(), "write_access".to_string()],
     };
 
@@ -73,10 +81,19 @@ fn monotonicity_theorem_generation_and_verification() {
     assert_eq!(theorem.verification_status, VerificationStatus::Unknown);
 
     // Verify theorem structure
-    assert!(theorem.proof_obligations.iter()
-        .any(|po| po.smt_formula.contains("forall") && po.smt_formula.contains("le")));
-    assert!(theorem.proof_obligations.iter()
-        .any(|po| po.assertion_id.contains("ordering") || po.assertion_id.contains("preservation")));
+    assert!(
+        theorem
+            .proof_obligations
+            .iter()
+            .any(|po| po.smt_formula.contains("forall") && po.smt_formula.contains("le"))
+    );
+    assert!(
+        theorem
+            .proof_obligations
+            .iter()
+            .any(|po| po.assertion_id.contains("ordering")
+                || po.assertion_id.contains("preservation"))
+    );
 
     // Verify all theorems
     let result = engine.verify_all_theorems().unwrap();
@@ -104,7 +121,9 @@ fn non_interference_theorem_generation() {
         security_context: [
             ("secret_input".to_string(), SecurityLevel::Secret),
             ("public_output".to_string(), SecurityLevel::Public),
-        ].into_iter().collect(),
+        ]
+        .into_iter()
+        .collect(),
         capability_constraints: Vec::new(),
     };
 
@@ -114,26 +133,40 @@ fn non_interference_theorem_generation() {
     let theorem_count = engine.generate_non_interference_theorems().unwrap();
     assert!(theorem_count > 0); // Should generate theorems for security level pairs
 
-    let ni_theorems: Vec<_> = engine.theorems.iter()
+    let ni_theorems: Vec<_> = engine
+        .theorems
+        .iter()
         .filter(|t| t.property == PolicyProperty::NonInterference)
         .collect();
 
     assert!(!ni_theorems.is_empty());
 
     // Verify theorem structure for high → low non-interference
-    let secret_to_public = ni_theorems.iter()
+    let secret_to_public = ni_theorems
+        .iter()
         .find(|t| t.theorem_id.contains("noninterference_public_secret"))
         .unwrap();
 
     assert_eq!(secret_to_public.property, PolicyProperty::NonInterference);
-    assert!(secret_to_public.hypothesis.contains("Secret") && secret_to_public.hypothesis.contains("Public"));
+    assert!(
+        secret_to_public.hypothesis.contains("Secret")
+            && secret_to_public.hypothesis.contains("Public")
+    );
     assert_eq!(secret_to_public.proof_obligations.len(), 2); // isolation + indistinguishability
 
     // Verify SMT formulas
-    assert!(secret_to_public.proof_obligations.iter()
-        .any(|po| po.smt_formula.contains("not (influences")));
-    assert!(secret_to_public.proof_obligations.iter()
-        .any(|po| po.smt_formula.contains("equal (observe")));
+    assert!(
+        secret_to_public
+            .proof_obligations
+            .iter()
+            .any(|po| po.smt_formula.contains("not (influences"))
+    );
+    assert!(
+        secret_to_public
+            .proof_obligations
+            .iter()
+            .any(|po| po.smt_formula.contains("equal (observe"))
+    );
 }
 
 /// Test capability attenuation theorem generation.
@@ -146,13 +179,14 @@ fn capability_attenuation_theorem_generation() {
         "user_management".to_string(),
         "system_config".to_string(),
         "audit_access".to_string(),
-    ].into_iter().collect();
+    ]
+    .into_iter()
+    .collect();
     engine.add_capability_attenuation("full_admin".to_string(), admin_children);
 
-    let user_mgmt_children: BTreeSet<String> = [
-        "create_user".to_string(),
-        "read_user".to_string(),
-    ].into_iter().collect();
+    let user_mgmt_children: BTreeSet<String> = ["create_user".to_string(), "read_user".to_string()]
+        .into_iter()
+        .collect();
     engine.add_capability_attenuation("user_management".to_string(), user_mgmt_children);
 
     // Add attenuation policy rule
@@ -175,25 +209,39 @@ fn capability_attenuation_theorem_generation() {
     let theorem_count = engine.generate_attenuation_theorems().unwrap();
     assert_eq!(theorem_count, 5); // 3 + 2 capabilities from hierarchy
 
-    let attenuation_theorems: Vec<_> = engine.theorems.iter()
+    let attenuation_theorems: Vec<_> = engine
+        .theorems
+        .iter()
         .filter(|t| t.property == PolicyProperty::Attenuation)
         .collect();
 
     assert_eq!(attenuation_theorems.len(), 5);
 
     // Verify specific attenuation theorem
-    let admin_to_user_mgmt = attenuation_theorems.iter()
-        .find(|t| t.theorem_id.contains("attenuation_full_admin_user_management"))
+    let admin_to_user_mgmt = attenuation_theorems
+        .iter()
+        .find(|t| {
+            t.theorem_id
+                .contains("attenuation_full_admin_user_management")
+        })
         .unwrap();
 
     assert_eq!(admin_to_user_mgmt.property, PolicyProperty::Attenuation);
     assert_eq!(admin_to_user_mgmt.proof_obligations.len(), 2); // subset + no_elevation
 
     // Verify SMT formulas for attenuation
-    assert!(admin_to_user_mgmt.proof_obligations.iter()
-        .any(|po| po.smt_formula.contains("permits") && po.smt_formula.contains("forall")));
-    assert!(admin_to_user_mgmt.proof_obligations.iter()
-        .any(|po| po.smt_formula.contains("not (exists")));
+    assert!(
+        admin_to_user_mgmt
+            .proof_obligations
+            .iter()
+            .any(|po| po.smt_formula.contains("permits") && po.smt_formula.contains("forall"))
+    );
+    assert!(
+        admin_to_user_mgmt
+            .proof_obligations
+            .iter()
+            .any(|po| po.smt_formula.contains("not (exists"))
+    );
 }
 
 /// Test comprehensive policy verification workflow.
@@ -234,7 +282,9 @@ fn comprehensive_policy_verification_workflow() {
         "read_all".to_string(),
         "write_protected".to_string(),
         "manage_users".to_string(),
-    ].into_iter().collect();
+    ]
+    .into_iter()
+    .collect();
     engine.add_capability_attenuation("admin".to_string(), admin_caps);
 
     // Generate all theorem types
@@ -250,13 +300,19 @@ fn comprehensive_policy_verification_workflow() {
     assert_eq!(engine.theorems.len(), total_expected);
 
     // Verify theorem distribution
-    let mono_actual = engine.theorems.iter()
+    let mono_actual = engine
+        .theorems
+        .iter()
         .filter(|t| t.property == PolicyProperty::Monotonicity)
         .count();
-    let ni_actual = engine.theorems.iter()
+    let ni_actual = engine
+        .theorems
+        .iter()
         .filter(|t| t.property == PolicyProperty::NonInterference)
         .count();
-    let atten_actual = engine.theorems.iter()
+    let atten_actual = engine
+        .theorems
+        .iter()
         .filter(|t| t.property == PolicyProperty::Attenuation)
         .count();
 
@@ -272,7 +328,10 @@ fn comprehensive_policy_verification_workflow() {
     assert!(verification_result.verified_theorems <= verification_result.total_theorems);
 
     // Check that verification cache is populated
-    assert_eq!(engine.verification_cache.len(), verification_result.total_theorems);
+    assert_eq!(
+        engine.verification_cache.len(),
+        verification_result.total_theorems
+    );
 }
 
 /// Test SMT declaration generation for policy verification.
@@ -286,8 +345,14 @@ fn smt_declaration_generation() {
     engine.smt_context.solver_backend = SmtSolver::Z3;
 
     // Add axioms
-    engine.smt_context.axioms.push("(forall ((x SecurityLevel) (y SecurityLevel)) (=> (le x y) (le x y)))".to_string());
-    engine.smt_context.axioms.push("(assert (distinct Public Internal Confidential Secret))".to_string());
+    engine
+        .smt_context
+        .axioms
+        .push("(forall ((x SecurityLevel) (y SecurityLevel)) (=> (le x y) (le x y)))".to_string());
+    engine
+        .smt_context
+        .axioms
+        .push("(assert (distinct Public Internal Confidential Secret))".to_string());
 
     let declarations = engine.generate_smt_declarations();
 
@@ -314,7 +379,12 @@ fn smt_declaration_generation() {
 /// Test policy verification with different SMT solvers.
 #[test]
 fn policy_verification_different_smt_solvers() {
-    let solvers = [SmtSolver::Internal, SmtSolver::Z3, SmtSolver::CVC5, SmtSolver::Yices];
+    let solvers = [
+        SmtSolver::Internal,
+        SmtSolver::Z3,
+        SmtSolver::CVC5,
+        SmtSolver::Yices,
+    ];
 
     for solver in &solvers {
         let mut engine = PolicyTheoremEngine::new();
@@ -341,7 +411,10 @@ fn policy_verification_different_smt_solvers() {
 
         // Verify solver-specific metadata
         let verification = engine.verification_cache.values().next().unwrap();
-        assert_eq!(verification.verification_metadata["solver"], format!("{:?}", solver));
+        assert_eq!(
+            verification.verification_metadata["solver"],
+            format!("{:?}", solver)
+        );
     }
 }
 
@@ -368,12 +441,15 @@ fn security_level_ordering_relationships() {
     ];
     levels.sort();
 
-    assert_eq!(levels, vec![
-        SecurityLevel::Public,
-        SecurityLevel::Internal,
-        SecurityLevel::Confidential,
-        SecurityLevel::Secret,
-    ]);
+    assert_eq!(
+        levels,
+        vec![
+            SecurityLevel::Public,
+            SecurityLevel::Internal,
+            SecurityLevel::Confidential,
+            SecurityLevel::Secret,
+        ]
+    );
 }
 
 /// Test policy verification test case generation and execution.
@@ -415,7 +491,11 @@ fn policy_test_case_generation_and_execution() {
         }
 
         // Verify expected theorem count (allowing for non-interference generating multiple theorems)
-        if test_case.policy_rules.iter().any(|r| r.rule_type == PolicyProperty::NonInterference) {
+        if test_case
+            .policy_rules
+            .iter()
+            .any(|r| r.rule_type == PolicyProperty::NonInterference)
+        {
             assert!(total_theorems >= test_case.expected_theorems);
         } else {
             assert_eq!(total_theorems, test_case.expected_theorems);
@@ -457,7 +537,7 @@ fn policy_verification_error_handling() {
     let malformed_rule = PolicyRule {
         rule_id: "".to_string(), // Empty rule ID
         rule_type: PolicyProperty::Monotonicity,
-        premise: "".to_string(), // Empty premise
+        premise: "".to_string(),    // Empty premise
         conclusion: "".to_string(), // Empty conclusion
         security_context: BTreeMap::new(),
         capability_constraints: Vec::new(),
@@ -561,7 +641,9 @@ fn integration_with_translation_validation() {
         security_context: [
             ("ir_input".to_string(), SecurityLevel::Secret),
             ("ir_output".to_string(), SecurityLevel::Public),
-        ].into_iter().collect(),
+        ]
+        .into_iter()
+        .collect(),
         capability_constraints: vec!["ir_transform".to_string()],
     };
 
@@ -571,14 +653,20 @@ fn integration_with_translation_validation() {
         premise: "IR transformation preserves capability constraints".to_string(),
         conclusion: "Transformed IR cannot gain capabilities".to_string(),
         security_context: BTreeMap::new(),
-        capability_constraints: vec!["ir1_caps".to_string(), "ir2_caps".to_string(), "ir3_caps".to_string()],
+        capability_constraints: vec![
+            "ir1_caps".to_string(),
+            "ir2_caps".to_string(),
+            "ir3_caps".to_string(),
+        ],
     };
 
     engine.add_policy_rule(ir_security_rule);
     engine.add_policy_rule(capability_preservation_rule);
 
     // Add IR-level capability hierarchy
-    let ir1_caps: BTreeSet<String> = ["memory_access".to_string(), "io_access".to_string()].into_iter().collect();
+    let ir1_caps: BTreeSet<String> = ["memory_access".to_string(), "io_access".to_string()]
+        .into_iter()
+        .collect();
     let ir2_caps: BTreeSet<String> = ["safe_memory".to_string()].into_iter().collect();
     engine.add_capability_attenuation("ir1_caps".to_string(), ir1_caps);
     engine.add_capability_attenuation("ir2_caps".to_string(), ir2_caps);
@@ -591,7 +679,9 @@ fn integration_with_translation_validation() {
     assert!(atten_count > 0);
 
     // Verify IR-specific theorems
-    let ir_theorems: Vec<_> = engine.theorems.iter()
+    let ir_theorems: Vec<_> = engine
+        .theorems
+        .iter()
         .filter(|t| t.theorem_id.contains("ir") || t.hypothesis.contains("IR"))
         .collect();
 

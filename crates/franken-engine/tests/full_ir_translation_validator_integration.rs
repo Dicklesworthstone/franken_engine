@@ -8,8 +8,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::full_ir_translation_validator::{
-    FullIrValidationContext, IrTransformation, IrLevel, TransformationPhase,
-    ValidationCoverage, SemanticEquivalenceProof, generate_full_ir_test_cases,
+    FullIrValidationContext, IrLevel, IrTransformation, SemanticEquivalenceProof,
+    TransformationPhase, ValidationCoverage, generate_full_ir_test_cases,
 };
 
 /// Test basic full IR validation context operations.
@@ -29,9 +29,18 @@ fn ir_level_pipeline_construction() {
     let mut ctx = FullIrValidationContext::new();
 
     // Add IR levels in pipeline order
-    ctx.add_ir_level(IrLevel::IR0, "function add(x, y) { return x + y; }".to_string());
-    ctx.add_ir_level(IrLevel::IR1, "SpecIR: OpAdd(x: Reg1, y: Reg2) -> Reg3".to_string());
-    ctx.add_ir_level(IrLevel::IR2, "CapIR: SafeAdd(x: Trusted, y: Trusted) -> Trusted".to_string());
+    ctx.add_ir_level(
+        IrLevel::IR0,
+        "function add(x, y) { return x + y; }".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR1,
+        "SpecIR: OpAdd(x: Reg1, y: Reg2) -> Reg3".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR2,
+        "CapIR: SafeAdd(x: Trusted, y: Trusted) -> Trusted".to_string(),
+    );
     ctx.add_ir_level(IrLevel::IR3, "ExecIR: add_i32 %r1, %r2 -> %r3".to_string());
 
     assert_eq!(ctx.ir_pipeline.len(), 4);
@@ -50,7 +59,10 @@ fn ir_transformation_validation() {
 
     // Define source and target IR
     ctx.add_ir_level(IrLevel::IR0, "let x = 42;".to_string());
-    ctx.add_ir_level(IrLevel::IR1, "DeclarationStmt(x, ConstValue(42))".to_string());
+    ctx.add_ir_level(
+        IrLevel::IR1,
+        "DeclarationStmt(x, ConstValue(42))".to_string(),
+    );
 
     // Add transformation
     let transformation = IrTransformation {
@@ -72,7 +84,10 @@ fn ir_transformation_validation() {
     assert_eq!(ctx.transformation_map.len(), 1);
     let key = (IrLevel::IR0, IrLevel::IR1);
     assert!(ctx.transformation_map.contains_key(&key));
-    assert_eq!(ctx.transformation_map[&key].phase, TransformationPhase::Parsing);
+    assert_eq!(
+        ctx.transformation_map[&key].phase,
+        TransformationPhase::Parsing
+    );
 }
 
 /// Test global invariant generation across all IR levels.
@@ -81,24 +96,39 @@ fn global_invariant_generation() {
     let mut ctx = FullIrValidationContext::new();
 
     // Add complete IR pipeline
-    ctx.add_ir_level(IrLevel::IR0, "if (condition) { x = 1; } else { x = 2; }".to_string());
-    ctx.add_ir_level(IrLevel::IR1, "CondBranch(condition, then_block, else_block)".to_string());
-    ctx.add_ir_level(IrLevel::IR2, "PolicyGuardedBranch(condition: Checked, branches: Safe)".to_string());
+    ctx.add_ir_level(
+        IrLevel::IR0,
+        "if (condition) { x = 1; } else { x = 2; }".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR1,
+        "CondBranch(condition, then_block, else_block)".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR2,
+        "PolicyGuardedBranch(condition: Checked, branches: Safe)".to_string(),
+    );
     ctx.add_ir_level(IrLevel::IR3, "br_cond %cond, label1, label2".to_string());
 
     let invariant_count = ctx.generate_global_invariants().unwrap();
     assert!(invariant_count >= 3); // At least one per transformation
 
     // Verify specific invariants exist
-    assert!(ctx.global_invariants.iter().any(|inv|
-        inv.invariant_id.contains("control_flow_preservation")
-    ));
-    assert!(ctx.global_invariants.iter().any(|inv|
-        inv.invariant_id.contains("variable_lifetime")
-    ));
-    assert!(ctx.global_invariants.iter().any(|inv|
-        inv.invariant_id.contains("semantic_equivalence")
-    ));
+    assert!(
+        ctx.global_invariants
+            .iter()
+            .any(|inv| inv.invariant_id.contains("control_flow_preservation"))
+    );
+    assert!(
+        ctx.global_invariants
+            .iter()
+            .any(|inv| inv.invariant_id.contains("variable_lifetime"))
+    );
+    assert!(
+        ctx.global_invariants
+            .iter()
+            .any(|inv| inv.invariant_id.contains("semantic_equivalence"))
+    );
 }
 
 /// Test validation coverage metrics computation.
@@ -145,9 +175,21 @@ fn validation_coverage_metrics() {
     assert_eq!(coverage.uncovered_phases.len(), 0);
 
     // Verify phase coverage
-    assert!(coverage.phase_coverage.contains_key(&TransformationPhase::Parsing));
-    assert!(coverage.phase_coverage.contains_key(&TransformationPhase::Lowering));
-    assert!(coverage.phase_coverage.contains_key(&TransformationPhase::CodeGeneration));
+    assert!(
+        coverage
+            .phase_coverage
+            .contains_key(&TransformationPhase::Parsing)
+    );
+    assert!(
+        coverage
+            .phase_coverage
+            .contains_key(&TransformationPhase::Lowering)
+    );
+    assert!(
+        coverage
+            .phase_coverage
+            .contains_key(&TransformationPhase::CodeGeneration)
+    );
 }
 
 /// Test semantic equivalence proof generation.
@@ -168,9 +210,7 @@ fn semantic_equivalence_proof_generation() {
             "Arithmetic correctness".to_string(),
             "Value equivalence".to_string(),
         ],
-        verification_obligations: vec![
-            "IR0 evaluation ≡ IR3 execution".to_string(),
-        ],
+        verification_obligations: vec!["IR0 evaluation ≡ IR3 execution".to_string()],
     };
 
     ctx.add_transformation(transformation);
@@ -191,16 +231,43 @@ fn end_to_end_validation_workflow() {
     let mut ctx = FullIrValidationContext::new();
 
     // Complete IR pipeline for a simple function
-    ctx.add_ir_level(IrLevel::IR0, "function factorial(n) { return n <= 1 ? 1 : n * factorial(n-1); }".to_string());
-    ctx.add_ir_level(IrLevel::IR1, "FunctionDecl(factorial, RecursiveCall(LessEqualOp, MulOp))".to_string());
-    ctx.add_ir_level(IrLevel::IR2, "SafeFunction(factorial, BoundsChecked, TailCallOptimized)".to_string());
-    ctx.add_ir_level(IrLevel::IR3, "factorial: cmp %n, 1; jle base_case; call factorial; mul %n, %ret".to_string());
+    ctx.add_ir_level(
+        IrLevel::IR0,
+        "function factorial(n) { return n <= 1 ? 1 : n * factorial(n-1); }".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR1,
+        "FunctionDecl(factorial, RecursiveCall(LessEqualOp, MulOp))".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR2,
+        "SafeFunction(factorial, BoundsChecked, TailCallOptimized)".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR3,
+        "factorial: cmp %n, 1; jle base_case; call factorial; mul %n, %ret".to_string(),
+    );
 
     // Add all transformations
     let transformations = vec![
-        ("IR0→IR1", IrLevel::IR0, IrLevel::IR1, TransformationPhase::Parsing),
-        ("IR1→IR2", IrLevel::IR1, IrLevel::IR2, TransformationPhase::Lowering),
-        ("IR2→IR3", IrLevel::IR2, IrLevel::IR3, TransformationPhase::CodeGeneration),
+        (
+            "IR0→IR1",
+            IrLevel::IR0,
+            IrLevel::IR1,
+            TransformationPhase::Parsing,
+        ),
+        (
+            "IR1→IR2",
+            IrLevel::IR1,
+            IrLevel::IR2,
+            TransformationPhase::Lowering,
+        ),
+        (
+            "IR2→IR3",
+            IrLevel::IR2,
+            IrLevel::IR3,
+            TransformationPhase::CodeGeneration,
+        ),
     ];
 
     for (name, source, target, phase) in transformations {
@@ -213,9 +280,7 @@ fn end_to_end_validation_workflow() {
                 "Function semantics preservation".to_string(),
                 "Recursion correctness".to_string(),
             ],
-            verification_obligations: vec![
-                format!("{} semantic equivalence", name),
-            ],
+            verification_obligations: vec![format!("{} semantic equivalence", name)],
         });
     }
 
@@ -264,7 +329,12 @@ fn validation_with_missing_ir_levels() {
     // Should still validate successfully for provided transformations
     let result = ctx.validate_full_ir_pipeline();
     assert!(result.validation_successful);
-    assert!(result.notes.iter().any(|note| note.contains("partial") || note.contains("direct")));
+    assert!(
+        result
+            .notes
+            .iter()
+            .any(|note| note.contains("partial") || note.contains("direct"))
+    );
 }
 
 /// Test complex control flow across IR levels.
@@ -284,9 +354,18 @@ fn complex_control_flow_validation() {
     "#;
 
     ctx.add_ir_level(IrLevel::IR0, source_code.to_string());
-    ctx.add_ir_level(IrLevel::IR1, "ForLoop(WhileLoop(IfStmt(ModOp, EqualOp)))".to_string());
-    ctx.add_ir_level(IrLevel::IR2, "LoopSafe(ConditionSafe(PolicyChecked))".to_string());
-    ctx.add_ir_level(IrLevel::IR3, "loop_entry: cmp %i, 10; jge loop_exit; mod %i, 2; ...".to_string());
+    ctx.add_ir_level(
+        IrLevel::IR1,
+        "ForLoop(WhileLoop(IfStmt(ModOp, EqualOp)))".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR2,
+        "LoopSafe(ConditionSafe(PolicyChecked))".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR3,
+        "loop_entry: cmp %i, 10; jge loop_exit; mod %i, 2; ...".to_string(),
+    );
 
     // Add comprehensive transformations
     ctx.add_transformation(IrTransformation {
@@ -298,18 +377,18 @@ fn complex_control_flow_validation() {
             "Loop structure preservation".to_string(),
             "Nested condition preservation".to_string(),
         ],
-        verification_obligations: vec![
-            "Control flow graph equivalence".to_string(),
-        ],
+        verification_obligations: vec!["Control flow graph equivalence".to_string()],
     });
 
     let invariant_count = ctx.generate_global_invariants().unwrap();
     assert!(invariant_count > 0);
 
     // Verify control flow specific invariants
-    assert!(ctx.global_invariants.iter().any(|inv|
-        inv.invariant_description.contains("control flow")
-    ));
+    assert!(
+        ctx.global_invariants
+            .iter()
+            .any(|inv| inv.invariant_description.contains("control flow"))
+    );
 }
 
 /// Test error handling and malformed IR validation.
@@ -372,7 +451,10 @@ fn integration_with_previous_validation() {
 
     // G.5 statement validation integration
     ctx.add_ir_level(IrLevel::IR0, "if (x > 0) { y = x * 2; }".to_string());
-    ctx.add_ir_level(IrLevel::IR1, "IfStmt(GtOp(x, 0), AssignStmt(y, MulOp(x, 2)))".to_string());
+    ctx.add_ir_level(
+        IrLevel::IR1,
+        "IfStmt(GtOp(x, 0), AssignStmt(y, MulOp(x, 2)))".to_string(),
+    );
 
     ctx.add_transformation(IrTransformation {
         source_level: IrLevel::IR0,
@@ -393,9 +475,10 @@ fn integration_with_previous_validation() {
     assert!(result.validation_successful);
 
     // Verify compatibility notes mention G.4/G.5
-    assert!(result.notes.iter().any(|note|
-        note.contains("G.4") || note.contains("G.5") || note.contains("expression") || note.contains("statement")
-    ));
+    assert!(result.notes.iter().any(|note| note.contains("G.4")
+        || note.contains("G.5")
+        || note.contains("expression")
+        || note.contains("statement")));
 }
 
 /// Test performance with large IR pipelines.
@@ -435,15 +518,25 @@ fn validation_result_comprehensive_reporting() {
 
     // Add complete pipeline
     ctx.add_ir_level(IrLevel::IR0, "let x = 42;".to_string());
-    ctx.add_ir_level(IrLevel::IR1, "DeclarationStmt(x, ConstValue(42))".to_string());
-    ctx.add_ir_level(IrLevel::IR2, "SafeDeclaration(x, TrustedValue(42))".to_string());
+    ctx.add_ir_level(
+        IrLevel::IR1,
+        "DeclarationStmt(x, ConstValue(42))".to_string(),
+    );
+    ctx.add_ir_level(
+        IrLevel::IR2,
+        "SafeDeclaration(x, TrustedValue(42))".to_string(),
+    );
     ctx.add_ir_level(IrLevel::IR3, "mov %x, 42".to_string());
 
     // Add all transformations
     let transformations = [
         (IrLevel::IR0, IrLevel::IR1, TransformationPhase::Parsing),
         (IrLevel::IR1, IrLevel::IR2, TransformationPhase::Lowering),
-        (IrLevel::IR2, IrLevel::IR3, TransformationPhase::CodeGeneration),
+        (
+            IrLevel::IR2,
+            IrLevel::IR3,
+            TransformationPhase::CodeGeneration,
+        ),
     ];
 
     for (source, target, phase) in transformations {
@@ -485,7 +578,7 @@ fn concurrent_validation_stability() {
             let mut ctx = FullIrValidationContext::new();
 
             ctx.add_ir_level(IrLevel::IR0, format!("x{} + y{}", i, i));
-            ctx.add_ir_level(IrLevel::IR3, format!("add %r{}, %r{}", i*2, i*2+1));
+            ctx.add_ir_level(IrLevel::IR3, format!("add %r{}, %r{}", i * 2, i * 2 + 1));
 
             ctx.add_transformation(IrTransformation {
                 source_level: IrLevel::IR0,

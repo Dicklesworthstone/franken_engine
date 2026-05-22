@@ -313,21 +313,21 @@ pub fn generate_statement_test_cases() -> Vec<StatementTestCase> {
             name: "if_statement".to_string(),
             source_ir: "if (condition) { x = 1; } else { x = 2; }".to_string(),
             statement_kind: StatementKind::IfStatement,
-            expected_phi_nodes: 1, // Phi node for x
+            expected_phi_nodes: 1,     // Phi node for x
             expected_control_edges: 3, // condition -> then, condition -> else, merge
         },
         StatementTestCase {
             name: "while_loop".to_string(),
             source_ir: "while (condition) { x = x + 1; }".to_string(),
             statement_kind: StatementKind::WhileLoop,
-            expected_phi_nodes: 1, // Phi node for loop variable
+            expected_phi_nodes: 1,     // Phi node for loop variable
             expected_control_edges: 2, // loop header, loop back
         },
         StatementTestCase {
             name: "nested_control_flow".to_string(),
             source_ir: "if (a) { while (b) { x = x + 1; } } else { x = 0; }".to_string(),
             statement_kind: StatementKind::IfStatement,
-            expected_phi_nodes: 2, // Phi nodes for nested control flow
+            expected_phi_nodes: 2,     // Phi nodes for nested control flow
             expected_control_edges: 5, // Complex control flow graph
         },
     ]

@@ -1607,7 +1607,10 @@ impl Expression {
                 (
                     "quasis",
                     CanonicalValue::Array(
-                        quasis.iter().map(|q| CanonicalValue::str(q.clone())).collect(),
+                        quasis
+                            .iter()
+                            .map(|q| CanonicalValue::str(q.clone()))
+                            .collect(),
                     ),
                 ),
                 (
@@ -1647,9 +1650,9 @@ impl Expression {
                 }
                 CanonicalValue::map_from_entries(entries)
             }
-            Self::Super => CanonicalValue::map_from_entries([
-                ("kind", CanonicalValue::str("super")),
-            ]),
+            Self::Super => {
+                CanonicalValue::map_from_entries([("kind", CanonicalValue::str("super"))])
+            }
         }
     }
 }

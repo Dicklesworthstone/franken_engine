@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::hash_tiers::ContentHash;
-use crate::security_epoch::SecurityEpoch;
 use crate::reproducibility_provenance_pack::ReproducibilityPack;
+use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -478,7 +478,10 @@ impl EvidenceBundle {
     }
 
     /// Set the reproducibility pack for third-party verification.
-    pub fn set_reproducibility_pack(&mut self, pack: ReproducibilityPack) -> Result<(), BundleError> {
+    pub fn set_reproducibility_pack(
+        &mut self,
+        pack: ReproducibilityPack,
+    ) -> Result<(), BundleError> {
         if self.status != BundleStatus::Assembling {
             return Err(BundleError::BundleSealed {
                 bundle_id: self.bundle_id.clone(),

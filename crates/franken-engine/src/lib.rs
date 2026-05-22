@@ -237,6 +237,7 @@ pub mod key_attestation;
 pub mod key_derivation;
 pub mod lab_runtime;
 pub mod lamport_evidence_annotation;
+pub mod lamport_total_order_merger;
 pub mod law_mining;
 pub mod law_promotion_lifecycle;
 pub mod law_promotion_pack;

@@ -696,4 +696,407 @@ mod tests {
         let err = AuthorityLatticeError::NegativeBudget;
         assert!(format!("{err}").contains("non-negative"));
     }
+
+    // -----------------------------------------------------------------------
+    // bd-cixqu.26.2 — unified join/meet/subsumption proofs over the product
+    //
+    // The tests above prove the algebraic laws on a single representative
+    // pair (lat_a, lat_b). The tests below extend the proofs to:
+    //   * deterministic sweeps over a fixture matrix of triples (covers
+    //     distributivity and the lattice axioms across more combinations);
+    //   * partial-order laws for the `subsumes` preorder (reflexivity,
+    //     transitivity, antisymmetry);
+    //   * cross-axis interaction laws (a join b is the unique LUB; a meet b
+    //     is the unique GLB; subsumes is the natural preorder).
+    //
+    // These tests treat per-axis lattices as corollaries of the product
+    // lattice proofs: every law verified on the product is also verified
+    // on the underlying axes (because the product's components ARE the
+    // axes' elements).
+    // -----------------------------------------------------------------------
+
+    fn fixture_matrix() -> Vec<AuthorityLattice> {
+        vec![
+            AuthorityLattice::bottom(),
+            AuthorityLattice::new(
+                LabelClass::Public,
+                CapabilitySet::from_iter([CapabilityKind::FsRead]),
+                BudgetEnvelope::try_new(1, 2, 3, 4).unwrap(),
+            ),
+            lat_a(),
+            lat_b(),
+            AuthorityLattice::new(
+                LabelClass::Confidential,
+                CapabilitySet::from_iter([
+                    CapabilityKind::FsRead,
+                    CapabilityKind::ClockRead,
+                    CapabilityKind::RandomRead,
+                ]),
+                BudgetEnvelope::try_new(50, 60, 70, 80).unwrap(),
+            ),
+            AuthorityLattice::new(
+                LabelClass::Secret,
+                CapabilitySet::from_iter([CapabilityKind::Eval, CapabilityKind::PolicyRequest]),
+                BudgetEnvelope::try_new(0, 100, 200, 0).unwrap(),
+            ),
+            AuthorityLattice::new(
+                LabelClass::TopSecret,
+                CapabilitySet::all(),
+                BudgetEnvelope::try_new(1_000, 1_000, 1_000, 1_000).unwrap(),
+            ),
+            AuthorityLattice::top(),
+        ]
+    }
+
+    // ----- Subsumes preorder laws -----
+
+    #[test]
+    fn subsumes_is_reflexive_for_all_fixtures() {
+        for x in &fixture_matrix() {
+            assert!(x.subsumes(x), "subsumes failed reflexivity on {:?}", x);
+        }
+    }
+
+    #[test]
+    fn subsumes_is_transitive_for_all_triples() {
+        let fixtures = fixture_matrix();
+        for (i, a) in fixtures.iter().enumerate() {
+            for (j, b) in fixtures.iter().enumerate() {
+                for (k, c) in fixtures.iter().enumerate() {
+                    if a.subsumes(b) && b.subsumes(c) {
+                        assert!(
+                            a.subsumes(c),
+                            "transitivity violated at indices ({}, {}, {})",
+                            i,
+                            j,
+                            k
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn subsumes_is_antisymmetric_for_all_pairs() {
+        let fixtures = fixture_matrix();
+        for (i, a) in fixtures.iter().enumerate() {
+            for (j, b) in fixtures.iter().enumerate() {
+                if a.subsumes(b) && b.subsumes(a) {
+                    assert_eq!(
+                        a, b,
+                        "antisymmetry violated at indices ({}, {}); a={:?}, b={:?}",
+                        i, j, a, b
+                    );
+                }
+            }
+        }
+    }
+
+    // ----- Join/meet equivalence laws -----
+
+    #[test]
+    fn subsumes_iff_join_is_self_across_all_pairs() {
+        for a in &fixture_matrix() {
+            for b in &fixture_matrix() {
+                let subsumes_holds = a.subsumes(b);
+                let join_is_self = a.join(b) == *a;
+                assert_eq!(
+                    subsumes_holds, join_is_self,
+                    "subsumes vs. join-is-self diverged for a={:?}, b={:?}",
+                    a, b
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn subsumes_iff_meet_is_other_across_all_pairs() {
+        // Dual law: a.subsumes(b) iff a.meet(b) == b
+        for a in &fixture_matrix() {
+            for b in &fixture_matrix() {
+                let subsumes_holds = a.subsumes(b);
+                let meet_is_other = a.meet(b) == *b;
+                assert_eq!(
+                    subsumes_holds, meet_is_other,
+                    "subsumes vs. meet-is-other diverged for a={:?}, b={:?}",
+                    a, b
+                );
+            }
+        }
+    }
+
+    // ----- Bounded-lattice laws across the matrix -----
+
+    #[test]
+    fn bottom_subsumed_by_everything() {
+        let bot = AuthorityLattice::bottom();
+        for a in &fixture_matrix() {
+            assert!(a.subsumes(&bot), "{:?} should subsume bottom", a);
+        }
+    }
+
+    #[test]
+    fn top_subsumes_everything() {
+        let top = AuthorityLattice::top();
+        for a in &fixture_matrix() {
+            assert!(top.subsumes(a), "top should subsume {:?}", a);
+        }
+    }
+
+    // ----- Commutativity / associativity / idempotency across the matrix -----
+
+    #[test]
+    fn join_commutative_across_matrix() {
+        for a in &fixture_matrix() {
+            for b in &fixture_matrix() {
+                assert_eq!(a.join(b), b.join(a));
+            }
+        }
+    }
+
+    #[test]
+    fn meet_commutative_across_matrix() {
+        for a in &fixture_matrix() {
+            for b in &fixture_matrix() {
+                assert_eq!(a.meet(b), b.meet(a));
+            }
+        }
+    }
+
+    #[test]
+    fn join_associative_across_matrix() {
+        let fixtures = fixture_matrix();
+        for a in &fixtures {
+            for b in &fixtures {
+                for c in &fixtures {
+                    assert_eq!(a.join(b).join(c), a.join(&b.join(c)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn meet_associative_across_matrix() {
+        let fixtures = fixture_matrix();
+        for a in &fixtures {
+            for b in &fixtures {
+                for c in &fixtures {
+                    assert_eq!(a.meet(b).meet(c), a.meet(&b.meet(c)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn join_idempotent_across_matrix() {
+        for a in &fixture_matrix() {
+            assert_eq!(a.join(a), *a);
+        }
+    }
+
+    #[test]
+    fn meet_idempotent_across_matrix() {
+        for a in &fixture_matrix() {
+            assert_eq!(a.meet(a), *a);
+        }
+    }
+
+    // ----- Absorption across the matrix -----
+
+    #[test]
+    fn absorption_join_meet_across_matrix() {
+        // a ⊔ (a ⊓ b) = a
+        for a in &fixture_matrix() {
+            for b in &fixture_matrix() {
+                assert_eq!(a.join(&a.meet(b)), *a);
+            }
+        }
+    }
+
+    #[test]
+    fn absorption_meet_join_across_matrix() {
+        // a ⊓ (a ⊔ b) = a
+        for a in &fixture_matrix() {
+            for b in &fixture_matrix() {
+                assert_eq!(a.meet(&a.join(b)), *a);
+            }
+        }
+    }
+
+    // ----- Distributivity -----
+    //
+    // The product lattice is distributive iff each component lattice is
+    // distributive. LabelClass is a chain (totally ordered) — chains are
+    // always distributive. CapabilitySet is a powerset under ⊆ — powersets
+    // are always distributive. BudgetEnvelope is a product of chains
+    // (max/min on i64) — also distributive. So the product is distributive.
+
+    #[test]
+    fn join_distributes_over_meet_across_matrix() {
+        // a ⊔ (b ⊓ c) = (a ⊔ b) ⊓ (a ⊔ c)
+        let fixtures = fixture_matrix();
+        for a in &fixtures {
+            for b in &fixtures {
+                for c in &fixtures {
+                    let lhs = a.join(&b.meet(c));
+                    let rhs = a.join(b).meet(&a.join(c));
+                    assert_eq!(
+                        lhs, rhs,
+                        "join-over-meet distributivity violated for a={:?} b={:?} c={:?}",
+                        a, b, c
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn meet_distributes_over_join_across_matrix() {
+        // a ⊓ (b ⊔ c) = (a ⊓ b) ⊔ (a ⊓ c)
+        let fixtures = fixture_matrix();
+        for a in &fixtures {
+            for b in &fixtures {
+                for c in &fixtures {
+                    let lhs = a.meet(&b.join(c));
+                    let rhs = a.meet(b).join(&a.meet(c));
+                    assert_eq!(
+                        lhs, rhs,
+                        "meet-over-join distributivity violated for a={:?} b={:?} c={:?}",
+                        a, b, c
+                    );
+                }
+            }
+        }
+    }
+
+    // ----- LUB / GLB universal properties -----
+
+    #[test]
+    fn join_is_upper_bound_across_matrix() {
+        for a in &fixture_matrix() {
+            for b in &fixture_matrix() {
+                let j = a.join(b);
+                assert!(j.subsumes(a), "join not upper bound of a");
+                assert!(j.subsumes(b), "join not upper bound of b");
+            }
+        }
+    }
+
+    #[test]
+    fn join_is_least_upper_bound_across_matrix() {
+        // For every upper bound u of {a, b}, u must subsume the join.
+        let fixtures = fixture_matrix();
+        for a in &fixtures {
+            for b in &fixtures {
+                let j = a.join(b);
+                for u in &fixtures {
+                    if u.subsumes(a) && u.subsumes(b) {
+                        assert!(
+                            u.subsumes(&j),
+                            "join is not LEAST upper bound: {:?} upper-bounds both but not the join",
+                            u
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn meet_is_lower_bound_across_matrix() {
+        for a in &fixture_matrix() {
+            for b in &fixture_matrix() {
+                let m = a.meet(b);
+                assert!(a.subsumes(&m), "meet not lower bound of a");
+                assert!(b.subsumes(&m), "meet not lower bound of b");
+            }
+        }
+    }
+
+    #[test]
+    fn meet_is_greatest_lower_bound_across_matrix() {
+        // For every lower bound l of {a, b}, the meet must subsume l.
+        let fixtures = fixture_matrix();
+        for a in &fixtures {
+            for b in &fixtures {
+                let m = a.meet(b);
+                for l in &fixtures {
+                    if a.subsumes(l) && b.subsumes(l) {
+                        assert!(
+                            m.subsumes(l),
+                            "meet is not GREATEST lower bound: {:?} lower-bounds both but the meet doesn't subsume it",
+                            l
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ----- Per-axis corollary checks -----
+    //
+    // Per-axis laws are now derivable as projections of the product laws,
+    // but we keep direct checks as smoke tests for the axis types in
+    // isolation.
+
+    #[test]
+    fn ifc_axis_is_chain_lattice() {
+        // LabelClass is totally ordered; for any two labels, one subsumes
+        // the other.
+        let labels = [
+            LabelClass::Public,
+            LabelClass::Internal,
+            LabelClass::Confidential,
+            LabelClass::Secret,
+            LabelClass::TopSecret,
+        ];
+        for a in &labels {
+            for b in &labels {
+                assert!(label_subsumes(a, b) || label_subsumes(b, a));
+            }
+        }
+    }
+
+    #[test]
+    fn capability_axis_subsumes_is_partial_order() {
+        let sets = [
+            CapabilitySet::empty(),
+            CapabilitySet::from_iter([CapabilityKind::FsRead]),
+            CapabilitySet::from_iter([CapabilityKind::FsRead, CapabilityKind::NetConnect]),
+            CapabilitySet::all(),
+        ];
+        for a in &sets {
+            // reflexivity
+            assert!(a.subsumes(a));
+        }
+        // antisymmetry: a ⊆ b ∧ b ⊆ a ⟹ a == b
+        for a in &sets {
+            for b in &sets {
+                if a.subsumes(b) && b.subsumes(a) {
+                    assert_eq!(a, b);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn budget_axis_subsumes_is_partial_order() {
+        let envelopes = [
+            BudgetEnvelope::bottom(),
+            BudgetEnvelope::try_new(10, 20, 30, 40).unwrap(),
+            BudgetEnvelope::try_new(50, 50, 50, 50).unwrap(),
+            BudgetEnvelope::top(),
+        ];
+        for a in &envelopes {
+            assert!(a.subsumes(a));
+        }
+        for a in &envelopes {
+            for b in &envelopes {
+                if a.subsumes(b) && b.subsumes(a) {
+                    assert_eq!(a, b);
+                }
+            }
+        }
+    }
 }

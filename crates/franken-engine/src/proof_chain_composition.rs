@@ -13,24 +13,27 @@
 // This is the structural / algebraic contract. It does NOT recompute
 // the underlying SMT proof — the witness is the postcondition hash
 // plus the chain of artifact references. A downstream verifier
-// (Track G + Track EE.2 memoization cache) replays each step's
-// artifact against the recorded pre/post hashes.
+// (Track G) replays each step's artifact against the recorded pre/post
+// hashes. The EE.2 memoization cache below stores the derived chain by
+// `(pre-state hash, optimization id)` so repeated derivations are a
+// `BTreeMap` lookup rather than a full chain walk.
 //
 // Anchoring beads:
 //   * bd-cixqu.7.6 (G.4) — Translation validation pilot (CLOSED).
 //     The pilot's per-pass artifact shape is what `proof_artifact_ref`
 //     points at.
 //   * bd-cixqu.31.2 (EE.2) — memoization cache; consumes
-//     `ProofChain::content_hash()` as the cache key.
+//     keyed by `(pre-state hash, optimization id)` and invalidated on
+//     optimization-pack version bump.
 //
 // Non-goals for this bead:
-//   * The actual cache (deferred to EE.2).
 //   * Cross-pass cost re-aggregation (proof_cost_manifest lives in
 //     proof_artifact.rs).
 
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 
 // ---------------------------------------------------------------------------
@@ -264,6 +267,180 @@ impl fmt::Display for ChainError {
 }
 
 impl std::error::Error for ChainError {}
+
+// ---------------------------------------------------------------------------
+// ProofDerivationCache — EE.2 content-hashed memoization
+// ---------------------------------------------------------------------------
+
+/// Cache key for memoized proof-chain derivations.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ProofDerivationCacheKey {
+    /// Hash of the pre-optimization state.
+    pub pre_state_hash: ContentHash,
+    /// Stable optimization identifier within the active optimization pack.
+    pub optimization_id: String,
+}
+
+impl ProofDerivationCacheKey {
+    /// Construct a cache key.
+    pub fn new(pre_state_hash: ContentHash, optimization_id: impl Into<String>) -> Self {
+        Self {
+            pre_state_hash,
+            optimization_id: optimization_id.into(),
+        }
+    }
+}
+
+/// Memoized derivation entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoizedProofDerivation {
+    /// Cache key for this entry.
+    pub key: ProofDerivationCacheKey,
+    /// Optimization-pack version active when the entry was written.
+    pub optimization_pack_version: String,
+    /// Hash of the composed proof chain.
+    pub proof_chain_hash: ContentHash,
+    /// Hash of the post-optimization state.
+    pub post_state_hash: ContentHash,
+    /// Number of pass proofs represented by the chain.
+    pub pass_count: usize,
+    /// Cached composed proof chain.
+    pub proof_chain: ProofChain,
+}
+
+/// Content-hashed memoization cache for proof-chain derivations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProofDerivationCache {
+    optimization_pack_version: String,
+    entries: BTreeMap<ProofDerivationCacheKey, MemoizedProofDerivation>,
+}
+
+impl ProofDerivationCache {
+    /// Create an empty cache for an optimization-pack version.
+    pub fn new(optimization_pack_version: impl Into<String>) -> Self {
+        Self {
+            optimization_pack_version: optimization_pack_version.into(),
+            entries: BTreeMap::new(),
+        }
+    }
+
+    /// Active optimization-pack version.
+    pub fn optimization_pack_version(&self) -> &str {
+        &self.optimization_pack_version
+    }
+
+    /// Number of cached entries.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the cache is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Drop all entries without changing the active pack version.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Ensure the active optimization-pack version. A changed version
+    /// invalidates every cached derivation and returns `true`.
+    pub fn invalidate_on_pack_version_bump(
+        &mut self,
+        new_optimization_pack_version: impl Into<String>,
+    ) -> bool {
+        let new_version = new_optimization_pack_version.into();
+        if self.optimization_pack_version == new_version {
+            return false;
+        }
+        self.optimization_pack_version = new_version;
+        self.clear();
+        true
+    }
+
+    /// Insert a composed proof chain for the supplied optimization id.
+    pub fn insert_chain(
+        &mut self,
+        optimization_id: impl Into<String>,
+        proof_chain: ProofChain,
+    ) -> Result<MemoizedProofDerivation, ProofDerivationCacheError> {
+        let optimization_id = optimization_id.into();
+        if optimization_id.trim().is_empty() {
+            return Err(ProofDerivationCacheError::EmptyOptimizationId);
+        }
+        proof_chain.verify()?;
+        let pre_state_hash = *proof_chain
+            .start_precondition()
+            .ok_or(ProofDerivationCacheError::EmptyProofChain)?;
+        let post_state_hash = *proof_chain
+            .end_postcondition()
+            .ok_or(ProofDerivationCacheError::EmptyProofChain)?;
+        let key = ProofDerivationCacheKey::new(pre_state_hash, optimization_id);
+        let entry = MemoizedProofDerivation {
+            key: key.clone(),
+            optimization_pack_version: self.optimization_pack_version.clone(),
+            proof_chain_hash: proof_chain.content_hash(),
+            post_state_hash,
+            pass_count: proof_chain.len(),
+            proof_chain,
+        };
+        self.entries.insert(key, entry.clone());
+        Ok(entry)
+    }
+
+    /// Lookup a derivation by `(pre-state hash, optimization id)`.
+    pub fn get(
+        &self,
+        pre_state_hash: &ContentHash,
+        optimization_id: &str,
+    ) -> Option<&MemoizedProofDerivation> {
+        self.entries.get(&ProofDerivationCacheKey::new(
+            *pre_state_hash,
+            optimization_id.to_string(),
+        ))
+    }
+
+    /// Whether the cache contains a derivation key.
+    pub fn contains_key(&self, pre_state_hash: &ContentHash, optimization_id: &str) -> bool {
+        self.get(pre_state_hash, optimization_id).is_some()
+    }
+}
+
+impl Default for ProofDerivationCache {
+    fn default() -> Self {
+        Self::new("unversioned")
+    }
+}
+
+/// Errors from proof-derivation cache insertion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProofDerivationCacheError {
+    /// A cache entry cannot be built from an empty proof chain.
+    EmptyProofChain,
+    /// Optimization identifiers must be stable and non-empty.
+    EmptyOptimizationId,
+    /// The proof chain itself is structurally invalid.
+    Chain(ChainError),
+}
+
+impl From<ChainError> for ProofDerivationCacheError {
+    fn from(value: ChainError) -> Self {
+        Self::Chain(value)
+    }
+}
+
+impl fmt::Display for ProofDerivationCacheError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyProofChain => f.write_str("cannot memoize an empty proof chain"),
+            Self::EmptyOptimizationId => f.write_str("optimization id must be non-empty"),
+            Self::Chain(err) => write!(f, "{err}"),
+        }
+    }
+}
+
+impl std::error::Error for ProofDerivationCacheError {}
 
 // ---------------------------------------------------------------------------
 // Tests — composition is associative and the chain is a category
@@ -571,6 +748,109 @@ mod tests {
         let p_bad = pass("px", hash("X"), hash("y"));
         assert!(p1.matches_successor(&p2));
         assert!(!p1.matches_successor(&p_bad));
+    }
+
+    // ----- EE.2 proof-derivation memoization cache -----
+
+    #[test]
+    fn proof_derivation_cache_keys_by_pre_state_and_optimization_id() {
+        let chain = ProofChain::try_from_passes(vec![
+            pass("p1", hash("a"), hash("b")),
+            pass("p2", hash("b"), hash("c")),
+        ])
+        .unwrap();
+        let mut cache = ProofDerivationCache::new("pack-v1");
+        let entry = cache
+            .insert_chain("constant_fold", chain.clone())
+            .expect("valid chain memoizes");
+
+        assert_eq!(entry.key.pre_state_hash, hash("a"));
+        assert_eq!(entry.key.optimization_id, "constant_fold");
+        assert_eq!(entry.post_state_hash, hash("c"));
+        assert_eq!(entry.pass_count, 2);
+        assert_eq!(entry.proof_chain_hash, chain.content_hash());
+        assert_eq!(
+            cache
+                .get(&hash("a"), "constant_fold")
+                .expect("entry should be present")
+                .proof_chain,
+            chain
+        );
+        assert!(cache.get(&hash("b"), "constant_fold").is_none());
+        assert!(cache.get(&hash("a"), "inline").is_none());
+    }
+
+    #[test]
+    fn proof_derivation_cache_separates_same_pre_state_by_optimization_id() {
+        let mut cache = ProofDerivationCache::new("pack-v1");
+        let inline = ProofChain::try_from_passes(vec![pass("inline", hash("a"), hash("b"))])
+            .expect("valid inline chain");
+        let fold = ProofChain::try_from_passes(vec![pass("fold", hash("a"), hash("c"))])
+            .expect("valid fold chain");
+
+        cache.insert_chain("inline", inline.clone()).unwrap();
+        cache.insert_chain("constant_fold", fold.clone()).unwrap();
+
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get(&hash("a"), "inline").unwrap().proof_chain, inline);
+        assert_eq!(
+            cache.get(&hash("a"), "constant_fold").unwrap().proof_chain,
+            fold
+        );
+    }
+
+    #[test]
+    fn proof_derivation_cache_version_bump_invalidates_entries() {
+        let mut cache = ProofDerivationCache::new("pack-v1");
+        cache
+            .insert_chain(
+                "inline",
+                ProofChain::try_from_passes(vec![pass("inline", hash("a"), hash("b"))]).unwrap(),
+            )
+            .unwrap();
+
+        assert!(!cache.invalidate_on_pack_version_bump("pack-v1"));
+        assert_eq!(cache.len(), 1);
+        assert!(cache.invalidate_on_pack_version_bump("pack-v2"));
+        assert_eq!(cache.optimization_pack_version(), "pack-v2");
+        assert!(cache.is_empty());
+        assert!(!cache.contains_key(&hash("a"), "inline"));
+    }
+
+    #[test]
+    fn proof_derivation_cache_rejects_empty_chain_and_empty_optimization_id() {
+        let mut cache = ProofDerivationCache::new("pack-v1");
+        let empty_chain_err = cache
+            .insert_chain("inline", ProofChain::empty())
+            .expect_err("empty chain should not memoize");
+        assert_eq!(empty_chain_err, ProofDerivationCacheError::EmptyProofChain);
+
+        let empty_id_err = cache
+            .insert_chain(
+                " ",
+                ProofChain::try_from_passes(vec![pass("inline", hash("a"), hash("b"))]).unwrap(),
+            )
+            .expect_err("empty optimization id should not memoize");
+        assert_eq!(empty_id_err, ProofDerivationCacheError::EmptyOptimizationId);
+    }
+
+    #[test]
+    fn proof_derivation_cache_serde_round_trip_preserves_lookup() {
+        let mut cache = ProofDerivationCache::new("pack-v1");
+        cache
+            .insert_chain(
+                "inline",
+                ProofChain::try_from_passes(vec![pass("inline", hash("a"), hash("b"))]).unwrap(),
+            )
+            .unwrap();
+
+        let json = serde_json::to_string(&cache).expect("serialize cache");
+        let restored: ProofDerivationCache =
+            serde_json::from_str(&json).expect("deserialize cache");
+
+        assert_eq!(cache, restored);
+        assert_eq!(restored.optimization_pack_version(), "pack-v1");
+        assert!(restored.contains_key(&hash("a"), "inline"));
     }
 
     // ----- Serde -----

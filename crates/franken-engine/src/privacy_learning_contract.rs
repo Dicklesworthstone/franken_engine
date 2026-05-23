@@ -412,6 +412,388 @@ impl DpBudgetSemantics {
 }
 
 // ---------------------------------------------------------------------------
+// DP-SGD posterior updates
+// ---------------------------------------------------------------------------
+
+const DP_SGD_MILLIONTHS: i64 = 1_000_000;
+const DP_SGD_EVIDENCE_DOMAIN: &[u8] = b"FrankenEngine.DpSgdPosteriorStep.v1";
+const DP_SGD_NOISE_DOMAIN: &[u8] = b"FrankenEngine.DpSgdNoise.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DpSgdPosteriorConfig {
+    pub round_id: String,
+    pub epoch: SecurityEpoch,
+    pub learning_rate_millionths: i64,
+    pub clipping_norm_millionths: i64,
+    pub noise_multiplier_millionths: i64,
+    pub min_participants: u32,
+    pub epsilon_cost_millionths: i64,
+    pub delta_cost_millionths: i64,
+}
+
+impl DpSgdPosteriorConfig {
+    pub fn validate(&self, feature_schema: &FeatureSchema) -> Result<(), ContractError> {
+        feature_schema.validate()?;
+        if self.round_id.trim().is_empty() {
+            return Err(ContractError::InvalidDpSgd {
+                detail: "round_id must not be empty".to_string(),
+            });
+        }
+        if self.learning_rate_millionths <= 0 {
+            return Err(ContractError::InvalidDpSgd {
+                detail: "learning_rate_millionths must be > 0".to_string(),
+            });
+        }
+        if self.clipping_norm_millionths <= 0 {
+            return Err(ContractError::InvalidDpSgd {
+                detail: "clipping_norm_millionths must be > 0".to_string(),
+            });
+        }
+        if self.noise_multiplier_millionths < 0 {
+            return Err(ContractError::InvalidDpSgd {
+                detail: "noise_multiplier_millionths must be >= 0".to_string(),
+            });
+        }
+        if self.min_participants < 2 {
+            return Err(ContractError::InvalidDpSgd {
+                detail: "min_participants must be >= 2".to_string(),
+            });
+        }
+        if self.epsilon_cost_millionths <= 0 || self.delta_cost_millionths <= 0 {
+            return Err(ContractError::InvalidDpSgd {
+                detail: "epsilon and delta costs must be > 0".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetPosteriorGradient {
+    pub participant_id: EngineObjectId,
+    pub sample_count: u64,
+    pub coordinates_millionths: BTreeMap<String, i64>,
+}
+
+impl FleetPosteriorGradient {
+    pub fn validate(&self, feature_schema: &FeatureSchema) -> Result<(), ContractError> {
+        if self.sample_count == 0 {
+            return Err(ContractError::InvalidDpSgd {
+                detail: "participant gradient sample_count must be > 0".to_string(),
+            });
+        }
+        for field_name in self.coordinates_millionths.keys() {
+            if !feature_schema.fields.contains_key(field_name) {
+                return Err(ContractError::InvalidDpSgd {
+                    detail: format!("gradient references unknown field: {field_name}"),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetPosteriorState {
+    pub coordinates_millionths: BTreeMap<String, i64>,
+}
+
+impl FleetPosteriorState {
+    pub fn zeroed(feature_schema: &FeatureSchema) -> Self {
+        Self {
+            coordinates_millionths: feature_schema
+                .fields
+                .keys()
+                .map(|field_name| (field_name.clone(), 0))
+                .collect(),
+        }
+    }
+
+    pub fn validate(&self, feature_schema: &FeatureSchema) -> Result<(), ContractError> {
+        for field_name in self.coordinates_millionths.keys() {
+            if !feature_schema.fields.contains_key(field_name) {
+                return Err(ContractError::InvalidDpSgd {
+                    detail: format!("posterior state references unknown field: {field_name}"),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DpSgdPosteriorStep {
+    pub round_id: String,
+    pub epoch: SecurityEpoch,
+    pub participant_count: u32,
+    pub clipping_norm_millionths: i64,
+    pub noise_multiplier_millionths: i64,
+    pub noise_seed_hash: [u8; 32],
+    pub averaged_clipped_gradient_millionths: BTreeMap<String, i64>,
+    pub noised_gradient_millionths: BTreeMap<String, i64>,
+    pub updated_posterior_millionths: BTreeMap<String, i64>,
+    pub epsilon_spent_millionths: i64,
+    pub delta_spent_millionths: i64,
+    pub evidence_hash: [u8; 32],
+}
+
+impl DpSgdPosteriorStep {
+    fn without_hash(mut self) -> Self {
+        self.evidence_hash = [0; 32];
+        self
+    }
+}
+
+pub fn apply_dp_sgd_posterior_step(
+    prior_state: &FleetPosteriorState,
+    gradients: &[FleetPosteriorGradient],
+    config: &DpSgdPosteriorConfig,
+    feature_schema: &FeatureSchema,
+    noise_seed: &[u8],
+) -> Result<DpSgdPosteriorStep, ContractError> {
+    config.validate(feature_schema)?;
+    prior_state.validate(feature_schema)?;
+    if noise_seed.is_empty() {
+        return Err(ContractError::InvalidDpSgd {
+            detail: "noise_seed must not be empty".to_string(),
+        });
+    }
+    if gradients.len() < config.min_participants as usize {
+        return Err(ContractError::InvalidDpSgd {
+            detail: format!(
+                "participant threshold not met: got {}, need {}",
+                gradients.len(),
+                config.min_participants
+            ),
+        });
+    }
+
+    let mut seen_participants = BTreeSet::new();
+    let mut aggregate = zero_coordinate_map(feature_schema);
+    for gradient in gradients {
+        gradient.validate(feature_schema)?;
+        if !seen_participants.insert(gradient.participant_id.clone()) {
+            return Err(ContractError::InvalidDpSgd {
+                detail: "duplicate participant gradient".to_string(),
+            });
+        }
+        let clipped = clip_gradient_l2(
+            &gradient.coordinates_millionths,
+            config.clipping_norm_millionths,
+            feature_schema,
+        )?;
+        for (field_name, value) in clipped {
+            let slot = aggregate
+                .get_mut(&field_name)
+                .expect("aggregate is initialized from feature schema");
+            *slot = checked_add_i64_contract(*slot, value)?;
+        }
+    }
+
+    let participant_count = gradients.len() as i64;
+    let averaged_clipped_gradient_millionths: BTreeMap<String, i64> = aggregate
+        .into_iter()
+        .map(|(field_name, value)| (field_name, value / participant_count))
+        .collect();
+
+    let noise_seed_hash = hash_bytes(noise_seed);
+    let noise_scale_millionths = checked_div_i64_contract(
+        checked_mul_i64_contract(
+            config.clipping_norm_millionths,
+            config.noise_multiplier_millionths,
+        )?,
+        DP_SGD_MILLIONTHS,
+    )?;
+    let noise_scale_millionths =
+        checked_div_i64_contract(noise_scale_millionths, participant_count)?;
+
+    let mut noised_gradient_millionths = BTreeMap::new();
+    for (field_name, value) in &averaged_clipped_gradient_millionths {
+        let noise = deterministic_dp_sgd_noise(
+            noise_seed,
+            &config.round_id,
+            field_name,
+            noise_scale_millionths,
+        );
+        noised_gradient_millionths
+            .insert(field_name.clone(), checked_add_i64_contract(*value, noise)?);
+    }
+
+    let mut updated_posterior_millionths = BTreeMap::new();
+    for field_name in feature_schema.fields.keys() {
+        let prior_value = *prior_state
+            .coordinates_millionths
+            .get(field_name)
+            .unwrap_or(&0);
+        let gradient_value = *noised_gradient_millionths
+            .get(field_name)
+            .expect("noised gradient is initialized from feature schema");
+        let step = checked_div_i64_contract(
+            checked_mul_i64_contract(config.learning_rate_millionths, gradient_value)?,
+            DP_SGD_MILLIONTHS,
+        )?;
+        updated_posterior_millionths.insert(
+            field_name.clone(),
+            checked_sub_i64_contract(prior_value, step)?,
+        );
+    }
+
+    let mut step = DpSgdPosteriorStep {
+        round_id: config.round_id.clone(),
+        epoch: config.epoch,
+        participant_count: gradients.len() as u32,
+        clipping_norm_millionths: config.clipping_norm_millionths,
+        noise_multiplier_millionths: config.noise_multiplier_millionths,
+        noise_seed_hash,
+        averaged_clipped_gradient_millionths,
+        noised_gradient_millionths,
+        updated_posterior_millionths,
+        epsilon_spent_millionths: config.epsilon_cost_millionths,
+        delta_spent_millionths: config.delta_cost_millionths,
+        evidence_hash: [0; 32],
+    };
+    step.evidence_hash = dp_sgd_step_hash(&step);
+    Ok(step)
+}
+
+fn zero_coordinate_map(feature_schema: &FeatureSchema) -> BTreeMap<String, i64> {
+    feature_schema
+        .fields
+        .keys()
+        .map(|field_name| (field_name.clone(), 0))
+        .collect()
+}
+
+fn clip_gradient_l2(
+    coordinates: &BTreeMap<String, i64>,
+    clipping_norm_millionths: i64,
+    feature_schema: &FeatureSchema,
+) -> Result<BTreeMap<String, i64>, ContractError> {
+    let mut sum_squares = 0_i128;
+    for field_name in feature_schema.fields.keys() {
+        let value = *coordinates.get(field_name).unwrap_or(&0);
+        let value_i128 = value as i128;
+        sum_squares = sum_squares
+            .checked_add(value_i128.checked_mul(value_i128).ok_or_else(|| {
+                ContractError::InvalidDpSgd {
+                    detail: "gradient norm overflow".to_string(),
+                }
+            })?)
+            .ok_or_else(|| ContractError::InvalidDpSgd {
+                detail: "gradient norm overflow".to_string(),
+            })?;
+    }
+
+    let norm = integer_sqrt_i128(sum_squares);
+    let scale_millionths = if norm <= 0 || norm <= clipping_norm_millionths as i128 {
+        DP_SGD_MILLIONTHS
+    } else {
+        ((clipping_norm_millionths as i128) * (DP_SGD_MILLIONTHS as i128) / norm) as i64
+    };
+
+    let mut clipped = BTreeMap::new();
+    for field_name in feature_schema.fields.keys() {
+        let value = *coordinates.get(field_name).unwrap_or(&0);
+        let scaled = checked_div_i64_contract(
+            checked_mul_i64_contract(value, scale_millionths)?,
+            DP_SGD_MILLIONTHS,
+        )?;
+        clipped.insert(field_name.clone(), scaled);
+    }
+    Ok(clipped)
+}
+
+fn deterministic_dp_sgd_noise(
+    noise_seed: &[u8],
+    round_id: &str,
+    field_name: &str,
+    scale_millionths: i64,
+) -> i64 {
+    if scale_millionths == 0 {
+        return 0;
+    }
+    let mut preimage = Vec::with_capacity(
+        DP_SGD_NOISE_DOMAIN.len() + noise_seed.len() + round_id.len() + field_name.len() + 16,
+    );
+    preimage.extend_from_slice(DP_SGD_NOISE_DOMAIN);
+    preimage.extend_from_slice(noise_seed);
+    preimage.extend_from_slice(&(round_id.len() as u64).to_be_bytes());
+    preimage.extend_from_slice(round_id.as_bytes());
+    preimage.extend_from_slice(&(field_name.len() as u64).to_be_bytes());
+    preimage.extend_from_slice(field_name.as_bytes());
+    let digest = hash_bytes(&preimage);
+    let mut raw = [0u8; 8];
+    raw.copy_from_slice(&digest[..8]);
+    let bucket = (u64::from_be_bytes(raw) % ((scale_millionths as u64) * 2 + 1)) as i64;
+    bucket - scale_millionths
+}
+
+fn dp_sgd_step_hash(step: &DpSgdPosteriorStep) -> [u8; 32] {
+    let unsigned = step.clone().without_hash();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(DP_SGD_EVIDENCE_DOMAIN);
+    bytes.extend_from_slice(unsigned.round_id.as_bytes());
+    bytes.extend_from_slice(&(unsigned.round_id.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(&unsigned.epoch.as_u64().to_be_bytes());
+    bytes.extend_from_slice(&unsigned.participant_count.to_be_bytes());
+    bytes.extend_from_slice(&unsigned.clipping_norm_millionths.to_be_bytes());
+    bytes.extend_from_slice(&unsigned.noise_multiplier_millionths.to_be_bytes());
+    bytes.extend_from_slice(&unsigned.noise_seed_hash);
+    write_i64_map(&mut bytes, &unsigned.averaged_clipped_gradient_millionths);
+    write_i64_map(&mut bytes, &unsigned.noised_gradient_millionths);
+    write_i64_map(&mut bytes, &unsigned.updated_posterior_millionths);
+    bytes.extend_from_slice(&unsigned.epsilon_spent_millionths.to_be_bytes());
+    bytes.extend_from_slice(&unsigned.delta_spent_millionths.to_be_bytes());
+    hash_bytes(&bytes)
+}
+
+fn write_i64_map(bytes: &mut Vec<u8>, values: &BTreeMap<String, i64>) {
+    bytes.extend_from_slice(&(values.len() as u64).to_be_bytes());
+    for (key, value) in values {
+        bytes.extend_from_slice(&(key.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(key.as_bytes());
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+}
+
+fn checked_add_i64_contract(left: i64, right: i64) -> Result<i64, ContractError> {
+    left.checked_add(right)
+        .ok_or_else(|| ContractError::InvalidDpSgd {
+            detail: "fixed-point addition overflow".to_string(),
+        })
+}
+
+fn checked_sub_i64_contract(left: i64, right: i64) -> Result<i64, ContractError> {
+    left.checked_sub(right)
+        .ok_or_else(|| ContractError::InvalidDpSgd {
+            detail: "fixed-point subtraction overflow".to_string(),
+        })
+}
+
+fn checked_mul_i64_contract(left: i64, right: i64) -> Result<i64, ContractError> {
+    left.checked_mul(right)
+        .ok_or_else(|| ContractError::InvalidDpSgd {
+            detail: "fixed-point multiplication overflow".to_string(),
+        })
+}
+
+fn checked_div_i64_contract(left: i64, right: i64) -> Result<i64, ContractError> {
+    if right == 0 {
+        return Err(ContractError::InvalidDpSgd {
+            detail: "fixed-point division by zero".to_string(),
+        });
+    }
+    Ok(left / right)
+}
+
+fn integer_sqrt_i128(value: i128) -> i128 {
+    if value <= 0 {
+        return 0;
+    }
+    (value as u128).isqrt() as i128
+}
+
+// ---------------------------------------------------------------------------
 // Secure aggregation requirements
 // ---------------------------------------------------------------------------
 
@@ -3000,6 +3382,9 @@ pub enum ContractError {
     InvalidDpBudget {
         detail: String,
     },
+    InvalidDpSgd {
+        detail: String,
+    },
     InvalidAggregation {
         detail: String,
     },
@@ -3067,6 +3452,7 @@ impl fmt::Display for ContractError {
                 write!(f, "invalid clipping strategy: {detail}")
             }
             Self::InvalidDpBudget { detail } => write!(f, "invalid DP budget: {detail}"),
+            Self::InvalidDpSgd { detail } => write!(f, "invalid DP-SGD update: {detail}"),
             Self::InvalidAggregation { detail } => {
                 write!(f, "invalid aggregation: {detail}")
             }
@@ -3266,6 +3652,60 @@ mod tests {
     fn create_test_contract() -> PrivacyLearningContract {
         PrivacyLearningContract::create_signed(&governance_signing_key(), test_contract_input())
             .expect("create test contract")
+    }
+
+    fn test_dp_sgd_config() -> DpSgdPosteriorConfig {
+        DpSgdPosteriorConfig {
+            round_id: "round-qq-1".to_string(),
+            epoch: SecurityEpoch::from_raw(21),
+            learning_rate_millionths: 500_000,
+            clipping_norm_millionths: 1_000_000,
+            noise_multiplier_millionths: 0,
+            min_participants: 2,
+            epsilon_cost_millionths: 50_000,
+            delta_cost_millionths: 100,
+        }
+    }
+
+    fn test_posterior_state() -> FleetPosteriorState {
+        FleetPosteriorState {
+            coordinates_millionths: BTreeMap::from([
+                ("calibration_residual".to_string(), 1_000_000),
+                ("drift_indicator".to_string(), 2_000_000),
+                ("false_positive_count".to_string(), 3_000_000),
+            ]),
+        }
+    }
+
+    fn gradient(byte: u8, values: &[(&str, i64)]) -> FleetPosteriorGradient {
+        FleetPosteriorGradient {
+            participant_id: EngineObjectId([byte; 32]),
+            sample_count: 10,
+            coordinates_millionths: values
+                .iter()
+                .map(|(field, value)| ((*field).to_string(), *value))
+                .collect(),
+        }
+    }
+
+    fn test_gradients() -> Vec<FleetPosteriorGradient> {
+        vec![
+            gradient(
+                0x01,
+                &[
+                    ("calibration_residual", 300_000),
+                    ("drift_indicator", 400_000),
+                ],
+            ),
+            gradient(
+                0x02,
+                &[
+                    ("calibration_residual", -100_000),
+                    ("drift_indicator", 200_000),
+                    ("false_positive_count", 50_000),
+                ],
+            ),
+        ]
     }
 
     fn evidence_id(byte: u8) -> EngineObjectId {
@@ -3718,6 +4158,350 @@ mod tests {
         budget.lifetime_epsilon_budget_millionths = 5_000_000; // 5.0
         // (5_000_000 / 500_000)^2 = 100
         assert_eq!(budget.max_epochs(), 100);
+    }
+
+    // -------------------------------------------------------------------
+    // DP-SGD posterior update tests
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn dp_sgd_config_valid() {
+        test_dp_sgd_config()
+            .validate(&test_feature_schema())
+            .expect("valid DP-SGD config");
+    }
+
+    #[test]
+    fn dp_sgd_config_empty_round_rejected() {
+        let mut cfg = test_dp_sgd_config();
+        cfg.round_id = " ".to_string();
+        assert!(matches!(
+            cfg.validate(&test_feature_schema()),
+            Err(ContractError::InvalidDpSgd { .. })
+        ));
+    }
+
+    #[test]
+    fn dp_sgd_config_zero_learning_rate_rejected() {
+        let mut cfg = test_dp_sgd_config();
+        cfg.learning_rate_millionths = 0;
+        assert!(matches!(
+            cfg.validate(&test_feature_schema()),
+            Err(ContractError::InvalidDpSgd { .. })
+        ));
+    }
+
+    #[test]
+    fn dp_sgd_config_zero_clipping_rejected() {
+        let mut cfg = test_dp_sgd_config();
+        cfg.clipping_norm_millionths = 0;
+        assert!(matches!(
+            cfg.validate(&test_feature_schema()),
+            Err(ContractError::InvalidDpSgd { .. })
+        ));
+    }
+
+    #[test]
+    fn dp_sgd_config_negative_noise_rejected() {
+        let mut cfg = test_dp_sgd_config();
+        cfg.noise_multiplier_millionths = -1;
+        assert!(matches!(
+            cfg.validate(&test_feature_schema()),
+            Err(ContractError::InvalidDpSgd { .. })
+        ));
+    }
+
+    #[test]
+    fn dp_sgd_config_low_participant_threshold_rejected() {
+        let mut cfg = test_dp_sgd_config();
+        cfg.min_participants = 1;
+        assert!(matches!(
+            cfg.validate(&test_feature_schema()),
+            Err(ContractError::InvalidDpSgd { .. })
+        ));
+    }
+
+    #[test]
+    fn dp_sgd_config_zero_privacy_cost_rejected() {
+        let mut cfg = test_dp_sgd_config();
+        cfg.epsilon_cost_millionths = 0;
+        assert!(matches!(
+            cfg.validate(&test_feature_schema()),
+            Err(ContractError::InvalidDpSgd { .. })
+        ));
+    }
+
+    #[test]
+    fn dp_sgd_gradient_zero_samples_rejected() {
+        let mut g = gradient(0x03, &[("calibration_residual", 1)]);
+        g.sample_count = 0;
+        assert!(matches!(
+            g.validate(&test_feature_schema()),
+            Err(ContractError::InvalidDpSgd { .. })
+        ));
+    }
+
+    #[test]
+    fn dp_sgd_gradient_unknown_field_rejected() {
+        let g = gradient(0x03, &[("unknown_field", 1)]);
+        assert!(matches!(
+            g.validate(&test_feature_schema()),
+            Err(ContractError::InvalidDpSgd { .. })
+        ));
+    }
+
+    #[test]
+    fn dp_sgd_state_zeroed_from_schema() {
+        let state = FleetPosteriorState::zeroed(&test_feature_schema());
+        assert_eq!(state.coordinates_millionths.len(), 3);
+        assert_eq!(state.coordinates_millionths["calibration_residual"], 0);
+        assert_eq!(state.coordinates_millionths["drift_indicator"], 0);
+        assert_eq!(state.coordinates_millionths["false_positive_count"], 0);
+    }
+
+    #[test]
+    fn dp_sgd_state_unknown_field_rejected() {
+        let mut state = test_posterior_state();
+        state
+            .coordinates_millionths
+            .insert("unknown_field".to_string(), 1);
+        assert!(matches!(
+            state.validate(&test_feature_schema()),
+            Err(ContractError::InvalidDpSgd { .. })
+        ));
+    }
+
+    #[test]
+    fn dp_sgd_rejects_empty_noise_seed() {
+        let err = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &test_dp_sgd_config(),
+            &test_feature_schema(),
+            b"",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::InvalidDpSgd { .. }));
+    }
+
+    #[test]
+    fn dp_sgd_rejects_participant_threshold_shortfall() {
+        let err = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &[gradient(0x01, &[("calibration_residual", 100_000)])],
+            &test_dp_sgd_config(),
+            &test_feature_schema(),
+            b"seed",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::InvalidDpSgd { .. }));
+    }
+
+    #[test]
+    fn dp_sgd_rejects_duplicate_participants() {
+        let mut gradients = test_gradients();
+        gradients[1].participant_id = gradients[0].participant_id.clone();
+        let err = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &gradients,
+            &test_dp_sgd_config(),
+            &test_feature_schema(),
+            b"seed",
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::InvalidDpSgd { .. }));
+    }
+
+    #[test]
+    fn dp_sgd_clip_leaves_small_gradient_unchanged() {
+        let clipped = clip_gradient_l2(
+            &gradient(
+                0x01,
+                &[
+                    ("calibration_residual", 300_000),
+                    ("drift_indicator", 400_000),
+                ],
+            )
+            .coordinates_millionths,
+            1_000_000,
+            &test_feature_schema(),
+        )
+        .expect("clip");
+        assert_eq!(clipped["calibration_residual"], 300_000);
+        assert_eq!(clipped["drift_indicator"], 400_000);
+    }
+
+    #[test]
+    fn dp_sgd_clip_scales_large_gradient() {
+        let clipped = clip_gradient_l2(
+            &gradient(
+                0x01,
+                &[
+                    ("calibration_residual", 800_000),
+                    ("drift_indicator", 600_000),
+                ],
+            )
+            .coordinates_millionths,
+            500_000,
+            &test_feature_schema(),
+        )
+        .expect("clip");
+        assert_eq!(clipped["calibration_residual"], 400_000);
+        assert_eq!(clipped["drift_indicator"], 300_000);
+    }
+
+    #[test]
+    fn dp_sgd_averages_sparse_gradients() {
+        let step = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &test_dp_sgd_config(),
+            &test_feature_schema(),
+            b"seed",
+        )
+        .expect("step");
+        assert_eq!(
+            step.averaged_clipped_gradient_millionths["calibration_residual"],
+            100_000
+        );
+        assert_eq!(
+            step.averaged_clipped_gradient_millionths["drift_indicator"],
+            300_000
+        );
+        assert_eq!(
+            step.averaged_clipped_gradient_millionths["false_positive_count"],
+            25_000
+        );
+    }
+
+    #[test]
+    fn dp_sgd_zero_noise_keeps_average_gradient() {
+        let step = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &test_dp_sgd_config(),
+            &test_feature_schema(),
+            b"seed",
+        )
+        .expect("step");
+        assert_eq!(
+            step.noised_gradient_millionths,
+            step.averaged_clipped_gradient_millionths
+        );
+    }
+
+    #[test]
+    fn dp_sgd_updates_posterior_by_gradient_descent() {
+        let step = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &test_dp_sgd_config(),
+            &test_feature_schema(),
+            b"seed",
+        )
+        .expect("step");
+        assert_eq!(
+            step.updated_posterior_millionths["calibration_residual"],
+            950_000
+        );
+        assert_eq!(
+            step.updated_posterior_millionths["drift_indicator"],
+            1_850_000
+        );
+        assert_eq!(
+            step.updated_posterior_millionths["false_positive_count"],
+            2_987_500
+        );
+    }
+
+    #[test]
+    fn dp_sgd_records_privacy_costs() {
+        let step = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &test_dp_sgd_config(),
+            &test_feature_schema(),
+            b"seed",
+        )
+        .expect("step");
+        assert_eq!(step.epsilon_spent_millionths, 50_000);
+        assert_eq!(step.delta_spent_millionths, 100);
+        assert_eq!(step.participant_count, 2);
+    }
+
+    #[test]
+    fn dp_sgd_noise_is_deterministic_for_same_seed() {
+        let mut cfg = test_dp_sgd_config();
+        cfg.noise_multiplier_millionths = 500_000;
+        let left = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &cfg,
+            &test_feature_schema(),
+            b"seed-A",
+        )
+        .expect("left");
+        let right = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &cfg,
+            &test_feature_schema(),
+            b"seed-A",
+        )
+        .expect("right");
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn dp_sgd_noise_seed_changes_evidence_hash() {
+        let mut cfg = test_dp_sgd_config();
+        cfg.noise_multiplier_millionths = 500_000;
+        let left = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &cfg,
+            &test_feature_schema(),
+            b"seed-A",
+        )
+        .expect("left");
+        let right = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &cfg,
+            &test_feature_schema(),
+            b"seed-B",
+        )
+        .expect("right");
+        assert_ne!(left.evidence_hash, right.evidence_hash);
+        assert_ne!(left.noise_seed_hash, right.noise_seed_hash);
+    }
+
+    #[test]
+    fn dp_sgd_evidence_hash_recomputes() {
+        let step = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &test_dp_sgd_config(),
+            &test_feature_schema(),
+            b"seed",
+        )
+        .expect("step");
+        assert_eq!(step.evidence_hash, dp_sgd_step_hash(&step));
+    }
+
+    #[test]
+    fn dp_sgd_step_serde_roundtrip() {
+        let step = apply_dp_sgd_posterior_step(
+            &test_posterior_state(),
+            &test_gradients(),
+            &test_dp_sgd_config(),
+            &test_feature_schema(),
+            b"seed",
+        )
+        .expect("step");
+        let json = serde_json::to_string(&step).expect("serialize");
+        let restored: DpSgdPosteriorStep = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, step);
     }
 
     // -------------------------------------------------------------------

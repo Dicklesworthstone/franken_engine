@@ -159,10 +159,14 @@ Minimum CI gate behavior:
 
 Third-party verification flow:
 1. Obtain bundle directory.
-2. Run `frankenctl repro verify --bundle <path> --output <report.json>`.
+2. Run `scripts/third_party_repro_lock_verifier.sh --lock <path>/repro.lock --report <report.json>`.
 3. Confirm report verdict is `pass`.
-4. Confirm output includes stable IDs (`trace_id`, `decision_id`, `policy_id`).
-5. Re-run to confirm deterministic identical verdict and hashes.
+4. Confirm the report lists the locked command sequence and source commit.
+5. Re-run to confirm deterministic identical verdict and output hashes.
+
+When a release package only needs to prove that a third party can derive the
+replay plan before spending remote-build budget, use `--plan-only`; publication
+still requires a non-plan verifier report with verdict `pass`.
 
 ## Retention and Rotation Policy
 

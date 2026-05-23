@@ -52,6 +52,40 @@ Replay wrapper:
 ./scripts/e2e/third_party_verifier_replay.sh ci
 ```
 
+## Repro.lock Scripted Environment (`bd-cixqu.14.2`)
+
+External operators can verify a shipped reproducibility lock without knowing the
+original gate script:
+
+```bash
+scripts/third_party_repro_lock_verifier.sh --lock artifacts/<bundle>/repro.lock --report verify_report.json
+```
+
+The verifier accepts both canonical `franken-engine.repro-lock.v1` locks and
+the runbook backfill shape `frankenengine.reproducibility.lock.v1`. It extracts
+the locked replay command sequence, enforces a fail-closed deterministic policy,
+wraps direct Cargo commands with:
+
+```bash
+rch exec -- env CARGO_INCREMENTAL=0 RUSTFLAGS="-C linker=cc" bash -lc '<locked command>'
+```
+
+and emits `franken-engine.third-party-repro-lock-verifier-report.v1` with the
+commands, source commit, deterministic-policy verdict, execution count, and
+failed command if any.
+
+Dry-run planning for release packages:
+
+```bash
+scripts/third_party_repro_lock_verifier.sh --lock artifacts/<bundle>/repro.lock --plan-only
+```
+
+Smoke coverage:
+
+```bash
+scripts/e2e/third_party_repro_lock_verifier_smoke.sh
+```
+
 ## Usage
 
 ```bash

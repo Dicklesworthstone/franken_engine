@@ -24,7 +24,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::ContentHash;
-use crate::martingale_decision_ledger::{MartingaleLedger, MartingaleVerdict, StoppingThreshold};
+use crate::martingale_decision_ledger::{MartingaleLedger, StoppingThreshold};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -39,6 +39,12 @@ const MIN_OBSERVATIONS_FOR_DETECTION: u64 = 5;
 
 /// Default threshold for CUSUM statistic (log(1/0.01) ≈ 4.605).
 const DEFAULT_CUSUM_THRESHOLD_MILLIONTHS: i64 = 4_605_000;
+
+/// Default BOCPD compatibility truncation for the synthetic run-length tail.
+const DEFAULT_BOCPD_MAX_RUN_LENGTH: u64 = 256;
+
+/// Default BOCPD constant-hazard expected run length.
+const DEFAULT_BOCPD_HAZARD_LAMBDA: u64 = 100;
 
 // ---------------------------------------------------------------------------
 // CompositeAlternative - Parametric family for post-change distribution
@@ -242,6 +248,102 @@ impl CompositeAlternative {
 }
 
 // ---------------------------------------------------------------------------
+// BOCPD compatibility shim
+// ---------------------------------------------------------------------------
+
+/// Configuration for emitting BOCPD-compatible signals from the sequential
+/// detector.
+///
+/// The JJ.1 detector is CUSUM/Page-rule based. This shim does not pretend to
+/// re-run BOCPD; it exposes the detector state in the shape BOCPD consumers
+/// already use: run-length distribution, run-length MAP, change-point
+/// probability, and constant hazard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BocpdCompatibilityConfig {
+    /// Maximum run length represented in the compatibility distribution.
+    pub max_run_length: u64,
+    /// Constant-hazard expected run length. `0` means degenerate always-change.
+    pub hazard_lambda: u64,
+}
+
+impl BocpdCompatibilityConfig {
+    /// Create a compatibility configuration.
+    pub const fn new(max_run_length: u64, hazard_lambda: u64) -> Self {
+        Self {
+            max_run_length,
+            hazard_lambda,
+        }
+    }
+
+    /// Constant hazard probability in millionths, matching
+    /// `regime_detector::ConstantHazard` semantics.
+    pub fn hazard_millionths(&self) -> i64 {
+        if self.hazard_lambda == 0 {
+            return MILLION;
+        }
+        MILLION / self.hazard_lambda as i64
+    }
+}
+
+impl Default for BocpdCompatibilityConfig {
+    fn default() -> Self {
+        Self {
+            max_run_length: DEFAULT_BOCPD_MAX_RUN_LENGTH,
+            hazard_lambda: DEFAULT_BOCPD_HAZARD_LAMBDA,
+        }
+    }
+}
+
+/// BOCPD-shaped signal emitted by [`ChangePointDetector`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BocpdCompatibilitySignal {
+    /// Detector identifier.
+    pub detector_id: String,
+    /// Number of observations incorporated by the detector.
+    pub observation_count: u64,
+    /// Most likely run length under the compatibility distribution.
+    pub most_probable_run_length: u64,
+    /// Probability of a change point at the current observation.
+    pub change_point_probability_millionths: i64,
+    /// Sparse run-length distribution in millionths.
+    pub run_length_distribution_millionths: BTreeMap<u64, i64>,
+    /// Constant hazard probability in millionths.
+    pub hazard_millionths: i64,
+    /// Current CUSUM statistic.
+    pub cusum_statistic_millionths: i64,
+    /// Configured CUSUM threshold.
+    pub threshold_millionths: i64,
+    /// Whether the underlying detector has fired.
+    pub change_detected: bool,
+    /// Security epoch used for the emitted signal.
+    pub epoch: SecurityEpoch,
+}
+
+impl BocpdCompatibilitySignal {
+    /// Sum of sparse run-length probabilities.
+    pub fn run_length_probability_total_millionths(&self) -> i64 {
+        self.run_length_distribution_millionths
+            .values()
+            .copied()
+            .sum()
+    }
+
+    /// Whether the signal is normalized to exactly one millionth unit.
+    pub fn is_normalized(&self) -> bool {
+        self.run_length_probability_total_millionths() == MILLION
+    }
+}
+
+/// Receipt returned when processing an observation through the BOCPD shim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BocpdCompatibleObservation {
+    /// Native CUSUM/Page-rule verdict.
+    pub verdict: ChangePointVerdict,
+    /// BOCPD-shaped compatibility signal after incorporating the observation.
+    pub signal: BocpdCompatibilitySignal,
+}
+
+// ---------------------------------------------------------------------------
 // ChangePointVerdict - Detection result with timing and estimates
 // ---------------------------------------------------------------------------
 
@@ -374,14 +476,14 @@ impl ChangePointDetector {
         // Update CUSUM statistic: S_n = max(0, S_{n-1} + log(L_n))
         self.cusum_statistic_millionths = (self.cusum_statistic_millionths + log_lr).max(0);
 
+        let payload_digest = ContentHash::compute(
+            &self.compute_observation_payload(observation_millionths, timestamp_ns),
+        );
+
         // Update integrated martingale if enabled
         if let Some(ref mut ledger) = self.martingale_ledger {
             if !ledger.is_stopped() {
-                let payload_bytes =
-                    self.compute_observation_payload(observation_millionths, timestamp_ns);
-                let payload_digest = ContentHash::compute(&payload_bytes);
-
-                let _verdict = ledger.append(log_lr, timestamp_ns, payload_digest)?;
+                let _verdict = ledger.append(log_lr, payload_digest, timestamp_ns)?;
             }
         }
 
@@ -420,6 +522,54 @@ impl ChangePointDetector {
             })
         } else {
             Ok(ChangePointVerdict::Continue)
+        }
+    }
+
+    /// Process an observation and emit a BOCPD-compatible signal for callers
+    /// that consume run-length and change-point-probability fields.
+    pub fn process_observation_with_bocpd_signal(
+        &mut self,
+        observation_millionths: i64,
+        timestamp_ns: u64,
+        config: BocpdCompatibilityConfig,
+    ) -> Result<BocpdCompatibleObservation, ChangePointError> {
+        let verdict = self.process_observation(observation_millionths, timestamp_ns)?;
+        let signal = self.bocpd_signal(config);
+        Ok(BocpdCompatibleObservation { verdict, signal })
+    }
+
+    /// Emit the current detector state as a BOCPD-compatible signal.
+    pub fn bocpd_signal(&self, config: BocpdCompatibilityConfig) -> BocpdCompatibilitySignal {
+        let observation_count = self.observation_count();
+        let change_point_probability = self.bocpd_change_point_probability_millionths();
+        let current_run_length = if observation_count == 0 || self.change_detected {
+            0
+        } else {
+            observation_count.min(config.max_run_length)
+        };
+
+        let mut run_length_distribution = BTreeMap::new();
+        if current_run_length == 0 {
+            run_length_distribution.insert(0, MILLION);
+        } else {
+            run_length_distribution.insert(0, change_point_probability);
+            run_length_distribution.insert(current_run_length, MILLION - change_point_probability);
+        }
+
+        let most_probable_run_length =
+            most_probable_run_length_from_distribution(&run_length_distribution);
+
+        BocpdCompatibilitySignal {
+            detector_id: self.detector_id.clone(),
+            observation_count,
+            most_probable_run_length,
+            change_point_probability_millionths: change_point_probability,
+            run_length_distribution_millionths: run_length_distribution,
+            hazard_millionths: config.hazard_millionths(),
+            cusum_statistic_millionths: self.cusum_statistic_millionths,
+            threshold_millionths: self.threshold_millionths,
+            change_detected: self.change_detected,
+            epoch: self.epoch,
         }
     }
 
@@ -516,6 +666,28 @@ impl ChangePointDetector {
         )
         .into_bytes()
     }
+
+    fn bocpd_change_point_probability_millionths(&self) -> i64 {
+        if self.change_detected || self.observations.is_empty() || self.threshold_millionths <= 0 {
+            return MILLION;
+        }
+
+        ((self.cusum_statistic_millionths as i128 * MILLION as i128)
+            / self.threshold_millionths as i128)
+            .clamp(0, MILLION as i128) as i64
+    }
+}
+
+fn most_probable_run_length_from_distribution(distribution: &BTreeMap<u64, i64>) -> u64 {
+    let mut best_run_length = 0;
+    let mut best_probability = i64::MIN;
+    for (&run_length, &probability) in distribution {
+        if probability > best_probability {
+            best_run_length = run_length;
+            best_probability = probability;
+        }
+    }
+    best_run_length
 }
 
 // ---------------------------------------------------------------------------
@@ -629,7 +801,7 @@ mod tests {
         for i in 1..=10 {
             let observation = (i % 3 - 1) * 200_000; // Values around 0
             let verdict = detector
-                .process_observation(observation, i * 1_000_000)
+                .process_observation(observation, (i as u64) * 1_000_000)
                 .expect("should process observation");
 
             assert!(matches!(verdict, ChangePointVerdict::Continue));
@@ -653,7 +825,7 @@ mod tests {
         for i in 1..=5 {
             let observation = (i % 3 - 1) * 100_000;
             let verdict = detector
-                .process_observation(observation, i * 1_000_000)
+                .process_observation(observation, (i as u64) * 1_000_000)
                 .expect("should process observation");
             assert!(matches!(verdict, ChangePointVerdict::Continue));
         }
@@ -662,7 +834,7 @@ mod tests {
         for i in 6..=15 {
             let observation = 1_500_000 + (i % 3 - 1) * 100_000; // Mean around 1.5
             let verdict = detector
-                .process_observation(observation, i * 1_000_000)
+                .process_observation(observation, (i as u64) * 1_000_000)
                 .expect("should process observation");
 
             if detector.is_change_detected() {
@@ -699,7 +871,7 @@ mod tests {
         for i in 1..=5 {
             let observation = MILLION + (i % 2) * 200_000; // Around mean 1.0
             let verdict = detector
-                .process_observation(observation, i * 1_000_000)
+                .process_observation(observation, (i as u64) * 1_000_000)
                 .expect("should process observation");
             assert!(matches!(verdict, ChangePointVerdict::Continue));
         }
@@ -708,7 +880,7 @@ mod tests {
         for i in 6..=15 {
             let observation = 300_000 + (i % 2) * 100_000; // Lower mean
             let verdict = detector
-                .process_observation(observation, i * 1_000_000)
+                .process_observation(observation, (i as u64) * 1_000_000)
                 .expect("should process observation");
 
             if detector.is_change_detected() {
@@ -732,7 +904,7 @@ mod tests {
         for i in 1..=5 {
             let observation = if i <= 2 { MILLION } else { 0 }; // ~30% success
             let verdict = detector
-                .process_observation(observation, i * 1_000_000)
+                .process_observation(observation, (i as u64) * 1_000_000)
                 .expect("should process observation");
             assert!(matches!(verdict, ChangePointVerdict::Continue));
         }
@@ -741,7 +913,7 @@ mod tests {
         for i in 6..=15 {
             let observation = if i <= 14 { MILLION } else { 0 }; // ~80% success
             let verdict = detector
-                .process_observation(observation, i * 1_000_000)
+                .process_observation(observation, (i as u64) * 1_000_000)
                 .expect("should process observation");
 
             if detector.is_change_detected() {
@@ -770,7 +942,7 @@ mod tests {
         for i in 1..=5 {
             let observation = 1_000_000; // Constant positive signal
             let _verdict = detector
-                .process_observation(observation, i * 1_000_000)
+                .process_observation(observation, (i as u64) * 1_000_000)
                 .expect("should process observation");
         }
 
@@ -790,7 +962,7 @@ mod tests {
         // Process some observations
         for i in 1..=3 {
             let _verdict = detector
-                .process_observation(i * 500_000, i * 1_000_000)
+                .process_observation(i * 500_000, (i as u64) * 1_000_000)
                 .expect("should process observation");
         }
 
@@ -819,7 +991,7 @@ mod tests {
         for i in 1..=10 {
             let observation = 2_000_000; // Large positive signal
             let verdict = detector
-                .process_observation(observation, i * 1_000_000)
+                .process_observation(observation, (i as u64) * 1_000_000)
                 .expect("should process observation");
 
             if detector.is_change_detected() {
@@ -888,5 +1060,194 @@ mod tests {
 
         assert!(change_verdict.is_change_detected());
         assert_eq!(change_verdict.detection_time(), Some(42));
+    }
+
+    #[test]
+    fn bocpd_config_matches_constant_hazard_semantics() {
+        assert_eq!(
+            BocpdCompatibilityConfig::new(50, 0).hazard_millionths(),
+            MILLION
+        );
+        assert_eq!(
+            BocpdCompatibilityConfig::new(50, 1).hazard_millionths(),
+            MILLION
+        );
+        assert_eq!(
+            BocpdCompatibilityConfig::new(50, 100).hazard_millionths(),
+            10_000
+        );
+    }
+
+    #[test]
+    fn fresh_bocpd_signal_starts_at_run_length_zero() {
+        let detector = ChangePointDetector::new_with_default_threshold(
+            "bocpd-fresh",
+            sample_normal_alternative(),
+            SecurityEpoch::from_raw(1),
+        );
+
+        let signal = detector.bocpd_signal(BocpdCompatibilityConfig::default());
+
+        assert_eq!(signal.detector_id, "bocpd-fresh");
+        assert_eq!(signal.observation_count, 0);
+        assert_eq!(signal.most_probable_run_length, 0);
+        assert_eq!(signal.change_point_probability_millionths, MILLION);
+        assert_eq!(
+            signal.run_length_distribution_millionths.get(&0),
+            Some(&MILLION)
+        );
+        assert!(signal.is_normalized());
+    }
+
+    #[test]
+    fn stable_bocpd_signal_moves_mass_to_current_run_length() {
+        let mut detector = ChangePointDetector::new(
+            "bocpd-stable",
+            sample_normal_alternative(),
+            5_000_000,
+            SecurityEpoch::from_raw(1),
+        );
+
+        for i in 1..=6 {
+            let verdict = detector
+                .process_observation(0, (i as u64) * 1_000_000)
+                .expect("stable observation should process");
+            assert!(matches!(verdict, ChangePointVerdict::Continue));
+        }
+
+        let signal = detector.bocpd_signal(BocpdCompatibilityConfig::new(50, 100));
+
+        assert_eq!(signal.observation_count, 6);
+        assert_eq!(signal.change_point_probability_millionths, 0);
+        assert_eq!(signal.most_probable_run_length, 6);
+        assert_eq!(
+            signal.run_length_distribution_millionths.get(&6),
+            Some(&MILLION)
+        );
+        assert!(signal.is_normalized());
+    }
+
+    #[test]
+    fn bocpd_signal_caps_run_length_at_configured_maximum() {
+        let mut detector = ChangePointDetector::new(
+            "bocpd-capped",
+            sample_normal_alternative(),
+            5_000_000,
+            SecurityEpoch::from_raw(1),
+        );
+
+        for i in 1..=9 {
+            detector
+                .process_observation(0, (i as u64) * 1_000_000)
+                .expect("stable observation should process");
+        }
+
+        let signal = detector.bocpd_signal(BocpdCompatibilityConfig::new(3, 100));
+
+        assert_eq!(signal.observation_count, 9);
+        assert_eq!(signal.most_probable_run_length, 3);
+        assert!(signal.run_length_distribution_millionths.contains_key(&3));
+        assert!(signal.is_normalized());
+    }
+
+    #[test]
+    fn bocpd_signal_probability_tracks_cusum_threshold_ratio() {
+        let mut detector = ChangePointDetector::new(
+            "bocpd-ratio",
+            sample_normal_alternative(),
+            4_000_000,
+            SecurityEpoch::from_raw(1),
+        );
+
+        detector
+            .process_observation(2_000_000, 1_000_000)
+            .expect("observation should process");
+        let signal = detector.bocpd_signal(BocpdCompatibilityConfig::default());
+
+        assert!(signal.change_point_probability_millionths > 0);
+        assert!(signal.change_point_probability_millionths < MILLION);
+        assert_eq!(
+            signal.change_point_probability_millionths,
+            detector.cusum_statistic_millionths() * MILLION / detector.threshold_millionths
+        );
+        assert!(signal.is_normalized());
+    }
+
+    #[test]
+    fn process_observation_with_bocpd_signal_returns_native_verdict() {
+        let mut detector = ChangePointDetector::new(
+            "bocpd-receipt",
+            sample_normal_alternative(),
+            5_000_000,
+            SecurityEpoch::from_raw(1),
+        );
+
+        let receipt = detector
+            .process_observation_with_bocpd_signal(
+                0,
+                1_000_000,
+                BocpdCompatibilityConfig::new(10, 100),
+            )
+            .expect("observation should process");
+
+        assert!(matches!(receipt.verdict, ChangePointVerdict::Continue));
+        assert_eq!(receipt.signal.observation_count, 1);
+        assert_eq!(receipt.signal.hazard_millionths, 10_000);
+        assert!(receipt.signal.is_normalized());
+    }
+
+    #[test]
+    fn detection_forces_bocpd_change_probability_to_one() {
+        let mut detector = ChangePointDetector::new(
+            "bocpd-detected",
+            sample_normal_alternative(),
+            500_000,
+            SecurityEpoch::from_raw(1),
+        );
+
+        let mut last_signal = detector.bocpd_signal(BocpdCompatibilityConfig::default());
+        for i in 1..=10 {
+            let receipt = detector
+                .process_observation_with_bocpd_signal(
+                    2_000_000,
+                    (i as u64) * 1_000_000,
+                    BocpdCompatibilityConfig::default(),
+                )
+                .expect("observation should process");
+            last_signal = receipt.signal;
+            if detector.is_change_detected() {
+                break;
+            }
+        }
+
+        assert!(detector.is_change_detected());
+        assert_eq!(last_signal.change_point_probability_millionths, MILLION);
+        assert_eq!(last_signal.most_probable_run_length, 0);
+        assert_eq!(
+            last_signal.run_length_distribution_millionths.get(&0),
+            Some(&MILLION)
+        );
+        assert!(last_signal.is_normalized());
+    }
+
+    #[test]
+    fn bocpd_signal_serde_roundtrip_preserves_distribution() {
+        let mut detector = ChangePointDetector::new(
+            "bocpd-serde",
+            sample_normal_alternative(),
+            5_000_000,
+            SecurityEpoch::from_raw(1),
+        );
+        detector
+            .process_observation(1_000_000, 1_000_000)
+            .expect("observation should process");
+        let signal = detector.bocpd_signal(BocpdCompatibilityConfig::new(25, 50));
+
+        let json = serde_json::to_string(&signal).expect("signal should serialize");
+        let roundtrip: BocpdCompatibilitySignal =
+            serde_json::from_str(&json).expect("signal should deserialize");
+
+        assert_eq!(roundtrip, signal);
+        assert!(roundtrip.is_normalized());
     }
 }

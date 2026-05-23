@@ -137,7 +137,7 @@ The table below mirrors [`docs/CLAIM_TO_PROOF_MATRIX_V1.md`](./docs/CLAIM_TO_PRO
 | Probabilistic guardplane (Bayesian + e-process boundaries) | OBSERVED | Backed by live decision artifacts; demonstrated in `examples/live_guardplane_decision_example.rs`. |
 | Deterministic replay for the declared high-severity inventory | OBSERVED | `replay_coverage` proof gate (`bd-2488a`) + byte-identical fixed-input `compile`/`run` artifacts in CLI integration tests. |
 | Cryptographic decision receipts with transparency-log + TEE attestation | HYPOTHESIS | Receipt, transparency-log, and TEE proof must be split and shipped before this can be promoted. |
-| Fleet immune system / quarantine propagation convergence SLO | TARGETED | A live quarantine-mesh proof wrapper now exists (`bd-ly6hp.3`); bounded convergence SLOs remain target until that evidence is published. |
+| Fleet immune system / quarantine propagation convergence SLO | OBSERVED | Fleet convergence harness with N-node testing (`bd-cixqu.2.1`), bounded SLO declaration and gate (`bd-cixqu.2.2`), quarantine de-escalation primitive (`bd-cixqu.2.3`), and partition fault profiles (`bd-cixqu.2.4`) provide live convergence evidence. |
 | Capability-typed end-to-end TS-to-IR contract / ambient-authority rejection | OBSERVED | Effect-set IR2 annotation (`bd-cixqu.3.1`), lowering-side rejection of ambient-authority calls (`bd-cixqu.3.2`), 16-scenario red-team negative corpus (`bd-cixqu.3.3`), and `scripts/run_rgc_capability_typed_compile_time.sh` + replay wrapper (`bd-cixqu.3.4`). |
 | Information-flow control with signed declassification receipts | OBSERVED | Live IFC example in `examples/live_ifc_declassification_example.rs` (`bd-dpfvh`). |
 | Red-team compromise-rate comparison | OBSERVED | Real attacker harness (`bd-28otw`), not hardcoded baselines. |
@@ -529,7 +529,7 @@ What FrankenEngine *is* built to defend against, and what is explicitly out of s
 | **Compromised operator signing key** | Threshold signing (`threshold_signing.rs`) reduces blast radius but cannot defend against a multi-party compromise. Out-of-band key custody is required. |
 | **Compromised host OS / hypervisor** | Bounded by TEE attestation, but TEE-backed production guarantees remain HYPOTHESIS (`FE-CLAIM-004`). |
 | **Adversarial sibling-repo crates** | The sibling-reuse contract assumes `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite` are trusted upstream. Sibling-repo compromise is out of scope; the cross-repo integration suite verifies behaviour, not authenticity. |
-| **De-escalation in a hostile fleet** | Quarantine is a permanent ratchet today; an extension that should be re-admitted after a false positive requires manual intervention. |
+| **De-escalation in a hostile fleet** | Quarantine de-escalation is supported via signed re-admission decisions with operator approval and TEE attestation (`bd-cixqu.2.3`); automatic re-admission without operator involvement remains out of scope. |
 | **Formal end-to-end proofs** | The finite-algebra invariant tests are mathematically explicit; theorem-backed proofs of equivalence between specification and implementation remain HYPOTHESIS (`FE-CLAIM-016`–`FE-CLAIM-021`). |
 | **Performance under unmeasured workloads** | Performance claims are gated to the `real_runtime_hot_paths` corpus. Behaviour outside that corpus is uncharacterised. |
 | **Compatibility with arbitrary npm native add-ons** | Conservative posture: the membrane refuses to silently bridge an npm-style native add-on into the trust boundary. |
@@ -598,7 +598,7 @@ The probabilistic guardplane is the runtime's continuous policy supervisor. It o
 allow  →  challenge  →  sandbox  →  suspend  →  terminate  →  quarantine
 ```
 
-Each step is one-way under the current implementation (`bd-or2e1` demotion-rollback work made the *promotion* side reversible via signed receipts, but operational de-escalation across extensions is still unimplemented; quarantine is a permanent ratchet today).
+Each step is one-way under the current implementation (`bd-or2e1` demotion-rollback work made the *promotion* side reversible via signed receipts, and operational de-escalation across extensions is now supported via `quarantine_deescalation.rs` with signed re-admission decisions and operator approval ledger).
 
 ### Bayesian posterior
 
@@ -1373,7 +1373,7 @@ Honest comparison across six JavaScript / WebAssembly runtimes targeting differe
 | Deterministic replay for high-severity decisions | Built into the runtime for the declared allow/deny/escalate inventory; fixed-input `frankenctl compile`/`run` artifacts are byte-identical in the shipped CLI integration test | External tooling only | External tooling only | External tooling only | Trace replay via runtime tooling (workerd); not a high-severity-inventory contract | Deterministic execution by spec, but no high-severity decision inventory or evidence-bundle contract |
 | Probabilistic containment policy | Built-in guardplane (Bayesian + e-process) | Not default runtime behavior | Not default runtime behavior | Permission prompts; not probabilistic | Per-request isolate boundaries; not probabilistic | N/A (host-defined) |
 | Cryptographic decision receipts | HYPOTHESIS until transparency-log and TEE proof artifacts promote the claim | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive | Not a core runtime primitive |
-| Fleet quarantine convergence model | TARGETED; de-escalation is unimplemented today (containment is a permanent ratchet) | App-specific | App-specific | App-specific | Per-isolate kill via control plane; no convergence SLO | N/A |
+| Fleet quarantine convergence model | OBSERVED (fleet convergence SLO with bounded timeouts; de-escalation via signed re-admission decisions) | App-specific | App-specific | App-specific | Per-isolate kill via control plane; no convergence SLO | N/A |
 | Capability-typed extension contract | Selected runtime capability gates; compile-time TS-to-IR contract is not shipped | Not native to runtime | Not native to runtime | Permission flags at process scope (`--allow-net`, etc.); not capability-typed at IR level | Bindings-mediated capabilities; not IR-typed | WASI capability surface; bound to imports, not source-level types |
 | Information-flow control with signed declassification receipts | OBSERVED (finite IFC lattice + signed declassification receipts) | Not in core | Not in core | Not in core | Not in core | Not in core |
 | Cross-runtime lockstep oracle | OBSERVED (differential Node/Bun harness with divergence classification) | N/A | N/A | N/A | N/A | N/A |
@@ -2078,11 +2078,10 @@ For downstream consumers (e.g. `/dp/franken_node`, sibling crates, integrators) 
 
 | | What you must NOT depend on |
 |---|---|
-| ❌ | Quarantine de-escalation. Containment is a permanent ratchet today; an extension that should be re-admitted after a false positive requires manual intervention. |
 | ❌ | TEE-backed production guarantees for cryptographic decision receipts. `FE-CLAIM-004` remains HYPOTHESIS until receipt, transparency-log, and TEE proof artifacts ship. |
 | ❌ | Compile-time TS-to-IR rejection of ambient-authority constructs as an end-to-end contract. `FE-CLAIM-006` remains TARGETED; selected hostcall/import gates cover only specific edges. |
 | ❌ | Node/Bun denominator throughput claims for *unmeasured* workloads. Only workloads in `real_runtime_hot_paths` are gated; `MockCertificate` / `hot_paths_simulation` artifacts are rejected by the gate. |
-| ❌ | Bounded fleet-quarantine convergence SLOs as a current guarantee. `FE-CLAIM-005` remains TARGETED until live convergence evidence publishes. |
+| ✅ | Bounded fleet-quarantine convergence SLOs as a current guarantee. `FE-CLAIM-005` is now OBSERVED with live convergence evidence and partition fault profile testing. |
 | ❌ | Arbitrary npm native add-ons through the membrane. The runtime intentionally refuses to silently bridge them into the trust boundary. |
 | ❌ | Side-channel defence at the CPU level (Spectre / Meltdown / RowHammer variants). Out of scope by design; see *Threat Model*. |
 
@@ -2103,7 +2102,7 @@ For downstream consumers (e.g. `/dp/franken_node`, sibling crates, integrators) 
 
 - High-security mode adds measurable overhead on latency-sensitive low-risk workloads.
 - Capability-typed TS-to-IR extension onboarding is not shipped as an end-to-end contract; current capability checks cover selected runtime hostcall/import boundaries.
-- Fleet quarantine is a permanent ratchet today; de-escalation is unimplemented.
+- Fleet quarantine supports reversible de-escalation via signed re-admission decisions; automatic re-admission without operator approval remains unimplemented.
 - Cryptographic decision receipts with transparency-log and TEE attestation remain HYPOTHESIS until live proof artifacts split and ship.
 - Node/Bun denominator performance comparisons remain TARGETED until live denominator artifacts replace placeholders; the gate explicitly rejects `MockCertificate` and `hot_paths_simulation` fixtures.
 - Exception semantics are not fully Executed while catch-binding capture by a closure created inside the handler remains ignored pending real function/closure lowering.
@@ -2291,7 +2290,7 @@ These capabilities are explicitly **not shipped** and must not be relied upon in
 ### CLI surfaces not recommended for production use
 
 - Advanced policy debugging surfaces requiring TEE attestation.
-- Fleet-wide quarantine orchestration beyond local containment (de-escalation unimplemented; permanent ratchet today).
+- Fleet-wide quarantine orchestration beyond local containment (automated de-escalation without operator approval not recommended for production).
 - Cross-repository governance coordination tools (use the `/dp/asupersync` control plane).
 - Live policy modification interfaces (use static policy manifests).
 - Cryptographic key rotation automation (use dedicated key management).

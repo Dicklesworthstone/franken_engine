@@ -81,24 +81,23 @@
       "verification_command": "TBD: split receipt-signing, transparency-log, and TEE proof commands before release"
     },
     {
-      "actual_wording_state": "target",
-      "allowed_state": "target",
-      "artifact_path": null,
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-005",
       "claim_id": "FE-CLAIM-005",
       "claim_scope": "operations",
       "claim_text": "Fleet immune system with quarantine and revocation propagation plus bounded convergence SLOs.",
-      "decision": "downgrade_until_live_proof",
-      "downgrade_text": "Target: quarantine and revocation propagation with bounded convergence evidence after a live runtime/CLI proof artifact exists.",
-      "freshness_days": null,
-      "owning_bead": "bd-ls22h",
-      "reason": "The available quarantine propagation example is explicitly PROVISIONAL synthetic documentation evidence, so it cannot back an observed fleet immune-system claim.",
+      "decision": "allow_observed",
+      "freshness_days": 1,
+      "owning_bead": "bd-cixqu.2.5",
+      "reason": "Promoted to OBSERVED under bd-cixqu.2.5 after B.1 (fleet harness with N-node testing), B.2 (bounded convergence SLO declaration + gate), B.3 (quarantine de-escalation primitive with TEE attestation), and B.4 (partition fault profiles + chaos vectors). Fleet convergence SLO gate validates convergence under declared fault profiles with measured percentiles and deterministic replay support.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 140,
-        "must_contain": "bounded convergence SLOs remain target",
+        "must_contain": "Fleet immune system / quarantine propagation convergence SLO",
         "start_line": 140
       },
-      "verification_command": "TBD: replace provisional synthetic example with live runtime/CLI quarantine propagation proof"
+      "verification_command": "./scripts/run_rgc_fleet_convergence_slo_gate.sh ci"
     },
     {
       "actual_wording_state": "observed",
@@ -153,9 +152,9 @@
       "reason": "The support boundary is a documentation policy claim and the source span is validated by this gate.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 2307,
+        "end_line": 2314,
         "must_contain": "Unsupported-surface usage voids reproduction assistance",
-        "start_line": 2307
+        "start_line": 2314
       },
       "verification_command": "./scripts/run_claim_to_proof_matrix_gate.sh ci"
     },

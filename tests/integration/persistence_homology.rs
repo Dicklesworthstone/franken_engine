@@ -696,3 +696,434 @@ fn test_large_graph_performance() {
     assert_eq!(diagram.computation_metadata.edge_count, 9);
     assert!(!diagram.bars.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// Wasserstein Distance Integration Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_wasserstein_distance_identical_graphs() {
+    let graph = create_test_graph();
+    let computer = PersistenceComputer::new();
+
+    let diagram1 = computer.compute_diagram(&graph).unwrap();
+    let diagram2 = computer.compute_diagram(&graph).unwrap();
+
+    let distance = wasserstein_distance(&diagram1, &diagram2, 2).unwrap();
+    assert_eq!(distance, WassersteinDistance::ZERO);
+}
+
+#[test]
+fn test_wasserstein_distance_different_graphs() {
+    let graph1 = create_test_graph();
+    let graph2 = create_multi_component_graph();
+
+    let computer = PersistenceComputer::new();
+    let diagram1 = computer.compute_diagram(&graph1).unwrap();
+    let diagram2 = computer.compute_diagram(&graph2).unwrap();
+
+    let distance = wasserstein_distance(&diagram1, &diagram2, 2).unwrap();
+    assert!(distance > WassersteinDistance::ZERO);
+
+    // Test symmetry
+    let distance_reverse = wasserstein_distance(&diagram2, &diagram1, 2).unwrap();
+    assert_eq!(distance, distance_reverse);
+}
+
+#[test]
+fn test_wasserstein_distance_vs_empty_graph() {
+    let graph = create_test_graph();
+    let empty_graph = CausationGraph::new();
+
+    let computer = PersistenceComputer::new();
+    let diagram = computer.compute_diagram(&graph).unwrap();
+    let empty_diagram = computer.compute_diagram(&empty_graph).unwrap();
+
+    let distance = wasserstein_distance(&diagram, &empty_diagram, 2).unwrap();
+    assert!(distance > WassersteinDistance::ZERO);
+
+    // Distance should be equal to sum of all persistence in the non-empty diagram
+    let expected_distance = diagram.bars.iter()
+        .map(|bar| bar.persistence().unwrap_or(FilterValue::from_millionths(1_000_000)).millionths)
+        .sum::<u32>();
+
+    // The actual distance should be related to this sum (but may differ due to Lp norm)
+    assert!(distance.millionths > 0);
+    assert!(distance.millionths <= expected_distance + 100_000); // Allow some tolerance
+}
+
+#[test]
+fn test_wasserstein_distance_cyclic_vs_acyclic() {
+    let cyclic_graph = create_cyclic_graph();
+    let acyclic_graph = create_test_graph();
+
+    let computer = PersistenceComputer::new();
+    let cyclic_diagram = computer.compute_diagram(&cyclic_graph).unwrap();
+    let acyclic_diagram = computer.compute_diagram(&acyclic_graph).unwrap();
+
+    let distance = wasserstein_distance(&cyclic_diagram, &acyclic_diagram, 2).unwrap();
+    assert!(distance >= WassersteinDistance::ZERO);
+}
+
+#[test]
+fn test_wasserstein_distance_different_orders() {
+    let graph1 = create_test_graph();
+    let graph2 = create_multi_component_graph();
+
+    let computer = PersistenceComputer::new();
+    let diagram1 = computer.compute_diagram(&graph1).unwrap();
+    let diagram2 = computer.compute_diagram(&graph2).unwrap();
+
+    let distance_l1 = wasserstein_distance(&diagram1, &diagram2, 1).unwrap();
+    let distance_l2 = wasserstein_distance(&diagram1, &diagram2, 2).unwrap();
+    let distance_l3 = wasserstein_distance(&diagram1, &diagram2, 3).unwrap();
+
+    // All distances should be non-negative
+    assert!(distance_l1 >= WassersteinDistance::ZERO);
+    assert!(distance_l2 >= WassersteinDistance::ZERO);
+    assert!(distance_l3 >= WassersteinDistance::ZERO);
+
+    // Generally L1 >= L2 >= L∞, but this depends on the specific data
+}
+
+#[test]
+fn test_wasserstein_distance_triangle_inequality() {
+    let graph1 = create_test_graph();
+    let graph2 = create_multi_component_graph();
+    let graph3 = create_cyclic_graph();
+
+    let computer = PersistenceComputer::new();
+    let diagram1 = computer.compute_diagram(&graph1).unwrap();
+    let diagram2 = computer.compute_diagram(&graph2).unwrap();
+    let diagram3 = computer.compute_diagram(&graph3).unwrap();
+
+    let d12 = wasserstein_distance(&diagram1, &diagram2, 2).unwrap();
+    let d23 = wasserstein_distance(&diagram2, &diagram3, 2).unwrap();
+    let d13 = wasserstein_distance(&diagram1, &diagram3, 2).unwrap();
+
+    // Triangle inequality: d(1,3) <= d(1,2) + d(2,3)
+    assert!(d13.millionths <= d12.millionths.saturating_add(d23.millionths));
+}
+
+#[test]
+fn test_wasserstein_distance_determinism() {
+    let graph1 = create_test_graph();
+    let graph2 = create_multi_component_graph();
+
+    let computer = PersistenceComputer::new();
+    let diagram1 = computer.compute_diagram(&graph1).unwrap();
+    let diagram2 = computer.compute_diagram(&graph2).unwrap();
+
+    // Compute distance multiple times
+    let distances: Vec<_> = (0..5)
+        .map(|_| wasserstein_distance(&diagram1, &diagram2, 2).unwrap())
+        .collect();
+
+    // All distances should be identical (deterministic)
+    for distance in &distances[1..] {
+        assert_eq!(*distance, distances[0]);
+    }
+}
+
+#[test]
+fn test_wasserstein_distance_filtration_types() {
+    let graph = create_test_graph();
+
+    let filter_types = vec![
+        FilterType::InfluenceWeight,
+        FilterType::Temporal,
+        FilterType::GraphDistance,
+        FilterType::Combined,
+    ];
+
+    let mut diagrams = Vec::new();
+
+    for filter_type in filter_types {
+        let config = PersistenceConfig {
+            max_dimension: 1,
+            persistence_threshold: FilterValue::from_millionths(1_000),
+            filter_type,
+            detect_cycles: true,
+        };
+
+        let computer = PersistenceComputer::with_config(config);
+        let diagram = computer.compute_diagram(&graph).unwrap();
+        diagrams.push(diagram);
+    }
+
+    // Compare diagrams from different filtrations
+    for i in 0..diagrams.len() {
+        for j in i+1..diagrams.len() {
+            let distance = wasserstein_distance(&diagrams[i], &diagrams[j], 2);
+            assert!(distance.is_ok());
+
+            let dist_val = distance.unwrap();
+            assert!(dist_val >= WassersteinDistance::ZERO);
+        }
+    }
+}
+
+#[test]
+fn test_wasserstein_distance_large_graphs() {
+    // Create two different large graphs
+    let mut graph1 = CausationGraph::new();
+    let mut graph2 = CausationGraph::new();
+
+    // First graph: chain structure
+    for i in 1..=8 {
+        let node = CausationNode {
+            id: NodeId(i),
+            node_type: NodeType::EvidenceAtom {
+                dependency: CausalDependency {
+                    factor_type: FactorType::SecurityPolicy,
+                    description: format!("Chain node {}", i),
+                    confidence_millionths: 800_000,
+                },
+                evidence_hash: ContentHash::compute(&format!("chain_evidence_{}", i).as_bytes()),
+                confidence_millionths: 800_000,
+            },
+            content_hash: ContentHash::compute(&format!("chain_node_{}", i).as_bytes()),
+            authenticity_hash: AuthenticityHash::compute_keyed(b"test_key", &format!("chain_{}", i).as_bytes()),
+            timestamp_ns: 1640995200_000_000_000 + (i as u64 * 1_000_000_000),
+            metadata: BTreeMap::new(),
+        };
+        graph1.add_node(node).unwrap();
+    }
+
+    // Connect nodes in a chain
+    for i in 1..8 {
+        let edge = CausationEdge {
+            id: EdgeId(i),
+            source: NodeId(i),
+            target: NodeId(i + 1),
+            weight: InfluenceWeight::from_millionths(500_000 + (i as u32 * 10_000)),
+            causation_type: CausationType::Direct,
+            content_hash: ContentHash::compute(&format!("chain_edge_{}", i).as_bytes()),
+            timestamp_ns: 1640995205_000_000_000 + (i as u64 * 1_000_000_000),
+            metadata: BTreeMap::new(),
+        };
+        graph1.add_edge(edge).unwrap();
+    }
+
+    // Second graph: star structure
+    for i in 1..=8 {
+        let node = CausationNode {
+            id: NodeId(i),
+            node_type: NodeType::EvidenceAtom {
+                dependency: CausalDependency {
+                    factor_type: FactorType::UserAction,
+                    description: format!("Star node {}", i),
+                    confidence_millionths: 750_000,
+                },
+                evidence_hash: ContentHash::compute(&format!("star_evidence_{}", i).as_bytes()),
+                confidence_millionths: 750_000,
+            },
+            content_hash: ContentHash::compute(&format!("star_node_{}", i).as_bytes()),
+            authenticity_hash: AuthenticityHash::compute_keyed(b"test_key", &format!("star_{}", i).as_bytes()),
+            timestamp_ns: 1640995200_000_000_000 + (i as u64 * 1_000_000_000),
+            metadata: BTreeMap::new(),
+        };
+        graph2.add_node(node).unwrap();
+    }
+
+    // Connect all nodes to center (node 1)
+    for i in 2..=8 {
+        let edge = CausationEdge {
+            id: EdgeId(i - 1),
+            source: NodeId(1),
+            target: NodeId(i),
+            weight: InfluenceWeight::from_millionths(600_000),
+            causation_type: CausationType::Direct,
+            content_hash: ContentHash::compute(&format!("star_edge_{}", i).as_bytes()),
+            timestamp_ns: 1640995205_000_000_000 + (i as u64 * 1_000_000_000),
+            metadata: BTreeMap::new(),
+        };
+        graph2.add_edge(edge).unwrap();
+    }
+
+    let computer = PersistenceComputer::new();
+    let diagram1 = computer.compute_diagram(&graph1).unwrap();
+    let diagram2 = computer.compute_diagram(&graph2).unwrap();
+
+    let start = std::time::Instant::now();
+    let distance = wasserstein_distance(&diagram1, &diagram2, 2).unwrap();
+    let duration = start.elapsed();
+
+    // Should complete in reasonable time
+    assert!(duration.as_millis() < 500); // Less than 0.5 seconds
+
+    // Chain vs star should have non-zero distance
+    assert!(distance > WassersteinDistance::ZERO);
+}
+
+#[test]
+fn test_wasserstein_distance_error_handling() {
+    let diagram1 = create_test_persistence_diagram_for_wasserstein();
+    let diagram2 = create_different_persistence_diagram_for_wasserstein();
+
+    // Invalid order should return error
+    let result = wasserstein_distance(&diagram1, &diagram2, 0);
+    assert!(result.is_err());
+
+    // Valid orders should work
+    for p in 1..=5 {
+        let result = wasserstein_distance(&diagram1, &diagram2, p);
+        assert!(result.is_ok());
+    }
+}
+
+#[test]
+fn test_wasserstein_distance_known_values() {
+    // Create diagrams with known simple structure for hand-computed answers
+    let simple_diagram1 = create_simple_persistence_diagram(vec![
+        (100_000, Some(300_000)), // Bar from 0.1 to 0.3 (persistence = 0.2)
+    ]);
+
+    let simple_diagram2 = create_simple_persistence_diagram(vec![
+        (200_000, Some(400_000)), // Bar from 0.2 to 0.4 (persistence = 0.2)
+    ]);
+
+    let distance = wasserstein_distance(&simple_diagram1, &simple_diagram2, 2).unwrap();
+
+    // Distance between (0.1,0.3) and (0.2,0.4) = sqrt((0.1)^2 + (0.1)^2) = sqrt(0.02) ≈ 0.141421
+    let expected_distance = (0.02_f64.sqrt() * 1_000_000.0) as u32;
+    let tolerance = 10_000; // Allow 0.01 tolerance
+
+    assert!(
+        distance.millionths.abs_diff(expected_distance) <= tolerance,
+        "Expected ~{}, got {}", expected_distance, distance.millionths
+    );
+}
+
+#[test]
+fn test_wasserstein_distance_pairwise_comparison() {
+    // Create multiple different graphs for pairwise comparison
+    let graphs = vec![
+        create_test_graph(),
+        create_multi_component_graph(),
+        create_cyclic_graph(),
+    ];
+
+    let computer = PersistenceComputer::new();
+    let diagrams: Vec<_> = graphs.iter()
+        .map(|g| computer.compute_diagram(g).unwrap())
+        .collect();
+
+    // Test all pairwise distances
+    for i in 0..diagrams.len() {
+        for j in 0..diagrams.len() {
+            let distance = wasserstein_distance(&diagrams[i], &diagrams[j], 2).unwrap();
+
+            if i == j {
+                // Distance to self should be zero
+                assert_eq!(distance, WassersteinDistance::ZERO);
+            } else {
+                // Distance between different diagrams should be positive
+                assert!(distance >= WassersteinDistance::ZERO);
+            }
+        }
+    }
+}
+
+// Helper functions for Wasserstein distance tests
+
+fn create_test_persistence_diagram_for_wasserstein() -> PersistenceDiagram {
+    PersistenceDiagram {
+        schema_version: PERSISTENCE_DIAGRAM_SCHEMA_VERSION.to_string(),
+        bars: vec![
+            PersistenceBar {
+                birth: FilterValue::from_millionths(100_000),
+                death: Some(FilterValue::from_millionths(300_000)),
+                dimension: 0,
+                representative: FeatureRepresentative::Component {
+                    root_node: NodeId(1),
+                    nodes: vec![NodeId(1)],
+                },
+                feature_weight: InfluenceWeight::from_millionths(200_000),
+            },
+        ],
+        source_graph_hash: ContentHash::compute(b"wasserstein_test_graph"),
+        content_hash: ContentHash::compute(b"wasserstein_test_diagram"),
+        authenticity_hash: AuthenticityHash::compute_keyed(b"test_key", b"wasserstein_test"),
+        computation_metadata: ComputationMetadata {
+            algorithm: "test".to_string(),
+            node_count: 1,
+            edge_count: 0,
+            computation_time_us: 100,
+            feature_counts: {
+                let mut counts = BTreeMap::new();
+                counts.insert(0, 1);
+                counts
+            },
+            filter_range: (FilterValue::from_millionths(100_000), FilterValue::from_millionths(300_000)),
+        },
+    }
+}
+
+fn create_different_persistence_diagram_for_wasserstein() -> PersistenceDiagram {
+    PersistenceDiagram {
+        schema_version: PERSISTENCE_DIAGRAM_SCHEMA_VERSION.to_string(),
+        bars: vec![
+            PersistenceBar {
+                birth: FilterValue::from_millionths(150_000),
+                death: Some(FilterValue::from_millionths(400_000)),
+                dimension: 0,
+                representative: FeatureRepresentative::Component {
+                    root_node: NodeId(2),
+                    nodes: vec![NodeId(2)],
+                },
+                feature_weight: InfluenceWeight::from_millionths(250_000),
+            },
+        ],
+        source_graph_hash: ContentHash::compute(b"different_wasserstein_graph"),
+        content_hash: ContentHash::compute(b"different_wasserstein_diagram"),
+        authenticity_hash: AuthenticityHash::compute_keyed(b"test_key", b"different_wasserstein_test"),
+        computation_metadata: ComputationMetadata {
+            algorithm: "test".to_string(),
+            node_count: 1,
+            edge_count: 0,
+            computation_time_us: 100,
+            feature_counts: {
+                let mut counts = BTreeMap::new();
+                counts.insert(0, 1);
+                counts
+            },
+            filter_range: (FilterValue::from_millionths(150_000), FilterValue::from_millionths(400_000)),
+        },
+    }
+}
+
+fn create_simple_persistence_diagram(bars_data: Vec<(u32, Option<u32>)>) -> PersistenceDiagram {
+    let bars = bars_data.into_iter().enumerate().map(|(i, (birth, death))| {
+        PersistenceBar {
+            birth: FilterValue::from_millionths(birth),
+            death: death.map(FilterValue::from_millionths),
+            dimension: 0,
+            representative: FeatureRepresentative::Component {
+                root_node: NodeId(i as u64 + 1),
+                nodes: vec![NodeId(i as u64 + 1)],
+            },
+            feature_weight: InfluenceWeight::from_millionths(death.unwrap_or(birth + 100_000) - birth),
+        }
+    }).collect();
+
+    PersistenceDiagram {
+        schema_version: PERSISTENCE_DIAGRAM_SCHEMA_VERSION.to_string(),
+        bars,
+        source_graph_hash: ContentHash::compute(b"simple_graph"),
+        content_hash: ContentHash::compute(b"simple_diagram"),
+        authenticity_hash: AuthenticityHash::compute_keyed(b"test_key", b"simple_test"),
+        computation_metadata: ComputationMetadata {
+            algorithm: "test".to_string(),
+            node_count: bars_data.len() as u32,
+            edge_count: 0,
+            computation_time_us: 100,
+            feature_counts: {
+                let mut counts = BTreeMap::new();
+                counts.insert(0, bars_data.len() as u32);
+                counts
+            },
+            filter_range: (FilterValue::from_millionths(100_000), FilterValue::from_millionths(500_000)),
+        },
+    }
+}

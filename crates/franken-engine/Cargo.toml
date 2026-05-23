@@ -34,6 +34,10 @@ path = "src/bin/franken_quarantine_mesh_demo.rs"
 name = "live_ifc_declassification_example"
 path = "../../examples/live_ifc_declassification_example.rs"
 
+[[example]]
+name = "self_replacement_lineage_replay"
+path = "../../examples/self_replacement_lineage_replay.rs"
+
 [[bench]]
 name = "comparative_node"
 path = "benches/comparative_node.rs"

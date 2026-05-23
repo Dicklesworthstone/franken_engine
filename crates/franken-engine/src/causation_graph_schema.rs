@@ -491,17 +491,17 @@ impl CausationGraph {
 
     /// Update the graph-level content hash.
     fn update_graph_hash(&mut self) {
-        use crate::canonical_encoding::CanonicalEncoder;
+        let mut hash_data = Vec::new();
 
-        let mut encoder = CanonicalEncoder::new();
-        encoder.encode_string(&self.schema_version);
-        encoder.encode_u64(self.metadata.node_count);
-        encoder.encode_u64(self.metadata.edge_count);
+        // Add schema version
+        hash_data.extend_from_slice(self.schema_version.as_bytes());
+        hash_data.extend_from_slice(&self.metadata.node_count.to_le_bytes());
+        hash_data.extend_from_slice(&self.metadata.edge_count.to_le_bytes());
 
         // Hash all nodes in deterministic order
         for node_id in &self.topological_order {
             if let Some(node) = self.nodes.get(node_id) {
-                encoder.encode_bytes(node.content_hash.as_bytes());
+                hash_data.extend_from_slice(node.content_hash.as_bytes());
             }
         }
 
@@ -510,11 +510,11 @@ impl CausationGraph {
         edge_ids.sort();
         for edge_id in edge_ids {
             if let Some(edge) = self.edges.get(edge_id) {
-                encoder.encode_bytes(edge.content_hash.as_bytes());
+                hash_data.extend_from_slice(edge.content_hash.as_bytes());
             }
         }
 
-        self.metadata.graph_hash = ContentHash::compute(&encoder.finalize());
+        self.metadata.graph_hash = ContentHash::compute(&hash_data);
     }
 }
 

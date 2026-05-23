@@ -816,14 +816,13 @@ impl ForensicQueryEngine {
     /// Compute cache key for a query.
     fn compute_cache_key(&self, query: &ForensicQuery) -> Result<String, QueryError> {
         // Simple cache key based on query content
-        use crate::canonical_encoding::CanonicalEncoder;
+        let mut hash_data = Vec::new();
 
-        let mut encoder = CanonicalEncoder::new();
-        encoder.encode_string(&query.query_id);
-        encoder.encode_string(&serde_json::to_string(&query.query_type)?);
-        encoder.encode_string(&serde_json::to_string(&query.target)?);
+        hash_data.extend_from_slice(query.query_id.as_bytes());
+        hash_data.extend_from_slice(serde_json::to_string(&query.query_type)?.as_bytes());
+        hash_data.extend_from_slice(serde_json::to_string(&query.target)?.as_bytes());
 
-        let hash = ContentHash::compute(&encoder.finalize());
+        let hash = ContentHash::compute(&hash_data);
         Ok(format!("query-{}", hash.as_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>()))
     }
 }

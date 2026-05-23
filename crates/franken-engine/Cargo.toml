@@ -199,6 +199,10 @@ __moved_to_frankenengine_control_plane_integration_tests = []
 # the repair effort is pending. Enable with `--features legacy_lib_tests_bd_2j7uk`
 # to attempt to compile the legacy tests.
 legacy_lib_tests_bd_2j7uk = []
+# Temporary profiling feature for H4.1 deterministic_serde::encode_into phase analysis.
+# Adds #[inline(never)] sentinels around encode phases for perf attribution.
+# NEVER enable in production builds - measurement-only.
+_h4_profile = []
 
 [dependencies]
 # NOTE: frankenengine-core dependency temporarily removed — franken-core crate
@@ -214,6 +218,7 @@ hmac = "0.12"
 ed25519-dalek = "2.0"
 rand = "0.8"
 hex = "0.4"
+mimalloc = { version = "0.1", default-features = false }
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "2.0"
 uuid = { version = "1.16", features = ["v7", "serde"] }

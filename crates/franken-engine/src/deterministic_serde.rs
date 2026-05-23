@@ -298,6 +298,48 @@ impl std::error::Error for SerdeError {}
 // Encoding
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// H4.1 profiling sentinels - measurement-only, never ship
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "_h4_profile")]
+#[inline(never)]
+fn _h4_phase_serialize_canonical_value(buf: &mut Vec<u8>, value: &CanonicalValue) {
+    encode_into_impl(buf, value);
+}
+
+#[cfg(feature = "_h4_profile")]
+#[inline(never)]
+fn _h4_phase_canonical_sort(buf: &mut Vec<u8>, entries: &BTreeMap<String, CanonicalValue>) {
+    // BTreeMap iteration (already sorted lexicographically)
+    let clamped = entries.len().min(u32::MAX as usize);
+    buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+    for (key, val) in entries.iter().take(clamped) {
+        let key_bytes = key.as_bytes();
+        let key_clamped = key_bytes.len().min(u32::MAX as usize);
+        buf.extend_from_slice(&(key_clamped as u32).to_be_bytes());
+        buf.extend_from_slice(&key_bytes[..key_clamped]);
+        encode_into(buf, val);
+    }
+}
+
+#[cfg(feature = "_h4_profile")]
+#[inline(never)]
+fn _h4_phase_write_field_bytes(buf: &mut Vec<u8>, data: &[u8]) {
+    let clamped = data.len().min(u32::MAX as usize);
+    buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+    buf.extend_from_slice(&data[..clamped]);
+}
+
+#[cfg(feature = "_h4_profile")]
+#[inline(never)]
+fn _h4_phase_encode_map_entries(buf: &mut Vec<u8>, entries: &BTreeMap<String, CanonicalValue>) {
+    buf.push(TAG_MAP);
+    _h4_phase_canonical_sort(buf, entries);
+}
+
+// ---------------------------------------------------------------------------
+
 /// Serialize a `CanonicalValue` to deterministic bytes (without schema prefix).
 pub fn encode_value(value: &CanonicalValue) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -305,7 +347,17 @@ pub fn encode_value(value: &CanonicalValue) -> Vec<u8> {
     buf
 }
 
+#[cfg(feature = "_h4_profile")]
 fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
+    _h4_phase_serialize_canonical_value(buf, value);
+}
+
+#[cfg(not(feature = "_h4_profile"))]
+fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
+    encode_into_impl(buf, value);
+}
+
+fn encode_into_impl(buf: &mut Vec<u8>, value: &CanonicalValue) {
     match value {
         CanonicalValue::U64(v) => {
             buf.push(TAG_U64);
@@ -321,19 +373,29 @@ fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
         }
         CanonicalValue::Bytes(v) => {
             buf.push(TAG_BYTES);
-            // Clamp length to u32::MAX and only write that many bytes so
-            // the encoded length prefix matches the data that follows,
-            // preventing decode-cursor misalignment on roundtrip.
-            let clamped = v.len().min(u32::MAX as usize);
-            buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-            buf.extend_from_slice(&v[..clamped]);
+            #[cfg(feature = "_h4_profile")]
+            _h4_phase_write_field_bytes(buf, v);
+            #[cfg(not(feature = "_h4_profile"))]
+            {
+                // Clamp length to u32::MAX and only write that many bytes so
+                // the encoded length prefix matches the data that follows,
+                // preventing decode-cursor misalignment on roundtrip.
+                let clamped = v.len().min(u32::MAX as usize);
+                buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                buf.extend_from_slice(&v[..clamped]);
+            }
         }
         CanonicalValue::String(v) => {
             buf.push(TAG_STRING);
-            let bytes = v.as_bytes();
-            let clamped = bytes.len().min(u32::MAX as usize);
-            buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-            buf.extend_from_slice(&bytes[..clamped]);
+            #[cfg(feature = "_h4_profile")]
+            _h4_phase_write_field_bytes(buf, v.as_bytes());
+            #[cfg(not(feature = "_h4_profile"))]
+            {
+                let bytes = v.as_bytes();
+                let clamped = bytes.len().min(u32::MAX as usize);
+                buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                buf.extend_from_slice(&bytes[..clamped]);
+            }
         }
         CanonicalValue::Array(items) => {
             buf.push(TAG_ARRAY);
@@ -344,16 +406,21 @@ fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
             }
         }
         CanonicalValue::Map(entries) => {
-            buf.push(TAG_MAP);
-            // BTreeMap guarantees lexicographic ordering.
-            let clamped = entries.len().min(u32::MAX as usize);
-            buf.extend_from_slice(&(clamped as u32).to_be_bytes());
-            for (key, val) in entries.iter().take(clamped) {
-                let key_bytes = key.as_bytes();
-                let key_clamped = key_bytes.len().min(u32::MAX as usize);
-                buf.extend_from_slice(&(key_clamped as u32).to_be_bytes());
-                buf.extend_from_slice(&key_bytes[..key_clamped]);
-                encode_into(buf, val);
+            #[cfg(feature = "_h4_profile")]
+            _h4_phase_encode_map_entries(buf, entries);
+            #[cfg(not(feature = "_h4_profile"))]
+            {
+                buf.push(TAG_MAP);
+                // BTreeMap guarantees lexicographic ordering.
+                let clamped = entries.len().min(u32::MAX as usize);
+                buf.extend_from_slice(&(clamped as u32).to_be_bytes());
+                for (key, val) in entries.iter().take(clamped) {
+                    let key_bytes = key.as_bytes();
+                    let key_clamped = key_bytes.len().min(u32::MAX as usize);
+                    buf.extend_from_slice(&(key_clamped as u32).to_be_bytes());
+                    buf.extend_from_slice(&key_bytes[..key_clamped]);
+                    encode_into(buf, val);
+                }
             }
         }
         CanonicalValue::Null => {

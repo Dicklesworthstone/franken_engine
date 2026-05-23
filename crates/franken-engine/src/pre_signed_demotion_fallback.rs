@@ -38,8 +38,10 @@
 //     demotion receipt is handled by `demotion_rollback.rs`; we just
 //     hold the digests.
 
+use crate::demotion_rollback::DemotionReceipt;
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::VerificationKey;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -240,6 +242,34 @@ impl PreSignedFallbackStore {
         Ok(())
     }
 
+    /// Verify and seal the pre-signed demotion receipt for a promotion.
+    ///
+    /// This is the V.5 call-shape: the operator-signed demotion receipt
+    /// must verify under the expected operator key before the promotion
+    /// path can observe a sealed fallback.
+    pub fn seal_verified_demotion_receipt(
+        &mut self,
+        promotion_id: PromotionId,
+        demotion_receipt: &DemotionReceipt,
+        expected_operator_key: &VerificationKey,
+        sealed_at_ns: u64,
+        epoch: SecurityEpoch,
+        permitted_triggers: Vec<DemotionTrigger>,
+    ) -> Result<(), FallbackError> {
+        demotion_receipt
+            .verify_signature(expected_operator_key)
+            .map_err(|_| FallbackError::InvalidDemotionReceiptSignature {
+                promotion_id: promotion_id.clone(),
+            })?;
+        self.seal(PreSignedDemotionFallback::new(
+            promotion_id,
+            demotion_receipt.content_hash(),
+            sealed_at_ns,
+            epoch,
+            permitted_triggers,
+        ))
+    }
+
     /// Mark the promotion as APPLIED. Transitions Sealed -> Active.
     pub fn mark_promotion_applied(
         &mut self,
@@ -355,6 +385,7 @@ pub enum FallbackError {
     ActivationBeforeArmed { promotion_id: PromotionId },
     VoidBeforeArmed { promotion_id: PromotionId },
     TriggerNotPermitted { promotion_id: PromotionId },
+    InvalidDemotionReceiptSignature { promotion_id: PromotionId },
 }
 
 impl fmt::Display for FallbackError {
@@ -391,6 +422,10 @@ impl fmt::Display for FallbackError {
             Self::TriggerNotPermitted { promotion_id } => write!(
                 f,
                 "supplied trigger is not in the permitted set for promotion {promotion_id}",
+            ),
+            Self::InvalidDemotionReceiptSignature { promotion_id } => write!(
+                f,
+                "demotion receipt signature is invalid for promotion {promotion_id}",
             ),
         }
     }

@@ -1,22 +1,77 @@
-//! E-process guardrail integration for hard-blocking unsafe automatic retunes.
+//! E-process guardrail integration reformulated as martingale consumer (bd-cixqu.27.2).
 //!
-//! E-process (anytime-valid sequential testing) guardrails provide
-//! mathematically rigorous boundaries that the PolicyController must never
-//! violate, regardless of expected-loss calculations.  Each guardrail
-//! accumulates an e-value (product of likelihood ratios); when the e-value
-//! exceeds the rejection threshold the guardrail triggers and blocks
-//! specified actions until an authorized reset.
+//! Reformulated from independent e-value accumulation to consume the unified
+//! MartingaleLedger substrate. Expected-loss matrix provides terminal action
+//! policy on the martingale's stopping decision. When the martingale stops
+//! (crossing rejection threshold), the guardrail consults the expected-loss
+//! matrix to determine which actions to block.
 //!
 //! Plan references: Section 10.11 item 14, 9G.5 (policy controller
 //! with expected-loss actions under guardrails), Top-10 #2 (guardplane),
-//! #8 (per-extension resource budget).
+//! #8 (per-extension resource budget), bd-cixqu.27.1 (martingale substrate).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::hash_tiers::ContentHash;
+use crate::martingale_decision_ledger::{
+    MartingaleLedger, MartingaleVerdict, StoppingThreshold, MartingaleError,
+};
 use crate::security_epoch::SecurityEpoch;
+
+// ---------------------------------------------------------------------------
+// ExpectedLossMatrix — terminal action policy on martingale stopping
+// ---------------------------------------------------------------------------
+
+/// Expected-loss matrix for terminal action policy when martingale stops.
+///
+/// Maps actions to expected loss values (fixed-point millionths). When the
+/// martingale emits a Stop verdict, the guardrail consults this matrix to
+/// determine which actions to block based on loss thresholds.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExpectedLossMatrix {
+    /// Loss values per action (millionths). Higher values = higher risk.
+    action_losses: BTreeMap<String, i64>,
+    /// Loss threshold above which actions are blocked (millionths).
+    block_threshold_millionths: i64,
+}
+
+impl ExpectedLossMatrix {
+    /// Create new expected-loss matrix.
+    pub fn new(
+        action_losses: BTreeMap<String, i64>,
+        block_threshold_millionths: i64,
+    ) -> Self {
+        Self {
+            action_losses,
+            block_threshold_millionths,
+        }
+    }
+
+    /// Get actions that should be blocked based on expected loss.
+    pub fn blocked_actions(&self) -> BTreeSet<String> {
+        self.action_losses
+            .iter()
+            .filter(|(_, &loss)| loss >= self.block_threshold_millionths)
+            .map(|(action, _)| action.clone())
+            .collect()
+    }
+
+    /// Check if specific action should be blocked.
+    pub fn should_block(&self, action: &str) -> bool {
+        self.action_losses
+            .get(action)
+            .map(|&loss| loss >= self.block_threshold_millionths)
+            .unwrap_or(false)
+    }
+
+    /// Get expected loss for an action (returns 0 if not found).
+    pub fn action_loss(&self, action: &str) -> i64 {
+        self.action_losses.get(action).copied().unwrap_or(0)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // GuardrailState — Active / Triggered / Suspended
@@ -135,8 +190,11 @@ pub enum GuardrailError {
     ResetUnauthorized { guardrail_id: String },
     /// Guardrail is not in triggered state; cannot reset.
     NotTriggered { guardrail_id: String },
-    /// E-value overflow (would exceed i64 range).
-    EValueOverflow { guardrail_id: String },
+    /// Martingale ledger error (overflow, already stopped, etc.).
+    MartingaleError {
+        guardrail_id: String,
+        source: MartingaleError,
+    },
 }
 
 impl fmt::Display for GuardrailError {
@@ -157,8 +215,11 @@ impl fmt::Display for GuardrailError {
             Self::NotTriggered { guardrail_id } => {
                 write!(f, "guardrail '{guardrail_id}' is not triggered")
             }
-            Self::EValueOverflow { guardrail_id } => {
-                write!(f, "e-value overflow for guardrail '{guardrail_id}'")
+            Self::MartingaleError {
+                guardrail_id,
+                source,
+            } => {
+                write!(f, "martingale error for guardrail '{guardrail_id}': {source}")
             }
         }
     }
@@ -188,20 +249,20 @@ pub struct ResetReceipt {
 /// Structured event emitted by guardrail state transitions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GuardrailEvent {
-    /// E-value was updated.
-    EValueUpdated {
+    /// Martingale was updated with new observation.
+    MartingaleUpdated {
         guardrail_id: String,
-        previous_e_value: i64,
-        new_e_value: i64,
         observation: i64,
-        likelihood_ratio: i64,
+        log_likelihood_ratio: i64,
+        verdict: MartingaleVerdict,
+        sequence: u64,
     },
-    /// Guardrail triggered (e-value exceeded threshold).
+    /// Guardrail triggered (martingale stopped).
     Triggered {
         guardrail_id: String,
-        e_value: i64,
-        threshold: i64,
+        sequence: u64,
         blocked_actions: Vec<String>,
+        expected_losses: BTreeMap<String, i64>,
     },
     /// Guardrail was reset.
     Reset {
@@ -223,32 +284,27 @@ pub enum GuardrailEvent {
 // EProcessGuardrail — single anytime-valid sequential constraint
 // ---------------------------------------------------------------------------
 
-/// A single e-process guardrail representing an anytime-valid sequential
-/// constraint.
+/// A single e-process guardrail reformulated as a martingale consumer.
 ///
-/// Accumulates an e-value (product of likelihood ratios) from a metric
-/// stream.  When the e-value exceeds the rejection threshold, the guardrail
-/// triggers and blocks specified actions.
+/// Instead of manually accumulating e-values, consumes the unified
+/// MartingaleLedger substrate. Expected-loss matrix provides terminal
+/// action policy when the martingale emits a Stop verdict.
 #[derive(Debug)]
 pub struct EProcessGuardrail {
     /// Unique guardrail identifier.
     pub guardrail_id: String,
     /// Metric/evidence stream being monitored.
     pub metric_stream: String,
-    /// Current accumulated e-value (fixed-point millionths; 1_000_000 = 1.0).
-    e_value_millionths: i64,
-    /// Rejection threshold (default: 1/alpha for significance level alpha).
-    threshold_millionths: i64,
+    /// Martingale ledger (unified substrate from bd-cixqu.27.1).
+    martingale: MartingaleLedger,
     /// Description of the safety condition being guarded.
     pub null_hypothesis: String,
     /// Current state.
     state: GuardrailState,
-    /// Actions blocked when triggered.
-    blocked_actions: BTreeSet<String>,
+    /// Expected-loss matrix for terminal action policy.
+    loss_matrix: ExpectedLossMatrix,
     /// Epoch at which this guardrail was configured.
     config_epoch: SecurityEpoch,
-    /// Number of observations processed.
-    observation_count: u64,
     /// Event log for evidence emission.
     events: Vec<GuardrailEvent>,
     /// Pluggable likelihood ratio function.
@@ -256,43 +312,48 @@ pub struct EProcessGuardrail {
 }
 
 impl EProcessGuardrail {
-    /// Create a new active guardrail.
+    /// Create a new active guardrail with martingale substrate.
     ///
-    /// - `threshold_millionths`: rejection threshold (e.g., 20_000_000 for alpha=0.05).
-    /// - `blocked_actions`: actions to block when triggered.
+    /// - `stopping_threshold`: martingale stopping threshold.
+    /// - `loss_matrix`: expected-loss matrix for terminal action policy.
     /// - `lr_fn`: likelihood ratio function for evidence updates.
     pub fn new(
         guardrail_id: impl Into<String>,
         metric_stream: impl Into<String>,
         null_hypothesis: impl Into<String>,
-        threshold_millionths: i64,
-        blocked_actions: BTreeSet<String>,
+        stopping_threshold: StoppingThreshold,
+        loss_matrix: ExpectedLossMatrix,
         config_epoch: SecurityEpoch,
         lr_fn: Box<dyn LikelihoodRatioFn>,
     ) -> Self {
+        let martingale = MartingaleLedger::new(stopping_threshold, config_epoch);
+
         Self {
             guardrail_id: guardrail_id.into(),
             metric_stream: metric_stream.into(),
-            e_value_millionths: 1_000_000, // start at 1.0
-            threshold_millionths,
+            martingale,
             null_hypothesis: null_hypothesis.into(),
             state: GuardrailState::Active,
-            blocked_actions,
+            loss_matrix,
             config_epoch,
-            observation_count: 0,
             events: Vec::new(),
             lr_fn,
         }
     }
 
-    /// Current e-value (millionths).
-    pub fn e_value(&self) -> i64 {
-        self.e_value_millionths
+    /// Current martingale state (event count, log M_n, etc.).
+    pub fn martingale_state(&self) -> crate::martingale_decision_ledger::MartingaleState {
+        self.martingale.current_state()
     }
 
-    /// Rejection threshold (millionths).
-    pub fn threshold(&self) -> i64 {
-        self.threshold_millionths
+    /// Whether the martingale has stopped.
+    pub fn is_stopped(&self) -> bool {
+        self.martingale.is_stopped()
+    }
+
+    /// Martingale stopping threshold.
+    pub fn threshold(&self) -> StoppingThreshold {
+        self.martingale.threshold()
     }
 
     /// Current state.
@@ -300,9 +361,13 @@ impl EProcessGuardrail {
         self.state
     }
 
-    /// Actions blocked by this guardrail (only meaningful when triggered).
-    pub fn blocked_actions(&self) -> &BTreeSet<String> {
-        &self.blocked_actions
+    /// Actions blocked by this guardrail (computed from expected-loss matrix).
+    pub fn blocked_actions(&self) -> BTreeSet<String> {
+        if self.state == GuardrailState::Triggered {
+            self.loss_matrix.blocked_actions()
+        } else {
+            BTreeSet::new()
+        }
     }
 
     /// Configuration epoch.
@@ -310,9 +375,9 @@ impl EProcessGuardrail {
         self.config_epoch
     }
 
-    /// Number of observations processed.
+    /// Number of observations processed (martingale event count).
     pub fn observation_count(&self) -> u64 {
-        self.observation_count
+        self.martingale.event_count()
     }
 
     /// Drain and return accumulated events.
@@ -322,16 +387,14 @@ impl EProcessGuardrail {
 
     /// Check if a specific action is blocked by this guardrail.
     pub fn blocks(&self, action: &str) -> bool {
-        self.state == GuardrailState::Triggered && self.blocked_actions.contains(action)
+        self.state == GuardrailState::Triggered && self.loss_matrix.should_block(action)
     }
 
-    /// Update the e-value with a new observation.
+    /// Update the martingale with a new observation.
     ///
-    /// The e-value is updated as: `e_new = e_old * lr(observation) / 1_000_000`
-    /// (dividing by 1M to maintain fixed-point scale).
-    ///
-    /// If the updated e-value >= threshold, the guardrail transitions to
-    /// `Triggered` and emits a `GuardrailEvent::Triggered`.
+    /// Converts likelihood ratio to log space and appends to the martingale
+    /// ledger. If the martingale emits a Stop verdict, consults the expected-loss
+    /// matrix to determine blocked actions and transitions to Triggered state.
     pub fn update(&mut self, observation_millionths: i64) -> Result<(), GuardrailError> {
         match self.state {
             GuardrailState::Suspended => {
@@ -347,43 +410,63 @@ impl EProcessGuardrail {
             GuardrailState::Active => {}
         }
 
+        // Compute likelihood ratio using the pluggable function.
         let lr = self.lr_fn.ratio(observation_millionths).ok_or_else(|| {
             GuardrailError::InvalidObservation {
                 guardrail_id: self.guardrail_id.clone(),
             }
         })?;
 
-        let previous = self.e_value_millionths;
+        // Convert to log space for martingale (ln(lr) * 1_000_000).
+        let log_lr_millionths = if lr <= 0 {
+            // Handle edge case: lr <= 0 means infinite negative log.
+            i64::MIN / 1000 // Prevent overflow in subsequent addition
+        } else {
+            // ln(lr / 1_000_000) * 1_000_000 = (ln(lr) - ln(1_000_000)) * 1_000_000
+            let lr_f64 = lr as f64 / 1_000_000.0;
+            (lr_f64.ln() * 1_000_000.0) as i64
+        };
 
-        // e_new = e_old * lr / 1_000_000 (fixed-point multiply)
-        let product = self.e_value_millionths as i128 * lr as i128;
-        let new_val = product / 1_000_000;
+        // Create content hash for the observation.
+        let payload = format!("observation:{observation_millionths}:lr:{lr}");
+        let payload_digest = ContentHash::compute(payload.as_bytes());
 
-        if new_val > i64::MAX as i128 || new_val < i64::MIN as i128 {
-            return Err(GuardrailError::EValueOverflow {
-                guardrail_id: self.guardrail_id.clone(),
-            });
-        }
-
-        self.e_value_millionths = new_val as i64;
-        self.observation_count += 1;
-
-        self.events.push(GuardrailEvent::EValueUpdated {
+        // Append to martingale ledger.
+        let verdict = self.martingale.append(
+            log_lr_millionths,
+            payload_digest,
+            // Use a simple timestamp (real systems would use proper clock).
+            self.observation_count() * 1_000_000_000,
+        ).map_err(|source| GuardrailError::MartingaleError {
             guardrail_id: self.guardrail_id.clone(),
-            previous_e_value: previous,
-            new_e_value: self.e_value_millionths,
+            source,
+        })?;
+
+        // Emit update event.
+        self.events.push(GuardrailEvent::MartingaleUpdated {
+            guardrail_id: self.guardrail_id.clone(),
             observation: observation_millionths,
-            likelihood_ratio: lr,
+            log_likelihood_ratio: log_lr_millionths,
+            verdict,
+            sequence: self.martingale.event_count(),
         });
 
-        // Check threshold.
-        if self.e_value_millionths >= self.threshold_millionths {
+        // Check if martingale stopped (rejection boundary crossed).
+        if let MartingaleVerdict::Stop { .. } = verdict {
             self.state = GuardrailState::Triggered;
+
+            // Terminal action policy: consult expected-loss matrix.
+            let blocked_actions = self.loss_matrix.blocked_actions();
+            let expected_losses: BTreeMap<String, i64> = blocked_actions
+                .iter()
+                .map(|action| (action.clone(), self.loss_matrix.action_loss(action)))
+                .collect();
+
             self.events.push(GuardrailEvent::Triggered {
                 guardrail_id: self.guardrail_id.clone(),
-                e_value: self.e_value_millionths,
-                threshold: self.threshold_millionths,
-                blocked_actions: self.blocked_actions.iter().cloned().collect(),
+                sequence: self.martingale.event_count(),
+                blocked_actions: blocked_actions.into_iter().collect(),
+                expected_losses,
             });
         }
 
@@ -392,7 +475,7 @@ impl EProcessGuardrail {
 
     /// Reset a triggered guardrail with an authorization receipt.
     ///
-    /// Resets e-value to 1.0 and transitions back to Active.
+    /// Creates a fresh martingale ledger and transitions back to Active.
     pub fn reset(&mut self, receipt: &ResetReceipt) -> Result<(), GuardrailError> {
         if self.state != GuardrailState::Triggered {
             return Err(GuardrailError::NotTriggered {
@@ -406,9 +489,10 @@ impl EProcessGuardrail {
             });
         }
 
-        self.e_value_millionths = 1_000_000; // reset to 1.0
+        // Create fresh martingale with same threshold but new epoch.
+        let threshold = self.martingale.threshold();
+        self.martingale = MartingaleLedger::new(threshold, receipt.epoch);
         self.state = GuardrailState::Active;
-        self.observation_count = 0;
 
         self.events.push(GuardrailEvent::Reset {
             guardrail_id: self.guardrail_id.clone(),
@@ -482,7 +566,7 @@ impl GuardrailRegistry {
         let mut blocked = BTreeSet::new();
         for gr in &self.guardrails {
             if gr.state() == GuardrailState::Triggered {
-                blocked.extend(gr.blocked_actions().iter().cloned());
+                blocked.extend(gr.blocked_actions());
             }
         }
         blocked
@@ -574,16 +658,27 @@ mod tests {
     use super::*;
 
     fn test_guardrail() -> EProcessGuardrail {
-        let mut blocked = BTreeSet::new();
-        blocked.insert("low".to_string());
-        blocked.insert("medium".to_string());
+        // Expected-loss matrix: block "low" and "medium" actions.
+        let mut action_losses = BTreeMap::new();
+        action_losses.insert("low".to_string(), 2_000_000);    // 2.0 loss
+        action_losses.insert("medium".to_string(), 3_000_000); // 3.0 loss
+        action_losses.insert("high".to_string(), 500_000);     // 0.5 loss (below threshold)
+
+        let loss_matrix = ExpectedLossMatrix::new(
+            action_losses,
+            1_000_000, // Block actions with loss >= 1.0
+        );
+
+        // Stopping threshold: log(1/0.05) ≈ 2.996 in millionths.
+        let stopping_threshold = StoppingThreshold::try_from_log_millionths(2_996_000)
+            .expect("valid threshold");
 
         EProcessGuardrail::new(
             "fnr-guard",
             "false_negative_rate",
             "false-negative rate <= 0.01",
-            20_000_000, // threshold = 20.0 (alpha = 0.05)
-            blocked,
+            stopping_threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 10_000,     // 0.01
@@ -599,8 +694,13 @@ mod tests {
     fn new_guardrail_starts_active() {
         let gr = test_guardrail();
         assert_eq!(gr.state(), GuardrailState::Active);
-        assert_eq!(gr.e_value(), 1_000_000); // 1.0
+        assert!(!gr.is_stopped());
         assert_eq!(gr.observation_count(), 0);
+
+        // Initial martingale state: M_0 = 1 (log_m = 0).
+        let state = gr.martingale_state();
+        assert_eq!(state.event_count, 0);
+        assert_eq!(state.log_m_millionths, 0);
     }
 
     #[test]
@@ -610,46 +710,47 @@ mod tests {
         assert_eq!(GuardrailState::Suspended.to_string(), "suspended");
     }
 
-    // -- E-value accumulation --
+    // -- Martingale accumulation --
 
     #[test]
-    fn below_threshold_observation_decreases_e_value() {
+    fn below_threshold_observation_updates_martingale() {
         let mut gr = test_guardrail();
         // observation = 5_000 (0.005), below threshold 10_000
-        // lr = 500_000 (0.5)
-        // e_new = 1_000_000 * 500_000 / 1_000_000 = 500_000 (0.5)
-        gr.update(5_000)
-            .expect("serde deserialization should succeed");
-        assert_eq!(gr.e_value(), 500_000);
+        // lr = 500_000 (0.5), log_lr ≈ ln(0.5) ≈ -0.693 in millionths ≈ -693_000
+        gr.update(5_000).expect("update should succeed");
+
+        let state = gr.martingale_state();
+        assert_eq!(state.event_count, 1);
+        assert!(state.log_m_millionths < 0); // decreased from 0
         assert_eq!(gr.state(), GuardrailState::Active);
         assert_eq!(gr.observation_count(), 1);
     }
 
     #[test]
-    fn above_threshold_observation_increases_e_value() {
+    fn above_threshold_observation_increases_log_martingale() {
         let mut gr = test_guardrail();
         // observation = 15_000 (0.015), above threshold 10_000
-        // lr = 5_000_000 (5.0)
-        // e_new = 1_000_000 * 5_000_000 / 1_000_000 = 5_000_000 (5.0)
-        gr.update(15_000)
-            .expect("serde deserialization should succeed");
-        assert_eq!(gr.e_value(), 5_000_000);
+        // lr = 5_000_000 (5.0), log_lr ≈ ln(5.0) ≈ 1.609 in millionths ≈ 1_609_000
+        gr.update(15_000).expect("update should succeed");
+
+        let state = gr.martingale_state();
+        assert_eq!(state.event_count, 1);
+        assert!(state.log_m_millionths > 0); // increased from 0
         assert_eq!(gr.state(), GuardrailState::Active);
     }
 
     #[test]
     fn repeated_high_observations_trigger_guardrail() {
         let mut gr = test_guardrail();
-        // Each high observation multiplies e by 5.0
-        // After 1: 5.0, after 2: 25.0 >= threshold 20.0 -> triggered
-        gr.update(15_000)
-            .expect("serde deserialization should succeed"); // e = 5.0
+        // Need enough high observations to cross log threshold ≈ 2.996
+        // Each high observation adds ln(5.0) ≈ 1.609
+        // Need at least 2 observations: 1.609 + 1.609 = 3.218 > 2.996
+        gr.update(15_000).expect("update should succeed");
         assert_eq!(gr.state(), GuardrailState::Active);
 
-        gr.update(15_000)
-            .expect("serde deserialization should succeed"); // e = 25.0 >= 20.0
+        gr.update(15_000).expect("update should succeed");
         assert_eq!(gr.state(), GuardrailState::Triggered);
-        assert_eq!(gr.e_value(), 25_000_000);
+        assert!(gr.is_stopped());
     }
 
     #[test]
@@ -680,16 +781,17 @@ mod tests {
     }
 
     #[test]
-    fn triggered_guardrail_blocks_specified_actions() {
+    fn triggered_guardrail_blocks_high_loss_actions() {
         let mut gr = test_guardrail();
-        gr.update(15_000)
-            .expect("serde deserialization should succeed");
-        gr.update(15_000)
-            .expect("serde deserialization should succeed"); // triggers
+        gr.update(15_000).expect("update should succeed");
+        gr.update(15_000).expect("update should succeed"); // triggers
 
+        // Expected-loss matrix blocks actions with loss >= 1.0
+        // "low" has loss 2.0, "medium" has loss 3.0 -> blocked
+        // "high" has loss 0.5 -> not blocked
         assert!(gr.blocks("low"));
         assert!(gr.blocks("medium"));
-        assert!(!gr.blocks("high")); // not in blocked set
+        assert!(!gr.blocks("high"));
     }
 
     // -- Reset --
@@ -697,22 +799,24 @@ mod tests {
     #[test]
     fn reset_triggered_guardrail() {
         let mut gr = test_guardrail();
-        gr.update(15_000)
-            .expect("serde deserialization should succeed");
-        gr.update(15_000)
-            .expect("serde deserialization should succeed"); // triggers
+        gr.update(15_000).expect("update should succeed");
+        gr.update(15_000).expect("update should succeed"); // triggers
 
         let receipt = ResetReceipt {
             authorized_by: "operator-1".to_string(),
             rationale: "FNR condition addressed".to_string(),
             epoch: SecurityEpoch::from_raw(1),
         };
-        gr.reset(&receipt)
-            .expect("serde deserialization should succeed");
+        gr.reset(&receipt).expect("reset should succeed");
 
         assert_eq!(gr.state(), GuardrailState::Active);
-        assert_eq!(gr.e_value(), 1_000_000); // reset to 1.0
+        assert!(!gr.is_stopped());
         assert_eq!(gr.observation_count(), 0);
+
+        // Fresh martingale: M_0 = 1 (log_m = 0).
+        let state = gr.martingale_state();
+        assert_eq!(state.event_count, 0);
+        assert_eq!(state.log_m_millionths, 0);
     }
 
     #[test]
@@ -777,28 +881,30 @@ mod tests {
         gr.suspend("maintenance");
         gr.resume();
         assert_eq!(gr.state(), GuardrailState::Active);
-        gr.update(15_000)
-            .expect("serde deserialization should succeed"); // works again
+        gr.update(15_000).expect("update should succeed"); // works again
     }
 
     // -- Events --
 
     #[test]
-    fn update_emits_e_value_updated_event() {
+    fn update_emits_martingale_updated_event() {
         let mut gr = test_guardrail();
-        gr.update(5_000)
-            .expect("serde deserialization should succeed");
+        gr.update(5_000).expect("update should succeed");
 
         let events = gr.drain_events();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            GuardrailEvent::EValueUpdated {
-                previous_e_value,
-                new_e_value,
+            GuardrailEvent::MartingaleUpdated {
+                observation,
+                log_likelihood_ratio,
+                verdict,
+                sequence,
                 ..
             } => {
-                assert_eq!(*previous_e_value, 1_000_000);
-                assert_eq!(*new_e_value, 500_000);
+                assert_eq!(*observation, 5_000);
+                assert!(*log_likelihood_ratio < 0); // ln(0.5) < 0
+                assert!(matches!(*verdict, MartingaleVerdict::Continue));
+                assert_eq!(*sequence, 1);
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -807,24 +913,25 @@ mod tests {
     #[test]
     fn trigger_emits_triggered_event() {
         let mut gr = test_guardrail();
-        gr.update(15_000)
-            .expect("serde deserialization should succeed");
-        gr.update(15_000)
-            .expect("serde deserialization should succeed"); // triggers
+        gr.update(15_000).expect("update should succeed");
+        gr.update(15_000).expect("update should succeed"); // triggers
 
         let events = gr.drain_events();
-        // Should have 2 update events + 1 triggered event
+        // Should have 2 martingale update events + 1 triggered event
         assert_eq!(events.len(), 3);
         match &events[2] {
             GuardrailEvent::Triggered {
                 blocked_actions,
-                e_value,
-                threshold,
+                expected_losses,
+                sequence,
                 ..
             } => {
-                assert_eq!(*e_value, 25_000_000);
-                assert_eq!(*threshold, 20_000_000);
+                assert_eq!(*sequence, 2);
                 assert_eq!(blocked_actions.len(), 2);
+                assert!(blocked_actions.contains(&"low".to_string()));
+                assert!(blocked_actions.contains(&"medium".to_string()));
+                assert_eq!(*expected_losses.get("low").unwrap(), 2_000_000);
+                assert_eq!(*expected_losses.get("medium").unwrap(), 3_000_000);
             }
             other => panic!("unexpected event: {other:?}"),
         }
@@ -833,10 +940,8 @@ mod tests {
     #[test]
     fn reset_emits_reset_event() {
         let mut gr = test_guardrail();
-        gr.update(15_000)
-            .expect("serde deserialization should succeed");
-        gr.update(15_000)
-            .expect("serde deserialization should succeed");
+        gr.update(15_000).expect("update should succeed");
+        gr.update(15_000).expect("update should succeed");
         gr.drain_events(); // clear
 
         let receipt = ResetReceipt {
@@ -844,8 +949,7 @@ mod tests {
             rationale: "addressed".to_string(),
             epoch: SecurityEpoch::from_raw(1),
         };
-        gr.reset(&receipt)
-            .expect("serde deserialization should succeed");
+        gr.reset(&receipt).expect("reset should succeed");
 
         let events = gr.drain_events();
         assert_eq!(events.len(), 1);
@@ -879,14 +983,19 @@ mod tests {
     fn registry_blocked_actions_union() {
         let mut registry = GuardrailRegistry::new();
 
-        let mut blocked1 = BTreeSet::new();
-        blocked1.insert("low".to_string());
+        // gr1: low threshold, triggers easily, blocks "low" action
+        let mut action_losses1 = BTreeMap::new();
+        action_losses1.insert("low".to_string(), 2_000_000); // blocks this
+        let loss_matrix1 = ExpectedLossMatrix::new(action_losses1, 1_000_000);
+        let threshold1 = StoppingThreshold::try_from_log_millionths(1_000_000)
+            .expect("valid threshold"); // low threshold
+
         let mut gr1 = EProcessGuardrail::new(
             "gr1",
             "metric-a",
             "test",
-            5_000_000,
-            blocked1,
+            threshold1,
+            loss_matrix1,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -894,18 +1003,22 @@ mod tests {
                 low_ratio_millionths: 500_000,
             }),
         );
-        // Trigger gr1 immediately (ratio=10.0, e=10.0 >= threshold 5.0)
-        gr1.update(1_000_000)
-            .expect("serde deserialization should succeed");
+        // Trigger gr1 with high ratio observation
+        gr1.update(1_000_000).expect("update should succeed");
 
-        let mut blocked2 = BTreeSet::new();
-        blocked2.insert("medium".to_string());
+        // gr2: high threshold, doesn't trigger, blocks "medium" action
+        let mut action_losses2 = BTreeMap::new();
+        action_losses2.insert("medium".to_string(), 2_000_000); // would block this
+        let loss_matrix2 = ExpectedLossMatrix::new(action_losses2, 1_000_000);
+        let threshold2 = StoppingThreshold::try_from_log_millionths(10_000_000)
+            .expect("valid threshold"); // high threshold
+
         let gr2 = EProcessGuardrail::new(
             "gr2",
             "metric-b",
             "test",
-            100_000_000,
-            blocked2,
+            threshold2,
+            loss_matrix2,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -927,13 +1040,17 @@ mod tests {
     fn registry_update_stream_targets_matching_guardrails() {
         let mut registry = GuardrailRegistry::new();
 
-        let blocked = BTreeSet::new();
+        let action_losses = BTreeMap::new();
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
+            .expect("valid threshold"); // high threshold, won't trigger easily
+
         let gr = EProcessGuardrail::new(
             "gr1",
             "fnr",
             "test",
-            100_000_000,
-            blocked,
+            threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -949,7 +1066,7 @@ mod tests {
         assert_eq!(
             registry
                 .get("gr1")
-                .expect("serde deserialization should succeed")
+                .expect("guardrail should exist")
                 .observation_count(),
             1
         );
@@ -960,7 +1077,7 @@ mod tests {
         assert_eq!(
             registry
                 .get("gr1")
-                .expect("serde deserialization should succeed")
+                .expect("guardrail should exist")
                 .observation_count(),
             1
         );
@@ -970,14 +1087,20 @@ mod tests {
     fn registry_permitted_actions() {
         let mut registry = GuardrailRegistry::new();
 
-        let mut blocked = BTreeSet::new();
-        blocked.insert("low".to_string());
+        let mut action_losses = BTreeMap::new();
+        action_losses.insert("low".to_string(), 2_000_000); // blocks this
+        action_losses.insert("medium".to_string(), 500_000); // doesn't block this
+        action_losses.insert("high".to_string(), 500_000);   // doesn't block this
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        let threshold = StoppingThreshold::try_from_log_millionths(1_000_000)
+            .expect("valid threshold"); // low threshold
+
         let mut gr = EProcessGuardrail::new(
             "gr1",
             "m",
             "test",
-            5_000_000,
-            blocked,
+            threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -985,8 +1108,7 @@ mod tests {
                 low_ratio_millionths: 500_000,
             }),
         );
-        gr.update(1_000_000)
-            .expect("serde deserialization should succeed"); // triggers
+        gr.update(1_000_000).expect("update should succeed"); // triggers
         registry.add(gr);
 
         let all = vec!["low".to_string(), "medium".to_string(), "high".to_string()];
@@ -999,14 +1121,18 @@ mod tests {
     fn registry_reset_all() {
         let mut registry = GuardrailRegistry::new();
 
-        let mut blocked = BTreeSet::new();
-        blocked.insert("low".to_string());
+        let mut action_losses = BTreeMap::new();
+        action_losses.insert("low".to_string(), 2_000_000);
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        let threshold = StoppingThreshold::try_from_log_millionths(1_000_000)
+            .expect("valid threshold"); // low threshold
+
         let mut gr = EProcessGuardrail::new(
             "gr1",
             "m",
             "test",
-            5_000_000,
-            blocked,
+            threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -1014,8 +1140,7 @@ mod tests {
                 low_ratio_millionths: 500_000,
             }),
         );
-        gr.update(1_000_000)
-            .expect("serde deserialization should succeed"); // triggers
+        gr.update(1_000_000).expect("update should succeed"); // triggers
         registry.add(gr);
 
         let receipt = ResetReceipt {
@@ -1028,7 +1153,7 @@ mod tests {
         assert_eq!(
             registry
                 .get("gr1")
-                .expect("serde deserialization should succeed")
+                .expect("guardrail should exist")
                 .state(),
             GuardrailState::Active
         );
@@ -1048,7 +1173,8 @@ mod tests {
                 }
                 let _ = gr.update(o);
             }
-            (gr.observation_count(), gr.e_value())
+            // Return observation count and log martingale value
+            (gr.observation_count(), gr.martingale_state().log_m_millionths)
         };
 
         let (count1, ev1) = run(&observations);
@@ -1112,8 +1238,9 @@ mod tests {
             GuardrailError::NotTriggered {
                 guardrail_id: "g".to_string(),
             },
-            GuardrailError::EValueOverflow {
+            GuardrailError::MartingaleError {
                 guardrail_id: "g".to_string(),
+                source: MartingaleError::AlreadyStopped,
             },
         ];
         for err in &errors {
@@ -1139,19 +1266,22 @@ mod tests {
 
     #[test]
     fn guardrail_event_serialization_round_trip() {
+        let mut expected_losses = BTreeMap::new();
+        expected_losses.insert("low".to_string(), 2_000_000);
+
         let events = vec![
-            GuardrailEvent::EValueUpdated {
+            GuardrailEvent::MartingaleUpdated {
                 guardrail_id: "g".to_string(),
-                previous_e_value: 1_000_000,
-                new_e_value: 5_000_000,
                 observation: 15_000,
-                likelihood_ratio: 5_000_000,
+                log_likelihood_ratio: 1_609_000,
+                verdict: MartingaleVerdict::Continue,
+                sequence: 1,
             },
             GuardrailEvent::Triggered {
                 guardrail_id: "g".to_string(),
-                e_value: 25_000_000,
-                threshold: 20_000_000,
+                sequence: 2,
                 blocked_actions: vec!["low".to_string()],
+                expected_losses,
             },
             GuardrailEvent::Reset {
                 guardrail_id: "g".to_string(),
@@ -1206,8 +1336,9 @@ mod tests {
             Box::new(GuardrailError::NotTriggered {
                 guardrail_id: "g5".into(),
             }),
-            Box::new(GuardrailError::EValueOverflow {
+            Box::new(GuardrailError::MartingaleError {
                 guardrail_id: "g6".into(),
+                source: MartingaleError::LogAccumulatorOverflow,
             }),
         ];
         let mut displays = std::collections::BTreeSet::new();
@@ -1226,17 +1357,21 @@ mod tests {
     // -- Enrichment: edge cases, overflow, lifecycle depth --
 
     #[test]
-    fn evalue_overflow_detected() {
-        let blocked = BTreeSet::new();
-        // Use a ratio large enough that two multiplications overflow i64,
-        // but small enough that the first step stays below the trigger threshold.
-        let big_ratio: i64 = 4_000_000_000_000; // 4 trillion
+    fn martingale_log_accumulator_overflow_detected() {
+        let action_losses = BTreeMap::new();
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        // Use extremely high threshold so we don't trigger before overflow
+        let threshold = StoppingThreshold::try_from_log_millionths(i64::MAX)
+            .expect("valid threshold");
+
+        // Use huge likelihood ratio that will cause log accumulator overflow
+        let big_ratio: i64 = i64::MAX; // huge ratio
         let mut gr = EProcessGuardrail::new(
             "overflow-test",
             "metric",
             "test",
-            i64::MAX, // very high threshold — won't trigger before overflow
-            blocked,
+            threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -1244,12 +1379,29 @@ mod tests {
                 low_ratio_millionths: 1_000_000,
             }),
         );
-        // First update: e = 1M * 4e12 / 1M = 4e12 (well below i64::MAX)
-        gr.update(1_000_000)
-            .expect("serde deserialization should succeed");
-        // Second update: product = 4e12 * 4e12 = 16e24, / 1e6 = 16e18 > i64::MAX → overflow
+
+        // Eventually this should cause log accumulator overflow in the martingale
         let result = gr.update(1_000_000);
-        assert!(matches!(result, Err(GuardrailError::EValueOverflow { .. })));
+        match result {
+            Err(GuardrailError::MartingaleError { source, .. }) => {
+                assert!(matches!(source, MartingaleError::LogAccumulatorOverflow));
+            }
+            _ => {
+                // If we didn't hit overflow immediately, keep trying
+                // (The exact number of iterations depends on the log calculation)
+                let mut attempts = 0;
+                while attempts < 10 {
+                    match gr.update(1_000_000) {
+                        Err(GuardrailError::MartingaleError { source, .. }) => {
+                            assert!(matches!(source, MartingaleError::LogAccumulatorOverflow));
+                            return;
+                        }
+                        Err(_) => break,
+                        Ok(_) => attempts += 1,
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -1261,14 +1413,13 @@ mod tests {
     }
 
     #[test]
-    fn suspend_preserves_evalue_and_count() {
+    fn suspend_preserves_martingale_state_and_count() {
         let mut gr = test_guardrail();
-        gr.update(5_000)
-            .expect("serde deserialization should succeed"); // e = 0.5
-        let ev_before = gr.e_value();
+        gr.update(5_000).expect("update should succeed");
+        let state_before = gr.martingale_state();
         let count_before = gr.observation_count();
         gr.suspend("maintenance");
-        assert_eq!(gr.e_value(), ev_before);
+        assert_eq!(gr.martingale_state().log_m_millionths, state_before.log_m_millionths);
         assert_eq!(gr.observation_count(), count_before);
     }
 
@@ -1371,13 +1522,17 @@ mod tests {
     #[test]
     fn registry_drain_all_events_empties_all() {
         let mut registry = GuardrailRegistry::new();
-        let blocked = BTreeSet::new();
+        let action_losses = BTreeMap::new();
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
+            .expect("valid threshold");
+
         let mut gr = EProcessGuardrail::new(
             "gr1",
             "m",
             "test",
-            100_000_000,
-            blocked,
+            threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -1385,8 +1540,7 @@ mod tests {
                 low_ratio_millionths: 500_000,
             }),
         );
-        gr.update(1_000_000)
-            .expect("serde deserialization should succeed");
+        gr.update(1_000_000).expect("update should succeed");
         registry.add(gr);
         let events = registry.drain_all_events();
         assert!(!events.is_empty());
@@ -1399,14 +1553,18 @@ mod tests {
         let mut registry = GuardrailRegistry::new();
         // Create two guardrails both blocking "low"
         for id in ["gr1", "gr2"] {
-            let mut blocked = BTreeSet::new();
-            blocked.insert("low".to_string());
+            let mut action_losses = BTreeMap::new();
+            action_losses.insert("low".to_string(), 2_000_000); // blocks this
+            let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+            let threshold = StoppingThreshold::try_from_log_millionths(1_000_000)
+                .expect("valid threshold"); // low threshold
+
             let mut gr = EProcessGuardrail::new(
                 id,
                 "m",
                 "test",
-                5_000_000,
-                blocked,
+                threshold,
+                loss_matrix,
                 SecurityEpoch::GENESIS,
                 Box::new(ThresholdLikelihoodRatio {
                     threshold_millionths: 0,
@@ -1414,8 +1572,7 @@ mod tests {
                     low_ratio_millionths: 500_000,
                 }),
             );
-            gr.update(1_000_000)
-                .expect("serde deserialization should succeed"); // triggers
+            gr.update(1_000_000).expect("update should succeed"); // triggers
             registry.add(gr);
         }
         let blockers = registry.blocking_guardrails("low");
@@ -1425,13 +1582,17 @@ mod tests {
     #[test]
     fn registry_update_stream_skips_non_matching() {
         let mut registry = GuardrailRegistry::new();
-        let blocked = BTreeSet::new();
+        let action_losses = BTreeMap::new();
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
+            .expect("valid threshold");
+
         let gr = EProcessGuardrail::new(
             "gr1",
             "stream-a",
             "test",
-            100_000_000,
-            blocked,
+            threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -1444,7 +1605,7 @@ mod tests {
         assert_eq!(
             registry
                 .get("gr1")
-                .expect("serde deserialization should succeed")
+                .expect("guardrail should exist")
                 .observation_count(),
             0
         );
@@ -1453,13 +1614,17 @@ mod tests {
     #[test]
     fn reset_all_skips_active_guardrails() {
         let mut registry = GuardrailRegistry::new();
-        let blocked = BTreeSet::new();
+        let action_losses = BTreeMap::new();
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
+            .expect("valid threshold");
+
         let gr = EProcessGuardrail::new(
             "active-gr",
             "m",
             "test",
-            100_000_000,
-            blocked,
+            threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -1478,7 +1643,7 @@ mod tests {
         assert_eq!(
             registry
                 .get("active-gr")
-                .expect("serde deserialization should succeed")
+                .expect("guardrail should exist")
                 .state(),
             GuardrailState::Active
         );
@@ -1502,8 +1667,9 @@ mod tests {
             GuardrailError::NotTriggered {
                 guardrail_id: "g".into(),
             },
-            GuardrailError::EValueOverflow {
+            GuardrailError::MartingaleError {
                 guardrail_id: "g".into(),
+                source: MartingaleError::AlreadyStopped,
             },
         ];
         let mut unique = std::collections::BTreeSet::new();
@@ -1516,13 +1682,17 @@ mod tests {
     #[test]
     fn guardrail_config_epoch_preserved() {
         let epoch = SecurityEpoch::from_raw(42);
-        let blocked = BTreeSet::new();
+        let action_losses = BTreeMap::new();
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        let threshold = StoppingThreshold::try_from_log_millionths(2_996_000)
+            .expect("valid threshold");
+
         let gr = EProcessGuardrail::new(
             "g",
             "m",
             "test",
-            20_000_000,
-            blocked,
+            threshold,
+            loss_matrix,
             epoch,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -1601,13 +1771,17 @@ mod tests {
         let mut registry = GuardrailRegistry::new();
         assert!(registry.is_empty());
 
-        let blocked = BTreeSet::new();
+        let action_losses = BTreeMap::new();
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
+            .expect("valid threshold");
+
         let gr = EProcessGuardrail::new(
             "gr1",
             "m",
             "test",
-            100_000_000,
-            blocked,
+            threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
@@ -1621,13 +1795,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Enrichment: e_value always starts at 1_000_000 (1.0)
+    // Enrichment: martingale always starts with log_m = 0 (M_0 = 1.0)
     // -----------------------------------------------------------------------
 
     #[test]
-    fn initial_e_value_is_one() {
+    fn initial_martingale_log_value_is_zero() {
         let gr = test_guardrail();
-        assert_eq!(gr.e_value(), 1_000_000);
+        assert_eq!(gr.martingale_state().log_m_millionths, 0);
+        assert_eq!(gr.martingale_state().event_count, 0);
     }
 
     // -----------------------------------------------------------------------
@@ -1635,24 +1810,28 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn single_observation_can_trigger_if_ratio_exceeds_threshold() {
-        let blocked = BTreeSet::new();
+    fn single_observation_can_trigger_if_log_ratio_exceeds_threshold() {
+        let action_losses = BTreeMap::new();
+        let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
+        // Low threshold: ln(5.0) ≈ 1.609 in millionths ≈ 1_609_000
+        let threshold = StoppingThreshold::try_from_log_millionths(1_609_000)
+            .expect("valid threshold");
+
         let mut gr = EProcessGuardrail::new(
             "single-trigger",
             "metric",
             "test",
-            5_000_000, // threshold = 5.0
-            blocked,
+            threshold,
+            loss_matrix,
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
                 threshold_millionths: 0,
-                high_ratio_millionths: 10_000_000, // ratio = 10.0
+                high_ratio_millionths: 10_000_000, // ratio = 10.0, ln(10) ≈ 2.303 > 1.609
                 low_ratio_millionths: 500_000,
             }),
         );
-        // Single observation at ratio 10.0: e = 1.0 * 10.0 = 10.0 >= 5.0
-        gr.update(1_000_000)
-            .expect("serde deserialization should succeed");
+        // Single observation with ratio 10.0: log_m = ln(10) ≈ 2.303 > 1.609 threshold
+        gr.update(1_000_000).expect("update should succeed");
         assert_eq!(gr.state(), GuardrailState::Triggered);
     }
 

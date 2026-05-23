@@ -112,6 +112,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "conformal_calibration"
+path = "fuzz_targets/conformal_calibration.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "semantic_cover_schema"
 path = "fuzz_targets/semantic_cover_schema.rs"
 test = false

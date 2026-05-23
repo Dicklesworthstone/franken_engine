@@ -15,7 +15,7 @@
 use std::fmt;
 
 use franken_engine_deterministic_derive::Deterministic;
-use franken_engine_deterministic_trait::Deterministic;
+use franken_engine_deterministic_trait::{Deterministic, FixedLayout};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -68,7 +68,7 @@ impl std::error::Error for HashError {}
 /// Scope: intra-process, ephemeral, NOT persisted across restarts, NOT
 /// security-relevant.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic, FixedLayout,
 )]
 pub struct IntegrityHash(pub u64);
 
@@ -116,6 +116,7 @@ impl fmt::Display for IntegrityHash {
     Serialize,
     Deserialize,
     Deterministic,
+    FixedLayout,
 )]
 pub struct ContentHash(pub [u8; 32]);
 
@@ -166,7 +167,7 @@ impl fmt::Display for ContentHash {
 ///
 /// Scope: security-critical, epoch-scoped, used with signing keys.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic, FixedLayout,
 )]
 pub struct AuthenticityHash(pub [u8; 32]);
 

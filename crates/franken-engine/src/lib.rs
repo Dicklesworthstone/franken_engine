@@ -34,6 +34,7 @@ pub mod assumptions_ledger;
 pub mod ast;
 pub mod asupersync_contract_matrix;
 pub mod asupersync_leverage_adoption_gate;
+pub mod attack_grammar_synthesizer;
 pub mod attack_surface_game_model;
 pub mod attestation_handshake;
 pub mod attested_execution_cell;

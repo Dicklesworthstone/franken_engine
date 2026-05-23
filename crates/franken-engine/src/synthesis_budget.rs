@@ -1511,8 +1511,8 @@ mod tests {
             );
             c
         };
-        let json1 = serde_json::to_string(&build()).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&build()).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&build()).expect("serialize derived Serialize");
+        let json2 = serde_json::to_string(&build()).expect("serialize derived Serialize");
         assert_eq!(json1, json2);
     }
 

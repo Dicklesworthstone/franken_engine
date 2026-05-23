@@ -17,6 +17,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bayesian_posterior::Posterior;
 use crate::federated_posterior_aggregation::{AggregatedPosteriorUpdate, PosteriorDelta};
 use crate::fleet_immune_protocol::NodeId;
 use crate::security_epoch::SecurityEpoch;
@@ -48,6 +49,9 @@ const MAX_DELTA_MILLIONTHS: u64 = 100;
 /// Since posterior deltas sum to zero and are bounded by probability mass changes,
 /// the global sensitivity is bounded by the maximum possible probability shift.
 const GLOBAL_SENSITIVITY_MILLIONTHS: u64 = 2_000_000; // 2.0 in millionths
+
+/// Conservative upper bound for DP-SGD clipping norm validation.
+const MAX_CLIPPING_NORM_MILLIONTHS: u64 = 4_000_000;
 
 // ---------------------------------------------------------------------------
 // PrivacyParameters - (ε,δ) configuration
@@ -364,6 +368,12 @@ impl DeterministicTestNoiseGenerator {
     }
 }
 
+impl Default for DeterministicTestNoiseGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NoiseGenerator for DeterministicTestNoiseGenerator {
     fn sample_gaussian(&mut self, scale_millionths: i64) -> i64 {
         // Simple deterministic "noise" for testing - not secure!
@@ -372,6 +382,322 @@ impl NoiseGenerator for DeterministicTestNoiseGenerator {
         let normalized = (pseudo_random as i64 - (1i64 << 30)) * scale_millionths / (1i64 << 29);
         normalized
     }
+}
+
+// ---------------------------------------------------------------------------
+// DP-SGD posterior updates
+// ---------------------------------------------------------------------------
+
+/// Configuration for one differentially-private SGD posterior update.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DpSgdConfig {
+    /// L2 clipping norm for each node gradient, in fixed-point millionths.
+    pub clipping_norm_millionths: u64,
+    /// SGD learning rate, in fixed-point millionths.
+    pub learning_rate_millionths: u64,
+    /// Privacy parameters spent by the round.
+    pub privacy_params: PrivacyParameters,
+}
+
+impl DpSgdConfig {
+    /// Create a validated DP-SGD configuration.
+    pub fn new(
+        clipping_norm_millionths: u64,
+        learning_rate_millionths: u64,
+        privacy_params: PrivacyParameters,
+    ) -> Result<Self, DifferentialPrivacyError> {
+        if clipping_norm_millionths == 0 || clipping_norm_millionths > MAX_CLIPPING_NORM_MILLIONTHS
+        {
+            return Err(DifferentialPrivacyError::InvalidClippingNorm);
+        }
+        if learning_rate_millionths == 0 || learning_rate_millionths > MILLION as u64 {
+            return Err(DifferentialPrivacyError::InvalidLearningRate);
+        }
+
+        Ok(Self {
+            clipping_norm_millionths,
+            learning_rate_millionths,
+            privacy_params,
+        })
+    }
+}
+
+/// A per-node posterior gradient for DP-SGD fleet learning.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DpSgdGradient {
+    /// Extension being updated.
+    pub extension_id: String,
+    /// Gradient component for P(Benign), in millionths.
+    pub gradient_benign_millionths: i64,
+    /// Gradient component for P(Anomalous), in millionths.
+    pub gradient_anomalous_millionths: i64,
+    /// Gradient component for P(Malicious), in millionths.
+    pub gradient_malicious_millionths: i64,
+    /// Gradient component for P(Unknown), in millionths.
+    pub gradient_unknown_millionths: i64,
+    /// Security epoch for the local posterior update.
+    pub epoch: SecurityEpoch,
+}
+
+impl DpSgdGradient {
+    /// Adapt an existing posterior delta into a DP-SGD gradient.
+    pub fn from_posterior_delta(delta: &PosteriorDelta) -> Self {
+        Self {
+            extension_id: delta.extension_id.clone(),
+            gradient_benign_millionths: delta.delta_benign_millionths,
+            gradient_anomalous_millionths: delta.delta_anomalous_millionths,
+            gradient_malicious_millionths: delta.delta_malicious_millionths,
+            gradient_unknown_millionths: delta.delta_unknown_millionths,
+            epoch: delta.epoch,
+        }
+    }
+
+    /// Return this gradient clipped to the configured L2 norm.
+    pub fn clipped_to(&self, clipping_norm_millionths: u64) -> Self {
+        let norm = self.l2_norm_millionths();
+        if norm == 0 || norm <= clipping_norm_millionths {
+            return self.clone();
+        }
+
+        let factor_millionths =
+            (clipping_norm_millionths as u128 * MILLION as u128 / norm as u128) as i128;
+
+        Self {
+            extension_id: self.extension_id.clone(),
+            gradient_benign_millionths: scale_component(
+                self.gradient_benign_millionths,
+                factor_millionths,
+            ),
+            gradient_anomalous_millionths: scale_component(
+                self.gradient_anomalous_millionths,
+                factor_millionths,
+            ),
+            gradient_malicious_millionths: scale_component(
+                self.gradient_malicious_millionths,
+                factor_millionths,
+            ),
+            gradient_unknown_millionths: scale_component(
+                self.gradient_unknown_millionths,
+                factor_millionths,
+            ),
+            epoch: self.epoch,
+        }
+    }
+
+    /// Deterministic integer L2 norm in millionths.
+    pub fn l2_norm_millionths(&self) -> u64 {
+        let components = [
+            self.gradient_benign_millionths,
+            self.gradient_anomalous_millionths,
+            self.gradient_malicious_millionths,
+            self.gradient_unknown_millionths,
+        ];
+        let sum_squares = components.iter().fold(0u128, |acc, value| {
+            let abs_value = i128::from(*value).unsigned_abs();
+            acc.saturating_add(abs_value.saturating_mul(abs_value))
+        });
+        integer_sqrt_u128(sum_squares)
+    }
+}
+
+/// Result of one DP-SGD posterior update round.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DpSgdPosteriorUpdate {
+    /// Round identifier whose privacy budget was spent.
+    pub round_id: String,
+    /// Extension being updated.
+    pub extension_id: String,
+    /// Security epoch shared by all gradients.
+    pub epoch: SecurityEpoch,
+    /// Number of fleet nodes included in the minibatch.
+    pub participant_count: u32,
+    /// Applied clipping norm.
+    pub clipping_norm_millionths: u64,
+    /// Applied learning rate.
+    pub learning_rate_millionths: u64,
+    /// Privacy parameters spent by the round.
+    pub privacy_params: PrivacyParameters,
+    /// Gaussian noise scale used for gradient perturbation.
+    pub noise_scale_millionths: u64,
+    /// Averaged clipped gradient for P(Benign).
+    pub clipped_gradient_benign_millionths: i64,
+    /// Averaged clipped gradient for P(Anomalous).
+    pub clipped_gradient_anomalous_millionths: i64,
+    /// Averaged clipped gradient for P(Malicious).
+    pub clipped_gradient_malicious_millionths: i64,
+    /// Averaged clipped gradient for P(Unknown).
+    pub clipped_gradient_unknown_millionths: i64,
+    /// Noisy averaged gradient for P(Benign).
+    pub noisy_gradient_benign_millionths: i64,
+    /// Noisy averaged gradient for P(Anomalous).
+    pub noisy_gradient_anomalous_millionths: i64,
+    /// Noisy averaged gradient for P(Malicious).
+    pub noisy_gradient_malicious_millionths: i64,
+    /// Noisy averaged gradient for P(Unknown).
+    pub noisy_gradient_unknown_millionths: i64,
+    /// Normalized posterior after applying the noisy SGD step.
+    pub updated_posterior: Posterior,
+}
+
+impl DpSgdPosteriorUpdate {
+    /// Run one deterministic DP-SGD posterior update over a fleet minibatch.
+    pub fn from_gradients(
+        prior: &Posterior,
+        gradients: &BTreeMap<NodeId, DpSgdGradient>,
+        config: DpSgdConfig,
+        round_id: impl Into<String>,
+        budget: &mut PrivacyBudget,
+        noise_generator: &mut dyn NoiseGenerator,
+    ) -> Result<Self, DifferentialPrivacyError> {
+        if gradients.is_empty() {
+            return Err(DifferentialPrivacyError::EmptyAggregation);
+        }
+
+        let round_id = round_id.into();
+        let first_gradient = gradients
+            .values()
+            .next()
+            .ok_or(DifferentialPrivacyError::EmptyAggregation)?;
+
+        for gradient in gradients.values() {
+            if gradient.extension_id != first_gradient.extension_id
+                || gradient.epoch != first_gradient.epoch
+            {
+                return Err(DifferentialPrivacyError::InconsistentGradientMetadata);
+            }
+        }
+
+        budget.allocate_for_round(&round_id, config.privacy_params)?;
+
+        let mut sum_benign: i128 = 0;
+        let mut sum_anomalous: i128 = 0;
+        let mut sum_malicious: i128 = 0;
+        let mut sum_unknown: i128 = 0;
+
+        for gradient in gradients.values() {
+            let clipped = gradient.clipped_to(config.clipping_norm_millionths);
+            sum_benign += i128::from(clipped.gradient_benign_millionths);
+            sum_anomalous += i128::from(clipped.gradient_anomalous_millionths);
+            sum_malicious += i128::from(clipped.gradient_malicious_millionths);
+            sum_unknown += i128::from(clipped.gradient_unknown_millionths);
+        }
+
+        let participant_count = gradients.len() as i128;
+        let clipped_gradient_benign_millionths = clamp_i128_to_i64(sum_benign / participant_count);
+        let clipped_gradient_anomalous_millionths =
+            clamp_i128_to_i64(sum_anomalous / participant_count);
+        let clipped_gradient_malicious_millionths =
+            clamp_i128_to_i64(sum_malicious / participant_count);
+        let clipped_gradient_unknown_millionths =
+            clamp_i128_to_i64(sum_unknown / participant_count);
+
+        let noise_scale = config
+            .privacy_params
+            .gaussian_noise_scale(config.clipping_norm_millionths);
+        let noisy_gradient_benign_millionths =
+            noisy_average(sum_benign, participant_count, noise_scale, noise_generator);
+        let noisy_gradient_anomalous_millionths = noisy_average(
+            sum_anomalous,
+            participant_count,
+            noise_scale,
+            noise_generator,
+        );
+        let noisy_gradient_malicious_millionths = noisy_average(
+            sum_malicious,
+            participant_count,
+            noise_scale,
+            noise_generator,
+        );
+        let noisy_gradient_unknown_millionths =
+            noisy_average(sum_unknown, participant_count, noise_scale, noise_generator);
+
+        let step_benign = sgd_step(
+            noisy_gradient_benign_millionths,
+            config.learning_rate_millionths,
+        );
+        let step_anomalous = sgd_step(
+            noisy_gradient_anomalous_millionths,
+            config.learning_rate_millionths,
+        );
+        let step_malicious = sgd_step(
+            noisy_gradient_malicious_millionths,
+            config.learning_rate_millionths,
+        );
+        let step_unknown = sgd_step(
+            noisy_gradient_unknown_millionths,
+            config.learning_rate_millionths,
+        );
+
+        let updated_posterior = Posterior::from_millionths(
+            add_i64(prior.p_benign, step_benign),
+            add_i64(prior.p_anomalous, step_anomalous),
+            add_i64(prior.p_malicious, step_malicious),
+            add_i64(prior.p_unknown, step_unknown),
+        );
+
+        Ok(Self {
+            round_id,
+            extension_id: first_gradient.extension_id.clone(),
+            epoch: first_gradient.epoch,
+            participant_count: gradients.len() as u32,
+            clipping_norm_millionths: config.clipping_norm_millionths,
+            learning_rate_millionths: config.learning_rate_millionths,
+            privacy_params: config.privacy_params,
+            noise_scale_millionths: noise_scale,
+            clipped_gradient_benign_millionths,
+            clipped_gradient_anomalous_millionths,
+            clipped_gradient_malicious_millionths,
+            clipped_gradient_unknown_millionths,
+            noisy_gradient_benign_millionths,
+            noisy_gradient_anomalous_millionths,
+            noisy_gradient_malicious_millionths,
+            noisy_gradient_unknown_millionths,
+            updated_posterior,
+        })
+    }
+}
+
+fn noisy_average(
+    sum: i128,
+    participant_count: i128,
+    noise_scale_millionths: u64,
+    noise_generator: &mut dyn NoiseGenerator,
+) -> i64 {
+    let noise = i128::from(noise_generator.sample_gaussian(noise_scale_millionths as i64));
+    clamp_i128_to_i64((sum + noise) / participant_count)
+}
+
+fn sgd_step(gradient_millionths: i64, learning_rate_millionths: u64) -> i64 {
+    clamp_i128_to_i64(
+        i128::from(gradient_millionths) * i128::from(learning_rate_millionths)
+            / i128::from(MILLION),
+    )
+}
+
+fn scale_component(component: i64, factor_millionths: i128) -> i64 {
+    clamp_i128_to_i64(i128::from(component) * factor_millionths / i128::from(MILLION))
+}
+
+fn add_i64(left: i64, right: i64) -> i64 {
+    clamp_i128_to_i64(i128::from(left) + i128::from(right))
+}
+
+fn clamp_i128_to_i64(value: i128) -> i64 {
+    value.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+fn integer_sqrt_u128(value: u128) -> u64 {
+    if value == 0 {
+        return 0;
+    }
+
+    let mut estimate = value;
+    let mut next = (estimate + value / estimate) / 2;
+    while next < estimate {
+        estimate = next;
+        next = (estimate + value / estimate) / 2;
+    }
+    estimate.min(u128::from(u64::MAX)) as u64
 }
 
 // ---------------------------------------------------------------------------
@@ -542,6 +868,10 @@ pub enum DifferentialPrivacyError {
     InvalidEpsilon,
     /// Invalid delta parameter.
     InvalidDelta,
+    /// Invalid DP-SGD clipping norm.
+    InvalidClippingNorm,
+    /// Invalid DP-SGD learning rate.
+    InvalidLearningRate,
     /// Insufficient privacy budget remaining.
     InsufficientBudget,
     /// Node budget not initialized.
@@ -552,6 +882,8 @@ pub enum DifferentialPrivacyError {
     EmptyAggregation,
     /// Inconsistent privacy parameters across deltas.
     InconsistentPrivacyParams,
+    /// Inconsistent DP-SGD gradient metadata across nodes.
+    InconsistentGradientMetadata,
 }
 
 impl std::fmt::Display for DifferentialPrivacyError {
@@ -559,11 +891,14 @@ impl std::fmt::Display for DifferentialPrivacyError {
         match self {
             Self::InvalidEpsilon => write!(f, "Invalid epsilon parameter"),
             Self::InvalidDelta => write!(f, "Invalid delta parameter"),
+            Self::InvalidClippingNorm => write!(f, "Invalid clipping norm"),
+            Self::InvalidLearningRate => write!(f, "Invalid learning rate"),
             Self::InsufficientBudget => write!(f, "Insufficient privacy budget"),
             Self::NodeBudgetNotFound => write!(f, "Node budget not initialized"),
             Self::DuplicateRoundAllocation => write!(f, "Duplicate round allocation"),
             Self::EmptyAggregation => write!(f, "Empty aggregation"),
             Self::InconsistentPrivacyParams => write!(f, "Inconsistent privacy parameters"),
+            Self::InconsistentGradientMetadata => write!(f, "Inconsistent gradient metadata"),
         }
     }
 }
@@ -661,5 +996,218 @@ mod tests {
         assert_eq!(private_delta.round_id, "test_round");
         assert_eq!(private_delta.privacy_params, params);
         assert!(private_delta.noise_scale_millionths > 0);
+    }
+
+    fn test_gradient(
+        extension_id: &str,
+        epoch: SecurityEpoch,
+        benign: i64,
+        anomalous: i64,
+        malicious: i64,
+        unknown: i64,
+    ) -> DpSgdGradient {
+        DpSgdGradient {
+            extension_id: extension_id.to_string(),
+            gradient_benign_millionths: benign,
+            gradient_anomalous_millionths: anomalous,
+            gradient_malicious_millionths: malicious,
+            gradient_unknown_millionths: unknown,
+            epoch,
+        }
+    }
+
+    fn test_dp_sgd_config() -> DpSgdConfig {
+        DpSgdConfig::new(
+            1_000_000,
+            500_000,
+            PrivacyParameters::new(100_000, 10).unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn dp_sgd_config_validation_rejects_unbounded_updates() {
+        let params = PrivacyParameters::default();
+
+        assert_eq!(
+            DpSgdConfig::new(0, 500_000, params),
+            Err(DifferentialPrivacyError::InvalidClippingNorm)
+        );
+        assert_eq!(
+            DpSgdConfig::new(MAX_CLIPPING_NORM_MILLIONTHS + 1, 500_000, params),
+            Err(DifferentialPrivacyError::InvalidClippingNorm)
+        );
+        assert_eq!(
+            DpSgdConfig::new(1_000_000, 0, params),
+            Err(DifferentialPrivacyError::InvalidLearningRate)
+        );
+        assert_eq!(
+            DpSgdConfig::new(1_000_000, 1_000_001, params),
+            Err(DifferentialPrivacyError::InvalidLearningRate)
+        );
+    }
+
+    #[test]
+    fn dp_sgd_gradient_clipping_caps_l2_norm() {
+        let gradient = test_gradient(
+            "test_ext",
+            SecurityEpoch::from_raw(7),
+            2_000_000,
+            0,
+            -2_000_000,
+            0,
+        );
+
+        let clipped = gradient.clipped_to(1_000_000);
+
+        assert!(clipped.l2_norm_millionths() <= 1_000_000);
+        assert!(clipped.gradient_benign_millionths > 0);
+        assert!(clipped.gradient_malicious_millionths < 0);
+    }
+
+    #[test]
+    fn dp_sgd_round_is_deterministic_for_btree_ordering() {
+        let epoch = SecurityEpoch::from_raw(9);
+        let config = test_dp_sgd_config();
+        let prior = crate::bayesian_posterior::Posterior::uniform();
+
+        let gradient_a = test_gradient("test_ext", epoch, 200_000, -100_000, -50_000, -50_000);
+        let gradient_b = test_gradient("test_ext", epoch, -100_000, 50_000, 100_000, -50_000);
+
+        let mut first_order = BTreeMap::new();
+        first_order.insert(NodeId::new("node_b"), gradient_b.clone());
+        first_order.insert(NodeId::new("node_a"), gradient_a.clone());
+
+        let mut second_order = BTreeMap::new();
+        second_order.insert(NodeId::new("node_a"), gradient_a);
+        second_order.insert(NodeId::new("node_b"), gradient_b);
+
+        let mut first_budget = PrivacyBudget::new(500_000, 100, epoch).unwrap();
+        let mut second_budget = PrivacyBudget::new(500_000, 100, epoch).unwrap();
+        let mut first_noise = DeterministicTestNoiseGenerator::new();
+        let mut second_noise = DeterministicTestNoiseGenerator::new();
+
+        let first_update = DpSgdPosteriorUpdate::from_gradients(
+            &prior,
+            &first_order,
+            config,
+            "round_qq_1",
+            &mut first_budget,
+            &mut first_noise,
+        )
+        .unwrap();
+        let second_update = DpSgdPosteriorUpdate::from_gradients(
+            &prior,
+            &second_order,
+            config,
+            "round_qq_1",
+            &mut second_budget,
+            &mut second_noise,
+        )
+        .unwrap();
+
+        assert_eq!(first_update, second_update);
+        assert!(first_update.updated_posterior.is_valid());
+        assert_eq!(first_budget.consumed_epsilon_millionths, 100_000);
+    }
+
+    #[test]
+    fn dp_sgd_round_refuses_duplicate_budget_spend() {
+        let epoch = SecurityEpoch::from_raw(10);
+        let config = test_dp_sgd_config();
+        let prior = crate::bayesian_posterior::Posterior::uniform();
+        let mut gradients = BTreeMap::new();
+        gradients.insert(
+            NodeId::new("node_a"),
+            test_gradient("test_ext", epoch, 100_000, 0, -100_000, 0),
+        );
+
+        let mut budget = PrivacyBudget::new(500_000, 100, epoch).unwrap();
+        let mut first_noise = DeterministicTestNoiseGenerator::new();
+        let mut second_noise = DeterministicTestNoiseGenerator::new();
+
+        DpSgdPosteriorUpdate::from_gradients(
+            &prior,
+            &gradients,
+            config,
+            "round_qq_1",
+            &mut budget,
+            &mut first_noise,
+        )
+        .unwrap();
+
+        let err = DpSgdPosteriorUpdate::from_gradients(
+            &prior,
+            &gradients,
+            config,
+            "round_qq_1",
+            &mut budget,
+            &mut second_noise,
+        )
+        .unwrap_err();
+
+        assert_eq!(err, DifferentialPrivacyError::DuplicateRoundAllocation);
+    }
+
+    #[test]
+    fn dp_sgd_round_rejects_inconsistent_gradient_metadata() {
+        let epoch = SecurityEpoch::from_raw(11);
+        let config = test_dp_sgd_config();
+        let prior = crate::bayesian_posterior::Posterior::uniform();
+        let mut gradients = BTreeMap::new();
+        gradients.insert(
+            NodeId::new("node_a"),
+            test_gradient("test_ext", epoch, 100_000, 0, -100_000, 0),
+        );
+        gradients.insert(
+            NodeId::new("node_b"),
+            test_gradient("other_ext", epoch, 100_000, 0, -100_000, 0),
+        );
+
+        let mut budget = PrivacyBudget::new(500_000, 100, epoch).unwrap();
+        let mut noise = DeterministicTestNoiseGenerator::new();
+
+        let err = DpSgdPosteriorUpdate::from_gradients(
+            &prior,
+            &gradients,
+            config,
+            "round_qq_1",
+            &mut budget,
+            &mut noise,
+        )
+        .unwrap_err();
+
+        assert_eq!(err, DifferentialPrivacyError::InconsistentGradientMetadata);
+        assert_eq!(budget.consumed_epsilon_millionths, 0);
+    }
+
+    #[test]
+    fn dp_sgd_update_serializes_as_persisted_evidence() {
+        let epoch = SecurityEpoch::from_raw(12);
+        let config = test_dp_sgd_config();
+        let prior = crate::bayesian_posterior::Posterior::uniform();
+        let mut gradients = BTreeMap::new();
+        gradients.insert(
+            NodeId::new("node_a"),
+            test_gradient("test_ext", epoch, 100_000, 0, -100_000, 0),
+        );
+
+        let mut budget = PrivacyBudget::new(500_000, 100, epoch).unwrap();
+        let mut noise = DeterministicTestNoiseGenerator::new();
+        let update = DpSgdPosteriorUpdate::from_gradients(
+            &prior,
+            &gradients,
+            config,
+            "round_qq_serde",
+            &mut budget,
+            &mut noise,
+        )
+        .unwrap();
+
+        let json = serde_json::to_string(&update).unwrap();
+        let decoded: DpSgdPosteriorUpdate = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded, update);
+        assert_eq!(decoded.round_id, "round_qq_serde");
     }
 }

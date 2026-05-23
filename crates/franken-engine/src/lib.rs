@@ -477,6 +477,7 @@ pub mod stdlib;
 pub mod stdlib_workload_verification;
 pub mod storage_adapter;
 pub mod structural_causal_model;
+pub mod submodular_moonshot_selection;
 pub mod succinct_witness_compiler;
 pub mod superblock_formation;
 pub mod superoptimization_gate;

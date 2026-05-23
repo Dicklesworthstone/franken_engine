@@ -5396,15 +5396,15 @@ pub fn lower_ir2_to_ir3(
 fn create_unified_authority_from_components(
     label_class: LabelClass,
     capability: Option<String>,
-    budget_millionths: Option<i64>,
+    _budget_millionths: Option<i64>,
 ) -> AuthorityLattice {
     use crate::unified_authority_algebra::CapabilityKind;
 
     // Convert capability string to CapabilitySet
     let mut capability_set = CapabilitySet::empty();
-    if let Some(cap_str) = capability {
+    if let Some(_cap_str) = capability {
         // Parse common capability strings to CapabilityKind
-        match cap_str.as_str() {
+        match _cap_str.as_str() {
             "fs_read" => capability_set = capability_set.with_capability(CapabilityKind::FsRead),
             "fs_write" => capability_set = capability_set.with_capability(CapabilityKind::FsWrite),
             "net_connect" => capability_set = capability_set.with_capability(CapabilityKind::NetConnect),
@@ -5425,7 +5425,7 @@ fn create_unified_authority_from_components(
     }
 
     // Create budget envelope
-    let budget_envelope = if let Some(budget) = budget_millionths {
+    let budget_envelope = if let Some(budget) = _budget_millionths {
         BudgetEnvelope::try_new(budget, budget, budget, budget).unwrap_or_else(|_| BudgetEnvelope::bottom())
     } else {
         BudgetEnvelope::bottom()

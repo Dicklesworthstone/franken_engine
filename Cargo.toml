@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/dp",
   "crates/franken-engine",
   "crates/franken-engine-control-plane-integration-tests",
   "crates/franken-engine-deterministic-derive",

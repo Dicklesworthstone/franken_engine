@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ifc_artifacts::{DeclassificationDecision, DeclassificationReceipt, Label};
 use crate::signature_preimage::VerificationKey;
+use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
 const RECEIPT_BLOCKED_ERROR_CODE: &str = "FE-IFC-BLOCK";
 const UNSPECIFIED_DECISION_ID: &str = "flow-lattice:decision:unspecified";
@@ -904,6 +905,58 @@ impl Ir2FlowLattice {
             receipt_id,
             receipt_replay_command,
         });
+    }
+
+    // -----------------------------------------------------------------------
+    // Unified Authority Operations (bd-cixqu.26.3 migration)
+    // -----------------------------------------------------------------------
+
+    /// Propagate authority through a computation: join all input authorities.
+    /// This replaces separate IFC + capability + budget joins with unified operation.
+    pub fn propagate_unified_authority(&self, inputs: &[AuthorityLattice]) -> AuthorityLattice {
+        inputs
+            .iter()
+            .fold(AuthorityLattice::bottom(), |acc, auth| acc.join(auth))
+    }
+
+    /// Compute authority for a data source with full IFC + capability + budget context.
+    /// This extends the IFC-only assign_label to include capability and budget requirements.
+    pub fn assign_unified_authority(
+        &self,
+        source: &DataSource,
+        capability_requirement: CapabilitySet,
+        budget_requirement: BudgetEnvelope,
+    ) -> AuthorityLattice {
+        let ifc_label = assign_label(source);
+        AuthorityLattice::new(ifc_label, capability_requirement, budget_requirement)
+    }
+
+    /// Check if unified authority allows a flow to a sink with given clearance, capabilities, and budget.
+    /// This demonstrates cross-axis authority checking combining all three lattices.
+    pub fn check_unified_flow_authority(
+        &self,
+        source_authority: &AuthorityLattice,
+        sink_clearance: Clearance,
+        required_capabilities: &CapabilitySet,
+        available_budget: &BudgetEnvelope,
+    ) -> Result<bool, FlowLatticeError> {
+        // Check IFC flow legality
+        let sink_label = match sink_clearance {
+            Clearance::OpenSink => LabelClass::Public,
+            Clearance::RestrictedSink => LabelClass::Internal,
+            Clearance::AuditedSink => LabelClass::Confidential,
+            Clearance::SealedSink => LabelClass::Secret,
+            Clearance::NeverSink => LabelClass::TopSecret,
+        };
+        let ifc_legal = source_authority.ifc_label.level() <= sink_label.level();
+
+        // Check capability authorization
+        let capability_authorized = required_capabilities.subsumes(&source_authority.capability_set);
+
+        // Check budget sufficiency
+        let budget_sufficient = available_budget.subsumes(&source_authority.budget_envelope);
+
+        Ok(ifc_legal && capability_authorized && budget_sufficient)
     }
 }
 
@@ -3060,5 +3113,185 @@ mod tests {
         assert_eq!(ordered[3], SinkKind::DeclassificationEndpoint);
         assert_eq!(ordered[4], SinkKind::LoggingRedacted);
         assert_eq!(ordered[5], SinkKind::MetricsExport);
+    }
+
+    // -----------------------------------------------------------------------
+    // Unified Authority Operations Tests (bd-cixqu.26.3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unified_authority_propagate_empty_returns_bottom() {
+        let lattice = Ir2FlowLattice::new();
+        let result = lattice.propagate_unified_authority(&[]);
+        assert_eq!(result, AuthorityLattice::bottom());
+    }
+
+    #[test]
+    fn unified_authority_propagate_single_returns_same() {
+        use crate::unified_authority_algebra::CapabilityKind;
+        let lattice = Ir2FlowLattice::new();
+        let caps = CapabilitySet::from_iter([CapabilityKind::FsRead, CapabilityKind::NetConnect]);
+        let budget = BudgetEnvelope::try_new(1000, 2000, 3000, 4000).unwrap();
+        let authority = AuthorityLattice::new(LabelClass::Internal, caps, budget);
+
+        let result = lattice.propagate_unified_authority(&[authority.clone()]);
+        assert_eq!(result, authority);
+    }
+
+    #[test]
+    fn unified_authority_propagate_joins_all_axes() {
+        use crate::unified_authority_algebra::CapabilityKind;
+        let lattice = Ir2FlowLattice::new();
+
+        // Authority 1: Secret IFC, FsRead capability, budget (1000, 0, 0, 0)
+        let caps1 = CapabilitySet::from_iter([CapabilityKind::FsRead]);
+        let budget1 = BudgetEnvelope::try_new(1000, 0, 0, 0).unwrap();
+        let auth1 = AuthorityLattice::new(LabelClass::Secret, caps1, budget1);
+
+        // Authority 2: Confidential IFC, NetConnect capability, budget (0, 2000, 0, 0)
+        let caps2 = CapabilitySet::from_iter([CapabilityKind::NetConnect]);
+        let budget2 = BudgetEnvelope::try_new(0, 2000, 0, 0).unwrap();
+        let auth2 = AuthorityLattice::new(LabelClass::Confidential, caps2, budget2);
+
+        let result = lattice.propagate_unified_authority(&[auth1, auth2]);
+
+        // Result should be: Secret IFC (max), FsRead+NetConnect capabilities (union), budget (1000, 2000, 0, 0) (max per component)
+        assert_eq!(result.ifc_label, LabelClass::Secret);
+        assert!(result.capability_set.contains(&CapabilityKind::FsRead));
+        assert!(result.capability_set.contains(&CapabilityKind::NetConnect));
+        assert_eq!(result.capability_set.len(), 2);
+        assert_eq!(result.budget_envelope.cpu_millionths, 1000);
+        assert_eq!(result.budget_envelope.memory_millionths, 2000);
+        assert_eq!(result.budget_envelope.wall_time_millionths, 0);
+        assert_eq!(result.budget_envelope.io_millionths, 0);
+    }
+
+    #[test]
+    fn unified_authority_assign_with_requirements() {
+        use crate::unified_authority_algebra::CapabilityKind;
+        let lattice = Ir2FlowLattice::new();
+
+        let caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
+        let budget = BudgetEnvelope::try_new(500, 1000, 1500, 2000).unwrap();
+
+        let result = lattice.assign_unified_authority(
+            &DataSource::GeneralFileRead,
+            caps.clone(),
+            budget
+        );
+
+        assert_eq!(result.ifc_label, LabelClass::Internal); // GeneralFileRead -> Internal
+        assert_eq!(result.capability_set, caps);
+        assert_eq!(result.budget_envelope, budget);
+    }
+
+    #[test]
+    fn unified_flow_check_all_axes_authorized() {
+        use crate::unified_authority_algebra::CapabilityKind;
+        let lattice = Ir2FlowLattice::new();
+
+        // Source with Internal IFC, FsRead capability, budget (1000, 1000, 1000, 1000)
+        let source_caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
+        let source_budget = BudgetEnvelope::try_new(1000, 1000, 1000, 1000).unwrap();
+        let source_auth = AuthorityLattice::new(LabelClass::Internal, source_caps.clone(), source_budget);
+
+        // Available budget must be >= source budget
+        let available_budget = BudgetEnvelope::try_new(2000, 2000, 2000, 2000).unwrap();
+
+        let result = lattice.check_unified_flow_authority(
+            &source_auth,
+            Clearance::RestrictedSink, // RestrictedSink -> Internal clearance
+            &source_caps,
+            &available_budget
+        ).unwrap();
+
+        assert!(result); // All checks pass
+    }
+
+    #[test]
+    fn unified_flow_check_ifc_violation() {
+        use crate::unified_authority_algebra::CapabilityKind;
+        let lattice = Ir2FlowLattice::new();
+
+        // Source with Secret IFC (high sensitivity)
+        let source_caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
+        let source_budget = BudgetEnvelope::try_new(1000, 1000, 1000, 1000).unwrap();
+        let source_auth = AuthorityLattice::new(LabelClass::Secret, source_caps.clone(), source_budget);
+
+        let available_budget = BudgetEnvelope::try_new(2000, 2000, 2000, 2000).unwrap();
+
+        let result = lattice.check_unified_flow_authority(
+            &source_auth,
+            Clearance::OpenSink, // OpenSink -> Public clearance (too low for Secret data)
+            &source_caps,
+            &available_budget
+        ).unwrap();
+
+        assert!(!result); // IFC violation
+    }
+
+    #[test]
+    fn unified_flow_check_capability_violation() {
+        use crate::unified_authority_algebra::CapabilityKind;
+        let lattice = Ir2FlowLattice::new();
+
+        // Source with only FsRead capability
+        let source_caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
+        let source_budget = BudgetEnvelope::try_new(1000, 1000, 1000, 1000).unwrap();
+        let source_auth = AuthorityLattice::new(LabelClass::Internal, source_caps, source_budget);
+
+        // Sink requires NetConnect capability (not available in source)
+        let required_caps = CapabilitySet::from_iter([CapabilityKind::NetConnect]);
+        let available_budget = BudgetEnvelope::try_new(2000, 2000, 2000, 2000).unwrap();
+
+        let result = lattice.check_unified_flow_authority(
+            &source_auth,
+            Clearance::RestrictedSink,
+            &required_caps,
+            &available_budget
+        ).unwrap();
+
+        assert!(!result); // Capability violation
+    }
+
+    #[test]
+    fn unified_flow_check_budget_violation() {
+        use crate::unified_authority_algebra::CapabilityKind;
+        let lattice = Ir2FlowLattice::new();
+
+        // Source requires budget (1000, 1000, 1000, 1000)
+        let source_caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
+        let source_budget = BudgetEnvelope::try_new(1000, 1000, 1000, 1000).unwrap();
+        let source_auth = AuthorityLattice::new(LabelClass::Internal, source_caps.clone(), source_budget);
+
+        // Available budget is insufficient (only 500 on each dimension)
+        let available_budget = BudgetEnvelope::try_new(500, 500, 500, 500).unwrap();
+
+        let result = lattice.check_unified_flow_authority(
+            &source_auth,
+            Clearance::RestrictedSink,
+            &source_caps,
+            &available_budget
+        ).unwrap();
+
+        assert!(!result); // Budget violation
+    }
+
+    #[test]
+    fn unified_authority_preserves_existing_per_axis_semantics() {
+        use crate::unified_authority_algebra::CapabilityKind;
+        let lattice = Ir2FlowLattice::new();
+
+        // Test that unified operations are consistent with per-axis operations
+        let labels = [LabelClass::Public, LabelClass::Internal];
+        let unified_result = lattice.propagate_labels(&labels);
+
+        // Create unified authorities with same IFC labels, empty capabilities/budget
+        let auth1 = AuthorityLattice::new(LabelClass::Public, CapabilitySet::empty(), BudgetEnvelope::bottom());
+        let auth2 = AuthorityLattice::new(LabelClass::Internal, CapabilitySet::empty(), BudgetEnvelope::bottom());
+        let unified_auth_result = lattice.propagate_unified_authority(&[auth1, auth2]);
+
+        // IFC component should match the original per-axis result
+        assert_eq!(unified_result, unified_auth_result.ifc_label);
     }
 }

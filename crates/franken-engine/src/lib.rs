@@ -78,6 +78,8 @@ pub mod causal_intervention_planner;
 pub mod causal_regret_evidence_gate;
 pub mod causal_replay;
 pub mod causal_uplift_evidence_gate;
+pub mod causation_graph;
+pub mod causation_graph_schema;
 pub mod certified_optimization_governance;
 pub mod certified_rewrite_optimizer;
 pub mod change_point_detector;

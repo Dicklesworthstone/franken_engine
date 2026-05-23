@@ -2161,7 +2161,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: result verified to be Ok above
-        let d = result.expect("serde deserialization should succeed");
+        let d = result.expect("verified ok result");
         assert_eq!(d.strategy, DispatchStrategy::InlinedCallback);
     }
 
@@ -3259,7 +3259,7 @@ mod tests {
         // SAFETY: result verified to be Ok above
         assert_eq!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("verified ok result")
                 .strategy,
             DispatchStrategy::FallbackSlow
         );

@@ -26,11 +26,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::fleet_immune_protocol::{
-    ContainmentAction, ContainmentIntent, DeterministicPrecedence, EvidenceAccumulator,
-    EvidencePacket, FleetMessage, FleetProtocolState, GossipConfig, HeartbeatLiveness,
-    MessageSignature, NodeHealthTracker, NodeId, NodeSequenceTracker, ProtocolError,
-    ProtocolVersion, QuorumCheckpoint, ReconciliationRequest, ResolvedContainmentDecision,
-    SequenceRange,
+    ContainmentAction, ContainmentIntent, DeterministicPrecedence, ErasureCodingPlan,
+    ErasureShardRole, EvidenceAccumulator, EvidencePacket, FleetMessage, FleetProtocolState,
+    GossipConfig, HeartbeatLiveness, MessageSignature, NodeHealthTracker, NodeId,
+    NodeSequenceTracker, ProtocolError, ProtocolVersion, QuorumCheckpoint, ReconciliationRequest,
+    ResolvedContainmentDecision, SequenceRange, encode_erasure_shards, reconstruct_erasure_payload,
 };
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -1231,6 +1231,18 @@ fn protocol_error_serde_roundtrip_all_variants() {
         ProtocolError::PartitionedNode {
             node_id: NodeId::new("n1"),
         },
+        ProtocolError::InvalidErasureCodingPlan {
+            data_shards: 0,
+            total_shards: 4,
+        },
+        ProtocolError::ErasureDecodeFailed {
+            shard_set_id: "set-1".into(),
+            reason: "missing shard".into(),
+        },
+        ProtocolError::SerializationFailed {
+            message_type: "EvidencePacket".into(),
+            detail: "bad payload".into(),
+        },
         ProtocolError::EmptyIntents,
     ];
 
@@ -1727,4 +1739,128 @@ fn e2e_sequence_tracking_across_message_types() {
         .process_evidence(&mk_evidence("n1", "ext-2", 2, 50_000))
         .unwrap_err();
     assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
+}
+
+#[test]
+fn erasure_plan_tunes_for_fleet_size_and_partition_profile() {
+    let normal = ErasureCodingPlan::tuned(9, 0);
+    let degraded = ErasureCodingPlan::tuned(9, 4);
+
+    assert_eq!(normal.total_shards, 9);
+    assert_eq!(degraded.total_shards, 9);
+    assert!(normal.data_shards < normal.total_shards);
+    assert!(degraded.data_shards <= normal.data_shards);
+    assert!(degraded.parity_shards() >= normal.parity_shards());
+}
+
+#[test]
+fn erasure_encoding_reconstructs_from_all_data_shards() {
+    let plan = ErasureCodingPlan::new(3, 5).unwrap();
+    let shards = encode_erasure_shards(
+        "payload-a",
+        NodeId::new("node-a"),
+        10,
+        100_000,
+        b"fleet evidence payload",
+        plan,
+    )
+    .unwrap();
+
+    assert_eq!(shards.len(), 5);
+    assert_eq!(
+        shards
+            .iter()
+            .filter(|shard| shard.role == ErasureShardRole::Data)
+            .count(),
+        3
+    );
+    let payload = reconstruct_erasure_payload(&shards[..3]).unwrap();
+    assert_eq!(payload, b"fleet evidence payload");
+}
+
+#[test]
+fn erasure_encoding_recovers_one_missing_data_shard_with_parity() {
+    let plan = ErasureCodingPlan::new(4, 6).unwrap();
+    let shards = encode_erasure_shards(
+        "payload-b",
+        NodeId::new("node-b"),
+        20,
+        200_000,
+        b"partition tolerant coded gossip",
+        plan,
+    )
+    .unwrap();
+    let available = vec![
+        shards[0].clone(),
+        shards[1].clone(),
+        shards[3].clone(),
+        shards[4].clone(),
+    ];
+
+    let payload = reconstruct_erasure_payload(&available).unwrap();
+    assert_eq!(payload, b"partition tolerant coded gossip");
+}
+
+#[test]
+fn erasure_encoding_rejects_two_missing_data_shards() {
+    let plan = ErasureCodingPlan::new(4, 6).unwrap();
+    let shards = encode_erasure_shards(
+        "payload-c",
+        NodeId::new("node-c"),
+        30,
+        300_000,
+        b"two missing data shards cannot be recovered by xor parity",
+        plan,
+    )
+    .unwrap();
+    let available = vec![shards[0].clone(), shards[3].clone(), shards[4].clone()];
+
+    let err = reconstruct_erasure_payload(&available).unwrap_err();
+    assert!(matches!(err, ProtocolError::ErasureDecodeFailed { .. }));
+}
+
+#[test]
+fn fleet_state_encodes_evidence_for_erasure_gossip_and_advances_sequence() {
+    let mut state = mk_fleet("coordinator");
+    let now = 10_000_000_000;
+    for i in 0..6 {
+        state
+            .process_heartbeat(&mk_heartbeat(&format!("node-{i}"), 1, now))
+            .unwrap();
+    }
+
+    let messages = state
+        .encode_evidence_for_erasure_gossip(&mk_evidence("node-0", "ext-coded", 2, 250_000), now)
+        .unwrap();
+    assert_eq!(messages.len(), 6);
+    assert_eq!(state.local_sequence, 6);
+    assert!(
+        messages
+            .iter()
+            .all(|msg| msg.node_id() == &NodeId::new("coordinator"))
+    );
+    assert_eq!(messages[0].sequence(), Some(1));
+    assert_eq!(messages[5].sequence(), Some(6));
+}
+
+#[test]
+fn fleet_message_erasure_shard_roundtrips_and_uses_origin_sequence() {
+    let plan = ErasureCodingPlan::new(2, 3).unwrap();
+    let shard = encode_erasure_shards(
+        "payload-d",
+        NodeId::new("origin"),
+        40,
+        400_000,
+        b"coded",
+        plan,
+    )
+    .unwrap()
+    .remove(0);
+    let msg = FleetMessage::ErasureShard(shard.clone());
+
+    assert_eq!(msg.node_id(), &NodeId::new("origin"));
+    assert_eq!(msg.sequence(), Some(40));
+    let json = serde_json::to_string(&msg).unwrap();
+    let back: FleetMessage = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, FleetMessage::ErasureShard(shard));
 }

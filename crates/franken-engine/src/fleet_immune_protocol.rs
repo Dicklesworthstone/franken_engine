@@ -173,6 +173,428 @@ pub struct EvidencePacket {
 }
 
 // ---------------------------------------------------------------------------
+// Erasure-coded gossip lane
+// ---------------------------------------------------------------------------
+
+/// Tuned erasure-coding parameters for gossip payload dissemination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct ErasureCodingPlan {
+    /// Number of data shards required to reconstruct the payload.
+    pub data_shards: u16,
+    /// Number of total shards emitted into gossip.
+    pub total_shards: u16,
+}
+
+impl ErasureCodingPlan {
+    pub fn new(data_shards: u16, total_shards: u16) -> Result<Self, ProtocolError> {
+        if data_shards == 0 || total_shards == 0 || data_shards > total_shards {
+            return Err(ProtocolError::InvalidErasureCodingPlan {
+                data_shards,
+                total_shards,
+            });
+        }
+        Ok(Self {
+            data_shards,
+            total_shards,
+        })
+    }
+
+    /// Deterministically tune `(k, n)` from fleet size and partition profile.
+    pub fn tuned(fleet_size: usize, partitioned_nodes: usize) -> Self {
+        let total_shards = fleet_size.max(1).min(usize::from(u16::MAX)) as u16;
+        let max_parity = total_shards.saturating_sub(1);
+        let partitioned = (partitioned_nodes.min(usize::from(max_parity))) as u16;
+        let base_parity = (total_shards / 3).max(1).min(max_parity);
+        let partition_parity = partitioned.saturating_add(1).min(max_parity);
+        let parity_shards = base_parity.max(partition_parity).min(max_parity);
+        let data_shards = total_shards.saturating_sub(parity_shards).max(1);
+        Self {
+            data_shards,
+            total_shards,
+        }
+    }
+
+    pub fn parity_shards(self) -> u16 {
+        self.total_shards.saturating_sub(self.data_shards)
+    }
+}
+
+/// Role of a shard in the erasure-coded gossip lane.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum ErasureShardRole {
+    /// Systematic data shard.
+    Data,
+    /// XOR parity shard.
+    Parity,
+}
+
+/// Erasure-coded fragment carried as a fleet gossip message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ErasureShard {
+    /// Stable identifier for all shards derived from the same payload.
+    pub shard_set_id: String,
+    /// Node that encoded this shard set.
+    pub origin_node: NodeId,
+    /// Monotonic per-origin sequence number.
+    pub sequence: u64,
+    /// Index within the shard set.
+    pub shard_index: u16,
+    /// Coding plan used for this shard set.
+    pub plan: ErasureCodingPlan,
+    /// Whether this is a data or parity shard.
+    pub role: ErasureShardRole,
+    /// Original payload length before padding.
+    pub payload_len: u64,
+    /// Hash of the original payload.
+    pub payload_hash: ContentHash,
+    /// Hash of this shard's canonical metadata and payload bytes.
+    pub shard_hash: ContentHash,
+    /// Padded shard bytes.
+    pub shard_payload: Vec<u8>,
+    /// Timestamp in nanoseconds.
+    pub timestamp_ns: u64,
+    /// Cryptographic signature over the shard hash.
+    pub signature: MessageSignature,
+    /// Protocol version.
+    pub protocol_version: ProtocolVersion,
+    /// Forward-compatible extension fields.
+    pub extensions: BTreeMap<String, String>,
+}
+
+impl ErasureShard {
+    fn new(
+        shard_set_id: String,
+        origin_node: NodeId,
+        sequence: u64,
+        shard_index: u16,
+        plan: ErasureCodingPlan,
+        role: ErasureShardRole,
+        payload_len: u64,
+        payload_hash: ContentHash,
+        shard_payload: Vec<u8>,
+        timestamp_ns: u64,
+        protocol_version: ProtocolVersion,
+    ) -> Self {
+        let shard_hash = compute_erasure_shard_hash(
+            &shard_set_id,
+            &origin_node,
+            sequence,
+            shard_index,
+            plan,
+            role,
+            payload_len,
+            payload_hash,
+            &shard_payload,
+            timestamp_ns,
+            protocol_version,
+        );
+        let signature = MessageSignature {
+            signer: origin_node.clone(),
+            hash: AuthenticityHash::compute_keyed(
+                origin_node.as_str().as_bytes(),
+                shard_hash.as_bytes(),
+            ),
+        };
+        Self {
+            shard_set_id,
+            origin_node,
+            sequence,
+            shard_index,
+            plan,
+            role,
+            payload_len,
+            payload_hash,
+            shard_hash,
+            shard_payload,
+            timestamp_ns,
+            signature,
+            protocol_version,
+            extensions: BTreeMap::new(),
+        }
+    }
+
+    pub fn is_data(&self) -> bool {
+        self.role == ErasureShardRole::Data
+    }
+
+    pub fn is_parity(&self) -> bool {
+        self.role == ErasureShardRole::Parity
+    }
+
+    pub fn recompute_shard_hash(&self) -> ContentHash {
+        compute_erasure_shard_hash(
+            &self.shard_set_id,
+            &self.origin_node,
+            self.sequence,
+            self.shard_index,
+            self.plan,
+            self.role,
+            self.payload_len,
+            self.payload_hash,
+            &self.shard_payload,
+            self.timestamp_ns,
+            self.protocol_version,
+        )
+    }
+}
+
+/// Encode an arbitrary gossip payload into deterministic erasure shards.
+pub fn encode_erasure_shards(
+    shard_set_id: impl Into<String>,
+    origin_node: NodeId,
+    first_sequence: u64,
+    timestamp_ns: u64,
+    payload: &[u8],
+    plan: ErasureCodingPlan,
+) -> Result<Vec<ErasureShard>, ProtocolError> {
+    let plan = ErasureCodingPlan::new(plan.data_shards, plan.total_shards)?;
+    let shard_set_id = shard_set_id.into();
+    let payload_hash = ContentHash::compute(payload);
+    let chunk_len = erasure_chunk_len(payload.len(), plan.data_shards)?;
+    let mut data_chunks = Vec::new();
+
+    for index in 0..plan.data_shards {
+        let start = usize::from(index).saturating_mul(chunk_len);
+        let end = start.saturating_add(chunk_len).min(payload.len());
+        let mut chunk = vec![0; chunk_len];
+        if start < payload.len() {
+            chunk[..end - start].copy_from_slice(&payload[start..end]);
+        }
+        data_chunks.push(chunk);
+    }
+
+    let mut parity = vec![0; chunk_len];
+    for chunk in &data_chunks {
+        for (slot, byte) in parity.iter_mut().zip(chunk) {
+            *slot ^= *byte;
+        }
+    }
+
+    let mut shards = Vec::new();
+    for shard_index in 0..plan.total_shards {
+        let role = if shard_index < plan.data_shards {
+            ErasureShardRole::Data
+        } else {
+            ErasureShardRole::Parity
+        };
+        let shard_payload = match role {
+            ErasureShardRole::Data => data_chunks[usize::from(shard_index)].clone(),
+            ErasureShardRole::Parity => parity.clone(),
+        };
+        shards.push(ErasureShard::new(
+            shard_set_id.clone(),
+            origin_node.clone(),
+            first_sequence.saturating_add(u64::from(shard_index)),
+            shard_index,
+            plan,
+            role,
+            payload.len() as u64,
+            payload_hash,
+            shard_payload,
+            timestamp_ns,
+            ProtocolVersion::CURRENT,
+        ));
+    }
+
+    Ok(shards)
+}
+
+/// Reconstruct a payload from a deterministic erasure shard set.
+pub fn reconstruct_erasure_payload(shards: &[ErasureShard]) -> Result<Vec<u8>, ProtocolError> {
+    let first = shards
+        .first()
+        .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
+            shard_set_id: String::new(),
+            reason: "no shards supplied".to_string(),
+        })?;
+    let plan = ErasureCodingPlan::new(first.plan.data_shards, first.plan.total_shards)?;
+    let payload_len =
+        usize::try_from(first.payload_len).map_err(|_| ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "payload length does not fit usize".to_string(),
+        })?;
+    let chunk_len = erasure_chunk_len(payload_len, plan.data_shards)?;
+    let mut data_chunks: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
+    let mut parity_chunk: Option<Vec<u8>> = None;
+
+    for shard in shards {
+        validate_erasure_shard_compatibility(first, shard, chunk_len)?;
+        match shard.role {
+            ErasureShardRole::Data => {
+                if shard.shard_index >= plan.data_shards {
+                    return Err(ProtocolError::ErasureDecodeFailed {
+                        shard_set_id: first.shard_set_id.clone(),
+                        reason: "data shard index outside data range".to_string(),
+                    });
+                }
+                if let Some(existing) = data_chunks.get(&shard.shard_index) {
+                    if existing != &shard.shard_payload {
+                        return Err(ProtocolError::ErasureDecodeFailed {
+                            shard_set_id: first.shard_set_id.clone(),
+                            reason: "conflicting duplicate data shard".to_string(),
+                        });
+                    }
+                } else {
+                    data_chunks.insert(shard.shard_index, shard.shard_payload.clone());
+                }
+            }
+            ErasureShardRole::Parity => {
+                if shard.shard_index < plan.data_shards {
+                    return Err(ProtocolError::ErasureDecodeFailed {
+                        shard_set_id: first.shard_set_id.clone(),
+                        reason: "parity shard index overlaps data range".to_string(),
+                    });
+                }
+                if let Some(existing) = &parity_chunk {
+                    if existing != &shard.shard_payload {
+                        return Err(ProtocolError::ErasureDecodeFailed {
+                            shard_set_id: first.shard_set_id.clone(),
+                            reason: "conflicting parity shard".to_string(),
+                        });
+                    }
+                } else {
+                    parity_chunk = Some(shard.shard_payload.clone());
+                }
+            }
+        }
+    }
+
+    let missing: Vec<u16> = (0..plan.data_shards)
+        .filter(|index| !data_chunks.contains_key(index))
+        .collect();
+    if missing.len() > 1 {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "more than one data shard is missing".to_string(),
+        });
+    }
+    if let Some(missing_index) = missing.first().copied() {
+        let mut recovered = parity_chunk.ok_or_else(|| ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "missing data shard without parity".to_string(),
+        })?;
+        for chunk in data_chunks.values() {
+            for (slot, byte) in recovered.iter_mut().zip(chunk) {
+                *slot ^= *byte;
+            }
+        }
+        data_chunks.insert(missing_index, recovered);
+    }
+
+    let mut payload = Vec::new();
+    for index in 0..plan.data_shards {
+        let chunk = data_chunks
+            .get(&index)
+            .ok_or_else(|| ProtocolError::ErasureDecodeFailed {
+                shard_set_id: first.shard_set_id.clone(),
+                reason: "required data shard unavailable".to_string(),
+            })?;
+        payload.extend_from_slice(chunk);
+    }
+    payload.truncate(payload_len);
+    if ContentHash::compute(&payload) != first.payload_hash {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "reconstructed payload hash mismatch".to_string(),
+        });
+    }
+    Ok(payload)
+}
+
+fn erasure_chunk_len(payload_len: usize, data_shards: u16) -> Result<usize, ProtocolError> {
+    if data_shards == 0 {
+        return Err(ProtocolError::InvalidErasureCodingPlan {
+            data_shards,
+            total_shards: 0,
+        });
+    }
+    Ok(if payload_len == 0 {
+        0
+    } else {
+        payload_len.div_ceil(usize::from(data_shards))
+    })
+}
+
+fn validate_erasure_shard_compatibility(
+    first: &ErasureShard,
+    shard: &ErasureShard,
+    chunk_len: usize,
+) -> Result<(), ProtocolError> {
+    let mismatch = first.shard_set_id != shard.shard_set_id
+        || first.plan != shard.plan
+        || first.payload_len != shard.payload_len
+        || first.payload_hash != shard.payload_hash
+        || first.protocol_version != shard.protocol_version;
+    if mismatch {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "mixed shard set metadata".to_string(),
+        });
+    }
+    if shard.shard_index >= shard.plan.total_shards {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "shard index outside total shard range".to_string(),
+        });
+    }
+    if shard.shard_payload.len() != chunk_len {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "unexpected shard payload length".to_string(),
+        });
+    }
+    if shard.shard_hash != shard.recompute_shard_hash() {
+        return Err(ProtocolError::ErasureDecodeFailed {
+            shard_set_id: first.shard_set_id.clone(),
+            reason: "shard hash mismatch".to_string(),
+        });
+    }
+    Ok(())
+}
+
+fn compute_erasure_shard_hash(
+    shard_set_id: &str,
+    origin_node: &NodeId,
+    sequence: u64,
+    shard_index: u16,
+    plan: ErasureCodingPlan,
+    role: ErasureShardRole,
+    payload_len: u64,
+    payload_hash: ContentHash,
+    shard_payload: &[u8],
+    timestamp_ns: u64,
+    protocol_version: ProtocolVersion,
+) -> ContentHash {
+    let mut canonical = Vec::new();
+    append_erasure_string(&mut canonical, shard_set_id);
+    append_erasure_string(&mut canonical, origin_node.as_str());
+    canonical.extend_from_slice(&sequence.to_be_bytes());
+    canonical.extend_from_slice(&shard_index.to_be_bytes());
+    canonical.extend_from_slice(&plan.data_shards.to_be_bytes());
+    canonical.extend_from_slice(&plan.total_shards.to_be_bytes());
+    canonical.push(match role {
+        ErasureShardRole::Data => 0,
+        ErasureShardRole::Parity => 1,
+    });
+    canonical.extend_from_slice(&payload_len.to_be_bytes());
+    canonical.extend_from_slice(payload_hash.as_bytes());
+    append_erasure_bytes(&mut canonical, shard_payload);
+    canonical.extend_from_slice(&timestamp_ns.to_be_bytes());
+    canonical.extend_from_slice(&protocol_version.major.to_be_bytes());
+    canonical.extend_from_slice(&protocol_version.minor.to_be_bytes());
+    ContentHash::compute(&canonical)
+}
+
+fn append_erasure_string(buf: &mut Vec<u8>, value: &str) {
+    append_erasure_bytes(buf, value.as_bytes());
+}
+
+fn append_erasure_bytes(buf: &mut Vec<u8>, value: &[u8]) {
+    buf.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    buf.extend_from_slice(value);
+}
+
+// ---------------------------------------------------------------------------
 // ContainmentIntent — node's proposed containment action
 // ---------------------------------------------------------------------------
 
@@ -344,6 +766,7 @@ impl SequenceRange {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FleetMessage {
     Evidence(EvidencePacket),
+    ErasureShard(ErasureShard),
     Intent(ContainmentIntent),
     Checkpoint(QuorumCheckpoint),
     Heartbeat(HeartbeatLiveness),
@@ -355,6 +778,7 @@ impl FleetMessage {
     pub fn node_id(&self) -> &NodeId {
         match self {
             Self::Evidence(p) => &p.node_id,
+            Self::ErasureShard(s) => &s.origin_node,
             Self::Intent(i) => &i.node_id,
             Self::Checkpoint(c) => {
                 // Checkpoints are collective; return the first participating
@@ -372,6 +796,7 @@ impl FleetMessage {
     pub fn sequence(&self) -> Option<u64> {
         match self {
             Self::Evidence(p) => Some(p.sequence),
+            Self::ErasureShard(s) => Some(s.sequence),
             Self::Intent(i) => Some(i.sequence),
             Self::Checkpoint(_) => None,
             Self::Heartbeat(h) => Some(h.sequence),
@@ -706,6 +1131,18 @@ pub enum ProtocolError {
     QuorumNotReached { required: usize, actual: usize },
     /// Message from a node suspected of being partitioned.
     PartitionedNode { node_id: NodeId },
+    /// Invalid erasure coding plan.
+    InvalidErasureCodingPlan { data_shards: u16, total_shards: u16 },
+    /// Erasure shard set could not be decoded.
+    ErasureDecodeFailed {
+        shard_set_id: String,
+        reason: String,
+    },
+    /// A message could not be serialized into the coded gossip lane.
+    SerializationFailed {
+        message_type: String,
+        detail: String,
+    },
     /// Empty intents list in precedence resolution.
     EmptyIntents,
 }
@@ -744,6 +1181,24 @@ impl fmt::Display for ProtocolError {
             Self::PartitionedNode { node_id } => {
                 write!(f, "message from partitioned node {node_id}")
             }
+            Self::InvalidErasureCodingPlan {
+                data_shards,
+                total_shards,
+            } => write!(
+                f,
+                "invalid erasure coding plan: data_shards={data_shards}, total_shards={total_shards}"
+            ),
+            Self::ErasureDecodeFailed {
+                shard_set_id,
+                reason,
+            } => write!(
+                f,
+                "erasure decode failed for shard set {shard_set_id}: {reason}"
+            ),
+            Self::SerializationFailed {
+                message_type,
+                detail,
+            } => write!(f, "failed to serialize {message_type}: {detail}"),
             Self::EmptyIntents => write!(f, "no intents to resolve"),
         }
     }
@@ -828,6 +1283,30 @@ impl FleetProtocolState {
         // Accumulate evidence.
         self.evidence.ingest(packet)?;
 
+        Ok(())
+    }
+
+    /// Process an incoming erasure-coded gossip shard.
+    pub fn process_erasure_shard(&mut self, shard: &ErasureShard) -> Result<(), ProtocolError> {
+        if !self
+            .protocol_version
+            .is_compatible_with(&shard.protocol_version)
+        {
+            return Err(ProtocolError::IncompatibleVersion {
+                local: self.protocol_version,
+                remote: shard.protocol_version,
+            });
+        }
+
+        if shard.shard_hash != shard.recompute_shard_hash() {
+            return Err(ProtocolError::ErasureDecodeFailed {
+                shard_set_id: shard.shard_set_id.clone(),
+                reason: "shard hash mismatch".to_string(),
+            });
+        }
+
+        self.sequence_tracker
+            .accept(&shard.origin_node, shard.sequence)?;
         Ok(())
     }
 
@@ -960,6 +1439,41 @@ impl FleetProtocolState {
     pub fn partitioned_nodes(&self, current_time_ns: u64) -> BTreeSet<NodeId> {
         self.health
             .suspected_partitioned(current_time_ns, self.config.partition_timeout_ns)
+    }
+
+    /// Derive the erasure coding plan from known fleet size and partition profile.
+    pub fn erasure_coding_plan(&self, current_time_ns: u64) -> ErasureCodingPlan {
+        let total_known = self.health.known_node_count().max(1);
+        let partitioned = self.partitioned_nodes(current_time_ns).len();
+        ErasureCodingPlan::tuned(total_known, partitioned)
+    }
+
+    /// Encode an evidence packet for erasure-coded gossip dissemination.
+    pub fn encode_evidence_for_erasure_gossip(
+        &mut self,
+        packet: &EvidencePacket,
+        current_time_ns: u64,
+    ) -> Result<Vec<FleetMessage>, ProtocolError> {
+        let payload =
+            serde_json::to_vec(packet).map_err(|err| ProtocolError::SerializationFailed {
+                message_type: "EvidencePacket".to_string(),
+                detail: err.to_string(),
+            })?;
+        let plan = self.erasure_coding_plan(current_time_ns);
+        let first_sequence = self.local_sequence.saturating_add(1);
+        self.local_sequence = self
+            .local_sequence
+            .saturating_add(u64::from(plan.total_shards));
+        let shard_set_id = format!("{}:{}", packet.node_id, packet.trace_id);
+        encode_erasure_shards(
+            shard_set_id,
+            self.local_node_id.clone(),
+            first_sequence,
+            current_time_ns,
+            &payload,
+            plan,
+        )
+        .map(|shards| shards.into_iter().map(FleetMessage::ErasureShard).collect())
     }
 }
 
@@ -1753,6 +2267,18 @@ mod tests {
             Box::new(ProtocolError::PartitionedNode {
                 node_id: NodeId("n-4".into()),
             }),
+            Box::new(ProtocolError::InvalidErasureCodingPlan {
+                data_shards: 0,
+                total_shards: 4,
+            }),
+            Box::new(ProtocolError::ErasureDecodeFailed {
+                shard_set_id: "set-1".into(),
+                reason: "missing shard".into(),
+            }),
+            Box::new(ProtocolError::SerializationFailed {
+                message_type: "EvidencePacket".into(),
+                detail: "bad payload".into(),
+            }),
             Box::new(ProtocolError::EmptyIntents),
         ];
         let mut displays = std::collections::BTreeSet::new();
@@ -1763,8 +2289,8 @@ mod tests {
         }
         assert_eq!(
             displays.len(),
-            7,
-            "all 7 variants produce distinct messages"
+            variants.len(),
+            "all protocol error variants produce distinct messages"
         );
     }
 
@@ -2075,6 +2601,18 @@ mod tests {
             },
             ProtocolError::PartitionedNode {
                 node_id: NodeId::new("n"),
+            },
+            ProtocolError::InvalidErasureCodingPlan {
+                data_shards: 0,
+                total_shards: 4,
+            },
+            ProtocolError::ErasureDecodeFailed {
+                shard_set_id: "set".into(),
+                reason: "missing shard".into(),
+            },
+            ProtocolError::SerializationFailed {
+                message_type: "EvidencePacket".into(),
+                detail: "bad payload".into(),
             },
             ProtocolError::EmptyIntents,
         ];

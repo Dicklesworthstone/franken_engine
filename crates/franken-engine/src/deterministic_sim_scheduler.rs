@@ -298,6 +298,14 @@ pub struct SimReplayLog {
 }
 
 impl SimReplayLog {
+    /// Create a new empty replay log with capacity hints.
+    pub fn new() -> Self {
+        // H6.1 audit: scheduler bench shows ~100+ dispatched events per completion cycle
+        Self {
+            entries: Vec::with_capacity(128),
+        }
+    }
+
     /// Append an entry.
     pub fn push(&mut self, entry: SimReplayEntry) {
         self.entries.push(entry);
@@ -404,7 +412,7 @@ impl SimScheduler {
             event_queue: BTreeMap::new(),
             next_event_id: 0,
             dispatch_log: Vec::new(),
-            replay_log: SimReplayLog::default(),
+            replay_log: SimReplayLog::new(),
             epoch,
         }
     }
@@ -1030,14 +1038,14 @@ mod tests {
 
     #[test]
     fn test_replay_log_empty() {
-        let log = SimReplayLog::default();
+        let log = SimReplayLog::new();
         assert!(log.is_empty());
         assert_eq!(log.len(), 0);
     }
 
     #[test]
     fn test_replay_log_push_and_len() {
-        let mut log = SimReplayLog::default();
+        let mut log = SimReplayLog::new();
         log.push(SimReplayEntry {
             tick: 0,
             event_id: 0,
@@ -1057,7 +1065,7 @@ mod tests {
     #[test]
     fn test_replay_log_content_hash_determinism() {
         let build = || {
-            let mut log = SimReplayLog::default();
+            let mut log = SimReplayLog::new();
             log.push(SimReplayEntry {
                 tick: 0,
                 event_id: 42,
@@ -1071,7 +1079,7 @@ mod tests {
 
     #[test]
     fn test_replay_log_serde_roundtrip() {
-        let mut log = SimReplayLog::default();
+        let mut log = SimReplayLog::new();
         log.push(SimReplayEntry {
             tick: 7,
             event_id: 99,
@@ -1446,7 +1454,7 @@ mod tests {
 
     #[test]
     fn test_replay_log_hash_differs() {
-        let mut log1 = SimReplayLog::default();
+        let mut log1 = SimReplayLog::new();
         log1.push(SimReplayEntry {
             tick: 0,
             event_id: 1,
@@ -1454,7 +1462,7 @@ mod tests {
             priority: SimPriority::Normal,
         });
 
-        let mut log2 = SimReplayLog::default();
+        let mut log2 = SimReplayLog::new();
         log2.push(SimReplayEntry {
             tick: 0,
             event_id: 2,

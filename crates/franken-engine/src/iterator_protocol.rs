@@ -381,7 +381,8 @@ impl IterationTrace {
             trace_id,
             record_id,
             kind,
-            events: Vec::new(),
+            // H6.1 audit: typical iteration has GetIterator + 5-15 Next + optional Close (~16 events)
+            events: Vec::with_capacity(16),
             completed: false,
             values_produced: 0,
         }

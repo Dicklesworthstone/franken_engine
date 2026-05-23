@@ -45,7 +45,6 @@ use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
     Ir2FlowLattice, LabelClass,
 };
-use crate::unified_authority_algebra::{AuthorityLattice, CapabilitySet, BudgetEnvelope};
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
@@ -63,6 +62,7 @@ use crate::parser_gap_inventory::{
     ParserGapSiteId, ParserGapStage, UNSUPPORTED_SYNTAX_DIAGNOSTIC_SCHEMA_VERSION,
     UnsupportedSyntaxDiagnostic,
 };
+use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
 const COMPONENT: &str = "lowering_pipeline";
 const IFC_RUNTIME_GUARD_CAPABILITY: &str = "ifc.check_flow";
@@ -2430,7 +2430,8 @@ fn lower_statement_to_ir1_with_flow(
             // its argument entirely — the destructuring's inner names were
             // never allocated and never received any value (bd-hld87).
             let mut param_names: Vec<String> = Vec::with_capacity(func.params.len());
-            let mut destructure_params: Vec<(String, &BindingPattern)> = Vec::new();
+            // H6.1 audit: bounded by function parameter count
+            let mut destructure_params: Vec<(String, &BindingPattern)> = Vec::with_capacity(func.params.len());
             for (index, param) in func.params.iter().enumerate() {
                 match param.name() {
                     Some(name) => param_names.push(name.to_string()),
@@ -2444,7 +2445,8 @@ fn lower_statement_to_ir1_with_flow(
             // perf: pre-size body_ops Vec based on function body statement count
             let estimated_body_ops = func.body.body.len().saturating_mul(2).max(8);
             let mut body_ops = Vec::with_capacity(estimated_body_ops);
-            let mut body_bindings = Vec::new();
+            // H6.1 audit: function body variable declarations typically 5-50, using 32 as reasonable default
+            let mut body_bindings = Vec::with_capacity(32);
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -2554,7 +2556,8 @@ fn lower_statement_to_ir1_with_flow(
                 .map(|c| c.body.body.len().saturating_mul(2).max(8))
                 .unwrap_or(8);
             let mut body_ops = Vec::with_capacity(estimated_body_ops);
-            let mut body_bindings = Vec::new();
+            // H6.1 audit: constructor body variable declarations, using 32 as reasonable default
+            let mut body_bindings = Vec::with_capacity(32);
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
@@ -5407,16 +5410,30 @@ fn create_unified_authority_from_components(
         match _cap_str.as_str() {
             "fs_read" => capability_set = capability_set.with_capability(CapabilityKind::FsRead),
             "fs_write" => capability_set = capability_set.with_capability(CapabilityKind::FsWrite),
-            "net_connect" => capability_set = capability_set.with_capability(CapabilityKind::NetConnect),
-            "net_listen" => capability_set = capability_set.with_capability(CapabilityKind::NetListen),
-            "proc_spawn" => capability_set = capability_set.with_capability(CapabilityKind::ProcSpawn),
+            "net_connect" => {
+                capability_set = capability_set.with_capability(CapabilityKind::NetConnect)
+            }
+            "net_listen" => {
+                capability_set = capability_set.with_capability(CapabilityKind::NetListen)
+            }
+            "proc_spawn" => {
+                capability_set = capability_set.with_capability(CapabilityKind::ProcSpawn)
+            }
             "env_read" => capability_set = capability_set.with_capability(CapabilityKind::EnvRead),
-            "env_write" => capability_set = capability_set.with_capability(CapabilityKind::EnvWrite),
-            "policy_request" => capability_set = capability_set.with_capability(CapabilityKind::PolicyRequest),
+            "env_write" => {
+                capability_set = capability_set.with_capability(CapabilityKind::EnvWrite)
+            }
+            "policy_request" => {
+                capability_set = capability_set.with_capability(CapabilityKind::PolicyRequest)
+            }
             "eval" => capability_set = capability_set.with_capability(CapabilityKind::Eval),
             "global" => capability_set = capability_set.with_capability(CapabilityKind::Global),
-            "clock_read" => capability_set = capability_set.with_capability(CapabilityKind::ClockRead),
-            "random_read" => capability_set = capability_set.with_capability(CapabilityKind::RandomRead),
+            "clock_read" => {
+                capability_set = capability_set.with_capability(CapabilityKind::ClockRead)
+            }
+            "random_read" => {
+                capability_set = capability_set.with_capability(CapabilityKind::RandomRead)
+            }
             _ => {
                 // Unknown capability string, leave empty for now
                 // In real implementation, this might log a warning or use a dynamic capability
@@ -5426,7 +5443,8 @@ fn create_unified_authority_from_components(
 
     // Create budget envelope
     let budget_envelope = if let Some(budget) = _budget_millionths {
-        BudgetEnvelope::try_new(budget, budget, budget, budget).unwrap_or_else(|_| BudgetEnvelope::bottom())
+        BudgetEnvelope::try_new(budget, budget, budget, budget)
+            .unwrap_or_else(|_| BudgetEnvelope::bottom())
     } else {
         BudgetEnvelope::bottom()
     };
@@ -14181,11 +14199,8 @@ mod tests {
 
     #[test]
     fn unified_authority_subsumes() {
-        let low_auth = create_unified_authority_from_components(
-            LabelClass::Public,
-            None,
-            Some(100_000),
-        );
+        let low_auth =
+            create_unified_authority_from_components(LabelClass::Public, None, Some(100_000));
         let high_auth = create_unified_authority_from_components(
             LabelClass::Secret,
             Some("global".to_string()),

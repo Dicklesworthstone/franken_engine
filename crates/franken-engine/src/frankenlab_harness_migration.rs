@@ -957,7 +957,7 @@ mod tests {
     fn registry_serde_roundtrip() {
         let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         let json =
-            serde_json::to_string_pretty(&reg).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&reg).expect("serialize derived Serialize");
         let round: HarnessMigrationRegistry =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, round);
@@ -1008,7 +1008,7 @@ mod tests {
         let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         let report = reg.build_report();
         let json =
-            serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&report).expect("serialize derived Serialize");
         let round: HarnessMigrationReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);

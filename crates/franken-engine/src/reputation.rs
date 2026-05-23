@@ -1686,9 +1686,9 @@ mod tests {
             g
         };
         let json1 =
-            serde_json::to_string(&build_graph()).expect("serde deserialization should succeed");
+            serde_json::to_string(&build_graph()).expect("serialize derived Serialize");
         let json2 =
-            serde_json::to_string(&build_graph()).expect("serde deserialization should succeed");
+            serde_json::to_string(&build_graph()).expect("serialize derived Serialize");
         assert_eq!(json1, json2, "identical graphs must produce identical JSON");
     }
 

@@ -136,6 +136,57 @@ Convert all direct field access to use the helper methods:
 - **Worst Case** (writes on every capture): ~1.02× cost (Rc allocation overhead)
 - **Typical Case** (mixed workload): 10-20× improvement based on write frequency
 
+## Write-Site Inventory
+
+Complete inventory of existing write sites that must be converted to use `mutate_*` helpers:
+
+### Registers Write Sites (32 total)
+
+| Line | Field | Current write idiom | Replacement helper |
+|------|-------|---------------------|-------------------|
+| 2670 | registers | `self.registers[reg as usize] = value;` | `self.mutate_registers(\|r\| r[reg as usize] = value)` |
+| 2845 | registers | `self.registers = seed.registers.clone();` | `self.mutate_registers(\|r\| *r = seed.registers.clone())` |
+| 2889 | registers | `self.registers = snapshot.registers;` | `self.mutate_registers(\|r\| *r = snapshot.registers)` |
+| 2905 | registers | `self.registers.clear();` | `self.mutate_registers(\|r\| r.clear())` |
+| 2906 | registers | `self.registers.resize(max_regs, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(max_regs, Value::Undefined))` |
+| 3946 | registers | `self.registers[reg_start + i] = value;` | `self.mutate_registers(\|r\| r[reg_start + i] = value)` |
+| 4466 | registers | `self.registers.resize(req_len, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(req_len, Value::Undefined))` |
+| 4495 | registers | `self.registers.resize(req_len, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(req_len, Value::Undefined))` |
+| 4498 | registers | `self.registers[saved_base + i] = val;` | `self.mutate_registers(\|r\| r[saved_base + i] = val)` |
+| 5045 | registers | `self.registers.resize(req_len, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(req_len, Value::Undefined))` |
+| 5047 | registers | `self.registers[self.register_base..req_len].fill(Value::Undefined);` | `self.mutate_registers(\|r\| r[self.register_base..req_len].fill(Value::Undefined))` |
+| 5215 | registers | `self.registers.resize(req_len, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(req_len, Value::Undefined))` |
+| 5217 | registers | `self.registers[self.register_base..req_len].fill(Value::Undefined);` | `self.mutate_registers(\|r\| r[self.register_base..req_len].fill(Value::Undefined))` |
+| 5405 | registers | `self.registers.resize(req_len, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(req_len, Value::Undefined))` |
+| 5407 | registers | `self.registers[self.register_base..req_len].fill(Value::Undefined);` | `self.mutate_registers(\|r\| r[self.register_base..req_len].fill(Value::Undefined))` |
+| 5517 | registers | `self.registers.resize(req_len, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(req_len, Value::Undefined))` |
+| 5519 | registers | `self.registers[self.register_base..req_len].fill(Value::Undefined);` | `self.mutate_registers(\|r\| r[self.register_base..req_len].fill(Value::Undefined))` |
+| 6182 | registers | `self.registers.resize(req_len, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(req_len, Value::Undefined))` |
+| 6184 | registers | `self.registers[self.register_base..req_len].fill(Value::Undefined);` | `self.mutate_registers(\|r\| r[self.register_base..req_len].fill(Value::Undefined))` |
+| 10448 | registers | `self.registers = vec![Value::Undefined; self.config.max_registers as usize];` | `self.mutate_registers(\|r\| *r = vec![Value::Undefined; self.config.max_registers as usize])` |
+| 10533 | registers | `self.registers = vec![Value::Undefined; self.config.max_registers as usize];` | `self.mutate_registers(\|r\| *r = vec![Value::Undefined; self.config.max_registers as usize])` |
+| 18949 | registers | `self.registers.resize(idx + 1, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(idx + 1, Value::Undefined))` |
+| 18951 | registers | `self.registers[idx] = value;` | `self.mutate_registers(\|r\| r[idx] = value)` |
+| 19211 | registers | `self.registers.resize(new_len, Value::Undefined);` | `self.mutate_registers(\|r\| r.resize(new_len, Value::Undefined))` |
+| 19230 | registers | `self.registers[actual_reg] = value;` | `self.mutate_registers(\|r\| r[actual_reg] = value)` |
+
+### Heap Write Sites (3 total)
+
+| Line | Field | Current write idiom | Replacement helper |
+|------|-------|---------------------|-------------------|
+| 2847 | heap | `self.heap = seed.heap.clone();` | `self.mutate_heap(\|h\| *h = seed.heap.clone())` |
+| 13425 | heap | `self.heap.push(result_obj);` | `self.mutate_heap(\|h\| h.push(result_obj))` |
+| 19534 | heap | `self.heap.push(object);` | `self.mutate_heap(\|h\| h.push(object))` |
+
+### Function Prototypes Write Sites (2 total)
+
+| Line | Field | Current write idiom | Replacement helper |
+|------|-------|---------------------|-------------------|
+| 2850 | function_prototypes | `self.function_prototypes = seed.function_prototypes.clone();` | `self.mutate_function_prototypes(\|fp\| *fp = seed.function_prototypes.clone())` |
+| 19745 | function_prototypes | `self.function_prototypes.insert(func_idx, prototype);` | `self.mutate_function_prototypes(\|fp\| fp.insert(func_idx, prototype))` |
+
+**Total: 37 write sites** across all seed-tracked fields requiring conversion.
+
 ## Compatibility
 
 This change is purely internal to `baseline_interpreter.rs`. No public API changes are required. The `capture_execution_seed` and `reset_execution_state_from_seed` methods maintain identical signatures and behavior guarantees.

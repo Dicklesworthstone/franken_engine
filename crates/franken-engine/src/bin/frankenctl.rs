@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;

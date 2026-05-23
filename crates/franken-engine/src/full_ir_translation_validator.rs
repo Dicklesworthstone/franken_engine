@@ -16,7 +16,7 @@ use crate::ir_contract::{Ir1Op, Ir2Op, Ir3Instruction};
 use crate::statement_translation_validator::{StatementValidationContext, ValidationLemma};
 
 /// IR levels in the FrankenEngine transformation pipeline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum IrLevel {
     IR0, // SyntaxIR - Direct AST representation
     IR1, // SpecIR - Scope-resolved with binding IDs
@@ -85,7 +85,7 @@ pub struct GlobalInvariant {
 }
 
 /// Types of global invariants in the IR pipeline.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum GlobalInvariantType {
     TypeSafety,
     MemorySafety,

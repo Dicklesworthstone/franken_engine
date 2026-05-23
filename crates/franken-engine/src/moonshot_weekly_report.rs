@@ -220,7 +220,11 @@ impl WeeklyRankedReport {
         // Sort descending by EIV; tie-break by moonshot_id ascending for
         // deterministic ordering when EIVs are equal.
         sorted.sort_by(|a, b| {
-            match b.eiv_score.eiv_millimillibits.cmp(&a.eiv_score.eiv_millimillibits) {
+            match b
+                .eiv_score
+                .eiv_millimillibits
+                .cmp(&a.eiv_score.eiv_millimillibits)
+            {
                 Ordering::Equal => a.eiv_score.moonshot_id.cmp(&b.eiv_score.moonshot_id),
                 other => other,
             }
@@ -365,7 +369,13 @@ mod tests {
         SecurityEpoch::from_raw(1)
     }
 
-    fn input(id: &str, alpha: u32, beta: u32, effort: EffortEstimate, unlocks: u32) -> WeeklyReportInput {
+    fn input(
+        id: &str,
+        alpha: u32,
+        beta: u32,
+        effort: EffortEstimate,
+        unlocks: u32,
+    ) -> WeeklyReportInput {
         WeeklyReportInput {
             eiv_score: EivScore::compute(
                 id,
@@ -488,7 +498,10 @@ mod tests {
         // invest_at threshold.
         let inputs = vec![input("m", 1, 1, EffortEstimate::Small, 5)];
         let r = WeeklyRankedReport::assemble(inputs, default_config(), 1, 100, epoch()).unwrap();
-        assert_eq!(r.rankings[0].recommended_action, RecommendedAction::InvestNow);
+        assert_eq!(
+            r.rankings[0].recommended_action,
+            RecommendedAction::InvestNow
+        );
     }
 
     #[test]
@@ -516,7 +529,10 @@ mod tests {
         let inputs = vec![input("m", 1, 1, EffortEstimate::Small, 0)];
         let r = WeeklyRankedReport::assemble(inputs, cfg, 1, 100, epoch()).unwrap();
         // EIV ~1.0 bit but threshold raised: no longer InvestNow.
-        assert_ne!(r.rankings[0].recommended_action, RecommendedAction::InvestNow);
+        assert_ne!(
+            r.rankings[0].recommended_action,
+            RecommendedAction::InvestNow
+        );
     }
 
     // ----- Determinism -----
@@ -639,7 +655,10 @@ mod tests {
         assert_eq!(format!("{}", EffortEstimate::Small), "small");
         assert_eq!(format!("{}", EffortEstimate::Epic), "epic");
         assert_eq!(format!("{}", RecommendedAction::InvestNow), "invest_now");
-        assert_eq!(format!("{}", RecommendedAction::ConsiderPausing), "consider_pausing");
+        assert_eq!(
+            format!("{}", RecommendedAction::ConsiderPausing),
+            "consider_pausing"
+        );
     }
 
     #[test]

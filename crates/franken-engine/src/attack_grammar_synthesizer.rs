@@ -422,7 +422,11 @@ impl AttackGrammarSynthesizer {
             ExploitSeverity::High,
             "Cross-site scripting through innerHTML injection with script execution",
             &["User input reaches innerHTML", "No content sanitization"],
-            &["Execute arbitrary JavaScript", "Steal user credentials", "Redirect to malicious site"],
+            &[
+                "Execute arbitrary JavaScript",
+                "Steal user credentials",
+                "Redirect to malicious site",
+            ],
         )?;
 
         let js_code = r#"// DOM Injection Exploit - innerHTML XSS
@@ -501,8 +505,15 @@ impl AttackGrammarSynthesizer {
             ExploitTarget::GlobalNamespace,
             ExploitSeverity::Critical,
             "Prototype pollution affecting Object.prototype to inject malicious properties",
-            &["Object merge operations", "No prototype pollution protection"],
-            &["Pollute global namespace", "Override security functions", "Bypass access controls"],
+            &[
+                "Object merge operations",
+                "No prototype pollution protection",
+            ],
+            &[
+                "Pollute global namespace",
+                "Override security functions",
+                "Bypass access controls",
+            ],
         )?;
 
         let js_code = r#"// Prototype Pollution Exploit
@@ -581,7 +592,11 @@ impl AttackGrammarSynthesizer {
             ExploitSeverity::Medium,
             "Event handler race condition exploitation for privilege escalation",
             &["Async event processing", "Shared mutable state"],
-            &["Hijack user actions", "Escalate privileges", "Bypass authorization"],
+            &[
+                "Hijack user actions",
+                "Escalate privileges",
+                "Bypass authorization",
+            ],
         )?;
 
         let js_code = r#"// Event Hijacking Exploit - Race Condition
@@ -652,7 +667,11 @@ impl AttackGrammarSynthesizer {
             ExploitSeverity::Medium,
             "Memory allocation bomb causing denial of service through exponential growth",
             &["No memory limits", "Unbounded object creation"],
-            &["Exhaust available memory", "Crash browser tab", "Denial of service"],
+            &[
+                "Exhaust available memory",
+                "Crash browser tab",
+                "Denial of service",
+            ],
         )?;
 
         let js_code = r#"// Resource Exhaustion Exploit - Memory Bomb
@@ -716,7 +735,11 @@ impl AttackGrammarSynthesizer {
             ExploitSeverity::High,
             "Time-based logic bomb with delayed payload execution",
             &["System clock access", "Persistent execution context"],
-            &["Execute at predetermined time", "Evade detection", "Delayed impact"],
+            &[
+                "Execute at predetermined time",
+                "Evade detection",
+                "Delayed impact",
+            ],
         )?;
 
         let js_code = r#"// Logic Bomb Exploit - Time-based Trigger
@@ -797,8 +820,15 @@ impl AttackGrammarSynthesizer {
             ExploitTarget::Dependencies,
             ExploitSeverity::Critical,
             "Supply chain attack through malicious package substitution",
-            &["Dynamic import/require", "No package integrity verification"],
-            &["Compromise dependency chain", "Inject malicious code", "Persistent access"],
+            &[
+                "Dynamic import/require",
+                "No package integrity verification",
+            ],
+            &[
+                "Compromise dependency chain",
+                "Inject malicious code",
+                "Persistent access",
+            ],
         )?;
 
         let js_code = r#"// Supply Chain Exploit - Package Substitution
@@ -921,30 +951,28 @@ impl AttackGrammarSynthesizer {
                     "'XSS'",
                     "atob('WFNT')", // Base64 for 'XSS'
                 );
-                mutated_code = mutated_code.replace(
-                    "\"XSS\"",
-                    "atob('WFNT')",
-                );
+                mutated_code = mutated_code.replace("\"XSS\"", "atob('WFNT')");
             }
             MutationOperator::TargetMutation => {
                 // Change DOM selectors
-                mutated_code = mutated_code.replace("querySelectorAll('[id], [class]')",
-                                                  "querySelectorAll('div, span, p')");
+                mutated_code = mutated_code.replace(
+                    "querySelectorAll('[id], [class]')",
+                    "querySelectorAll('div, span, p')",
+                );
                 mutated_code = mutated_code.replace("'click'", "'mousedown'");
             }
             MutationOperator::Obfuscation => {
                 // Add variable name obfuscation
                 mutated_code = format!(
                     "// Obfuscated version\n{}\n/* {} */",
-                    mutated_code,
-                    "Generated with obfuscation"
+                    mutated_code, "Generated with obfuscation"
                 );
             }
             MutationOperator::TimingMutation => {
                 // Add random delays
                 mutated_code = mutated_code.replace(
                     "setTimeout(executeInjection);",
-                    "setTimeout(executeInjection, Math.random() * 1000);"
+                    "setTimeout(executeInjection, Math.random() * 1000);",
                 );
             }
             MutationOperator::VectorCombination => {
@@ -964,10 +992,14 @@ impl AttackGrammarSynthesizer {
         }
 
         // Update manifest
-        mutated_manifest.exploit_id = self.derive_exploit_id(&format!("{}-{}",
-            base.manifest.exploit_id, operator), timestamp_ns)?;
-        mutated_manifest.description = format!("{} (mutated with {})",
-                                             mutated_manifest.description, operator);
+        mutated_manifest.exploit_id = self.derive_exploit_id(
+            &format!("{}-{}", base.manifest.exploit_id, operator),
+            timestamp_ns,
+        )?;
+        mutated_manifest.description = format!(
+            "{} (mutated with {})",
+            mutated_manifest.description, operator
+        );
         mutated_manifest.code_hash = ContentHash::compute(mutated_code.as_bytes());
 
         let filename_suffix = format!("_{}", operator.to_string().replace('-', "_"));
@@ -975,9 +1007,13 @@ impl AttackGrammarSynthesizer {
         Ok(ExploitCandidate {
             manifest: mutated_manifest,
             javascript_code: mutated_code,
-            js_filename: base.js_filename.replace(".js", &format!("{}.js", filename_suffix)),
-            manifest_filename: base.manifest_filename.replace(".manifest.json",
-                                                             &format!("{}.manifest.json", filename_suffix)),
+            js_filename: base
+                .js_filename
+                .replace(".js", &format!("{}.js", filename_suffix)),
+            manifest_filename: base.manifest_filename.replace(
+                ".manifest.json",
+                &format!("{}.manifest.json", filename_suffix),
+            ),
         })
     }
 
@@ -992,34 +1028,58 @@ impl AttackGrammarSynthesizer {
         preconditions: &[&str],
         outcomes: &[&str],
     ) -> Result<ExploitManifest, AttackGrammarError> {
-        let exploit_id = self.derive_exploit_id(&format!("{}-{}-{}",
-            strategy, target, description), 0)?;
+        let exploit_id =
+            self.derive_exploit_id(&format!("{}-{}-{}", strategy, target, description), 0)?;
 
         let detection_patterns: BTreeSet<String> = match strategy {
-            AttackStrategy::DomInjection => {
-                ["innerHTML modification", "script tag injection", "onerror handler"].iter()
-                    .map(|s| s.to_string()).collect()
-            },
-            AttackStrategy::PrototypePollution => {
-                ["__proto__ access", "constructor.prototype modification", "Object.prototype pollution"].iter()
-                    .map(|s| s.to_string()).collect()
-            },
-            AttackStrategy::EventHijacking => {
-                ["addEventListener override", "event handler modification", "privilege escalation"].iter()
-                    .map(|s| s.to_string()).collect()
-            },
-            AttackStrategy::ResourceExhaustion => {
-                ["memory allocation spike", "exponential growth", "setTimeout loop"].iter()
-                    .map(|s| s.to_string()).collect()
-            },
-            AttackStrategy::LogicBomb => {
-                ["date-based trigger", "localStorage access", "delayed execution"].iter()
-                    .map(|s| s.to_string()).collect()
-            },
-            AttackStrategy::SupplyChain => {
-                ["require override", "dynamic import interception", "package substitution"].iter()
-                    .map(|s| s.to_string()).collect()
-            },
+            AttackStrategy::DomInjection => [
+                "innerHTML modification",
+                "script tag injection",
+                "onerror handler",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            AttackStrategy::PrototypePollution => [
+                "__proto__ access",
+                "constructor.prototype modification",
+                "Object.prototype pollution",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            AttackStrategy::EventHijacking => [
+                "addEventListener override",
+                "event handler modification",
+                "privilege escalation",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            AttackStrategy::ResourceExhaustion => [
+                "memory allocation spike",
+                "exponential growth",
+                "setTimeout loop",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            AttackStrategy::LogicBomb => [
+                "date-based trigger",
+                "localStorage access",
+                "delayed execution",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            AttackStrategy::SupplyChain => [
+                "require override",
+                "dynamic import interception",
+                "package substitution",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
         };
 
         let mitigations = match strategy {
@@ -1103,10 +1163,9 @@ impl AttackGrammarSynthesizer {
 
         let output_path = Path::new(output_dir);
         if !output_path.exists() {
-            fs::create_dir_all(output_path)
-                .map_err(|e| AttackGrammarError::CodeGeneration {
-                    reason: format!("create output directory: {}", e)
-                })?;
+            fs::create_dir_all(output_path).map_err(|e| AttackGrammarError::CodeGeneration {
+                reason: format!("create output directory: {}", e),
+            })?;
         }
 
         let mut written_files = Vec::new();
@@ -1114,21 +1173,24 @@ impl AttackGrammarSynthesizer {
         for candidate in candidates {
             // Write JavaScript file
             let js_path = output_path.join(&candidate.js_filename);
-            fs::write(&js_path, &candidate.javascript_code)
-                .map_err(|e| AttackGrammarError::CodeGeneration {
-                    reason: format!("write JS file: {}", e)
-                })?;
+            fs::write(&js_path, &candidate.javascript_code).map_err(|e| {
+                AttackGrammarError::CodeGeneration {
+                    reason: format!("write JS file: {}", e),
+                }
+            })?;
 
             // Write manifest file
             let manifest_path = output_path.join(&candidate.manifest_filename);
-            let manifest_json = serde_json::to_string_pretty(&candidate.manifest)
-                .map_err(|e| AttackGrammarError::ManifestGeneration {
-                    reason: format!("serialize manifest: {}", e)
-                })?;
-            fs::write(&manifest_path, manifest_json)
-                .map_err(|e| AttackGrammarError::ManifestGeneration {
-                    reason: format!("write manifest file: {}", e)
-                })?;
+            let manifest_json = serde_json::to_string_pretty(&candidate.manifest).map_err(|e| {
+                AttackGrammarError::ManifestGeneration {
+                    reason: format!("serialize manifest: {}", e),
+                }
+            })?;
+            fs::write(&manifest_path, manifest_json).map_err(|e| {
+                AttackGrammarError::ManifestGeneration {
+                    reason: format!("write manifest file: {}", e),
+                }
+            })?;
 
             written_files.push((
                 js_path.to_string_lossy().to_string(),
@@ -1181,9 +1243,18 @@ mod tests {
     #[test]
     fn attack_strategy_display() {
         assert_eq!(AttackStrategy::DomInjection.to_string(), "dom-injection");
-        assert_eq!(AttackStrategy::PrototypePollution.to_string(), "prototype-pollution");
-        assert_eq!(AttackStrategy::EventHijacking.to_string(), "event-hijacking");
-        assert_eq!(AttackStrategy::ResourceExhaustion.to_string(), "resource-exhaustion");
+        assert_eq!(
+            AttackStrategy::PrototypePollution.to_string(),
+            "prototype-pollution"
+        );
+        assert_eq!(
+            AttackStrategy::EventHijacking.to_string(),
+            "event-hijacking"
+        );
+        assert_eq!(
+            AttackStrategy::ResourceExhaustion.to_string(),
+            "resource-exhaustion"
+        );
         assert_eq!(AttackStrategy::LogicBomb.to_string(), "logic-bomb");
         assert_eq!(AttackStrategy::SupplyChain.to_string(), "supply-chain");
     }
@@ -1191,7 +1262,10 @@ mod tests {
     #[test]
     fn exploit_target_display() {
         assert_eq!(ExploitTarget::DomTree.to_string(), "dom-tree");
-        assert_eq!(ExploitTarget::GlobalNamespace.to_string(), "global-namespace");
+        assert_eq!(
+            ExploitTarget::GlobalNamespace.to_string(),
+            "global-namespace"
+        );
         assert_eq!(ExploitTarget::EventSystem.to_string(), "event-system");
     }
 
@@ -1204,7 +1278,10 @@ mod tests {
 
     #[test]
     fn mutation_operator_display() {
-        assert_eq!(MutationOperator::PayloadEncoding.to_string(), "payload-encoding");
+        assert_eq!(
+            MutationOperator::PayloadEncoding.to_string(),
+            "payload-encoding"
+        );
         assert_eq!(MutationOperator::Obfuscation.to_string(), "obfuscation");
     }
 
@@ -1226,7 +1303,8 @@ mod tests {
     #[test]
     fn generate_dom_injection_exploits() {
         let synth = AttackGrammarSynthesizer::new(test_config());
-        let exploits = synth.generate_dom_injection_exploits()
+        let exploits = synth
+            .generate_dom_injection_exploits()
             .expect("should generate DOM injection exploits");
 
         assert!(!exploits.is_empty());
@@ -1239,7 +1317,8 @@ mod tests {
     #[test]
     fn generate_prototype_pollution_exploits() {
         let synth = AttackGrammarSynthesizer::new(test_config());
-        let exploits = synth.generate_prototype_pollution_exploits()
+        let exploits = synth
+            .generate_prototype_pollution_exploits()
             .expect("should generate prototype pollution exploits");
 
         assert!(!exploits.is_empty());
@@ -1251,7 +1330,8 @@ mod tests {
     #[test]
     fn synthesize_all_strategies() {
         let mut synth = AttackGrammarSynthesizer::new(test_config());
-        let candidates = synth.synthesize_exploits(1000)
+        let candidates = synth
+            .synthesize_exploits(1000)
             .expect("should synthesize exploits");
 
         assert!(!candidates.is_empty());
@@ -1261,11 +1341,13 @@ mod tests {
     #[test]
     fn apply_payload_encoding_mutation() {
         let synth = AttackGrammarSynthesizer::new(test_config());
-        let base_exploits = synth.generate_dom_injection_exploits()
+        let base_exploits = synth
+            .generate_dom_injection_exploits()
             .expect("should generate base exploits");
         let base = &base_exploits[0];
 
-        let mutated = synth.apply_mutation(base, MutationOperator::PayloadEncoding, 1000)
+        let mutated = synth
+            .apply_mutation(base, MutationOperator::PayloadEncoding, 1000)
             .expect("should apply mutation");
 
         assert!(mutated.javascript_code.contains("atob"));
@@ -1277,10 +1359,10 @@ mod tests {
         let errors = vec![
             AttackGrammarError::NoBaseExploits,
             AttackGrammarError::UnsupportedStrategy {
-                strategy: AttackStrategy::DomInjection
+                strategy: AttackStrategy::DomInjection,
             },
             AttackGrammarError::CodeGeneration {
-                reason: "test".to_string()
+                reason: "test".to_string(),
             },
         ];
 
@@ -1292,13 +1374,13 @@ mod tests {
     #[test]
     fn manifest_serde_roundtrip() {
         let synth = AttackGrammarSynthesizer::new(test_config());
-        let exploits = synth.generate_dom_injection_exploits()
+        let exploits = synth
+            .generate_dom_injection_exploits()
             .expect("should generate exploits");
 
         let manifest = &exploits[0].manifest;
         let json = serde_json::to_string(manifest).expect("should serialize");
-        let restored: ExploitManifest = serde_json::from_str(&json)
-            .expect("should deserialize");
+        let restored: ExploitManifest = serde_json::from_str(&json).expect("should deserialize");
 
         assert_eq!(manifest.exploit_id, restored.exploit_id);
         assert_eq!(manifest.strategy, restored.strategy);

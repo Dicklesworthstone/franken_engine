@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 //! Real-runtime hot path performance benchmarks.
 //!
 //! These workloads intentionally exercise shipped FrankenEngine structures.

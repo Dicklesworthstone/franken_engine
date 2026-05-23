@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::ContentHash;
 use crate::martingale_decision_ledger::{
-    MartingaleLedger, MartingaleVerdict, StoppingThreshold, MartingaleError,
+    MartingaleError, MartingaleLedger, MartingaleVerdict, StoppingThreshold,
 };
 use crate::security_epoch::SecurityEpoch;
 
@@ -40,10 +40,7 @@ pub struct ExpectedLossMatrix {
 
 impl ExpectedLossMatrix {
     /// Create new expected-loss matrix.
-    pub fn new(
-        action_losses: BTreeMap<String, i64>,
-        block_threshold_millionths: i64,
-    ) -> Self {
+    pub fn new(action_losses: BTreeMap<String, i64>, block_threshold_millionths: i64) -> Self {
         Self {
             action_losses,
             block_threshold_millionths,
@@ -219,7 +216,10 @@ impl fmt::Display for GuardrailError {
                 guardrail_id,
                 source,
             } => {
-                write!(f, "martingale error for guardrail '{guardrail_id}': {source}")
+                write!(
+                    f,
+                    "martingale error for guardrail '{guardrail_id}': {source}"
+                )
             }
         }
     }
@@ -432,15 +432,18 @@ impl EProcessGuardrail {
         let payload_digest = ContentHash::compute(payload.as_bytes());
 
         // Append to martingale ledger.
-        let verdict = self.martingale.append(
-            log_lr_millionths,
-            payload_digest,
-            // Use a simple timestamp (real systems would use proper clock).
-            self.observation_count() * 1_000_000_000,
-        ).map_err(|source| GuardrailError::MartingaleError {
-            guardrail_id: self.guardrail_id.clone(),
-            source,
-        })?;
+        let verdict = self
+            .martingale
+            .append(
+                log_lr_millionths,
+                payload_digest,
+                // Use a simple timestamp (real systems would use proper clock).
+                self.observation_count() * 1_000_000_000,
+            )
+            .map_err(|source| GuardrailError::MartingaleError {
+                guardrail_id: self.guardrail_id.clone(),
+                source,
+            })?;
 
         // Emit update event.
         self.events.push(GuardrailEvent::MartingaleUpdated {
@@ -660,9 +663,9 @@ mod tests {
     fn test_guardrail() -> EProcessGuardrail {
         // Expected-loss matrix: block "low" and "medium" actions.
         let mut action_losses = BTreeMap::new();
-        action_losses.insert("low".to_string(), 2_000_000);    // 2.0 loss
+        action_losses.insert("low".to_string(), 2_000_000); // 2.0 loss
         action_losses.insert("medium".to_string(), 3_000_000); // 3.0 loss
-        action_losses.insert("high".to_string(), 500_000);     // 0.5 loss (below threshold)
+        action_losses.insert("high".to_string(), 500_000); // 0.5 loss (below threshold)
 
         let loss_matrix = ExpectedLossMatrix::new(
             action_losses,
@@ -670,8 +673,8 @@ mod tests {
         );
 
         // Stopping threshold: log(1/0.05) ≈ 2.996 in millionths.
-        let stopping_threshold = StoppingThreshold::try_from_log_millionths(2_996_000)
-            .expect("valid threshold");
+        let stopping_threshold =
+            StoppingThreshold::try_from_log_millionths(2_996_000).expect("valid threshold");
 
         EProcessGuardrail::new(
             "fnr-guard",
@@ -987,8 +990,8 @@ mod tests {
         let mut action_losses1 = BTreeMap::new();
         action_losses1.insert("low".to_string(), 2_000_000); // blocks this
         let loss_matrix1 = ExpectedLossMatrix::new(action_losses1, 1_000_000);
-        let threshold1 = StoppingThreshold::try_from_log_millionths(1_000_000)
-            .expect("valid threshold"); // low threshold
+        let threshold1 =
+            StoppingThreshold::try_from_log_millionths(1_000_000).expect("valid threshold"); // low threshold
 
         let mut gr1 = EProcessGuardrail::new(
             "gr1",
@@ -1010,8 +1013,8 @@ mod tests {
         let mut action_losses2 = BTreeMap::new();
         action_losses2.insert("medium".to_string(), 2_000_000); // would block this
         let loss_matrix2 = ExpectedLossMatrix::new(action_losses2, 1_000_000);
-        let threshold2 = StoppingThreshold::try_from_log_millionths(10_000_000)
-            .expect("valid threshold"); // high threshold
+        let threshold2 =
+            StoppingThreshold::try_from_log_millionths(10_000_000).expect("valid threshold"); // high threshold
 
         let gr2 = EProcessGuardrail::new(
             "gr2",
@@ -1042,8 +1045,8 @@ mod tests {
 
         let action_losses = BTreeMap::new();
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
-            .expect("valid threshold"); // high threshold, won't trigger easily
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(10_000_000).expect("valid threshold"); // high threshold, won't trigger easily
 
         let gr = EProcessGuardrail::new(
             "gr1",
@@ -1090,10 +1093,10 @@ mod tests {
         let mut action_losses = BTreeMap::new();
         action_losses.insert("low".to_string(), 2_000_000); // blocks this
         action_losses.insert("medium".to_string(), 500_000); // doesn't block this
-        action_losses.insert("high".to_string(), 500_000);   // doesn't block this
+        action_losses.insert("high".to_string(), 500_000); // doesn't block this
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-        let threshold = StoppingThreshold::try_from_log_millionths(1_000_000)
-            .expect("valid threshold"); // low threshold
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(1_000_000).expect("valid threshold"); // low threshold
 
         let mut gr = EProcessGuardrail::new(
             "gr1",
@@ -1124,8 +1127,8 @@ mod tests {
         let mut action_losses = BTreeMap::new();
         action_losses.insert("low".to_string(), 2_000_000);
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-        let threshold = StoppingThreshold::try_from_log_millionths(1_000_000)
-            .expect("valid threshold"); // low threshold
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(1_000_000).expect("valid threshold"); // low threshold
 
         let mut gr = EProcessGuardrail::new(
             "gr1",
@@ -1151,10 +1154,7 @@ mod tests {
         let errors = registry.reset_all(&receipt);
         assert!(errors.is_empty());
         assert_eq!(
-            registry
-                .get("gr1")
-                .expect("guardrail should exist")
-                .state(),
+            registry.get("gr1").expect("guardrail should exist").state(),
             GuardrailState::Active
         );
     }
@@ -1174,7 +1174,10 @@ mod tests {
                 let _ = gr.update(o);
             }
             // Return observation count and log martingale value
-            (gr.observation_count(), gr.martingale_state().log_m_millionths)
+            (
+                gr.observation_count(),
+                gr.martingale_state().log_m_millionths,
+            )
         };
 
         let (count1, ev1) = run(&observations);
@@ -1361,8 +1364,8 @@ mod tests {
         let action_losses = BTreeMap::new();
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
         // Use extremely high threshold so we don't trigger before overflow
-        let threshold = StoppingThreshold::try_from_log_millionths(i64::MAX)
-            .expect("valid threshold");
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(i64::MAX).expect("valid threshold");
 
         // Use huge likelihood ratio that will cause log accumulator overflow
         let big_ratio: i64 = i64::MAX; // huge ratio
@@ -1419,7 +1422,10 @@ mod tests {
         let state_before = gr.martingale_state();
         let count_before = gr.observation_count();
         gr.suspend("maintenance");
-        assert_eq!(gr.martingale_state().log_m_millionths, state_before.log_m_millionths);
+        assert_eq!(
+            gr.martingale_state().log_m_millionths,
+            state_before.log_m_millionths
+        );
         assert_eq!(gr.observation_count(), count_before);
     }
 
@@ -1524,8 +1530,8 @@ mod tests {
         let mut registry = GuardrailRegistry::new();
         let action_losses = BTreeMap::new();
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
-            .expect("valid threshold");
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(10_000_000).expect("valid threshold");
 
         let mut gr = EProcessGuardrail::new(
             "gr1",
@@ -1556,8 +1562,8 @@ mod tests {
             let mut action_losses = BTreeMap::new();
             action_losses.insert("low".to_string(), 2_000_000); // blocks this
             let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-            let threshold = StoppingThreshold::try_from_log_millionths(1_000_000)
-                .expect("valid threshold"); // low threshold
+            let threshold =
+                StoppingThreshold::try_from_log_millionths(1_000_000).expect("valid threshold"); // low threshold
 
             let mut gr = EProcessGuardrail::new(
                 id,
@@ -1584,8 +1590,8 @@ mod tests {
         let mut registry = GuardrailRegistry::new();
         let action_losses = BTreeMap::new();
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
-            .expect("valid threshold");
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(10_000_000).expect("valid threshold");
 
         let gr = EProcessGuardrail::new(
             "gr1",
@@ -1616,8 +1622,8 @@ mod tests {
         let mut registry = GuardrailRegistry::new();
         let action_losses = BTreeMap::new();
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
-            .expect("valid threshold");
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(10_000_000).expect("valid threshold");
 
         let gr = EProcessGuardrail::new(
             "active-gr",
@@ -1684,8 +1690,8 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(42);
         let action_losses = BTreeMap::new();
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-        let threshold = StoppingThreshold::try_from_log_millionths(2_996_000)
-            .expect("valid threshold");
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(2_996_000).expect("valid threshold");
 
         let gr = EProcessGuardrail::new(
             "g",
@@ -1773,8 +1779,8 @@ mod tests {
 
         let action_losses = BTreeMap::new();
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
-        let threshold = StoppingThreshold::try_from_log_millionths(10_000_000)
-            .expect("valid threshold");
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(10_000_000).expect("valid threshold");
 
         let gr = EProcessGuardrail::new(
             "gr1",
@@ -1814,8 +1820,8 @@ mod tests {
         let action_losses = BTreeMap::new();
         let loss_matrix = ExpectedLossMatrix::new(action_losses, 1_000_000);
         // Low threshold: ln(5.0) ≈ 1.609 in millionths ≈ 1_609_000
-        let threshold = StoppingThreshold::try_from_log_millionths(1_609_000)
-            .expect("valid threshold");
+        let threshold =
+            StoppingThreshold::try_from_log_millionths(1_609_000).expect("valid threshold");
 
         let mut gr = EProcessGuardrail::new(
             "single-trigger",

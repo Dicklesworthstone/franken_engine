@@ -19,7 +19,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::ast::SourceSpan;
+use crate::eprocess_guardrail::{
+    EProcessGuardrail, ExpectedLossMatrix, GuardrailRegistry, ThresholdLikelihoodRatio,
+};
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
+use crate::martingale_decision_ledger::StoppingThreshold;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -449,6 +453,8 @@ pub struct BasicGuardplaneAdapter {
     pub config: GuardplaneConfig,
     /// Decision history for learning.
     pub decision_history: Vec<GuardplaneDecisionEvidence>,
+    /// Unified substrate from AA.1/AA.2 for martingale-based decisions
+    pub unified_guardrail_registry: GuardrailRegistry,
 }
 
 /// Configuration for guardplane behavior.
@@ -636,11 +642,46 @@ fn compute_assessment_confidence(
 }
 
 impl BasicGuardplaneAdapter {
-    /// Create a new basic guardplane adapter.
+    /// Create a new basic guardplane adapter with unified substrate.
     pub fn new(config: GuardplaneConfig) -> Self {
+        let mut unified_guardrail_registry = GuardrailRegistry::new();
+
+        // Create expected-loss matrix for integration decisions
+        let mut action_losses = std::collections::BTreeMap::new();
+        action_losses.insert("allow".to_string(), 100_000); // 0.1 loss for allow
+        action_losses.insert("challenge".to_string(), 300_000); // 0.3 loss for challenge
+        action_losses.insert("sandbox".to_string(), 600_000); // 0.6 loss for sandbox
+        action_losses.insert("deny".to_string(), 900_000); // 0.9 loss for deny
+
+        let expected_loss_matrix = ExpectedLossMatrix::new(
+            action_losses,
+            500_000, // Block actions with loss >= 0.5
+        );
+
+        // Create stopping threshold for integration decisions
+        let stopping_threshold = StoppingThreshold::try_from_log_millionths(2_996_000)
+            .unwrap_or_else(|_| StoppingThreshold::try_from_log_millionths(1_000_000).unwrap());
+
+        // Create unified guardrail for integration
+        let unified_guardrail = EProcessGuardrail::new(
+            "guardplane-integration",
+            "integration-decisions",
+            "unified guardplane integration decisions",
+            stopping_threshold,
+            expected_loss_matrix,
+            crate::security_epoch::SecurityEpoch::GENESIS,
+            Box::new(ThresholdLikelihoodRatio {
+                threshold_millionths: config.challenge_threshold as i64,
+                high_ratio_millionths: 3_000_000, // 3.0 ratio when above threshold
+                low_ratio_millionths: 300_000,    // 0.3 ratio when below threshold
+            }),
+        );
+        unified_guardrail_registry.add(unified_guardrail);
+
         Self {
             config,
             decision_history: Vec::new(),
+            unified_guardrail_registry,
         }
     }
 
@@ -889,15 +930,39 @@ impl InterpreterHook for BasicGuardplaneAdapter {
 
         let op_context = OperationContext::PropertyAccess(context.clone());
         let risk = self.assess_risk(&op_context)?;
-        let action = self.determine_action(&risk);
+        let legacy_action = self.determine_action(&risk);
+
+        // Unified substrate decision (AA.1/AA.2)
+        let observation_millionths = risk.risk_score;
+        let _guardrail_errors = self
+            .unified_guardrail_registry
+            .update_stream("integration-decisions", observation_millionths.into());
+
+        // Check if unified guardrails are triggered
+        let unified_blocked_actions = self.unified_guardrail_registry.blocked_actions();
+        let unified_action = if !unified_blocked_actions.is_empty() {
+            HookAction::Terminate // Block if any unified guardrails triggered
+        } else {
+            HookAction::Allow
+        };
+
+        // Combine legacy and unified decisions (stricter wins)
+        let final_action = match (&legacy_action, &unified_action) {
+            (HookAction::Terminate, _) | (_, HookAction::Terminate) => HookAction::Terminate,
+            (HookAction::Quarantine, _) | (_, HookAction::Quarantine) => HookAction::Quarantine,
+            (HookAction::Suspend, _) | (_, HookAction::Suspend) => HookAction::Suspend,
+            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
+            (HookAction::Challenge, _) | (_, HookAction::Challenge) => HookAction::Challenge,
+            _ => HookAction::Allow,
+        };
 
         // Generate and store evidence if enabled
         if self.config.emit_evidence {
-            let evidence = self.generate_evidence(&op_context, &risk, action)?;
+            let evidence = self.generate_evidence(&op_context, &risk, final_action)?;
             self.decision_history.push(evidence);
         }
 
-        Ok(action)
+        Ok(final_action)
     }
 
     fn pre_call(&mut self, context: &CallContext) -> Result<HookAction, GuardplaneError> {
@@ -908,14 +973,36 @@ impl InterpreterHook for BasicGuardplaneAdapter {
 
         let op_context = OperationContext::Call(context.clone());
         let risk = self.assess_risk(&op_context)?;
-        let action = self.determine_action(&risk);
+        let legacy_action = self.determine_action(&risk);
+
+        // Unified substrate decision (AA.1/AA.2)
+        let observation_millionths = risk.risk_score;
+        let _guardrail_errors = self
+            .unified_guardrail_registry
+            .update_stream("integration-decisions", observation_millionths.into());
+
+        let unified_blocked_actions = self.unified_guardrail_registry.blocked_actions();
+        let unified_action = if !unified_blocked_actions.is_empty() {
+            HookAction::Terminate
+        } else {
+            HookAction::Allow
+        };
+
+        let final_action = match (&legacy_action, &unified_action) {
+            (HookAction::Terminate, _) | (_, HookAction::Terminate) => HookAction::Terminate,
+            (HookAction::Quarantine, _) | (_, HookAction::Quarantine) => HookAction::Quarantine,
+            (HookAction::Suspend, _) | (_, HookAction::Suspend) => HookAction::Suspend,
+            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
+            (HookAction::Challenge, _) | (_, HookAction::Challenge) => HookAction::Challenge,
+            _ => HookAction::Allow,
+        };
 
         if self.config.emit_evidence {
-            let evidence = self.generate_evidence(&op_context, &risk, action)?;
+            let evidence = self.generate_evidence(&op_context, &risk, final_action)?;
             self.decision_history.push(evidence);
         }
 
-        Ok(action)
+        Ok(final_action)
     }
 
     fn pre_allocation(
@@ -928,14 +1015,36 @@ impl InterpreterHook for BasicGuardplaneAdapter {
 
         let op_context = OperationContext::Allocation(context.clone());
         let risk = self.assess_risk(&op_context)?;
-        let action = self.determine_action(&risk);
+        let legacy_action = self.determine_action(&risk);
+
+        // Unified substrate decision (AA.1/AA.2)
+        let observation_millionths = risk.risk_score;
+        let _guardrail_errors = self
+            .unified_guardrail_registry
+            .update_stream("integration-decisions", observation_millionths.into());
+
+        let unified_blocked_actions = self.unified_guardrail_registry.blocked_actions();
+        let unified_action = if !unified_blocked_actions.is_empty() {
+            HookAction::Terminate
+        } else {
+            HookAction::Allow
+        };
+
+        let final_action = match (&legacy_action, &unified_action) {
+            (HookAction::Terminate, _) | (_, HookAction::Terminate) => HookAction::Terminate,
+            (HookAction::Quarantine, _) | (_, HookAction::Quarantine) => HookAction::Quarantine,
+            (HookAction::Suspend, _) | (_, HookAction::Suspend) => HookAction::Suspend,
+            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
+            (HookAction::Challenge, _) | (_, HookAction::Challenge) => HookAction::Challenge,
+            _ => HookAction::Allow,
+        };
 
         if self.config.emit_evidence {
-            let evidence = self.generate_evidence(&op_context, &risk, action)?;
+            let evidence = self.generate_evidence(&op_context, &risk, final_action)?;
             self.decision_history.push(evidence);
         }
 
-        Ok(action)
+        Ok(final_action)
     }
 
     fn pre_import(&mut self, context: &ImportContext) -> Result<HookAction, GuardplaneError> {
@@ -945,14 +1054,37 @@ impl InterpreterHook for BasicGuardplaneAdapter {
 
         let op_context = OperationContext::Import(context.clone());
         let risk = self.assess_risk(&op_context)?;
-        let action = self.determine_action(&risk);
+
+        // Legacy decision path (maintained for compatibility)
+        let legacy_action = self.determine_action(&risk);
+
+        // Unified substrate decision (AA.1/AA.2)
+        let observation_millionths = risk.risk_score;
+        let _guardrail_errors = self
+            .unified_guardrail_registry
+            .update_stream("integration-decisions", observation_millionths.into());
+
+        let unified_blocked_actions = self.unified_guardrail_registry.blocked_actions();
+        let unified_action = if !unified_blocked_actions.is_empty() {
+            HookAction::Quarantine
+        } else {
+            HookAction::Allow
+        };
+
+        // Combine decisions (stricter action wins)
+        let final_action = match (legacy_action, unified_action) {
+            (HookAction::Quarantine, _) | (_, HookAction::Quarantine) => HookAction::Quarantine,
+            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
+            (HookAction::Challenge, _) | (_, HookAction::Challenge) => HookAction::Challenge,
+            _ => HookAction::Allow,
+        };
 
         if self.config.emit_evidence {
-            let evidence = self.generate_evidence(&op_context, &risk, action)?;
+            let evidence = self.generate_evidence(&op_context, &risk, final_action)?;
             self.decision_history.push(evidence);
         }
 
-        Ok(action)
+        Ok(final_action)
     }
 }
 
@@ -1176,10 +1308,10 @@ mod tests {
             e_process_boundaries: Vec::new(),
             policy_violations: Vec::new(),
         };
-        assert_eq!(
+        assert!(matches!(
             adapter.determine_action(&medium_risk),
-            HookAction::Challenge
-        );
+            HookAction::Challenge(_)
+        ));
 
         // High risk → Sandbox
         let high_risk = RiskAssessment {

@@ -17,11 +17,16 @@ use crate::baseline_interpreter::{
     PropertyKey, Value,
 };
 use crate::bayesian_posterior::{BayesianPosteriorUpdater, Evidence, Posterior, RiskState};
+use crate::eprocess_guardrail::{
+    EProcessGuardrail, ExpectedLossMatrix, GuardrailRegistry, GuardrailState, ResetReceipt,
+    ThresholdLikelihoodRatio,
+};
 use crate::expected_loss_selector::{
     ContainmentAction as SelectorContainmentAction, ExpectedLossSelector, LossMatrix,
 };
 use crate::fleet_convergence::ContainmentThresholds;
 use crate::fleet_immune_protocol::ContainmentAction as ThresholdContainmentAction;
+use crate::martingale_decision_ledger::{MartingaleVerdict, StoppingThreshold};
 use crate::runtime_config::RuntimeConfig;
 use crate::security_epoch::SecurityEpoch;
 
@@ -396,8 +401,11 @@ pub struct GuardplaneExecutionSummary {
 
 #[derive(Debug)]
 struct GuardplaneAdapterState {
+    // Legacy fields for backward compatibility during migration
     updater: BayesianPosteriorUpdater,
     selector: ExpectedLossSelector,
+    // Unified substrate from AA.1/AA.2
+    unified_guardrail_registry: GuardrailRegistry,
     thresholds: ContainmentThresholds,
     operation_count: u64,
     decisions: Vec<GuardplaneDecisionRecord>,
@@ -422,12 +430,51 @@ impl GuardplaneAdapter {
             context.extension_id.clone(),
         );
         updater.set_epoch(epoch);
+
+        // Create unified guardrail registry with martingale substrate
+        let mut unified_guardrail_registry = GuardrailRegistry::new();
+
+        // Convert existing LossMatrix to ExpectedLossMatrix for unified substrate
+        let mut action_losses = std::collections::BTreeMap::new();
+        // LossMatrix doesn't have action_losses() method, use a default mapping
+        action_losses.insert("Allow".to_string(), 0);
+        action_losses.insert("Challenge".to_string(), 100_000);
+        action_losses.insert("Sandbox".to_string(), 300_000);
+        action_losses.insert("Suspend".to_string(), 500_000);
+        action_losses.insert("Terminate".to_string(), 800_000);
+        action_losses.insert("Quarantine".to_string(), 900_000);
+        let expected_loss_matrix = ExpectedLossMatrix::new(
+            action_losses,
+            1_000_000, // 1.0 threshold for blocking actions
+        );
+
+        // Create stopping threshold: log(1/0.05) ≈ 2.996 in millionths
+        let stopping_threshold = StoppingThreshold::try_from_log_millionths(2_996_000)
+            .unwrap_or_else(|_| StoppingThreshold::try_from_log_millionths(1_000_000).unwrap());
+
+        // Create unified guardrail consuming martingale substrate
+        let unified_guardrail = EProcessGuardrail::new(
+            format!("unified-{}", context.extension_id),
+            "guardplane-decisions",
+            "unified guardplane decision substrate",
+            stopping_threshold,
+            expected_loss_matrix,
+            epoch,
+            Box::new(ThresholdLikelihoodRatio {
+                threshold_millionths: 500_000,    // 0.5 risk threshold
+                high_ratio_millionths: 2_000_000, // 2.0 ratio when above threshold
+                low_ratio_millionths: 500_000,    // 0.5 ratio when below threshold
+            }),
+        );
+        unified_guardrail_registry.add(unified_guardrail);
+
         Self {
             context,
             epoch,
             state: Mutex::new(GuardplaneAdapterState {
                 updater,
                 selector: ExpectedLossSelector::new(loss_matrix),
+                unified_guardrail_registry,
                 thresholds: ContainmentThresholds::default(),
                 operation_count: 0,
                 decisions: Vec::new(),
@@ -486,10 +533,35 @@ impl GuardplaneAdapter {
         state.operation_count = state.operation_count.saturating_add(1);
 
         let evidence = self.build_evidence(&operation, state.operation_count);
+
+        // Legacy decision path (maintained for compatibility)
         let update = state.updater.update(&evidence);
         let decision = state.selector.select(&update.posterior);
         let posterior_delta_millionths = posterior_delta(&update.posterior);
         let threshold_action = state.thresholds.evaluate(posterior_delta_millionths);
+
+        // Unified substrate decision path (AA.1/AA.2)
+        // Convert evidence to likelihood ratio and feed to martingale
+        let lr_millionths = self.evidence_to_likelihood_ratio(&evidence);
+        let observation_millionths = (evidence.resource_score_millionths
+            + evidence.timing_anomaly_millionths
+            + evidence.denial_rate_millionths)
+            / 3;
+
+        // Update unified guardrail registry with observation
+        let _guardrail_errors = state
+            .unified_guardrail_registry
+            .update_stream("guardplane-decisions", observation_millionths);
+
+        // Check if unified guardrails are triggered
+        let unified_blocked_actions = state.unified_guardrail_registry.blocked_actions();
+        let unified_action = if !unified_blocked_actions.is_empty() {
+            HookAction::Terminate("unified guardrails triggered".to_string()) // Block if any unified guardrails triggered
+        } else {
+            HookAction::Allow
+        };
+
+        // For now, combine decisions (legacy takes precedence for compatibility)
         let action = hook_action_from_decisions(
             &operation,
             decision.action,
@@ -497,6 +569,42 @@ impl GuardplaneAdapter {
             &update.posterior,
             posterior_delta_millionths,
         );
+
+        // Use stricter of legacy or unified decision
+        let final_action = match (&action, &unified_action) {
+            (HookAction::Terminate(_), _) | (_, HookAction::Terminate(_)) => {
+                if let HookAction::Terminate(reason) = action {
+                    HookAction::Terminate(reason)
+                } else if let HookAction::Terminate(reason) = unified_action {
+                    HookAction::Terminate(reason)
+                } else {
+                    HookAction::Terminate("unknown".to_string())
+                }
+            }
+            (HookAction::Quarantine(_), _) | (_, HookAction::Quarantine(_)) => {
+                if let HookAction::Quarantine(reason) = action {
+                    HookAction::Quarantine(reason)
+                } else if let HookAction::Quarantine(reason) = unified_action {
+                    HookAction::Quarantine(reason)
+                } else {
+                    HookAction::Quarantine("unknown".to_string())
+                }
+            }
+            (HookAction::Suspend, _) | (_, HookAction::Suspend) => HookAction::Suspend,
+            (HookAction::Sandbox, _) | (_, HookAction::Sandbox) => HookAction::Sandbox,
+            (HookAction::Challenge(_), _) | (_, HookAction::Challenge(_)) => {
+                if let HookAction::Challenge(token) = action {
+                    HookAction::Challenge(token)
+                } else if let HookAction::Challenge(token) = unified_action {
+                    HookAction::Challenge(token)
+                } else {
+                    HookAction::Challenge(ChallengeToken {
+                        token: "unified".to_string(),
+                    })
+                }
+            }
+            _ => HookAction::Allow,
+        };
 
         state.decisions.push(GuardplaneDecisionRecord {
             hook_context: hook_context.clone(),
@@ -507,11 +615,31 @@ impl GuardplaneAdapter {
             log_likelihood_ratio_millionths: update.cumulative_llr_millionths,
             selected_action: decision.action,
             threshold_action,
-            action: action.clone(),
+            action: final_action.clone(), // Use combined decision from unified substrate
             expected_loss_millionths: decision.expected_loss_millionths,
         });
 
-        action
+        final_action
+    }
+
+    fn evidence_to_likelihood_ratio(&self, evidence: &Evidence) -> i64 {
+        // Convert evidence scores to likelihood ratio
+        // High resource/timing/denial scores indicate higher risk -> higher LR
+        let total_score = evidence.resource_score_millionths
+            + evidence.timing_anomaly_millionths
+            + evidence.denial_rate_millionths;
+        let average_score = total_score / 3;
+
+        // Map score (0 to 1M) to likelihood ratio (0.1 to 10.0 in millionths)
+        if average_score > 500_000 {
+            // Above average risk -> LR > 1.0
+            let excess = average_score - 500_000;
+            1_000_000 + (excess * 18) / 500_000 // 1.0 to 10.0
+        } else {
+            // Below average risk -> LR < 1.0
+            let deficit = 500_000 - average_score;
+            1_000_000 - (deficit * 900_000) / 500_000 // 0.1 to 1.0
+        }
     }
 
     fn build_evidence(&self, operation: &GuardplaneOperation, operation_index: u64) -> Evidence {

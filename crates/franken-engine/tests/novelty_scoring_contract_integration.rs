@@ -947,6 +947,202 @@ fn info_gain_divergent_prior_positive() {
 }
 
 // ===========================================================================
+// Semantic novelty detector
+// ===========================================================================
+
+#[test]
+fn semantic_detector_rejects_cosmetic_variant_with_different_source() {
+    let existing = NoveltyCandidate::new(
+        "corpus-a".into(),
+        CandidateKind::Program,
+        5000,
+        vec![900_000, 200_000, 100_000, 700_000],
+        b"function attack(){return 1;}",
+    );
+    let candidate = NoveltyCandidate::new(
+        "candidate-a".into(),
+        CandidateKind::Program,
+        5000,
+        vec![900_000, 200_000, 100_000, 700_000],
+        b"function attack() { return 1; }",
+    );
+
+    let report = classify_semantic_novelty(&candidate, &[existing]);
+    let nearest = report.nearest.as_ref().expect("nearest corpus match");
+
+    assert_eq!(report.verdict, SemanticNoveltyVerdict::Duplicate);
+    assert!(!report.counts_as_distinct());
+    assert_eq!(nearest.existing_candidate_id, "corpus-a");
+    assert_eq!(nearest.similarity_millionths, MILLIONTHS);
+    assert!(!nearest.source_hash_match);
+}
+
+#[test]
+fn semantic_detector_reports_byte_identical_duplicate() {
+    let existing = NoveltyCandidate::new(
+        "corpus-byte".into(),
+        CandidateKind::Program,
+        5000,
+        vec![100_000],
+        b"same-source",
+    );
+    let candidate = NoveltyCandidate::new(
+        "candidate-byte".into(),
+        CandidateKind::Program,
+        5000,
+        vec![900_000],
+        b"same-source",
+    );
+
+    let report = classify_semantic_novelty(&candidate, &[existing]);
+    let nearest = report.nearest.as_ref().expect("nearest corpus match");
+
+    assert_eq!(report.verdict, SemanticNoveltyVerdict::Duplicate);
+    assert_eq!(nearest.similarity_millionths, MILLIONTHS);
+    assert!(nearest.source_hash_match);
+}
+
+#[test]
+fn semantic_detector_flags_near_duplicate_for_review() {
+    let existing = NoveltyCandidate::new(
+        "corpus-near".into(),
+        CandidateKind::Program,
+        5000,
+        vec![900_000, 100_000],
+        b"source-a",
+    );
+    let candidate = NoveltyCandidate::new(
+        "candidate-near".into(),
+        CandidateKind::Program,
+        5000,
+        vec![650_000, 350_000],
+        b"source-b",
+    );
+
+    let report = classify_semantic_novelty(&candidate, &[existing]);
+
+    assert_eq!(report.verdict, SemanticNoveltyVerdict::NearDuplicate);
+    assert!(!report.counts_as_distinct());
+}
+
+#[test]
+fn semantic_detector_allows_distinct_feature_profile() {
+    let existing = NoveltyCandidate::new(
+        "corpus-distinct".into(),
+        CandidateKind::Program,
+        5000,
+        vec![1_000_000, 0, 0],
+        b"source-a",
+    );
+    let candidate = NoveltyCandidate::new(
+        "candidate-distinct".into(),
+        CandidateKind::Program,
+        5000,
+        vec![0, 1_000_000, 0],
+        b"source-b",
+    );
+
+    let report = classify_semantic_novelty(&candidate, &[existing]);
+
+    assert_eq!(report.verdict, SemanticNoveltyVerdict::Novel);
+    assert!(report.counts_as_distinct());
+}
+
+#[test]
+fn semantic_detector_tie_breaks_nearest_match_deterministically() {
+    let candidate = NoveltyCandidate::new(
+        "candidate-tie".into(),
+        CandidateKind::Program,
+        5000,
+        vec![500_000, 500_000],
+        b"candidate",
+    );
+    let later_id = NoveltyCandidate::new(
+        "z-corpus".into(),
+        CandidateKind::Program,
+        5000,
+        vec![500_000, 500_000],
+        b"z",
+    );
+    let earlier_id = NoveltyCandidate::new(
+        "a-corpus".into(),
+        CandidateKind::Program,
+        5000,
+        vec![500_000, 500_000],
+        b"a",
+    );
+
+    let report = classify_semantic_novelty(&candidate, &[later_id, earlier_id]);
+    let nearest = report.nearest.as_ref().expect("nearest corpus match");
+
+    assert_eq!(nearest.existing_candidate_id, "a-corpus");
+}
+
+#[test]
+fn semantic_novelty_report_serde_roundtrip() {
+    let existing = NoveltyCandidate::new(
+        "corpus-serde".into(),
+        CandidateKind::Program,
+        5000,
+        vec![900_000, 100_000],
+        b"source-a",
+    );
+    let candidate = NoveltyCandidate::new(
+        "candidate-serde".into(),
+        CandidateKind::Program,
+        5000,
+        vec![900_000, 100_000],
+        b"source-b",
+    );
+    let report = classify_semantic_novelty(&candidate, &[existing]);
+
+    let json = serde_json::to_string(&report).expect("serialize semantic novelty report");
+    let back: SemanticNoveltyReport =
+        serde_json::from_str(&json).expect("deserialize semantic novelty report");
+
+    assert_eq!(report, back);
+}
+
+#[test]
+fn score_batch_zeroes_semantic_duplicates() {
+    let cfg = ScoringConfig::default_config();
+    let existing = NoveltyCandidate::new(
+        "batch-original".into(),
+        CandidateKind::Program,
+        2000,
+        vec![
+            900_000, 800_000, 100_000, 700_000, 600_000, 500_000, 400_000,
+        ],
+        b"function attack(){return 1;}",
+    );
+    let cosmetic = NoveltyCandidate::new(
+        "batch-cosmetic".into(),
+        CandidateKind::Program,
+        2000,
+        vec![
+            900_000, 800_000, 100_000, 700_000, 600_000, 500_000, 400_000,
+        ],
+        b"function attack() { return 1; }",
+    );
+
+    let batch = score_batch(&[existing, cosmetic], &cfg);
+    let duplicate_cert = batch
+        .certificates
+        .iter()
+        .find(|cert| cert.candidate_id == "batch-cosmetic")
+        .expect("cosmetic candidate certificate");
+    let duplicate_report = batch
+        .semantic_reports
+        .iter()
+        .find(|report| report.candidate_id == "batch-cosmetic")
+        .expect("cosmetic candidate semantic report");
+
+    assert_eq!(duplicate_report.verdict, SemanticNoveltyVerdict::Duplicate);
+    assert_eq!(duplicate_cert.score.total_score_millionths, 0);
+    assert_eq!(duplicate_cert.verdict, NoveltyVerdict::Redundant);
+}
+
+// ===========================================================================
 // score_candidate and score_batch
 // ===========================================================================
 

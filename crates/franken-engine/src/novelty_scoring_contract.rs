@@ -75,6 +75,12 @@ pub const DEFAULT_ABSTENTION_THRESHOLD: u64 = 300_000; // 30%
 /// considered entirely incompressible.
 pub const MAX_DESCRIPTION_LENGTH: u64 = 10_000_000;
 
+/// Default semantic-similarity threshold at which a candidate is a duplicate.
+pub const DEFAULT_SEMANTIC_DUPLICATE_THRESHOLD_MILLIONTHS: u64 = 900_000;
+
+/// Default semantic-similarity threshold at which a candidate needs review.
+pub const DEFAULT_SEMANTIC_NEAR_DUPLICATE_THRESHOLD_MILLIONTHS: u64 = 700_000;
+
 // ---------------------------------------------------------------------------
 // NoveltyDimension — which novelty axis is being measured
 // ---------------------------------------------------------------------------
@@ -230,6 +236,236 @@ impl NoveltyCandidate {
             feature_vector,
             source_hash: ContentHash::compute(source_bytes),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Semantic novelty detection — reject cosmetic variants
+// ---------------------------------------------------------------------------
+
+/// Semantic novelty verdict against an existing corpus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SemanticNoveltyVerdict {
+    /// Candidate is semantically distinct from the corpus.
+    Novel,
+    /// Candidate is close enough to require duplicate review before promotion.
+    NearDuplicate,
+    /// Candidate is semantically redundant with an existing corpus entry.
+    Duplicate,
+}
+
+impl SemanticNoveltyVerdict {
+    /// Machine-readable label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Novel => "novel",
+            Self::NearDuplicate => "near_duplicate",
+            Self::Duplicate => "duplicate",
+        }
+    }
+
+    /// Whether this verdict should count as a distinct attack.
+    pub fn counts_as_distinct(&self) -> bool {
+        matches!(self, Self::Novel)
+    }
+}
+
+impl fmt::Display for SemanticNoveltyVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Thresholds for deterministic semantic novelty classification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticNoveltyConfig {
+    /// Similarity at or above this value is a duplicate.
+    pub duplicate_threshold_millionths: u64,
+    /// Similarity at or above this value is a near-duplicate.
+    pub near_duplicate_threshold_millionths: u64,
+}
+
+impl SemanticNoveltyConfig {
+    /// Default semantic novelty thresholds.
+    pub fn default_config() -> Self {
+        Self {
+            duplicate_threshold_millionths: DEFAULT_SEMANTIC_DUPLICATE_THRESHOLD_MILLIONTHS,
+            near_duplicate_threshold_millionths:
+                DEFAULT_SEMANTIC_NEAR_DUPLICATE_THRESHOLD_MILLIONTHS,
+        }
+    }
+
+    fn normalized_thresholds(&self) -> (u64, u64) {
+        let duplicate = self.duplicate_threshold_millionths.min(MILLIONTHS);
+        let near = self.near_duplicate_threshold_millionths.min(duplicate);
+        (duplicate, near)
+    }
+}
+
+/// Nearest semantic-corpus match for a candidate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticSimilarityMatch {
+    /// Existing corpus candidate that was nearest.
+    pub existing_candidate_id: String,
+    /// Similarity in fixed-point millionths.
+    pub similarity_millionths: u64,
+    /// Distance in fixed-point millionths.
+    pub distance_millionths: u64,
+    /// Number of exactly equal feature slots.
+    pub shared_feature_count: usize,
+    /// Number of feature slots compared.
+    pub compared_feature_count: usize,
+    /// Whether the source bytes were byte-identical.
+    pub source_hash_match: bool,
+}
+
+/// Semantic novelty report suitable for `novelty_report.json` emission.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SemanticNoveltyReport {
+    /// Candidate being classified.
+    pub candidate_id: String,
+    /// Corpus novelty verdict.
+    pub verdict: SemanticNoveltyVerdict,
+    /// Nearest existing corpus entry, if any.
+    pub nearest: Option<SemanticSimilarityMatch>,
+    /// Duplicate threshold used for this report.
+    pub duplicate_threshold_millionths: u64,
+    /// Near-duplicate threshold used for this report.
+    pub near_duplicate_threshold_millionths: u64,
+}
+
+impl SemanticNoveltyReport {
+    /// Whether this candidate should count as a distinct attack.
+    pub fn counts_as_distinct(&self) -> bool {
+        self.verdict.counts_as_distinct()
+    }
+}
+
+/// Compute deterministic semantic similarity between two candidates.
+pub fn semantic_similarity_match(
+    candidate: &NoveltyCandidate,
+    existing: &NoveltyCandidate,
+) -> SemanticSimilarityMatch {
+    let source_hash_match = candidate.source_hash == existing.source_hash;
+    if source_hash_match {
+        return SemanticSimilarityMatch {
+            existing_candidate_id: existing.candidate_id.clone(),
+            similarity_millionths: MILLIONTHS,
+            distance_millionths: 0,
+            shared_feature_count: candidate
+                .feature_vector
+                .len()
+                .max(existing.feature_vector.len()),
+            compared_feature_count: candidate
+                .feature_vector
+                .len()
+                .max(existing.feature_vector.len()),
+            source_hash_match,
+        };
+    }
+
+    let compared_feature_count = candidate
+        .feature_vector
+        .len()
+        .max(existing.feature_vector.len());
+    if compared_feature_count == 0 {
+        return SemanticSimilarityMatch {
+            existing_candidate_id: existing.candidate_id.clone(),
+            similarity_millionths: 0,
+            distance_millionths: MILLIONTHS,
+            shared_feature_count: 0,
+            compared_feature_count,
+            source_hash_match,
+        };
+    }
+
+    let mut total_distance: u128 = 0;
+    let mut shared_feature_count = 0usize;
+    for i in 0..compared_feature_count {
+        let candidate_value = candidate.feature_vector.get(i).copied().unwrap_or(0);
+        let existing_value = existing.feature_vector.get(i).copied().unwrap_or(0);
+        let candidate_value = candidate_value.min(MILLIONTHS);
+        let existing_value = existing_value.min(MILLIONTHS);
+        if candidate_value == existing_value {
+            shared_feature_count += 1;
+        }
+        total_distance =
+            total_distance.saturating_add(candidate_value.abs_diff(existing_value).into());
+    }
+
+    let max_distance = (compared_feature_count as u128).saturating_mul(MILLIONTHS.into());
+    let distance_millionths = total_distance
+        .saturating_mul(MILLIONTHS.into())
+        .checked_div(max_distance)
+        .unwrap_or(0)
+        .min(MILLIONTHS.into()) as u64;
+    let mut similarity_millionths = MILLIONTHS.saturating_sub(distance_millionths);
+
+    if candidate.kind != existing.kind {
+        similarity_millionths =
+            similarity_millionths.min(DEFAULT_SEMANTIC_NEAR_DUPLICATE_THRESHOLD_MILLIONTHS - 1);
+    }
+
+    SemanticSimilarityMatch {
+        existing_candidate_id: existing.candidate_id.clone(),
+        similarity_millionths,
+        distance_millionths: MILLIONTHS.saturating_sub(similarity_millionths),
+        shared_feature_count,
+        compared_feature_count,
+        source_hash_match,
+    }
+}
+
+/// Classify a candidate against an existing corpus using default thresholds.
+pub fn classify_semantic_novelty(
+    candidate: &NoveltyCandidate,
+    existing_corpus: &[NoveltyCandidate],
+) -> SemanticNoveltyReport {
+    classify_semantic_novelty_with_config(
+        candidate,
+        existing_corpus,
+        &SemanticNoveltyConfig::default_config(),
+    )
+}
+
+/// Classify a candidate against an existing corpus using explicit thresholds.
+pub fn classify_semantic_novelty_with_config(
+    candidate: &NoveltyCandidate,
+    existing_corpus: &[NoveltyCandidate],
+    config: &SemanticNoveltyConfig,
+) -> SemanticNoveltyReport {
+    let (duplicate_threshold, near_duplicate_threshold) = config.normalized_thresholds();
+    let mut nearest: Option<SemanticSimilarityMatch> = None;
+
+    for existing in existing_corpus {
+        let candidate_match = semantic_similarity_match(candidate, existing);
+        let should_replace = nearest.as_ref().is_none_or(|current| {
+            candidate_match.similarity_millionths > current.similarity_millionths
+                || (candidate_match.similarity_millionths == current.similarity_millionths
+                    && candidate_match.existing_candidate_id < current.existing_candidate_id)
+        });
+        if should_replace {
+            nearest = Some(candidate_match);
+        }
+    }
+
+    let verdict = nearest.as_ref().map_or(SemanticNoveltyVerdict::Novel, |m| {
+        if m.similarity_millionths >= duplicate_threshold {
+            SemanticNoveltyVerdict::Duplicate
+        } else if m.similarity_millionths >= near_duplicate_threshold {
+            SemanticNoveltyVerdict::NearDuplicate
+        } else {
+            SemanticNoveltyVerdict::Novel
+        }
+    });
+
+    SemanticNoveltyReport {
+        candidate_id: candidate.candidate_id.clone(),
+        verdict,
+        nearest,
+        duplicate_threshold_millionths: duplicate_threshold,
+        near_duplicate_threshold_millionths: near_duplicate_threshold,
     }
 }
 
@@ -497,6 +733,9 @@ pub struct NoveltyBatch {
     /// Certificates produced.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub certificates: Vec<NoveltyCertificate>,
+    /// Semantic novelty reports used to reject cosmetic corpus variants.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub semantic_reports: Vec<SemanticNoveltyReport>,
 }
 
 impl NoveltyBatch {
@@ -523,6 +762,7 @@ impl NoveltyBatch {
             candidates: Vec::new(),
             config: None,
             certificates: Vec::new(),
+            semantic_reports: Vec::new(),
         }
     }
 
@@ -1182,10 +1422,20 @@ pub fn score_candidate(
 /// successive candidate adds information relative to the growing set.
 pub fn score_batch(candidates: &[NoveltyCandidate], config: &ScoringConfig) -> NoveltyBatch {
     let mut scored: Vec<NoveltyScore> = Vec::with_capacity(candidates.len());
+    let mut semantic_reports: Vec<SemanticNoveltyReport> = Vec::with_capacity(candidates.len());
 
     for (i, candidate) in candidates.iter().enumerate() {
         let prior = &candidates[..i];
-        let score = score_candidate(candidate, config, prior);
+        let semantic_report = classify_semantic_novelty(candidate, prior);
+        let mut score = score_candidate(candidate, config, prior);
+        if !semantic_report.counts_as_distinct() {
+            for (_, dimension_score) in &mut score.dimension_scores {
+                *dimension_score = 0;
+            }
+            score.total_score_millionths = 0;
+            score.is_novel = false;
+        }
+        semantic_reports.push(semantic_report);
         scored.push(score);
     }
 
@@ -1256,6 +1506,7 @@ pub fn score_batch(candidates: &[NoveltyCandidate], config: &ScoringConfig) -> N
         candidates: candidates.to_vec(),
         config: Some(config.clone()),
         certificates,
+        semantic_reports,
     }
 }
 

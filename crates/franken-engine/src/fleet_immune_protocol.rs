@@ -1100,6 +1100,156 @@ impl NodeHealthTracker {
 }
 
 // ---------------------------------------------------------------------------
+// Self-stabilizing fleet formulation
+// ---------------------------------------------------------------------------
+
+/// Node phase in the self-stabilizing view of the fleet protocol.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SelfStabilizingNodePhase {
+    /// Node has sequence evidence but no heartbeat frontier yet.
+    Unknown,
+    /// Node heartbeat is current and can contribute to legitimate states.
+    Healthy,
+    /// Node missed the heartbeat timeout and must be repaired through gossip.
+    PartitionSuspected,
+}
+
+/// Per-node state used by the self-stabilizing fleet formulation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SelfStabilizingNodeState {
+    pub node_id: NodeId,
+    pub phase: SelfStabilizingNodePhase,
+    pub last_sequence: u64,
+    pub last_heartbeat_ns: Option<u64>,
+    pub evidence_frontier_hash: Option<ContentHash>,
+}
+
+/// Violation that prevents a snapshot from being a legitimate state.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SelfStabilizationViolation {
+    /// No node has a healthy heartbeat.
+    NoHealthyNodes,
+    /// The local node is absent from the health frontier.
+    LocalNodeMissing,
+    /// A pending intent exists for an extension with no accumulated evidence.
+    PendingIntentWithoutEvidence { extension_id: String },
+    /// A pending intent has not yet been folded into a checkpoint decision.
+    UnresolvedPendingIntent { extension_id: String },
+    /// A pending intent was emitted by a node currently suspected partitioned.
+    PartitionedNodeHasPendingIntent {
+        node_id: NodeId,
+        extension_id: String,
+    },
+    /// A healthy node lacks an accepted replay frontier.
+    HealthyNodeMissingReplayFrontier { node_id: NodeId },
+}
+
+/// Legitimacy verdict for a self-stabilizing fleet snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelfStabilizationLegitimacy {
+    pub legitimate: bool,
+    pub violations: BTreeSet<SelfStabilizationViolation>,
+}
+
+impl SelfStabilizationLegitimacy {
+    fn from_violations(violations: BTreeSet<SelfStabilizationViolation>) -> Self {
+        Self {
+            legitimate: violations.is_empty(),
+            violations,
+        }
+    }
+}
+
+/// Deterministic repair/convergence transition in the self-stabilizing model.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum SelfStabilizingTransition {
+    /// Publish or ingest the local heartbeat so the local node enters the frontier.
+    AdmitLocalNode { node_id: NodeId },
+    /// Repair a partitioned node through heartbeat/reconciliation gossip.
+    RepairPartition { node_id: NodeId },
+    /// Repair missing evidence before resolving a pending intent.
+    AccumulateEvidence { extension_id: String },
+    /// Resolve pending intents through deterministic precedence.
+    ResolveIntent { extension_id: String },
+    /// Healthy node must first establish a replay frontier.
+    RepairReplayFrontier { node_id: NodeId },
+    /// State is legitimate and no repair transition is currently required.
+    Legitimate,
+}
+
+/// Complete self-stabilizing snapshot derived from fleet protocol state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelfStabilizationSnapshot {
+    pub local_node_id: NodeId,
+    pub epoch: SecurityEpoch,
+    pub checkpoint_seq: u64,
+    pub nodes: BTreeMap<NodeId, SelfStabilizingNodeState>,
+    pub evidence_counts_by_extension: BTreeMap<String, u64>,
+    pub pending_intents_by_extension: BTreeMap<String, u64>,
+    pub partitioned_nodes: BTreeSet<NodeId>,
+    pub legitimacy: SelfStabilizationLegitimacy,
+    pub recommended_transitions: Vec<SelfStabilizingTransition>,
+}
+
+impl SelfStabilizationSnapshot {
+    /// Deterministic digest of the state-machine view.
+    pub fn snapshot_hash(&self) -> ContentHash {
+        let mut canonical = Vec::new();
+        append_self_stabilization_string(&mut canonical, self.local_node_id.as_str());
+        canonical.extend_from_slice(&self.epoch.as_u64().to_be_bytes());
+        canonical.extend_from_slice(&self.checkpoint_seq.to_be_bytes());
+
+        for (node_id, node) in &self.nodes {
+            append_self_stabilization_string(&mut canonical, node_id.as_str());
+            canonical.push(match node.phase {
+                SelfStabilizingNodePhase::Unknown => 0,
+                SelfStabilizingNodePhase::Healthy => 1,
+                SelfStabilizingNodePhase::PartitionSuspected => 2,
+            });
+            canonical.extend_from_slice(&node.last_sequence.to_be_bytes());
+            match node.last_heartbeat_ns {
+                Some(ts) => {
+                    canonical.push(1);
+                    canonical.extend_from_slice(&ts.to_be_bytes());
+                }
+                None => canonical.push(0),
+            }
+            match node.evidence_frontier_hash {
+                Some(hash) => {
+                    canonical.push(1);
+                    canonical.extend_from_slice(hash.as_bytes());
+                }
+                None => canonical.push(0),
+            }
+        }
+
+        for (extension_id, count) in &self.evidence_counts_by_extension {
+            append_self_stabilization_string(&mut canonical, extension_id);
+            canonical.extend_from_slice(&count.to_be_bytes());
+        }
+        for (extension_id, count) in &self.pending_intents_by_extension {
+            append_self_stabilization_string(&mut canonical, extension_id);
+            canonical.extend_from_slice(&count.to_be_bytes());
+        }
+        for node_id in &self.partitioned_nodes {
+            append_self_stabilization_string(&mut canonical, node_id.as_str());
+        }
+        for violation in &self.legitimacy.violations {
+            append_self_stabilization_string(&mut canonical, &format!("{violation:?}"));
+        }
+        for transition in &self.recommended_transitions {
+            append_self_stabilization_string(&mut canonical, &format!("{transition:?}"));
+        }
+        ContentHash::compute(&canonical)
+    }
+}
+
+fn append_self_stabilization_string(buf: &mut Vec<u8>, value: &str) {
+    buf.extend_from_slice(&(value.len() as u64).to_be_bytes());
+    buf.extend_from_slice(value.as_bytes());
+}
+
+// ---------------------------------------------------------------------------
 // ProtocolError — protocol-level errors
 // ---------------------------------------------------------------------------
 
@@ -1474,6 +1624,175 @@ impl FleetProtocolState {
             plan,
         )
         .map(|shards| shards.into_iter().map(FleetMessage::ErasureShard).collect())
+    }
+
+    /// Project the live protocol state into an explicit self-stabilizing model.
+    pub fn self_stabilization_snapshot(&self, current_time_ns: u64) -> SelfStabilizationSnapshot {
+        let partitioned_nodes = self.partitioned_nodes(current_time_ns);
+        let healthy_nodes = self
+            .health
+            .healthy_nodes(current_time_ns, self.config.partition_timeout_ns);
+
+        let mut all_nodes = self.sequence_tracker.known_nodes();
+        all_nodes.extend(self.health.last_heartbeat_ns.keys().cloned());
+        all_nodes.insert(self.local_node_id.clone());
+
+        let mut nodes = BTreeMap::new();
+        for node_id in all_nodes {
+            let phase = if partitioned_nodes.contains(&node_id) {
+                SelfStabilizingNodePhase::PartitionSuspected
+            } else if self.health.last_heartbeat_ns.contains_key(&node_id) {
+                SelfStabilizingNodePhase::Healthy
+            } else {
+                SelfStabilizingNodePhase::Unknown
+            };
+            nodes.insert(
+                node_id.clone(),
+                SelfStabilizingNodeState {
+                    node_id: node_id.clone(),
+                    phase,
+                    last_sequence: self.sequence_tracker.last_sequence(&node_id),
+                    last_heartbeat_ns: self.health.last_heartbeat_ns(&node_id),
+                    evidence_frontier_hash: self.health.last_frontier_hash.get(&node_id).copied(),
+                },
+            );
+        }
+
+        let evidence_counts_by_extension = self.evidence.evidence_count.clone();
+        let mut pending_intents_by_extension = BTreeMap::new();
+        for (extension_id, intents) in &self.pending_intents {
+            let count = match u64::try_from(intents.len()) {
+                Ok(value) => value,
+                Err(_) => u64::MAX,
+            };
+            pending_intents_by_extension.insert(extension_id.clone(), count);
+        }
+
+        let legitimacy = self.self_stabilization_legitimacy(
+            &healthy_nodes,
+            &partitioned_nodes,
+            &pending_intents_by_extension,
+        );
+        let recommended_transitions = self.self_stabilizing_transitions(
+            &healthy_nodes,
+            &partitioned_nodes,
+            &pending_intents_by_extension,
+        );
+
+        SelfStabilizationSnapshot {
+            local_node_id: self.local_node_id.clone(),
+            epoch: self.current_epoch,
+            checkpoint_seq: self.last_checkpoint_seq,
+            nodes,
+            evidence_counts_by_extension,
+            pending_intents_by_extension,
+            partitioned_nodes,
+            legitimacy,
+            recommended_transitions,
+        }
+    }
+
+    fn self_stabilization_legitimacy(
+        &self,
+        healthy_nodes: &BTreeSet<NodeId>,
+        partitioned_nodes: &BTreeSet<NodeId>,
+        pending_intents_by_extension: &BTreeMap<String, u64>,
+    ) -> SelfStabilizationLegitimacy {
+        let mut violations = BTreeSet::new();
+
+        if healthy_nodes.is_empty() {
+            violations.insert(SelfStabilizationViolation::NoHealthyNodes);
+        }
+        if !self
+            .health
+            .last_heartbeat_ns
+            .contains_key(&self.local_node_id)
+        {
+            violations.insert(SelfStabilizationViolation::LocalNodeMissing);
+        }
+
+        for node_id in healthy_nodes {
+            if self.sequence_tracker.last_sequence(node_id) == 0 {
+                violations.insert(
+                    SelfStabilizationViolation::HealthyNodeMissingReplayFrontier {
+                        node_id: node_id.clone(),
+                    },
+                );
+            }
+        }
+
+        for extension_id in pending_intents_by_extension.keys() {
+            violations.insert(SelfStabilizationViolation::UnresolvedPendingIntent {
+                extension_id: extension_id.clone(),
+            });
+            if self.evidence.evidence_count(extension_id) == 0 {
+                violations.insert(SelfStabilizationViolation::PendingIntentWithoutEvidence {
+                    extension_id: extension_id.clone(),
+                });
+            }
+        }
+
+        for (extension_id, intents) in &self.pending_intents {
+            for intent in intents {
+                if partitioned_nodes.contains(&intent.node_id) {
+                    violations.insert(
+                        SelfStabilizationViolation::PartitionedNodeHasPendingIntent {
+                            node_id: intent.node_id.clone(),
+                            extension_id: extension_id.clone(),
+                        },
+                    );
+                }
+            }
+        }
+
+        SelfStabilizationLegitimacy::from_violations(violations)
+    }
+
+    fn self_stabilizing_transitions(
+        &self,
+        healthy_nodes: &BTreeSet<NodeId>,
+        partitioned_nodes: &BTreeSet<NodeId>,
+        pending_intents_by_extension: &BTreeMap<String, u64>,
+    ) -> Vec<SelfStabilizingTransition> {
+        let mut transitions = BTreeSet::new();
+
+        if !self
+            .health
+            .last_heartbeat_ns
+            .contains_key(&self.local_node_id)
+        {
+            transitions.insert(SelfStabilizingTransition::AdmitLocalNode {
+                node_id: self.local_node_id.clone(),
+            });
+        }
+        for node_id in partitioned_nodes {
+            transitions.insert(SelfStabilizingTransition::RepairPartition {
+                node_id: node_id.clone(),
+            });
+        }
+        for node_id in healthy_nodes {
+            if self.sequence_tracker.last_sequence(node_id) == 0 {
+                transitions.insert(SelfStabilizingTransition::RepairReplayFrontier {
+                    node_id: node_id.clone(),
+                });
+            }
+        }
+        for extension_id in pending_intents_by_extension.keys() {
+            if self.evidence.evidence_count(extension_id) == 0 {
+                transitions.insert(SelfStabilizingTransition::AccumulateEvidence {
+                    extension_id: extension_id.clone(),
+                });
+            } else {
+                transitions.insert(SelfStabilizingTransition::ResolveIntent {
+                    extension_id: extension_id.clone(),
+                });
+            }
+        }
+        if transitions.is_empty() {
+            transitions.insert(SelfStabilizingTransition::Legitimate);
+        }
+
+        transitions.into_iter().collect()
     }
 }
 

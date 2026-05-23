@@ -30,7 +30,8 @@ use frankenengine_engine::fleet_immune_protocol::{
     ErasureShardRole, EvidenceAccumulator, EvidencePacket, FleetMessage, FleetProtocolState,
     GossipConfig, HeartbeatLiveness, MessageSignature, NodeHealthTracker, NodeId,
     NodeSequenceTracker, ProtocolError, ProtocolVersion, QuorumCheckpoint, ReconciliationRequest,
-    ResolvedContainmentDecision, SequenceRange, encode_erasure_shards, reconstruct_erasure_payload,
+    ResolvedContainmentDecision, SelfStabilizationViolation, SelfStabilizingNodePhase,
+    SelfStabilizingTransition, SequenceRange, encode_erasure_shards, reconstruct_erasure_payload,
 };
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -1863,4 +1864,261 @@ fn fleet_message_erasure_shard_roundtrips_and_uses_origin_sequence() {
     let json = serde_json::to_string(&msg).unwrap();
     let back: FleetMessage = serde_json::from_str(&json).unwrap();
     assert_eq!(back, FleetMessage::ErasureShard(shard));
+}
+
+#[test]
+fn self_stabilization_new_state_requires_local_admission() {
+    let state = mk_fleet("local");
+    let snapshot = state.self_stabilization_snapshot(1_000_000_000);
+
+    assert!(!snapshot.legitimacy.legitimate);
+    assert!(
+        snapshot
+            .legitimacy
+            .violations
+            .contains(&SelfStabilizationViolation::LocalNodeMissing)
+    );
+    assert!(
+        snapshot
+            .legitimacy
+            .violations
+            .contains(&SelfStabilizationViolation::NoHealthyNodes)
+    );
+    assert_eq!(
+        snapshot.recommended_transitions,
+        vec![SelfStabilizingTransition::AdmitLocalNode {
+            node_id: NodeId::new("local")
+        }]
+    );
+    assert_eq!(
+        snapshot.nodes[&NodeId::new("local")].phase,
+        SelfStabilizingNodePhase::Unknown
+    );
+}
+
+#[test]
+fn self_stabilization_local_heartbeat_reaches_legitimate_state() {
+    let mut state = mk_fleet("local");
+    state
+        .process_heartbeat(&mk_heartbeat("local", 1, 1_000_000_000))
+        .unwrap();
+
+    let snapshot = state.self_stabilization_snapshot(2_000_000_000);
+    assert!(snapshot.legitimacy.legitimate);
+    assert_eq!(
+        snapshot.recommended_transitions,
+        vec![SelfStabilizingTransition::Legitimate]
+    );
+    assert_eq!(
+        snapshot.nodes[&NodeId::new("local")].phase,
+        SelfStabilizingNodePhase::Healthy
+    );
+    assert_eq!(snapshot.nodes[&NodeId::new("local")].last_sequence, 1);
+}
+
+#[test]
+fn self_stabilization_marks_partition_for_repair() {
+    let mut state = mk_fleet("local");
+    state
+        .process_heartbeat(&mk_heartbeat("local", 1, 1_000_000_000))
+        .unwrap();
+    state
+        .process_heartbeat(&mk_heartbeat("remote", 1, 1_000_000_000))
+        .unwrap();
+
+    let snapshot = state.self_stabilization_snapshot(30_000_000_000);
+    assert!(snapshot.partitioned_nodes.contains(&NodeId::new("local")));
+    assert!(snapshot.partitioned_nodes.contains(&NodeId::new("remote")));
+    assert!(snapshot.recommended_transitions.contains(
+        &SelfStabilizingTransition::RepairPartition {
+            node_id: NodeId::new("remote")
+        }
+    ));
+    assert_eq!(
+        snapshot.nodes[&NodeId::new("remote")].phase,
+        SelfStabilizingNodePhase::PartitionSuspected
+    );
+}
+
+#[test]
+fn self_stabilization_pending_intent_without_evidence_is_illegitimate() {
+    let mut state = mk_fleet("local");
+    state
+        .process_heartbeat(&mk_heartbeat("local", 1, 1_000_000_000))
+        .unwrap();
+    state
+        .process_intent(&mk_intent(
+            "remote",
+            "ext-a",
+            ContainmentAction::Sandbox,
+            1,
+            1,
+        ))
+        .unwrap();
+
+    let snapshot = state.self_stabilization_snapshot(2_000_000_000);
+    assert!(!snapshot.legitimacy.legitimate);
+    assert!(snapshot.legitimacy.violations.contains(
+        &SelfStabilizationViolation::PendingIntentWithoutEvidence {
+            extension_id: "ext-a".to_string()
+        }
+    ));
+    assert!(snapshot.recommended_transitions.contains(
+        &SelfStabilizingTransition::AccumulateEvidence {
+            extension_id: "ext-a".to_string()
+        }
+    ));
+}
+
+#[test]
+fn self_stabilization_pending_intent_with_evidence_recommends_resolution() {
+    let mut state = mk_fleet("local");
+    state
+        .process_heartbeat(&mk_heartbeat("local", 1, 1_000_000_000))
+        .unwrap();
+    state
+        .process_evidence(&mk_evidence("remote", "ext-a", 1, 250_000))
+        .unwrap();
+    state
+        .process_intent(&mk_intent(
+            "remote",
+            "ext-a",
+            ContainmentAction::Suspend,
+            2,
+            1,
+        ))
+        .unwrap();
+
+    let snapshot = state.self_stabilization_snapshot(2_000_000_000);
+    assert!(!snapshot.legitimacy.legitimate);
+    assert!(snapshot.legitimacy.violations.contains(
+        &SelfStabilizationViolation::UnresolvedPendingIntent {
+            extension_id: "ext-a".to_string()
+        }
+    ));
+    assert!(
+        snapshot
+            .recommended_transitions
+            .contains(&SelfStabilizingTransition::ResolveIntent {
+                extension_id: "ext-a".to_string()
+            })
+    );
+    assert_eq!(snapshot.evidence_counts_by_extension.get("ext-a"), Some(&1));
+}
+
+#[test]
+fn self_stabilization_checkpoint_clears_unresolved_transition() {
+    let mut state = mk_fleet("local");
+    state
+        .process_heartbeat(&mk_heartbeat("local", 1, 1_000_000_000))
+        .unwrap();
+    state
+        .process_evidence(&mk_evidence("remote", "ext-a", 1, 250_000))
+        .unwrap();
+    state
+        .process_intent(&mk_intent(
+            "remote",
+            "ext-a",
+            ContainmentAction::Suspend,
+            2,
+            1,
+        ))
+        .unwrap();
+
+    let before = state.self_stabilization_snapshot(2_000_000_000);
+    assert!(
+        before
+            .recommended_transitions
+            .contains(&SelfStabilizingTransition::ResolveIntent {
+                extension_id: "ext-a".to_string()
+            })
+    );
+
+    state
+        .build_checkpoint(3_000_000_000, mk_sig("local"))
+        .unwrap();
+    let after = state.self_stabilization_snapshot(4_000_000_000);
+    assert!(after.legitimacy.legitimate);
+    assert_eq!(
+        after.recommended_transitions,
+        vec![SelfStabilizingTransition::Legitimate]
+    );
+    assert!(after.pending_intents_by_extension.is_empty());
+}
+
+#[test]
+fn self_stabilization_partitioned_intent_is_explicit_violation() {
+    let mut state = mk_fleet("local");
+    state
+        .process_heartbeat(&mk_heartbeat("local", 1, 20_000_000_000))
+        .unwrap();
+    state
+        .process_heartbeat(&mk_heartbeat("remote", 1, 1_000_000_000))
+        .unwrap();
+    state
+        .process_evidence(&mk_evidence("remote", "ext-a", 2, 250_000))
+        .unwrap();
+    state
+        .process_intent(&mk_intent(
+            "remote",
+            "ext-a",
+            ContainmentAction::Suspend,
+            3,
+            1,
+        ))
+        .unwrap();
+
+    let snapshot = state.self_stabilization_snapshot(20_000_000_000);
+    assert!(snapshot.legitimacy.violations.contains(
+        &SelfStabilizationViolation::PartitionedNodeHasPendingIntent {
+            node_id: NodeId::new("remote"),
+            extension_id: "ext-a".to_string()
+        }
+    ));
+    assert!(snapshot.recommended_transitions.contains(
+        &SelfStabilizingTransition::RepairPartition {
+            node_id: NodeId::new("remote")
+        }
+    ));
+}
+
+#[test]
+fn self_stabilization_snapshot_hash_is_deterministic() {
+    let mut left = mk_fleet("local");
+    let mut right = mk_fleet("local");
+    for node in ["local", "b", "a"] {
+        left.process_heartbeat(&mk_heartbeat(node, 1, 1_000_000_000))
+            .unwrap();
+    }
+    for node in ["a", "local", "b"] {
+        right
+            .process_heartbeat(&mk_heartbeat(node, 1, 1_000_000_000))
+            .unwrap();
+    }
+
+    let left_snapshot = left.self_stabilization_snapshot(2_000_000_000);
+    let right_snapshot = right.self_stabilization_snapshot(2_000_000_000);
+    assert_eq!(
+        left_snapshot.snapshot_hash(),
+        right_snapshot.snapshot_hash()
+    );
+    assert_eq!(
+        left_snapshot.nodes.keys().cloned().collect::<Vec<_>>(),
+        vec![NodeId::new("a"), NodeId::new("b"), NodeId::new("local")]
+    );
+}
+
+#[test]
+fn self_stabilization_snapshot_serde_roundtrip() {
+    let mut state = mk_fleet("local");
+    state
+        .process_heartbeat(&mk_heartbeat("local", 1, 1_000_000_000))
+        .unwrap();
+    let snapshot = state.self_stabilization_snapshot(2_000_000_000);
+
+    let json = serde_json::to_string(&snapshot).unwrap();
+    let back: frankenengine_engine::fleet_immune_protocol::SelfStabilizationSnapshot =
+        serde_json::from_str(&json).unwrap();
+    assert_eq!(snapshot, back);
+    assert_eq!(snapshot.snapshot_hash(), back.snapshot_hash());
 }

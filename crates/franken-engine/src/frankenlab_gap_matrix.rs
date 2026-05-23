@@ -1730,7 +1730,7 @@ mod tests {
         );
         assert!(found.is_some());
         assert_eq!(
-            found.expect("serde deserialization should succeed").status,
+            found.expect("test should find gap entry").status,
             GapStatus::Covered
         );
     }

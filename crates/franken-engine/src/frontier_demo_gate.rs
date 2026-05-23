@@ -812,7 +812,7 @@ mod tests {
             &crate::engine_object_id::SchemaId::from_definition(b"frontier-demo-gate"),
             b"frontier-demo-gate",
         )
-        .expect("serde deserialization should succeed")
+        .expect("derive_id with valid inputs")
     }
 
     fn test_artifact(category: ArtifactCategory, suffix: &str) -> DemoArtifact {

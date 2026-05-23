@@ -1376,7 +1376,7 @@ mod tests {
             .candidate_evaluations
             .iter()
             .find(|(id, _)| id == "spec-mega")
-            .expect("serde deserialization should succeed");
+            .expect("test fixture should contain spec-mega evaluation");
         assert_eq!(expensive_eval.1.tag(), "missing_features");
     }
 

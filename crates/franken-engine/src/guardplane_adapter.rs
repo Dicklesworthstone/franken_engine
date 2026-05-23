@@ -799,7 +799,7 @@ mod tests {
         assert!(
             summary
                 .last_posterior_delta_millionths
-                .expect("serde deserialization should succeed")
+                .expect("test fixture should have posterior delta")
                 >= 500_000
         );
     }

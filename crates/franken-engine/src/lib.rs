@@ -129,6 +129,7 @@ pub mod deterministic_probabilistic_telemetry;
 pub mod deterministic_replay;
 pub mod deterministic_serde;
 pub mod deterministic_sim_scheduler;
+pub mod differential_privacy_posterior;
 pub mod disruption_scorecard;
 pub mod disruptive_floor_metric_gate;
 pub mod distribution_shift_monitor;

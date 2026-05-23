@@ -512,6 +512,7 @@ pub mod tier_up_profiler;
 pub mod timescale_separation_certificate;
 pub mod trace_fusion;
 pub mod trace_fusion_superinstruction;
+pub mod trace_independence;
 pub mod transfer_governance_gate;
 pub mod translation_validation;
 pub mod translation_validation_proof_carrier;

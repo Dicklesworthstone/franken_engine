@@ -182,12 +182,12 @@ fn check_path_deterministic(type_path: &TypePath) -> syn::Result<()> {
     }
 
     // For generic types, check type arguments
-    if let Some(last_segment) = type_path.path.segments.last() {
-        if let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments {
-            for arg in &args.args {
-                if let syn::GenericArgument::Type(ty) = arg {
-                    check_type_deterministic(ty)?;
-                }
+    if let Some(last_segment) = type_path.path.segments.last()
+        && let syn::PathArguments::AngleBracketed(args) = &last_segment.arguments
+    {
+        for arg in &args.args {
+            if let syn::GenericArgument::Type(ty) = arg {
+                check_type_deterministic(ty)?;
             }
         }
     }

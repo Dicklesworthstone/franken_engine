@@ -1389,7 +1389,7 @@ mod tests {
         // ROI = (20M - 9.7M) * 1M / 9.7M = 10.3M * 1M / 9.7M ≈ 1_061_855
         let roi = m
             .strategy_roi("supply_chain")
-            .expect("serde deserialization should succeed");
+            .expect("ROI calculation available");
         assert!(roi > 1_000_000 && roi < 1_100_000, "roi was {roi}");
     }
 
@@ -1422,9 +1422,7 @@ mod tests {
             version: 1,
             calibration_source: "test".into(),
         };
-        let roi = m
-            .expected_roi()
-            .expect("serde deserialization should succeed");
+        let roi = m.expected_roi().expect("ROI calculation available");
         assert!(roi < 0, "expected negative ROI, got {roi}");
     }
 
@@ -1543,7 +1541,7 @@ mod tests {
         let m = sample_containment_model();
         let allow_cost = m
             .get(ContainmentAction::Allow)
-            .expect("serde deserialization should succeed");
+            .expect("ROI calculation available");
         assert_eq!(allow_cost.execution_latency_us, 0);
         assert_eq!(m.get(ContainmentAction::Sandbox), None);
     }
@@ -2202,7 +2200,7 @@ mod tests {
         let base = m.total_base_cost();
         let adjusted = m
             .adjusted_cost("supply-chain")
-            .expect("serde deserialization should succeed");
+            .expect("ROI calculation available");
         assert_eq!(adjusted, base + 500_000 - 200_000 + 100_000);
     }
 
@@ -2238,7 +2236,7 @@ mod tests {
         // adjusted_cost = 1_000_000, gain = 2_000_000, roi = 1_000_000 * 1M / 1M = 1_000_000
         let roi = m
             .strategy_roi("phishing")
-            .expect("serde deserialization should succeed");
+            .expect("ROI calculation available");
         assert_eq!(roi, 1_000_000);
     }
 

@@ -43,7 +43,6 @@ use crate::expected_loss_selector::{
     ActionDecision, ContainmentAction, ExpectedLossSelector, LossMatrix,
 };
 use crate::flow_lattice::{Clearance, DeclassificationObligation, Ir2FlowLattice, LabelClass};
-use crate::unified_authority_algebra::{AuthorityLattice, CapabilitySet, BudgetEnvelope};
 use crate::guardplane_adapter::{
     GuardplaneAdapter, GuardplaneDecisionRecord, GuardplaneExecutionSummary,
     GuardplaneExtensionContext, GuardplaneOperation,
@@ -80,6 +79,7 @@ use crate::tropical_semiring::{
 use crate::ts_normalization::{
     SourceIngestionSummary, TsNormalizationError, prepare_source_entry_for_public_entrypoints,
 };
+use crate::unified_authority_algebra::{AuthorityLattice, BudgetEnvelope, CapabilitySet};
 
 // Canonical baseline anchors for the orchestrator-tuning regression pin
 // (see `runtime_config_default_matches_orchestrator_constants` in this file's

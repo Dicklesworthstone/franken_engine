@@ -1577,8 +1577,7 @@ mod tests {
         ));
         // SAFETY: FlatteningInventory derives Serialize and has no non-serializable fields.
         // to_string_pretty on derived Serialize types only fails on writer errors (impossible with String).
-        let json =
-            serde_json::to_string_pretty(&inv).expect("serde deserialization should succeed");
+        let json = serde_json::to_string_pretty(&inv).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by to_string_pretty of a valid FlatteningInventory,
         // so from_str back to FlatteningInventory cannot fail (valid format + matching schema).
         let back: FlatteningInventory =

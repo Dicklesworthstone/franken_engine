@@ -1566,7 +1566,7 @@ mod tests {
         manifest.trace_id = bad_trace.to_string();
         fs::write(
             &manifest_path,
-            serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed"),
+            serde_json::to_string_pretty(&manifest).expect("serialize derived Serialize"),
         )
         .expect("write corrupted manifest");
 

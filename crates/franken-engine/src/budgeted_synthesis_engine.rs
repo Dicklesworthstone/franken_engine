@@ -875,9 +875,7 @@ mod tests {
         ];
         let r = SynthesisReport::new(epoch(), "k1", SynthesisBudget::default(), candidates);
         // SAFETY: test setup guarantees report has verified candidates
-        let best = r
-            .best_candidate()
-            .expect("serde deserialization should succeed");
+        let best = r.best_candidate().expect("report has valid candidates");
         assert_eq!(best.candidate_id, "c2");
         assert_eq!(best.speedup_millionths, 1_300_000);
     }
@@ -992,11 +990,11 @@ mod tests {
     fn origin_serde_snake_case_format() {
         // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&CandidateOrigin::AlgebraicSimplification)
-            .expect("serde deserialization should succeed");
+            .expect("serialize derived Serialize");
         assert_eq!(json, "\"algebraic_simplification\"");
         // SAFETY: to_string cannot fail on derived Serialize enum
         let json2 = serde_json::to_string(&CandidateOrigin::TemplateBased)
-            .expect("serde deserialization should succeed");
+            .expect("serialize derived Serialize");
         assert_eq!(json2, "\"template_based\"");
     }
 
@@ -1577,9 +1575,7 @@ mod tests {
         assert!(r.has_result());
 
         // SAFETY: test setup guarantees report has admissible candidates
-        let best = r
-            .best_candidate()
-            .expect("serde deserialization should succeed");
+        let best = r.best_candidate().expect("report has valid candidates");
         assert_eq!(best.speedup_millionths, 1_400_000);
         assert!(best.is_admissible());
     }
@@ -1619,7 +1615,7 @@ mod tests {
         ];
         let r = SynthesisReport::new(epoch(), "k-all", SynthesisBudget::default(), candidates);
         // SAFETY: to_string_pretty cannot fail on derived Serialize struct
-        let json = serde_json::to_string_pretty(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_string_pretty(&r).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string_pretty roundtrip
         let back: SynthesisReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

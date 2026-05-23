@@ -169,7 +169,7 @@ impl SchedulerAutomaton {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("ID derivation with valid inputs")
     }
 }
 
@@ -371,7 +371,7 @@ impl VerificationResult {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("ID derivation with valid inputs")
     }
 }
 
@@ -441,7 +441,7 @@ impl RegressionFixture {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("ID derivation with valid inputs")
     }
 }
 
@@ -556,7 +556,7 @@ impl CompositionCheck {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("ID derivation with valid inputs")
     }
 }
 
@@ -656,7 +656,7 @@ impl InvariantRegistry {
             &invariant_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("ID derivation with valid inputs")
     }
 }
 
@@ -1390,7 +1390,7 @@ mod tests {
         assert_eq!(
             // SAFETY: Test-only unwrap, verified above that get_result("P1") returns Some
             reg.get_result("P1")
-                .expect("serde deserialization should succeed")
+                .expect("verification result present")
                 .status,
             VerificationStatus::Verified
         );

@@ -43,10 +43,10 @@ use serde::{Deserialize, Serialize};
 use crate::forensic_query_api::{
     ForensicQueryEngine, ForensicQuery, ForensicQueryResult, QueryType, QueryTarget,
     QueryParameters, CausalExplanationResult, InfluenceAnalysisResult,
-    CounterfactualAnalysisResult, QueryError, QueryStatus,
+    CounterfactualAnalysisResult, QueryError, QueryStatus, CausalSubgraph,
 };
 use crate::causation_graph_schema::{
-    CausationGraph, CausationNode, CausationEdge, CausalSubgraph, NodeId, EdgeId,
+    CausationGraph, CausationNode, CausationEdge, NodeId, EdgeId,
     NodeType, DecisionOutcome, CausationType, InfluenceWeight,
 };
 use crate::minimal_causal_set_inference::DecisionFactor;

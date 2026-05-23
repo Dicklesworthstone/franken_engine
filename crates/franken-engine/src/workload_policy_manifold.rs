@@ -1624,14 +1624,14 @@ mod tests {
 
     #[test]
     fn boundary_direction_serde_roundtrip() {
-        let above = serde_json::to_string(&BoundaryDirection::Above)
-            .expect("serialize derived Serialize");
+        let above =
+            serde_json::to_string(&BoundaryDirection::Above).expect("serialize derived Serialize");
         let above_back: BoundaryDirection =
             serde_json::from_str(&above).expect("deserialize known-valid JSON");
         assert_eq!(BoundaryDirection::Above, above_back);
 
-        let below = serde_json::to_string(&BoundaryDirection::Below)
-            .expect("serialize derived Serialize");
+        let below =
+            serde_json::to_string(&BoundaryDirection::Below).expect("serialize derived Serialize");
         let below_back: BoundaryDirection =
             serde_json::from_str(&below).expect("deserialize known-valid JSON");
         assert_eq!(BoundaryDirection::Below, below_back);

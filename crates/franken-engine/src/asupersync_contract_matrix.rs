@@ -519,7 +519,7 @@ pub fn build_asupersync_contract_matrix_with_generated_at(
         .map(|release| release.release_id.clone())
         .or_else(|| releases.first().map(|release| release.release_id.clone()))
         // SAFETY: load_upstream_release_identifiers guarantees at least one release
-        .expect("serde deserialization should succeed");
+        .expect("at least one release present");
     let release_index = release_index(&releases);
 
     let compatibility_cells = vec![
@@ -1502,7 +1502,7 @@ mod tests {
     fn surface_serde_is_snake_case() {
         // SAFETY: to_string cannot fail on derived Serialize enum
         let json = serde_json::to_string(&AsupersyncSurface::KernelContext)
-            .expect("serde deserialization should succeed");
+            .expect("serialize derived Serialize");
         assert_eq!(json, "\"kernel_context\"");
     }
 

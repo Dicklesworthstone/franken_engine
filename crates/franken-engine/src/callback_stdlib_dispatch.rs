@@ -3258,9 +3258,7 @@ mod tests {
         assert!(result.is_ok());
         // SAFETY: result verified to be Ok above
         assert_eq!(
-            result
-                .expect("verified ok result")
-                .strategy,
+            result.expect("verified ok result").strategy,
             DispatchStrategy::FallbackSlow
         );
     }

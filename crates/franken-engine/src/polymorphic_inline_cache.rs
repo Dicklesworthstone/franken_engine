@@ -1295,7 +1295,7 @@ mod tests {
             scope
                 .sites
                 .get(&10)
-                .expect("serde deserialization should succeed")
+                .expect("site present in scope")
                 .total_accesses,
             1
         );
@@ -1331,7 +1331,7 @@ mod tests {
             scope
                 .sites
                 .get(&10)
-                .expect("serde deserialization should succeed")
+                .expect("site present in scope")
                 .guard_failure_count,
             1
         );

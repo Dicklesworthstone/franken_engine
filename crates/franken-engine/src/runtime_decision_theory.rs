@@ -1799,7 +1799,7 @@ mod tests {
         }
         // SAFETY: Test has observed 10 values which exceeds min_observations (5),
         // so var() must return Some (sufficient data for VaR calculation).
-        let var = cvar.var().expect("serde deserialization should succeed");
+        let var = cvar.var().expect("VaR calculation with sufficient data");
         // VaR at 80%: index = floor(10 * 0.8) = 8 → obs[8] = 8M.
         assert_eq!(var, 8 * MILLION);
     }

@@ -2566,21 +2566,17 @@ mod tests {
         let policy = accepted_policy(3);
         let mut seqlock = SimulatedSeqlock::new("v1");
         // SAFETY: Test-only unwrap, simulated seqlock operations should succeed
-        seqlock
-            .begin_write()
-            .expect("serde deserialization should succeed");
+        seqlock.begin_write().expect("simulated seqlock operation");
         // SAFETY: Test-only unwrap, simulated seqlock operations should succeed
         seqlock
             .commit_write("v2")
-            .expect("serde deserialization should succeed");
+            .expect("simulated seqlock operation");
         // SAFETY: Test-only unwrap, simulated seqlock operations should succeed
-        seqlock
-            .begin_write()
-            .expect("serde deserialization should succeed");
+        seqlock.begin_write().expect("simulated seqlock operation");
         // SAFETY: Test-only unwrap, simulated seqlock operations should succeed
         seqlock
             .commit_write("v3")
-            .expect("serde deserialization should succeed");
+            .expect("simulated seqlock operation");
 
         let plan = [ReadInterference::Stable];
         let outcome = seqlock.read_with_interference(&policy, &plan);

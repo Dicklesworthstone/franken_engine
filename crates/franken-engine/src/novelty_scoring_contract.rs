@@ -1989,12 +1989,12 @@ mod tests {
             .certificates
             .iter()
             .find(|c| c.score.rank == 0)
-            .expect("serde deserialization should succeed");
+            .expect("rank certificate found");
         let rank1 = batch
             .certificates
             .iter()
             .find(|c| c.score.rank == 1)
-            .expect("serde deserialization should succeed");
+            .expect("rank certificate found");
         assert!(rank0.score.total_score_millionths >= rank1.score.total_score_millionths);
     }
 

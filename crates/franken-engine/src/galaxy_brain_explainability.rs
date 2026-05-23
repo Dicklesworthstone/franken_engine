@@ -31,6 +31,11 @@ const MILLION: i64 = 1_000_000;
 
 /// Schema version for explainability artifacts.
 pub const SCHEMA_VERSION: &str = "franken-engine.galaxy-brain-explainability.v1";
+/// Schema version for constrained Track X narrative artifacts.
+pub const NARRATIVE_SCHEMA_VERSION: &str = "franken-engine.narrative-grammar.v1";
+/// Default deterministic grammar policy for Track X narration.
+pub const DEFAULT_NARRATIVE_POLICY_ID: &str = "track-x.default.v1";
+const MAX_NARRATIVE_ATOM_CHARS: usize = 96;
 
 // ---------------------------------------------------------------------------
 // VerbosityLevel — controls explanation depth
@@ -244,6 +249,420 @@ pub struct CounterfactualOutcome {
 }
 
 // ---------------------------------------------------------------------------
+// Constrained narration grammar — deterministic Track X text generation
+// ---------------------------------------------------------------------------
+
+/// Deterministic policy controlling constrained narrative token generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrativeGrammarPolicy {
+    /// Stable policy identifier included in the generated artifact.
+    pub policy_id: String,
+    /// Maximum explanation depth to render.
+    pub verbosity: VerbosityLevel,
+    /// Whether governing equations are rendered.
+    pub include_equations: bool,
+    /// Whether binding constraints are rendered.
+    pub include_binding_constraints: bool,
+    /// Whether rejected alternatives are rendered.
+    pub include_alternatives: bool,
+    /// Whether posterior belief entries are rendered.
+    pub include_posterior: bool,
+    /// Maximum entries rendered for each repeated token class.
+    pub max_items: u32,
+}
+
+impl Default for NarrativeGrammarPolicy {
+    fn default() -> Self {
+        Self {
+            policy_id: DEFAULT_NARRATIVE_POLICY_ID.to_string(),
+            verbosity: VerbosityLevel::Standard,
+            include_equations: true,
+            include_binding_constraints: true,
+            include_alternatives: true,
+            include_posterior: true,
+            max_items: 8,
+        }
+    }
+}
+
+/// Typed decision input consumed by the constrained narrative grammar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrativeDecisionInput {
+    /// Decision identifier this narrative explains.
+    pub decision_id: String,
+    /// Security epoch at decision time.
+    pub epoch: SecurityEpoch,
+    /// Decision domain.
+    pub domain: DecisionDomain,
+    /// Regime label at decision time.
+    pub regime: RegimeLabel,
+    /// Expected loss of the selected action.
+    pub chosen_loss_millionths: i64,
+    /// Governing equation(s) that drove the decision.
+    pub equations: Vec<GoverningEquation>,
+    /// Rejected alternatives.
+    pub alternatives: Vec<ExplainedAlternative>,
+    /// Active constraints.
+    pub constraints: Vec<ConstraintInteraction>,
+    /// Per-factor risk decomposition.
+    pub risk_breakdown: Vec<RiskBreakdown>,
+    /// Confidence in the decision.
+    pub confidence_millionths: i64,
+}
+
+/// Complete input tuple for deterministic narrative generation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NarrativeGrammarInput {
+    /// Typed decision input.
+    pub decision: NarrativeDecisionInput,
+    /// Rendering policy.
+    pub policy: NarrativeGrammarPolicy,
+    /// Posterior belief map, rendered in key order.
+    pub posterior_millionths: BTreeMap<String, i64>,
+    /// Selected action.
+    pub action: LaneAction,
+}
+
+/// Typed token emitted by the constrained narrative grammar.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum NarrativeToken {
+    /// Artifact header.
+    Header {
+        schema_version: String,
+        policy_id: String,
+    },
+    /// Decision identity and replay anchor.
+    Decision {
+        decision_id: String,
+        epoch: u64,
+        domain: DecisionDomain,
+        regime: RegimeLabel,
+    },
+    /// Selected action and expected loss.
+    Action {
+        action: LaneAction,
+        action_label: String,
+        loss_millionths: i64,
+    },
+    /// Governing equation result.
+    Equation {
+        name: String,
+        result_millionths: i64,
+        threshold_millionths: Option<i64>,
+        threshold_exceeded: bool,
+    },
+    /// Binding constraint.
+    BindingConstraint {
+        constraint_id: String,
+        slack_millionths: i64,
+    },
+    /// Rejected alternative.
+    Alternative {
+        action: LaneAction,
+        expected_loss_millionths: i64,
+        rejection_reason: RejectionReason,
+    },
+    /// Posterior belief entry.
+    Posterior {
+        factor: String,
+        value_millionths: i64,
+    },
+    /// Aggregate risk contribution.
+    Risk {
+        factor: String,
+        contribution_millionths: i64,
+    },
+    /// Decision confidence.
+    Confidence { confidence_millionths: i64 },
+    /// Terminal token.
+    End,
+}
+
+/// Deterministic constrained narrative artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConstrainedNarrative {
+    /// Narrative schema version.
+    pub schema_version: String,
+    /// Deterministic token stream.
+    pub tokens: Vec<NarrativeToken>,
+    /// Byte-identical rendered text derived from `tokens`.
+    pub text: String,
+    /// Hash of the rendered text for replay checks.
+    pub content_hash: String,
+}
+
+impl NarrativeToken {
+    fn render(&self) -> String {
+        match self {
+            Self::Header {
+                schema_version,
+                policy_id,
+            } => format!(
+                "header(schema={},policy={})",
+                grammar_atom(schema_version),
+                grammar_atom(policy_id)
+            ),
+            Self::Decision {
+                decision_id,
+                epoch,
+                domain,
+                regime,
+            } => format!(
+                "decision(id={},epoch={},domain={},regime={})",
+                grammar_atom(decision_id),
+                epoch,
+                domain,
+                regime
+            ),
+            Self::Action {
+                action,
+                action_label,
+                loss_millionths,
+            } => format!(
+                "action(kind={},label={},loss_millionths={})",
+                grammar_atom(&action.to_string()),
+                grammar_atom(action_label),
+                loss_millionths
+            ),
+            Self::Equation {
+                name,
+                result_millionths,
+                threshold_millionths,
+                threshold_exceeded,
+            } => {
+                let threshold = threshold_millionths
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "none".to_string());
+                format!(
+                    "equation(name={},result_millionths={},threshold_millionths={},threshold_exceeded={})",
+                    grammar_atom(name),
+                    result_millionths,
+                    threshold,
+                    threshold_exceeded
+                )
+            }
+            Self::BindingConstraint {
+                constraint_id,
+                slack_millionths,
+            } => format!(
+                "binding_constraint(id={},slack_millionths={})",
+                grammar_atom(constraint_id),
+                slack_millionths
+            ),
+            Self::Alternative {
+                action,
+                expected_loss_millionths,
+                rejection_reason,
+            } => format!(
+                "alternative(action={},expected_loss_millionths={},rejection_reason={})",
+                grammar_atom(&action.to_string()),
+                expected_loss_millionths,
+                rejection_reason
+            ),
+            Self::Posterior {
+                factor,
+                value_millionths,
+            } => format!(
+                "posterior(factor={},value_millionths={})",
+                grammar_atom(factor),
+                value_millionths
+            ),
+            Self::Risk {
+                factor,
+                contribution_millionths,
+            } => format!(
+                "risk(factor={},contribution_millionths={})",
+                grammar_atom(factor),
+                contribution_millionths
+            ),
+            Self::Confidence {
+                confidence_millionths,
+            } => format!("confidence(millionths={confidence_millionths})"),
+            Self::End => "end".to_string(),
+        }
+    }
+}
+
+/// Generate a deterministic narrative token stream and rendered text.
+pub fn generate_constrained_narrative(input: NarrativeGrammarInput) -> ConstrainedNarrative {
+    let NarrativeGrammarInput {
+        decision,
+        policy,
+        posterior_millionths,
+        action,
+    } = input;
+
+    let max_items = policy.max_items as usize;
+    let mut tokens = vec![
+        NarrativeToken::Header {
+            schema_version: NARRATIVE_SCHEMA_VERSION.to_string(),
+            policy_id: policy.policy_id,
+        },
+        NarrativeToken::Decision {
+            decision_id: decision.decision_id,
+            epoch: decision.epoch.as_u64(),
+            domain: decision.domain,
+            regime: decision.regime,
+        },
+        NarrativeToken::Action {
+            action: action.clone(),
+            action_label: action_narrative_label(&action),
+            loss_millionths: decision.chosen_loss_millionths,
+        },
+    ];
+
+    if policy.include_equations && policy.verbosity >= VerbosityLevel::Standard {
+        let mut equations = decision.equations;
+        equations.sort_by(|a, b| {
+            (
+                grammar_atom(&a.name),
+                a.result_millionths,
+                a.threshold_millionths,
+                a.threshold_exceeded,
+            )
+                .cmp(&(
+                    grammar_atom(&b.name),
+                    b.result_millionths,
+                    b.threshold_millionths,
+                    b.threshold_exceeded,
+                ))
+        });
+        for equation in equations.into_iter().take(max_items) {
+            tokens.push(NarrativeToken::Equation {
+                name: equation.name,
+                result_millionths: equation.result_millionths,
+                threshold_millionths: equation.threshold_millionths,
+                threshold_exceeded: equation.threshold_exceeded,
+            });
+        }
+    }
+
+    if policy.include_binding_constraints && policy.verbosity >= VerbosityLevel::Standard {
+        let mut constraints: Vec<_> = decision
+            .constraints
+            .into_iter()
+            .filter(|constraint| constraint.binding)
+            .collect();
+        constraints.sort_by(|a, b| {
+            (grammar_atom(&a.constraint_id), a.slack_millionths)
+                .cmp(&(grammar_atom(&b.constraint_id), b.slack_millionths))
+        });
+        for constraint in constraints.into_iter().take(max_items) {
+            tokens.push(NarrativeToken::BindingConstraint {
+                constraint_id: constraint.constraint_id,
+                slack_millionths: constraint.slack_millionths,
+            });
+        }
+    }
+
+    if policy.include_alternatives && policy.verbosity >= VerbosityLevel::Standard {
+        let mut alternatives = decision.alternatives;
+        alternatives.sort_by(|a, b| {
+            (
+                a.expected_loss_millionths,
+                a.rejection_reason,
+                a.action.to_string(),
+            )
+                .cmp(&(
+                    b.expected_loss_millionths,
+                    b.rejection_reason,
+                    b.action.to_string(),
+                ))
+        });
+        for alternative in alternatives.into_iter().take(max_items) {
+            tokens.push(NarrativeToken::Alternative {
+                action: alternative.action,
+                expected_loss_millionths: alternative.expected_loss_millionths,
+                rejection_reason: alternative.rejection_reason,
+            });
+        }
+    }
+
+    if policy.verbosity >= VerbosityLevel::GalaxyBrain {
+        let mut risk_entries = decision.risk_breakdown;
+        risk_entries.sort_by(|a, b| {
+            (grammar_atom(&a.factor), a.contribution_millionths)
+                .cmp(&(grammar_atom(&b.factor), b.contribution_millionths))
+        });
+        for risk in risk_entries.into_iter().take(max_items) {
+            tokens.push(NarrativeToken::Risk {
+                factor: risk.factor,
+                contribution_millionths: risk.contribution_millionths,
+            });
+        }
+
+        if policy.include_posterior {
+            for (factor, value_millionths) in posterior_millionths.into_iter().take(max_items) {
+                tokens.push(NarrativeToken::Posterior {
+                    factor,
+                    value_millionths,
+                });
+            }
+        }
+
+        tokens.push(NarrativeToken::Confidence {
+            confidence_millionths: decision.confidence_millionths,
+        });
+    }
+
+    tokens.push(NarrativeToken::End);
+    let text = render_narrative_tokens(&tokens);
+    let mut hasher = Sha256::new();
+    hasher.update(NARRATIVE_SCHEMA_VERSION.as_bytes());
+    hasher.update(text.as_bytes());
+    let hash = hasher.finalize();
+
+    ConstrainedNarrative {
+        schema_version: NARRATIVE_SCHEMA_VERSION.to_string(),
+        tokens,
+        text,
+        content_hash: hex::encode(&hash[..16]),
+    }
+}
+
+fn render_narrative_tokens(tokens: &[NarrativeToken]) -> String {
+    tokens
+        .iter()
+        .map(NarrativeToken::render)
+        .collect::<Vec<_>>()
+        .join(" | ")
+}
+
+fn action_narrative_label(action: &LaneAction) -> String {
+    match action {
+        LaneAction::RouteTo(lane) => {
+            format!("Routed_to_lane_{}", grammar_atom(lane.stable_label()))
+        }
+        LaneAction::FallbackSafe => "FallbackSafe".to_string(),
+        LaneAction::Demote { from_lane, reason } => {
+            format!(
+                "Demoted_from_lane_{}_due_to_{reason:?}",
+                grammar_atom(from_lane.stable_label())
+            )
+        }
+        LaneAction::SuspendAdaptive => "SuspendAdaptive".to_string(),
+    }
+}
+
+fn grammar_atom(raw: &str) -> String {
+    let mut out = String::new();
+    for ch in raw.chars().take(MAX_NARRATIVE_ATOM_CHARS) {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':') {
+            out.push(ch);
+        } else if ch.is_ascii_whitespace() || matches!(ch, '/' | '\\') {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() {
+        "empty".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DecisionExplanation — the full explanation record
 // ---------------------------------------------------------------------------
 
@@ -330,6 +749,32 @@ impl DecisionExplanation {
             .iter()
             .map(|r| r.contribution_millionths)
             .sum()
+    }
+
+    /// Convert this explanation into constrained narrative grammar input.
+    pub fn narrative_input(&self, policy: NarrativeGrammarPolicy) -> NarrativeGrammarInput {
+        NarrativeGrammarInput {
+            decision: NarrativeDecisionInput {
+                decision_id: self.decision_id.clone(),
+                epoch: self.epoch,
+                domain: self.domain,
+                regime: self.regime,
+                chosen_loss_millionths: self.chosen_loss_millionths,
+                equations: self.equations.clone(),
+                alternatives: self.alternatives.clone(),
+                constraints: self.constraints.clone(),
+                risk_breakdown: self.risk_breakdown.clone(),
+                confidence_millionths: self.confidence_millionths,
+            },
+            policy,
+            posterior_millionths: self.posterior_millionths.clone(),
+            action: self.chosen_action.clone(),
+        }
+    }
+
+    /// Generate the byte-identical constrained narrative for this explanation.
+    pub fn constrained_narrative(&self, policy: NarrativeGrammarPolicy) -> ConstrainedNarrative {
+        generate_constrained_narrative(self.narrative_input(policy))
     }
 }
 
@@ -688,18 +1133,21 @@ pub fn explain_lane_routing(input: LaneRoutingExplanationInput) -> Option<Decisi
         equations,
         verbosity,
     } = input;
-    let rationale = format!(
-        "Routed to lane {} under {} regime; expected loss {}",
-        chosen_lane, regime, chosen_loss_millionths,
-    );
-    ExplanationBuilder::new(decision_id, epoch, DecisionDomain::LaneRouting)
+    let mut explanation = ExplanationBuilder::new(decision_id, epoch, DecisionDomain::LaneRouting)
         .verbosity(verbosity)
         .regime(regime)
         .chosen(LaneAction::RouteTo(chosen_lane), chosen_loss_millionths)
-        .rationale(rationale)
+        .rationale(String::new())
         .alternatives(alternatives)
         .equations(equations)
-        .build()
+        .build()?;
+    explanation.rationale = explanation
+        .constrained_narrative(NarrativeGrammarPolicy {
+            verbosity,
+            ..NarrativeGrammarPolicy::default()
+        })
+        .text;
+    Some(explanation)
 }
 
 /// Build a fallback/demotion explanation.
@@ -727,22 +1175,22 @@ pub fn explain_fallback(input: FallbackExplanationInput) -> Option<DecisionExpla
         constraints,
         verbosity,
     } = input;
-    let rationale = format!(
-        "Demoted from lane {} due to {reason:?}; switching to safe mode",
-        from_lane,
-    );
-    let action = LaneAction::Demote {
-        from_lane,
-        reason: reason.clone(),
-    };
-    ExplanationBuilder::new(decision_id, epoch, DecisionDomain::Fallback)
+    let action = LaneAction::Demote { from_lane, reason };
+    let mut explanation = ExplanationBuilder::new(decision_id, epoch, DecisionDomain::Fallback)
         .verbosity(verbosity)
         .regime(regime)
         .chosen(action, 0)
-        .rationale(rationale)
+        .rationale(String::new())
         .equations(equations)
         .constraints(constraints)
-        .build()
+        .build()?;
+    explanation.rationale = explanation
+        .constrained_narrative(NarrativeGrammarPolicy {
+            verbosity,
+            ..NarrativeGrammarPolicy::default()
+        })
+        .text;
+    Some(explanation)
 }
 
 // ---------------------------------------------------------------------------
@@ -848,6 +1296,232 @@ mod tests {
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
             assert_eq!(d, back);
         }
+    }
+
+    // -- Constrained narrative grammar tests --
+
+    #[test]
+    fn constrained_narrative_is_byte_identical_for_replay() {
+        let explanation =
+            ExplanationBuilder::new("d-x1".to_string(), test_epoch(), DecisionDomain::Security)
+                .verbosity(VerbosityLevel::GalaxyBrain)
+                .regime(RegimeLabel::Attack)
+                .chosen(LaneAction::SuspendAdaptive, 25_000)
+                .equation(GoverningEquation {
+                    name: "capability narrowing predicate".to_string(),
+                    formula: "risk > threshold".to_string(),
+                    parameters: BTreeMap::from([("threshold".to_string(), 500_000)]),
+                    result_millionths: 700_000,
+                    threshold_millionths: Some(500_000),
+                    threshold_exceeded: true,
+                })
+                .constraint(ConstraintInteraction {
+                    constraint_id: "tenant capability grant rate".to_string(),
+                    description: "free text is not rendered by the grammar".to_string(),
+                    binding: true,
+                    slack_millionths: 0,
+                })
+                .risk(RiskBreakdown {
+                    factor: "incident severity".to_string(),
+                    weight_millionths: 500_000,
+                    belief_millionths: 600_000,
+                    contribution_millionths: 300_000,
+                })
+                .posterior("tenant/zeta".to_string(), 400_000)
+                .posterior("incident severity".to_string(), 600_000)
+                .confidence(875_000)
+                .rationale("ignored by constrained generator".to_string())
+                .build()
+                .expect("chosen action is set");
+
+        let policy = NarrativeGrammarPolicy {
+            verbosity: VerbosityLevel::GalaxyBrain,
+            ..NarrativeGrammarPolicy::default()
+        };
+        let first = explanation.constrained_narrative(policy.clone());
+        let second = explanation.constrained_narrative(policy);
+
+        assert_eq!(first.tokens, second.tokens);
+        assert_eq!(first.text.as_bytes(), second.text.as_bytes());
+        assert_eq!(first.content_hash, second.content_hash);
+        assert!(
+            first
+                .text
+                .contains("header(schema=franken-engine.narrative-grammar.v1")
+        );
+        assert!(first.text.contains("posterior(factor=incident_severity"));
+        assert!(!first.text.contains("free text is not rendered"));
+        assert!(!first.text.contains("ignored by constrained"));
+    }
+
+    #[test]
+    fn constrained_narrative_canonicalizes_repeated_input_order() {
+        let alt_fast = ExplainedAlternative {
+            action: LaneAction::RouteTo(test_lane("fast")),
+            expected_loss_millionths: 300_000,
+            rejection_reason: RejectionReason::HigherLoss,
+            detail: "first".to_string(),
+        };
+        let alt_safe = ExplainedAlternative {
+            action: LaneAction::FallbackSafe,
+            expected_loss_millionths: 100_000,
+            rejection_reason: RejectionReason::PolicyForbidden,
+            detail: "second".to_string(),
+        };
+        let equation_a = GoverningEquation {
+            name: "zeta risk".to_string(),
+            formula: "z".to_string(),
+            parameters: BTreeMap::new(),
+            result_millionths: 300_000,
+            threshold_millionths: None,
+            threshold_exceeded: false,
+        };
+        let equation_b = GoverningEquation {
+            name: "alpha risk".to_string(),
+            formula: "a".to_string(),
+            parameters: BTreeMap::new(),
+            result_millionths: 100_000,
+            threshold_millionths: Some(200_000),
+            threshold_exceeded: false,
+        };
+        let base_decision = NarrativeDecisionInput {
+            decision_id: "d-x1-order".to_string(),
+            epoch: test_epoch(),
+            domain: DecisionDomain::LaneRouting,
+            regime: RegimeLabel::Elevated,
+            chosen_loss_millionths: 50_000,
+            equations: vec![equation_a.clone(), equation_b.clone()],
+            alternatives: vec![alt_fast.clone(), alt_safe.clone()],
+            constraints: vec![
+                ConstraintInteraction {
+                    constraint_id: "zeta".to_string(),
+                    description: "z".to_string(),
+                    binding: true,
+                    slack_millionths: 0,
+                },
+                ConstraintInteraction {
+                    constraint_id: "alpha".to_string(),
+                    description: "a".to_string(),
+                    binding: true,
+                    slack_millionths: 10_000,
+                },
+            ],
+            risk_breakdown: vec![],
+            confidence_millionths: 0,
+        };
+        let mut reversed_decision = base_decision.clone();
+        reversed_decision.equations = vec![equation_b, equation_a];
+        reversed_decision.alternatives = vec![alt_safe, alt_fast];
+        reversed_decision.constraints.reverse();
+        let policy = NarrativeGrammarPolicy::default();
+        let first = generate_constrained_narrative(NarrativeGrammarInput {
+            decision: base_decision,
+            policy: policy.clone(),
+            posterior_millionths: BTreeMap::new(),
+            action: LaneAction::RouteTo(test_lane("js")),
+        });
+        let second = generate_constrained_narrative(NarrativeGrammarInput {
+            decision: reversed_decision,
+            policy,
+            posterior_millionths: BTreeMap::new(),
+            action: LaneAction::RouteTo(test_lane("js")),
+        });
+
+        assert_eq!(first.text, second.text);
+        assert_eq!(first.content_hash, second.content_hash);
+        let alpha_equation = first
+            .text
+            .find("equation(name=alpha_risk")
+            .expect("alpha equation token should render");
+        let zeta_equation = first
+            .text
+            .find("equation(name=zeta_risk")
+            .expect("zeta equation token should render");
+        let alpha_constraint = first
+            .text
+            .find("binding_constraint(id=alpha")
+            .expect("alpha constraint token should render");
+        let zeta_constraint = first
+            .text
+            .find("binding_constraint(id=zeta")
+            .expect("zeta constraint token should render");
+        assert!(alpha_equation < zeta_equation);
+        assert!(alpha_constraint < zeta_constraint);
+    }
+
+    #[test]
+    fn narrative_policy_controls_depth_and_posterior_rendering() {
+        let explanation = ExplanationBuilder::new(
+            "d-x1-depth".to_string(),
+            test_epoch(),
+            DecisionDomain::Security,
+        )
+        .verbosity(VerbosityLevel::GalaxyBrain)
+        .chosen(LaneAction::SuspendAdaptive, 1)
+        .posterior("risk".to_string(), 999_999)
+        .confidence(999_000)
+        .rationale("manual".to_string())
+        .build()
+        .expect("chosen action is set");
+
+        let minimal = explanation.constrained_narrative(NarrativeGrammarPolicy {
+            verbosity: VerbosityLevel::Minimal,
+            include_posterior: true,
+            ..NarrativeGrammarPolicy::default()
+        });
+        let galaxy = explanation.constrained_narrative(NarrativeGrammarPolicy {
+            verbosity: VerbosityLevel::GalaxyBrain,
+            include_posterior: true,
+            ..NarrativeGrammarPolicy::default()
+        });
+
+        assert!(!minimal.text.contains("posterior("));
+        assert!(!minimal.text.contains("confidence("));
+        assert!(
+            galaxy
+                .text
+                .contains("posterior(factor=risk,value_millionths=999999)")
+        );
+        assert!(galaxy.text.contains("confidence(millionths=999000)"));
+    }
+
+    #[test]
+    fn explain_helpers_use_constrained_grammar_for_rationale() {
+        let lane = explain_lane_routing(LaneRoutingExplanationInput {
+            decision_id: "d-x1-lane".to_string(),
+            epoch: test_epoch(),
+            regime: RegimeLabel::Normal,
+            chosen_lane: test_lane("js"),
+            chosen_loss_millionths: 100_000,
+            alternatives: vec![],
+            equations: vec![],
+            verbosity: VerbosityLevel::Standard,
+        })
+        .expect("chosen lane explanation should build");
+
+        assert_eq!(
+            lane.rationale,
+            lane.constrained_narrative(NarrativeGrammarPolicy::default())
+                .text
+        );
+        assert!(lane.rationale.contains("Routed_to_lane_js"));
+        assert!(lane.rationale.contains("loss_millionths=100000"));
+
+        let fallback = explain_fallback(FallbackExplanationInput {
+            decision_id: "d-x1-fallback".to_string(),
+            epoch: test_epoch(),
+            regime: RegimeLabel::Degraded,
+            from_lane: test_lane("wasm"),
+            reason: DemotionReason::CvarExceeded,
+            equations: vec![],
+            constraints: vec![],
+            verbosity: VerbosityLevel::Standard,
+        })
+        .expect("fallback explanation should build");
+
+        assert!(fallback.rationale.contains("Demoted"));
+        assert!(fallback.rationale.contains("CvarExceeded"));
+        assert!(!fallback.rationale.contains("switching to safe mode"));
     }
 
     // -- GoverningEquation tests --

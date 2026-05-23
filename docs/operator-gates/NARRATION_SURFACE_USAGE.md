@@ -59,7 +59,9 @@ evidence; the report is built around it, not on top of it.
     `DecisionExplanation`, `ExplanationBuilder`, `VerbosityLevel`,
     `DecisionDomain`, `GoverningEquation`, `ExplainedAlternative`,
     `ConstraintInteraction`, `RiskBreakdown`,
-    `CounterfactualOutcome`, `RejectionReason`.
+    `CounterfactualOutcome`, `RejectionReason`,
+    `NarrativeGrammarInput`, `NarrativeGrammarPolicy`,
+    `NarrativeToken`, `ConstrainedNarrative`.
   - `crates/franken-engine/src/incident_replay_bundle.rs` —
     `IncidentReplayBundle`, `BundleManifest`, `CounterfactualResult`,
     `VerificationReport` (the bundle that carries the narration
@@ -94,6 +96,11 @@ For every guardplane boundary crossing, the runtime produces a
 | `counterfactuals` | (GalaxyBrain only) Outcomes under alternative actions. | The "what would have happened if" record. |
 | `posterior_millionths` | (GalaxyBrain only) Posterior over risk factors. | The Bayesian state at decision time. |
 | `confidence_millionths` | (GalaxyBrain only) Confidence in the decision (0..1_000_000). | Read before quoting the rationale — low-confidence rationale should NOT be quoted without the confidence value. |
+
+The constrained grammar maps typed `(decision input + policy +
+posterior + action)` fields into `NarrativeToken` values and only
+then renders bytes. Replays compare the rendered bytes, not an
+operator-edited paragraph.
 
 The `VerbosityLevel` is set at generation time and cannot be raised
 retroactively. A `Minimal` narration cannot be "expanded" into a

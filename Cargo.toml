@@ -4,6 +4,7 @@ members = [
   "crates/franken-engine-control-plane-integration-tests",
   "crates/franken-engine-deterministic-derive",
   "crates/franken-engine-deterministic-trait",
+  "crates/franken-engine-fixed-layout-derive",
   "crates/franken-engine-test-support",
   "crates/franken-extension-host",
   "crates/franken-metamorphic",

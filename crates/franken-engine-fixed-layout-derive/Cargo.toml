@@ -1,0 +1,21 @@
+[package]
+name = "franken-engine-fixed-layout-derive"
+version = "0.1.0"
+edition = "2021"
+authors = ["FrankenEngine Team"]
+description = "Derive macro for FixedLayout trait - auto-emit fixed-byte canonical encoding"
+repository = "https://github.com/franken-engine/franken-engine"
+license = "MIT"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0"
+quote = "1.0"
+syn = { version = "2.0", features = ["full"] }
+franken-engine-deterministic-trait = { path = "../franken-engine-deterministic-trait" }
+
+[dev-dependencies]
+trybuild = "1.0"
+franken-engine-deterministic-derive = { path = "../franken-engine-deterministic-derive" }

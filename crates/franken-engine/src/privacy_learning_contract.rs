@@ -894,6 +894,406 @@ impl SecureAggregationRequirements {
         }
         Ok(())
     }
+
+    pub fn byzantine_tolerance_k(&self) -> u32 {
+        match self.secret_sharing_scheme {
+            SecretSharingScheme::Shamir => self
+                .sharing_threshold
+                .map(|threshold| self.min_participants.saturating_sub(threshold))
+                .unwrap_or(0),
+            SecretSharingScheme::Additive => self.min_participants.saturating_sub(1) / 3,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Secure aggregation protocol
+// ---------------------------------------------------------------------------
+
+const SECURE_AGGREGATION_MASK_DOMAIN: &[u8] = b"FrankenEngine.SecureAggregationMask.v1";
+const SECURE_AGGREGATION_RECEIPT_DOMAIN: &[u8] = b"FrankenEngine.SecureAggregationReceipt.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecureAggregationParticipantSecret {
+    pub participant_id: EngineObjectId,
+    pub update_millionths: BTreeMap<String, i64>,
+    pub pairwise_secrets: BTreeMap<EngineObjectId, Vec<u8>>,
+}
+
+impl SecureAggregationParticipantSecret {
+    pub fn validate(&self, feature_schema: &FeatureSchema) -> Result<(), ContractError> {
+        for field_name in self.update_millionths.keys() {
+            if !feature_schema.fields.contains_key(field_name) {
+                return Err(ContractError::InvalidSecureAggregation {
+                    detail: format!("participant update references unknown field: {field_name}"),
+                });
+            }
+        }
+        for (peer_id, secret) in &self.pairwise_secrets {
+            if peer_id == &self.participant_id {
+                return Err(ContractError::InvalidSecureAggregation {
+                    detail: "participant must not carry a pairwise secret with itself".to_string(),
+                });
+            }
+            if secret.is_empty() {
+                return Err(ContractError::InvalidSecureAggregation {
+                    detail: "pairwise secret must not be empty".to_string(),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecureAggregationMaskedUpdate {
+    pub participant_id: EngineObjectId,
+    pub masked_coordinates_millionths: BTreeMap<String, i64>,
+    pub pairwise_secret_commitments: BTreeMap<EngineObjectId, [u8; 32]>,
+    pub malicious_evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SecureAggregationStatus {
+    Aggregated,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SecureAggregationRejectReason {
+    EmptyRoundId,
+    EmptyExpectedParticipants,
+    ParticipantThresholdNotMet,
+    DropoutDetected,
+    UnexpectedParticipant,
+    DuplicateParticipant,
+    MaliciousParticipant,
+    UnknownField,
+    PairwiseCommitmentMismatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecureAggregationRoundReceipt {
+    pub round_id: String,
+    pub epoch: SecurityEpoch,
+    pub status: SecureAggregationStatus,
+    pub reject_reason: Option<SecureAggregationRejectReason>,
+    pub participant_count: u32,
+    pub expected_participant_count: u32,
+    pub collusion_threshold_k: u32,
+    pub aggregate_update_millionths: BTreeMap<String, i64>,
+    pub receipt_hash: [u8; 32],
+}
+
+impl SecureAggregationRoundReceipt {
+    fn rejected(
+        round_id: &str,
+        epoch: SecurityEpoch,
+        reason: SecureAggregationRejectReason,
+        participant_count: u32,
+        expected_participant_count: u32,
+        collusion_threshold_k: u32,
+        feature_schema: &FeatureSchema,
+    ) -> Self {
+        let mut receipt = Self {
+            round_id: round_id.to_string(),
+            epoch,
+            status: SecureAggregationStatus::Rejected,
+            reject_reason: Some(reason),
+            participant_count,
+            expected_participant_count,
+            collusion_threshold_k,
+            aggregate_update_millionths: zero_coordinate_map(feature_schema),
+            receipt_hash: [0; 32],
+        };
+        receipt.receipt_hash = secure_aggregation_receipt_hash(&receipt);
+        receipt
+    }
+
+    fn without_hash(mut self) -> Self {
+        self.receipt_hash = [0; 32];
+        self
+    }
+}
+
+pub fn mask_secure_aggregation_update(
+    round_id: &str,
+    secret: &SecureAggregationParticipantSecret,
+    feature_schema: &FeatureSchema,
+) -> Result<SecureAggregationMaskedUpdate, ContractError> {
+    if round_id.trim().is_empty() {
+        return Err(ContractError::InvalidSecureAggregation {
+            detail: "round_id must not be empty".to_string(),
+        });
+    }
+    feature_schema.validate()?;
+    secret.validate(feature_schema)?;
+
+    let mut masked = zero_coordinate_map(feature_schema);
+    for field_name in feature_schema.fields.keys() {
+        let value = *secret.update_millionths.get(field_name).unwrap_or(&0);
+        masked.insert(field_name.clone(), value);
+    }
+
+    let mut commitments = BTreeMap::new();
+    for (peer_id, pairwise_secret) in &secret.pairwise_secrets {
+        commitments.insert(peer_id.clone(), hash_bytes(pairwise_secret));
+        for field_name in feature_schema.fields.keys() {
+            let mask = derive_pairwise_mask_millionths(
+                round_id,
+                &secret.participant_id,
+                peer_id,
+                field_name,
+                pairwise_secret,
+            );
+            let signed_mask = if secret.participant_id < *peer_id {
+                mask
+            } else {
+                -mask
+            };
+            let slot = masked
+                .get_mut(field_name)
+                .expect("masked update is initialized from feature schema");
+            *slot = checked_add_i64_contract(*slot, signed_mask)?;
+        }
+    }
+
+    Ok(SecureAggregationMaskedUpdate {
+        participant_id: secret.participant_id.clone(),
+        masked_coordinates_millionths: masked,
+        pairwise_secret_commitments: commitments,
+        malicious_evidence: None,
+    })
+}
+
+pub fn aggregate_secure_updates(
+    round_id: &str,
+    epoch: SecurityEpoch,
+    requirements: &SecureAggregationRequirements,
+    feature_schema: &FeatureSchema,
+    expected_participants: &BTreeSet<EngineObjectId>,
+    submitted_updates: &[SecureAggregationMaskedUpdate],
+) -> Result<SecureAggregationRoundReceipt, ContractError> {
+    requirements.validate()?;
+    feature_schema.validate()?;
+    let collusion_threshold_k = requirements.byzantine_tolerance_k();
+    if round_id.trim().is_empty() {
+        return Ok(SecureAggregationRoundReceipt::rejected(
+            round_id,
+            epoch,
+            SecureAggregationRejectReason::EmptyRoundId,
+            submitted_updates.len() as u32,
+            expected_participants.len() as u32,
+            collusion_threshold_k,
+            feature_schema,
+        ));
+    }
+    if expected_participants.is_empty() {
+        return Ok(SecureAggregationRoundReceipt::rejected(
+            round_id,
+            epoch,
+            SecureAggregationRejectReason::EmptyExpectedParticipants,
+            submitted_updates.len() as u32,
+            0,
+            collusion_threshold_k,
+            feature_schema,
+        ));
+    }
+    if expected_participants.len() < requirements.min_participants as usize
+        || submitted_updates.len() < requirements.min_participants as usize
+    {
+        return Ok(SecureAggregationRoundReceipt::rejected(
+            round_id,
+            epoch,
+            SecureAggregationRejectReason::ParticipantThresholdNotMet,
+            submitted_updates.len() as u32,
+            expected_participants.len() as u32,
+            collusion_threshold_k,
+            feature_schema,
+        ));
+    }
+
+    let mut seen = BTreeSet::new();
+    let mut submitted_by_id: BTreeMap<EngineObjectId, &SecureAggregationMaskedUpdate> =
+        BTreeMap::new();
+    for update in submitted_updates {
+        if !seen.insert(update.participant_id.clone()) {
+            return Ok(SecureAggregationRoundReceipt::rejected(
+                round_id,
+                epoch,
+                SecureAggregationRejectReason::DuplicateParticipant,
+                submitted_updates.len() as u32,
+                expected_participants.len() as u32,
+                collusion_threshold_k,
+                feature_schema,
+            ));
+        }
+        if !expected_participants.contains(&update.participant_id) {
+            return Ok(SecureAggregationRoundReceipt::rejected(
+                round_id,
+                epoch,
+                SecureAggregationRejectReason::UnexpectedParticipant,
+                submitted_updates.len() as u32,
+                expected_participants.len() as u32,
+                collusion_threshold_k,
+                feature_schema,
+            ));
+        }
+        if update.malicious_evidence.is_some() {
+            return Ok(SecureAggregationRoundReceipt::rejected(
+                round_id,
+                epoch,
+                SecureAggregationRejectReason::MaliciousParticipant,
+                submitted_updates.len() as u32,
+                expected_participants.len() as u32,
+                collusion_threshold_k,
+                feature_schema,
+            ));
+        }
+        for field_name in update.masked_coordinates_millionths.keys() {
+            if !feature_schema.fields.contains_key(field_name) {
+                return Ok(SecureAggregationRoundReceipt::rejected(
+                    round_id,
+                    epoch,
+                    SecureAggregationRejectReason::UnknownField,
+                    submitted_updates.len() as u32,
+                    expected_participants.len() as u32,
+                    collusion_threshold_k,
+                    feature_schema,
+                ));
+            }
+        }
+        submitted_by_id.insert(update.participant_id.clone(), update);
+    }
+
+    if seen != *expected_participants {
+        return Ok(SecureAggregationRoundReceipt::rejected(
+            round_id,
+            epoch,
+            SecureAggregationRejectReason::DropoutDetected,
+            submitted_updates.len() as u32,
+            expected_participants.len() as u32,
+            collusion_threshold_k,
+            feature_schema,
+        ));
+    }
+
+    for left in expected_participants {
+        for right in expected_participants {
+            if left >= right {
+                continue;
+            }
+            let left_update = submitted_by_id
+                .get(left)
+                .expect("submitted set was checked against expected participants");
+            let right_update = submitted_by_id
+                .get(right)
+                .expect("submitted set was checked against expected participants");
+            let left_commitment = left_update.pairwise_secret_commitments.get(right);
+            let right_commitment = right_update.pairwise_secret_commitments.get(left);
+            if left_commitment.is_none()
+                || right_commitment.is_none()
+                || left_commitment != right_commitment
+            {
+                return Ok(SecureAggregationRoundReceipt::rejected(
+                    round_id,
+                    epoch,
+                    SecureAggregationRejectReason::PairwiseCommitmentMismatch,
+                    submitted_updates.len() as u32,
+                    expected_participants.len() as u32,
+                    collusion_threshold_k,
+                    feature_schema,
+                ));
+            }
+        }
+    }
+
+    let mut aggregate = zero_coordinate_map(feature_schema);
+    for update in submitted_updates {
+        for field_name in feature_schema.fields.keys() {
+            let value = *update
+                .masked_coordinates_millionths
+                .get(field_name)
+                .unwrap_or(&0);
+            let slot = aggregate
+                .get_mut(field_name)
+                .expect("aggregate is initialized from feature schema");
+            *slot = checked_add_i64_contract(*slot, value)?;
+        }
+    }
+
+    let mut receipt = SecureAggregationRoundReceipt {
+        round_id: round_id.to_string(),
+        epoch,
+        status: SecureAggregationStatus::Aggregated,
+        reject_reason: None,
+        participant_count: submitted_updates.len() as u32,
+        expected_participant_count: expected_participants.len() as u32,
+        collusion_threshold_k,
+        aggregate_update_millionths: aggregate,
+        receipt_hash: [0; 32],
+    };
+    receipt.receipt_hash = secure_aggregation_receipt_hash(&receipt);
+    Ok(receipt)
+}
+
+fn derive_pairwise_mask_millionths(
+    round_id: &str,
+    left: &EngineObjectId,
+    right: &EngineObjectId,
+    field_name: &str,
+    pairwise_secret: &[u8],
+) -> i64 {
+    let mut preimage = Vec::with_capacity(
+        SECURE_AGGREGATION_MASK_DOMAIN.len() + round_id.len() + field_name.len() + 96,
+    );
+    preimage.extend_from_slice(SECURE_AGGREGATION_MASK_DOMAIN);
+    preimage.extend_from_slice(&(round_id.len() as u64).to_be_bytes());
+    preimage.extend_from_slice(round_id.as_bytes());
+    let (low, high) = if left <= right {
+        (left, right)
+    } else {
+        (right, left)
+    };
+    preimage.extend_from_slice(low.as_bytes());
+    preimage.extend_from_slice(high.as_bytes());
+    preimage.extend_from_slice(&(field_name.len() as u64).to_be_bytes());
+    preimage.extend_from_slice(field_name.as_bytes());
+    preimage.extend_from_slice(pairwise_secret);
+    let digest = hash_bytes(&preimage);
+    let mut raw = [0u8; 8];
+    raw.copy_from_slice(&digest[..8]);
+    (u64::from_be_bytes(raw) % 2_000_001) as i64 - 1_000_000
+}
+
+fn secure_aggregation_receipt_hash(receipt: &SecureAggregationRoundReceipt) -> [u8; 32] {
+    let unsigned = receipt.clone().without_hash();
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(SECURE_AGGREGATION_RECEIPT_DOMAIN);
+    bytes.extend_from_slice(&(unsigned.round_id.len() as u64).to_be_bytes());
+    bytes.extend_from_slice(unsigned.round_id.as_bytes());
+    bytes.extend_from_slice(&unsigned.epoch.as_u64().to_be_bytes());
+    bytes.extend_from_slice(&[match unsigned.status {
+        SecureAggregationStatus::Aggregated => 1,
+        SecureAggregationStatus::Rejected => 2,
+    }]);
+    bytes.extend_from_slice(&[match unsigned.reject_reason {
+        None => 0,
+        Some(SecureAggregationRejectReason::EmptyRoundId) => 1,
+        Some(SecureAggregationRejectReason::EmptyExpectedParticipants) => 2,
+        Some(SecureAggregationRejectReason::ParticipantThresholdNotMet) => 3,
+        Some(SecureAggregationRejectReason::DropoutDetected) => 4,
+        Some(SecureAggregationRejectReason::UnexpectedParticipant) => 5,
+        Some(SecureAggregationRejectReason::DuplicateParticipant) => 6,
+        Some(SecureAggregationRejectReason::MaliciousParticipant) => 7,
+        Some(SecureAggregationRejectReason::UnknownField) => 8,
+        Some(SecureAggregationRejectReason::PairwiseCommitmentMismatch) => 9,
+    }]);
+    bytes.extend_from_slice(&unsigned.participant_count.to_be_bytes());
+    bytes.extend_from_slice(&unsigned.expected_participant_count.to_be_bytes());
+    bytes.extend_from_slice(&unsigned.collusion_threshold_k.to_be_bytes());
+    write_i64_map(&mut bytes, &unsigned.aggregate_update_millionths);
+    hash_bytes(&bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -3388,6 +3788,9 @@ pub enum ContractError {
     InvalidAggregation {
         detail: String,
     },
+    InvalidSecureAggregation {
+        detail: String,
+    },
     InvalidRetention {
         detail: String,
     },
@@ -3455,6 +3858,9 @@ impl fmt::Display for ContractError {
             Self::InvalidDpSgd { detail } => write!(f, "invalid DP-SGD update: {detail}"),
             Self::InvalidAggregation { detail } => {
                 write!(f, "invalid aggregation: {detail}")
+            }
+            Self::InvalidSecureAggregation { detail } => {
+                write!(f, "invalid secure aggregation: {detail}")
             }
             Self::InvalidRetention { detail } => write!(f, "invalid retention: {detail}"),
             Self::InvalidRandomnessTranscript { detail } => {
@@ -3706,6 +4112,90 @@ mod tests {
                 ],
             ),
         ]
+    }
+
+    fn secure_participant(byte: u8) -> EngineObjectId {
+        EngineObjectId([byte; 32])
+    }
+
+    fn secure_expected_three() -> BTreeSet<EngineObjectId> {
+        BTreeSet::from([
+            secure_participant(0x01),
+            secure_participant(0x02),
+            secure_participant(0x03),
+        ])
+    }
+
+    fn secure_requirements_three() -> SecureAggregationRequirements {
+        SecureAggregationRequirements {
+            min_participants: 3,
+            dropout_tolerance_millionths: 333_333,
+            secret_sharing_scheme: SecretSharingScheme::Additive,
+            sharing_threshold: None,
+            coordinator_trust_model: CoordinatorTrustModel::HonestButCurious,
+        }
+    }
+
+    fn pairwise_secret(left: u8, right: u8) -> Vec<u8> {
+        let low = left.min(right);
+        let high = left.max(right);
+        vec![b'p', b'a', b'i', b'r', low, high]
+    }
+
+    fn secure_secret(
+        participant: u8,
+        values: &[(&str, i64)],
+    ) -> SecureAggregationParticipantSecret {
+        let participant_id = secure_participant(participant);
+        let mut pairwise_secrets = BTreeMap::new();
+        for peer in [0x01, 0x02, 0x03] {
+            if peer != participant {
+                pairwise_secrets
+                    .insert(secure_participant(peer), pairwise_secret(participant, peer));
+            }
+        }
+        SecureAggregationParticipantSecret {
+            participant_id,
+            update_millionths: values
+                .iter()
+                .map(|(field, value)| ((*field).to_string(), *value))
+                .collect(),
+            pairwise_secrets,
+        }
+    }
+
+    fn masked_three_for_round(round_id: &str) -> Vec<SecureAggregationMaskedUpdate> {
+        [
+            secure_secret(
+                0x01,
+                &[("calibration_residual", 1_000), ("drift_indicator", 2_000)],
+            ),
+            secure_secret(
+                0x02,
+                &[
+                    ("calibration_residual", 3_000),
+                    ("drift_indicator", -1_000),
+                    ("false_positive_count", 5_000),
+                ],
+            ),
+            secure_secret(
+                0x03,
+                &[
+                    ("calibration_residual", -4_000),
+                    ("drift_indicator", 6_000),
+                    ("false_positive_count", 7_000),
+                ],
+            ),
+        ]
+        .iter()
+        .map(|secret| {
+            mask_secure_aggregation_update(round_id, secret, &test_feature_schema()).expect("mask")
+        })
+        .collect()
+    }
+
+    fn masked_three() -> Vec<SecureAggregationMaskedUpdate> {
+        masked_three_for_round("round-secagg-1")
     }
 
     fn evidence_id(byte: u8) -> EngineObjectId {
@@ -4613,6 +5103,437 @@ mod tests {
             agg.validate(),
             Err(ContractError::InvalidAggregation { .. })
         ));
+    }
+
+    #[test]
+    fn secure_aggregation_additive_threshold_k_is_n_minus_one_over_three() {
+        let mut requirements = secure_requirements_three();
+        requirements.min_participants = 7;
+        assert_eq!(requirements.byzantine_tolerance_k(), 2);
+    }
+
+    #[test]
+    fn secure_aggregation_shamir_threshold_k_is_dropout_capacity() {
+        let requirements = SecureAggregationRequirements {
+            min_participants: 10,
+            dropout_tolerance_millionths: 200_000,
+            secret_sharing_scheme: SecretSharingScheme::Shamir,
+            sharing_threshold: Some(7),
+            coordinator_trust_model: CoordinatorTrustModel::Malicious,
+        };
+        assert_eq!(requirements.byzantine_tolerance_k(), 3);
+    }
+
+    #[test]
+    fn secure_aggregation_secret_rejects_self_pairwise_secret() {
+        let mut secret = secure_secret(0x01, &[]);
+        secret
+            .pairwise_secrets
+            .insert(secure_participant(0x01), pairwise_secret(0x01, 0x01));
+        assert!(matches!(
+            secret.validate(&test_feature_schema()),
+            Err(ContractError::InvalidSecureAggregation { .. })
+        ));
+    }
+
+    #[test]
+    fn secure_aggregation_secret_rejects_empty_pairwise_secret() {
+        let mut secret = secure_secret(0x01, &[]);
+        secret
+            .pairwise_secrets
+            .insert(secure_participant(0x02), Vec::new());
+        assert!(matches!(
+            secret.validate(&test_feature_schema()),
+            Err(ContractError::InvalidSecureAggregation { .. })
+        ));
+    }
+
+    #[test]
+    fn secure_aggregation_secret_rejects_unknown_field() {
+        let mut secret = secure_secret(0x01, &[]);
+        secret
+            .update_millionths
+            .insert("unknown_field".to_string(), 1);
+        assert!(matches!(
+            secret.validate(&test_feature_schema()),
+            Err(ContractError::InvalidSecureAggregation { .. })
+        ));
+    }
+
+    #[test]
+    fn secure_aggregation_mask_rejects_empty_round_id() {
+        let err = mask_secure_aggregation_update(
+            "   ",
+            &secure_secret(0x01, &[("drift_indicator", 1)]),
+            &test_feature_schema(),
+        )
+        .expect_err("blank round id rejected");
+        assert!(matches!(
+            err,
+            ContractError::InvalidSecureAggregation { .. }
+        ));
+    }
+
+    #[test]
+    fn secure_aggregation_mask_fills_missing_schema_coordinates() {
+        let masked = mask_secure_aggregation_update(
+            "round-secagg-1",
+            &secure_secret(0x01, &[("drift_indicator", 1)]),
+            &test_feature_schema(),
+        )
+        .expect("mask");
+        assert_eq!(masked.masked_coordinates_millionths.len(), 3);
+        assert!(
+            masked
+                .masked_coordinates_millionths
+                .contains_key("calibration_residual")
+        );
+        assert!(
+            masked
+                .masked_coordinates_millionths
+                .contains_key("false_positive_count")
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_mask_commitments_are_symmetric() {
+        let updates = masked_three();
+        let left = updates
+            .iter()
+            .find(|update| update.participant_id == secure_participant(0x01))
+            .expect("left");
+        let right = updates
+            .iter()
+            .find(|update| update.participant_id == secure_participant(0x02))
+            .expect("right");
+        assert_eq!(
+            left.pairwise_secret_commitments
+                .get(&secure_participant(0x02)),
+            right
+                .pairwise_secret_commitments
+                .get(&secure_participant(0x01))
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_pairwise_masks_are_canonical_by_participant_order() {
+        let left = secure_participant(0x01);
+        let right = secure_participant(0x02);
+        let secret = pairwise_secret(0x01, 0x02);
+        assert_eq!(
+            derive_pairwise_mask_millionths(
+                "round-secagg-1",
+                &left,
+                &right,
+                "drift_indicator",
+                &secret
+            ),
+            derive_pairwise_mask_millionths(
+                "round-secagg-1",
+                &right,
+                &left,
+                "drift_indicator",
+                &secret
+            )
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_aggregates_three_participants() {
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &masked_three(),
+        )
+        .expect("aggregate");
+        assert_eq!(receipt.status, SecureAggregationStatus::Aggregated);
+        assert_eq!(receipt.reject_reason, None);
+        assert_eq!(receipt.participant_count, 3);
+        assert_eq!(receipt.expected_participant_count, 3);
+        assert_eq!(receipt.collusion_threshold_k, 0);
+        assert_eq!(
+            receipt.aggregate_update_millionths["calibration_residual"],
+            0
+        );
+        assert_eq!(
+            receipt.aggregate_update_millionths["drift_indicator"],
+            7_000
+        );
+        assert_eq!(
+            receipt.aggregate_update_millionths["false_positive_count"],
+            12_000
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_receipt_hash_recomputes() {
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &masked_three(),
+        )
+        .expect("aggregate");
+        assert_eq!(
+            receipt.receipt_hash,
+            secure_aggregation_receipt_hash(&receipt)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_is_deterministic() {
+        let first = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &masked_three(),
+        )
+        .expect("aggregate");
+        let second = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &masked_three(),
+        )
+        .expect("aggregate");
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn secure_aggregation_round_id_changes_receipt_hash() {
+        let first = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &masked_three_for_round("round-secagg-1"),
+        )
+        .expect("aggregate");
+        let second = aggregate_secure_updates(
+            "round-secagg-2",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &masked_three_for_round("round-secagg-2"),
+        )
+        .expect("aggregate");
+        assert_eq!(
+            first.aggregate_update_millionths,
+            second.aggregate_update_millionths
+        );
+        assert_ne!(first.receipt_hash, second.receipt_hash);
+    }
+
+    #[test]
+    fn secure_aggregation_rejects_empty_expected_participants() {
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &BTreeSet::new(),
+            &masked_three(),
+        )
+        .expect("aggregate");
+        assert_eq!(receipt.status, SecureAggregationStatus::Rejected);
+        assert_eq!(
+            receipt.reject_reason,
+            Some(SecureAggregationRejectReason::EmptyExpectedParticipants)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_rejects_participant_threshold_shortfall() {
+        let mut requirements = secure_requirements_three();
+        requirements.min_participants = 4;
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &requirements,
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &masked_three(),
+        )
+        .expect("aggregate");
+        assert_eq!(
+            receipt.reject_reason,
+            Some(SecureAggregationRejectReason::ParticipantThresholdNotMet)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_rejects_dropout() {
+        let mut requirements = secure_requirements_three();
+        requirements.min_participants = 2;
+        let mut updates = masked_three();
+        updates.pop();
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &requirements,
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &updates,
+        )
+        .expect("aggregate");
+        assert_eq!(
+            receipt.reject_reason,
+            Some(SecureAggregationRejectReason::DropoutDetected)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_rejects_unexpected_participant() {
+        let mut updates = masked_three();
+        updates.push(
+            mask_secure_aggregation_update(
+                "round-secagg-1",
+                &secure_secret(0x04, &[("drift_indicator", 1)]),
+                &test_feature_schema(),
+            )
+            .expect("mask"),
+        );
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &updates,
+        )
+        .expect("aggregate");
+        assert_eq!(
+            receipt.reject_reason,
+            Some(SecureAggregationRejectReason::UnexpectedParticipant)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_rejects_duplicate_participant() {
+        let mut updates = masked_three();
+        updates.push(updates[0].clone());
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &updates,
+        )
+        .expect("aggregate");
+        assert_eq!(
+            receipt.reject_reason,
+            Some(SecureAggregationRejectReason::DuplicateParticipant)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_rejects_malicious_participant() {
+        let mut updates = masked_three();
+        updates[1].malicious_evidence = Some("bad share transcript".to_string());
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &updates,
+        )
+        .expect("aggregate");
+        assert_eq!(
+            receipt.reject_reason,
+            Some(SecureAggregationRejectReason::MaliciousParticipant)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_rejects_unknown_masked_field() {
+        let mut updates = masked_three();
+        updates[0]
+            .masked_coordinates_millionths
+            .insert("unknown_field".to_string(), 1);
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &updates,
+        )
+        .expect("aggregate");
+        assert_eq!(
+            receipt.reject_reason,
+            Some(SecureAggregationRejectReason::UnknownField)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_rejects_pairwise_commitment_mismatch() {
+        let mut updates = masked_three();
+        updates[0]
+            .pairwise_secret_commitments
+            .insert(secure_participant(0x02), [0xFF; 32]);
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &updates,
+        )
+        .expect("aggregate");
+        assert_eq!(
+            receipt.reject_reason,
+            Some(SecureAggregationRejectReason::PairwiseCommitmentMismatch)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_reject_receipt_zeroes_aggregate_coordinates() {
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &BTreeSet::new(),
+            &masked_three(),
+        )
+        .expect("aggregate");
+        assert_eq!(receipt.aggregate_update_millionths.len(), 3);
+        assert!(
+            receipt
+                .aggregate_update_millionths
+                .values()
+                .all(|value| *value == 0)
+        );
+    }
+
+    #[test]
+    fn secure_aggregation_receipt_serde_roundtrip() {
+        let receipt = aggregate_secure_updates(
+            "round-secagg-1",
+            SecurityEpoch::from_raw(31),
+            &secure_requirements_three(),
+            &test_feature_schema(),
+            &secure_expected_three(),
+            &masked_three(),
+        )
+        .expect("aggregate");
+        let json = serde_json::to_string(&receipt).expect("serialize");
+        let restored: SecureAggregationRoundReceipt =
+            serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored, receipt);
     }
 
     // -------------------------------------------------------------------

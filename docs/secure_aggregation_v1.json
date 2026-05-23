@@ -1,0 +1,33 @@
+{
+  "schema_version": "franken-engine.secure-aggregation.v1",
+  "track": "QQ.2",
+  "protocol": "Bonawitz2017-inspired additive pairwise masking",
+  "thresholds": {
+    "honest_majority_assumption": "k < n/3",
+    "default_collusion_threshold_k_formula": "floor((n - 1) / 3)",
+    "example_participant_counts": [
+      {
+        "n": 3,
+        "k": 0
+      },
+      {
+        "n": 7,
+        "k": 2
+      },
+      {
+        "n": 25,
+        "k": 8
+      }
+    ],
+    "dropout_policy": "fail_closed_reject",
+    "malicious_peer_policy": "fail_closed_reject"
+  },
+  "implementation": {
+    "rust_surface": "crates/franken-engine/src/privacy_learning_contract.rs",
+    "participant_secret_type": "SecureAggregationParticipantSecret",
+    "masked_update_type": "SecureAggregationMaskedUpdate",
+    "receipt_type": "SecureAggregationRoundReceipt",
+    "mask_domain": "FrankenEngine.SecureAggregationMask.v1",
+    "receipt_domain": "FrankenEngine.SecureAggregationReceipt.v1"
+  }
+}

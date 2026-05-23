@@ -200,7 +200,8 @@ struct RunArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct DoctorArgs {
-    input: PathBuf,
+    input: Option<PathBuf>,
+    artifact_dir: Option<PathBuf>,
     summary: bool,
     out_dir: Option<PathBuf>,
     workload_id: Option<String>,
@@ -281,6 +282,7 @@ struct ReplayArgs {
     compare_trace: Option<PathBuf>,
     mode: ReplayMode,
     out: Option<PathBuf>,
+    fleet_trace: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1000,7 +1002,36 @@ struct DoctorCommandOutput {
     preflight: PreflightDoctorOutput,
     onboarding_scorecard: OnboardingScorecardOutput,
     rollout_decision: RolloutDecisionArtifactOutput,
+    artifact_bundle: Option<DoctorArtifactBundleStatus>,
     observability_mode: ObservabilityModeOutput,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct DoctorArtifactBundleStatus {
+    bundle_dir: String,
+    input_path: Option<String>,
+    manifest_path: String,
+    manifest_present: bool,
+    manifest_valid_json: bool,
+    manifest_schema_version: Option<String>,
+    artifact_paths: BTreeMap<String, Vec<String>>,
+    events_path: String,
+    events_present: bool,
+    events_valid_jsonl: bool,
+    event_count: usize,
+    step_logs_dir: String,
+    step_logs_present: bool,
+    step_log_count: usize,
+    complete: bool,
+    diagnostics: Vec<DoctorArtifactBundleDiagnostic>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct DoctorArtifactBundleDiagnostic {
+    severity: String,
+    code: String,
+    path: String,
+    message: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1385,6 +1416,7 @@ fn parse_compile_command(args: &[String]) -> Result<CommandSpec, String> {
     }
 
     let mut input: Option<PathBuf> = None;
+    let mut artifact_dir: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut goal = ParseGoal::Script;
     let mut trace_id = "trace-frankenctl-compile".to_string();
@@ -1482,6 +1514,9 @@ fn parse_doctor_command(args: &[String]) -> Result<CommandSpec, String> {
     while index < args.len() {
         match args[index].as_str() {
             "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--artifact-dir" => {
+                artifact_dir = Some(PathBuf::from(next_arg(args, &mut index, "--artifact-dir")?))
+            }
             "--summary" => summary = true,
             "--out-dir" => out_dir = Some(PathBuf::from(next_arg(args, &mut index, "--out-dir")?)),
             "--workload-id" => workload_id = Some(next_arg(args, &mut index, "--workload-id")?),
@@ -1543,8 +1578,15 @@ fn parse_doctor_command(args: &[String]) -> Result<CommandSpec, String> {
         index += 1;
     }
 
+    if input.is_none() && artifact_dir.is_none() {
+        return Err(
+            "doctor requires --input <runtime_input.json> or --artifact-dir <bundle>".to_string(),
+        );
+    }
+
     Ok(CommandSpec::Doctor(Box::new(DoctorArgs {
-        input: input.ok_or_else(|| "doctor requires --input <runtime_input.json>".to_string())?,
+        input,
+        artifact_dir,
         summary,
         out_dir,
         workload_id,
@@ -1823,6 +1865,7 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
     let mut compare_trace: Option<PathBuf> = None;
     let mut mode = ReplayMode::Strict;
     let mut out: Option<PathBuf> = None;
+    let mut fleet_trace: Option<PathBuf> = None;
 
     let mut index = 0usize;
     while index < args.len() {
@@ -1837,6 +1880,9 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
             }
             "--mode" => mode = parse_replay_mode(&next_arg(args, &mut index, "--mode")?)?,
             "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            "--fleet-trace" => {
+                fleet_trace = Some(PathBuf::from(next_arg(args, &mut index, "--fleet-trace")?))
+            }
             flag => return Err(format!("unknown replay run flag `{flag}`")),
         }
         index += 1;
@@ -1847,6 +1893,7 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
         compare_trace,
         mode,
         out,
+        fleet_trace,
     }))
 }
 
@@ -4382,10 +4429,27 @@ fn append_benchmark_bundle_check(
 }
 
 fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
-    let trace = load_json_file::<NondeterminismTrace>(&args.trace)?;
+    let mut trace = load_json_file::<NondeterminismTrace>(&args.trace)?;
     trace
         .validate_for_replay()
         .map_err(|error| format!("replay failed before sequence 0: {error}"))?;
+
+    // If fleet trace is provided, merge it with the main trace
+    if let Some(fleet_trace_path) = &args.fleet_trace {
+        let fleet_trace = load_json_file::<NondeterminismTrace>(fleet_trace_path)?;
+        fleet_trace
+            .validate_for_replay()
+            .map_err(|error| format!("fleet trace validation failed: {error}"))?;
+
+        // Simple merge by sequence number (timestamp-based ordering)
+        let mut merged_events = trace.events.clone();
+        merged_events.extend(fleet_trace.events);
+
+        // Sort by sequence number for deterministic ordering
+        merged_events.sort_by_key(|event| event.sequence);
+
+        trace.events = merged_events;
+    }
     let (trace_id, decision_id, policy_id) = cli_replay_ids(&trace.session_id, args.mode);
     let session_id = trace.session_id.clone();
     let event_count = trace.events.len();

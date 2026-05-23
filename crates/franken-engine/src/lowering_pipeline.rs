@@ -45,6 +45,7 @@ use crate::flow_lattice::{
     Clearance, DeclassificationObligation, FlowCheckResult as LatticeFlowCheckResult,
     Ir2FlowLattice, LabelClass,
 };
+use crate::unified_authority_algebra::{AuthorityLattice, CapabilitySet, BudgetEnvelope};
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
@@ -5391,6 +5392,48 @@ pub fn lower_ir2_to_ir3(
     })
 }
 
+// Helper function to create unified authority lattice from separate components
+fn create_unified_authority_from_components(
+    label_class: LabelClass,
+    capability: Option<String>,
+    budget_millionths: Option<i64>,
+) -> AuthorityLattice {
+    use crate::unified_authority_algebra::CapabilityKind;
+
+    // Convert capability string to CapabilitySet
+    let mut capability_set = CapabilitySet::empty();
+    if let Some(cap_str) = capability {
+        // Parse common capability strings to CapabilityKind
+        match cap_str.as_str() {
+            "fs_read" => capability_set = capability_set.with_capability(CapabilityKind::FsRead),
+            "fs_write" => capability_set = capability_set.with_capability(CapabilityKind::FsWrite),
+            "net_connect" => capability_set = capability_set.with_capability(CapabilityKind::NetConnect),
+            "net_listen" => capability_set = capability_set.with_capability(CapabilityKind::NetListen),
+            "proc_spawn" => capability_set = capability_set.with_capability(CapabilityKind::ProcSpawn),
+            "env_read" => capability_set = capability_set.with_capability(CapabilityKind::EnvRead),
+            "env_write" => capability_set = capability_set.with_capability(CapabilityKind::EnvWrite),
+            "policy_request" => capability_set = capability_set.with_capability(CapabilityKind::PolicyRequest),
+            "eval" => capability_set = capability_set.with_capability(CapabilityKind::Eval),
+            "global" => capability_set = capability_set.with_capability(CapabilityKind::Global),
+            "clock_read" => capability_set = capability_set.with_capability(CapabilityKind::ClockRead),
+            "random_read" => capability_set = capability_set.with_capability(CapabilityKind::RandomRead),
+            _ => {
+                // Unknown capability string, leave empty for now
+                // In real implementation, this might log a warning or use a dynamic capability
+            }
+        }
+    }
+
+    // Create budget envelope
+    let budget_envelope = if let Some(budget) = budget_millionths {
+        BudgetEnvelope::try_new(budget, budget, budget, budget).unwrap_or_else(|_| BudgetEnvelope::bottom())
+    } else {
+        BudgetEnvelope::bottom()
+    };
+
+    AuthorityLattice::new(label_class, capability_set, budget_envelope)
+}
+
 fn build_ir2_flow_proof_artifact(
     ir2: &Ir2Module,
     context: &LoweringContext,
@@ -5420,6 +5463,13 @@ fn build_ir2_flow_proof_artifact(
         let source_class = LabelClass::from_label(&source_label);
         let sink_clearance = sink_label_to_clearance(&sink_clearance_label);
         let capability = op.required_capability.as_ref().map(|cap| cap.0.clone());
+
+        // MIGRATION: Create unified authority lattice for demonstration
+        let _unified_source_authority = create_unified_authority_from_components(
+            source_class.clone(),
+            capability.clone(),
+            None, // No budget info available yet
+        );
         let mut obligation_hint = None;
 
         if flow.declassification_required
@@ -14105,5 +14155,45 @@ mod tests {
     fn golden_simple_literal_lowering() {
         let ir0 = script_ir0(); // Reuse existing simple literal test
         assert_golden_ir_output(&ir0, "numeric_literal");
+    }
+
+    // MIGRATION TESTS: Unified Authority Algebra
+    #[test]
+    fn unified_authority_lattice_creation() {
+        let auth1 = create_unified_authority_from_components(
+            LabelClass::Public,
+            Some("fs_read".to_string()),
+            Some(1_000_000), // 1.0 in millionths
+        );
+        let auth2 = create_unified_authority_from_components(
+            LabelClass::Internal,
+            Some("fs_write".to_string()),
+            Some(500_000), // 0.5 in millionths
+        );
+
+        // Test basic lattice operations
+        let joined = auth1.join(&auth2);
+        assert_eq!(joined.ifc_label, LabelClass::Internal); // Higher security label
+
+        let met = auth1.meet(&auth2);
+        assert_eq!(met.ifc_label, LabelClass::Public); // Lower security label
+    }
+
+    #[test]
+    fn unified_authority_subsumes() {
+        let low_auth = create_unified_authority_from_components(
+            LabelClass::Public,
+            None,
+            Some(100_000),
+        );
+        let high_auth = create_unified_authority_from_components(
+            LabelClass::Secret,
+            Some("global".to_string()),
+            Some(2_000_000),
+        );
+
+        // High authority should subsume low authority
+        assert!(high_auth.subsumes(&low_auth));
+        assert!(!low_auth.subsumes(&high_auth));
     }
 }

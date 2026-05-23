@@ -43,6 +43,7 @@ use crate::expected_loss_selector::{
     ActionDecision, ContainmentAction, ExpectedLossSelector, LossMatrix,
 };
 use crate::flow_lattice::{Clearance, DeclassificationObligation, Ir2FlowLattice, LabelClass};
+use crate::unified_authority_algebra::{AuthorityLattice, CapabilitySet, BudgetEnvelope};
 use crate::guardplane_adapter::{
     GuardplaneAdapter, GuardplaneDecisionRecord, GuardplaneExecutionSummary,
     GuardplaneExtensionContext, GuardplaneOperation,

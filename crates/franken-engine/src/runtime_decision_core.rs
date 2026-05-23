@@ -37,6 +37,9 @@ use crate::baseline_interpreter::{
     DETERMINISTIC_PROFILE_LABEL, LEGACY_QUICKJS_PROFILE_LABEL, LEGACY_V8_PROFILE_LABEL,
     THROUGHPUT_PROFILE_LABEL,
 };
+use crate::minimal_causal_set_inference::{
+    CausalDecisionSystem, CausalTracker, DecisionFactor, MinimalCausalSet,
+};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -1122,6 +1125,10 @@ pub struct RuntimeDecisionCore {
     pub calibration_seq: u64,
     /// Fallback event sequence counter.
     pub fallback_seq: u64,
+    /// Causal tracker for minimal-set inference (FF.1).
+    causal_tracker: Option<CausalTracker>,
+    /// Computed causal sets for recent decisions.
+    pub causal_sets: Vec<MinimalCausalSet>,
 }
 
 /// Input for a routing decision.
@@ -1199,6 +1206,8 @@ impl RuntimeDecisionCore {
             decision_seq: 0,
             calibration_seq: 0,
             fallback_seq: 0,
+            causal_tracker: None,
+            causal_sets: Vec::new(),
         })
     }
 
@@ -1219,14 +1228,55 @@ impl RuntimeDecisionCore {
             });
         }
 
-        // 2. Update state.
+        // 2. Initialize causal tracking for this decision.
+        if let Some(tracker) = &mut self.causal_tracker {
+            tracker.add_metadata(
+                "decision_id",
+                format!("decision-{}", self.state.decision_count),
+            );
+            tracker.add_metadata("core_id", self.core_id.clone());
+        }
+
+        // 3. Update state and record evidence usage.
         self.state.epoch = input.epoch;
         self.state.confidence_millionths = input.confidence_millionths;
         self.state.regime = input.regime;
         self.state.risk_posteriors = input.risk_posteriors.clone();
         self.state.decision_count = self.state.decision_count.saturating_add(1);
 
-        // 3. Record latency and update CVaR.
+        // Record evidence usage for state updates
+        if let Some(tracker) = &mut self.causal_tracker {
+            // Record confidence influence
+            tracker.record_evidence_usage(
+                format!("confidence-{}", self.state.decision_count),
+                "confidence_observation",
+                DecisionFactor::PosteriorProbability,
+                input.confidence_millionths.abs(),
+                &input.confidence_millionths.to_le_bytes(),
+            );
+
+            // Record regime influence
+            tracker.record_evidence_usage(
+                format!("regime-{}", self.state.decision_count),
+                "regime_detection",
+                DecisionFactor::ConstraintActivation,
+                (input.regime as u8 as i64) * 200_000, // Regime impact weight
+                &(input.regime as u8).to_le_bytes(),
+            );
+
+            // Record risk posterior influences
+            for (dim, &value) in &input.risk_posteriors {
+                tracker.record_evidence_usage(
+                    format!("risk-{}-{}", dim, self.state.decision_count),
+                    "risk_posterior",
+                    DecisionFactor::LossMatrix,
+                    value,
+                    &value.to_le_bytes(),
+                );
+            }
+        }
+
+        // 4. Record latency and update CVaR.
         self.cvar_constraint.observe(input.observed_latency_us);
         self.state
             .recent_latencies_us
@@ -1235,16 +1285,56 @@ impl RuntimeDecisionCore {
             self.state.recent_latencies_us.remove(0);
         }
 
-        // 4. Update calibration.
+        // Record CVaR evidence usage
+        if let Some(tracker) = &mut self.causal_tracker {
+            tracker.record_evidence_usage(
+                format!("latency-{}", self.state.decision_count),
+                "latency_observation",
+                DecisionFactor::GuardrailActivation,
+                input.observed_latency_us as i64,
+                &input.observed_latency_us.to_le_bytes(),
+            );
+        }
+
+        // 5. Update calibration.
         self.calibration.observe(
             input.nonconformity_score_millionths,
             input.calibration_covered,
         );
 
-        // 5. Record budget consumption.
+        // Record calibration evidence usage
+        if let Some(tracker) = &mut self.causal_tracker {
+            tracker.record_evidence_usage(
+                format!("calibration-{}", self.state.decision_count),
+                "nonconformity_score",
+                DecisionFactor::GuardrailActivation,
+                input.nonconformity_score_millionths.abs(),
+                &input.nonconformity_score_millionths.to_le_bytes(),
+            );
+        }
+
+        // 6. Record budget consumption.
         self.budget.record(input.compute_ms, input.memory_mb);
 
-        // 6. Emit calibration ledger entry.
+        // Record budget evidence usage
+        if let Some(tracker) = &mut self.causal_tracker {
+            tracker.record_evidence_usage(
+                format!("compute-budget-{}", self.state.decision_count),
+                "compute_consumption",
+                DecisionFactor::ConstraintActivation,
+                input.compute_ms as i64 * 10_000, // Scale factor for influence
+                &input.compute_ms.to_le_bytes(),
+            );
+            tracker.record_evidence_usage(
+                format!("memory-budget-{}", self.state.decision_count),
+                "memory_consumption",
+                DecisionFactor::ConstraintActivation,
+                input.memory_mb as i64 * 50_000, // Scale factor for influence
+                &input.memory_mb.to_le_bytes(),
+            );
+        }
+
+        // 7. Emit calibration ledger entry.
         let cal_entry = CalibrationLedgerEntry {
             seq: self.calibration_seq,
             empirical_coverage_millionths: self.calibration.empirical_coverage_millionths(),
@@ -1262,7 +1352,7 @@ impl RuntimeDecisionCore {
             self.calibration_ledger.remove(0);
         }
 
-        // 7. Check fallback triggers (priority order: budget -> CVaR -> regime -> confidence -> calibration).
+        // 8. Check fallback triggers (priority order: budget -> CVaR -> regime -> confidence -> calibration).
         let mut fallback_reason: Option<FallbackReason> = None;
 
         // 7a. Budget exhausted.
@@ -1320,7 +1410,7 @@ impl RuntimeDecisionCore {
             });
         }
 
-        // 8. Select action.
+        // 9. Select action.
         let (action, expected_loss) = if let Some(ref reason) = fallback_reason {
             // Fallback: select safe mode or demotion target.
             let target_lane = match reason {
@@ -1387,7 +1477,40 @@ impl RuntimeDecisionCore {
             }
         };
 
-        // 9. Record decision trace.
+        // 10. Record action selection evidence for causal tracking.
+        if let Some(tracker) = &mut self.causal_tracker {
+            tracker.record_evidence_usage(
+                format!("action-selection-{}", self.state.decision_count),
+                "action_selection",
+                DecisionFactor::ActionFiltering,
+                expected_loss.abs(),
+                &expected_loss.to_le_bytes(),
+            );
+
+            if fallback_reason.is_some() {
+                tracker.record_evidence_usage(
+                    format!("fallback-trigger-{}", self.state.decision_count),
+                    "fallback_trigger",
+                    DecisionFactor::GuardrailActivation,
+                    1_000_000, // Full weight for fallback triggers
+                    b"fallback_triggered",
+                );
+            }
+        }
+
+        // 11. Compute minimal causal set for this decision.
+        if let Some(causal_set) = self.compute_causal_set(
+            format!("decision-{}", self.state.decision_count),
+            input.epoch,
+        ) {
+            self.causal_sets.push(causal_set);
+            // Trim causal sets to prevent unbounded growth
+            if self.causal_sets.len() > MAX_TRACE_ENTRIES {
+                self.causal_sets.remove(0);
+            }
+        }
+
+        // 12. Record decision trace.
         let trace_entry = DecisionTraceEntry {
             seq: self.decision_seq,
             state_before: self.state.clone(),
@@ -1460,6 +1583,67 @@ impl RuntimeDecisionCore {
     /// Check if any fallback is currently active.
     pub fn is_fallback_active(&self) -> bool {
         self.state.safe_mode_active
+    }
+
+    /// Enable causal tracking for decision analysis (FF.1).
+    pub fn enable_causal_tracking(&mut self) {
+        self.causal_tracker = Some(CausalTracker::new());
+    }
+
+    /// Disable causal tracking.
+    pub fn disable_causal_tracking(&mut self) {
+        self.causal_tracker = None;
+    }
+
+    /// Check if causal tracking is currently enabled.
+    pub fn causal_tracking_enabled(&self) -> bool {
+        self.causal_tracker.is_some()
+    }
+
+    /// Get the most recent causal sets computed for decisions.
+    pub fn recent_causal_sets(&self) -> &[MinimalCausalSet] {
+        &self.causal_sets
+    }
+
+    /// Get the minimal causal set for a specific decision sequence number.
+    pub fn causal_set_for_decision(&self, decision_seq: u64) -> Option<&MinimalCausalSet> {
+        self.causal_sets
+            .iter()
+            .find(|set| set.decision_id == format!("decision-{}", decision_seq))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CausalDecisionSystem implementation for RuntimeDecisionCore
+// ---------------------------------------------------------------------------
+
+impl CausalDecisionSystem for RuntimeDecisionCore {
+    fn enable_causal_tracking(&mut self) {
+        self.causal_tracker = Some(CausalTracker::new());
+    }
+
+    fn causal_tracker(&self) -> Option<&CausalTracker> {
+        self.causal_tracker.as_ref()
+    }
+
+    fn causal_tracker_mut(&mut self) -> Option<&mut CausalTracker> {
+        self.causal_tracker.as_mut()
+    }
+
+    fn compute_causal_set(
+        &self,
+        decision_id: impl Into<String>,
+        epoch_id: SecurityEpoch,
+    ) -> Option<MinimalCausalSet> {
+        if let Some(tracker) = &self.causal_tracker {
+            let timestamp_ns = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time should be valid")
+                .as_nanos() as u64;
+            Some(tracker.compute_minimal_set(decision_id, epoch_id, timestamp_ns))
+        } else {
+            None
+        }
     }
 }
 
@@ -2772,5 +2956,135 @@ mod tests {
         let back: LossPolicyEntry =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(entry, back);
+    }
+
+    // -- Causal tracking tests (FF.1) --
+
+    #[test]
+    fn causal_tracking_integration() {
+        let mut core = RuntimeDecisionCore::new(
+            "causal-test",
+            vec![
+                LaneId::deterministic_profile(),
+                LaneId::throughput_profile(),
+            ],
+            LaneId::deterministic_profile(),
+            epoch(1),
+        )
+        .expect("core creation should succeed");
+
+        // Enable causal tracking
+        core.enable_causal_tracking();
+        assert!(core.causal_tracking_enabled());
+
+        let input = RoutingDecisionInput {
+            observed_latency_us: 1500,
+            risk_posteriors: default_risk_posteriors(),
+            regime: RegimeEstimate::Normal,
+            confidence_millionths: 800_000,
+            is_adverse: false,
+            nonconformity_score_millionths: 250_000,
+            calibration_covered: true,
+            compute_ms: 20,
+            memory_mb: 64,
+            epoch: epoch(1),
+            timestamp_ns: 1000000,
+        };
+
+        let result = core.decide(&input).expect("decision should succeed");
+        assert_eq!(
+            result.action,
+            RoutingAction::SelectLane(LaneId::deterministic_profile())
+        );
+
+        // Verify causal set was computed
+        assert_eq!(core.recent_causal_sets().len(), 1);
+        let causal_set = &core.recent_causal_sets()[0];
+
+        // Verify decision ID format
+        assert_eq!(causal_set.decision_id, "decision-1");
+
+        // Verify evidence atoms are recorded
+        assert!(causal_set.minimal_set_size > 0);
+        assert!(causal_set.total_evidence_atoms_considered > 0);
+
+        // Verify various decision factors are represented
+        let factor_types: std::collections::BTreeSet<_> = causal_set
+            .dependencies
+            .iter()
+            .map(|dep| dep.influenced_factor)
+            .collect();
+
+        // Should have multiple decision factors involved
+        assert!(
+            factor_types.len() >= 3,
+            "Expected multiple decision factors, got {:?}",
+            factor_types
+        );
+
+        // Verify specific expected factors
+        assert!(factor_types.contains(&DecisionFactor::PosteriorProbability));
+        assert!(factor_types.contains(&DecisionFactor::LossMatrix));
+        assert!(factor_types.contains(&DecisionFactor::ConstraintActivation));
+
+        // Test causal set lookup by decision
+        let retrieved_set = core.causal_set_for_decision(1);
+        assert!(retrieved_set.is_some());
+        assert_eq!(retrieved_set.unwrap().decision_id, "decision-1");
+
+        // Verify causal tracking can be disabled
+        core.disable_causal_tracking();
+        assert!(!core.causal_tracking_enabled());
+    }
+
+    #[test]
+    fn causal_tracking_fallback_triggers() {
+        let mut core = RuntimeDecisionCore::new(
+            "fallback-causal-test",
+            vec![LaneId::deterministic_profile()],
+            LaneId::deterministic_profile(),
+            epoch(1),
+        )
+        .expect("core creation should succeed");
+
+        core.enable_causal_tracking();
+
+        // Create input that triggers CVaR fallback
+        let input = RoutingDecisionInput {
+            observed_latency_us: 100_000, // Very high latency to trigger CVaR
+            risk_posteriors: high_risk_posteriors(),
+            regime: RegimeEstimate::Attack, // Attack regime to trigger demotion
+            confidence_millionths: 200_000, // Low confidence
+            is_adverse: true,
+            nonconformity_score_millionths: 900_000,
+            calibration_covered: false,
+            compute_ms: 200, // High compute usage
+            memory_mb: 512,  // High memory usage
+            epoch: epoch(1),
+            timestamp_ns: 2000000,
+        };
+
+        let result = core.decide(&input).expect("decision should succeed");
+        assert!(result.fallback_triggered);
+
+        // Verify causal set includes fallback trigger evidence
+        let causal_set = &core.recent_causal_sets()[0];
+        let evidence_types: std::collections::BTreeSet<_> = causal_set
+            .dependencies
+            .iter()
+            .map(|dep| dep.evidence_type.as_str())
+            .collect();
+
+        assert!(evidence_types.contains("fallback_trigger"));
+        assert!(evidence_types.contains("regime_detection"));
+        assert!(evidence_types.contains("latency_observation"));
+
+        // Verify guardrail activation factor is present
+        let factors: std::collections::BTreeSet<_> = causal_set
+            .dependencies
+            .iter()
+            .map(|dep| dep.influenced_factor)
+            .collect();
+        assert!(factors.contains(&DecisionFactor::GuardrailActivation));
     }
 }

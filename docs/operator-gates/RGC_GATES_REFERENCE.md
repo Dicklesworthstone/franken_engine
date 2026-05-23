@@ -2731,4 +2731,52 @@ primary-SLO field mismatch.
   blocked on bd-cixqu.2.3 (de-escalation primitive, which is in
   turn blocked on bd-cixqu.1.3 TEE).
 
+## Privacy-Preserving Fleet Learning Gate
+
+`bd-cixqu.20.4` — Gate run_rgc_privacy_preserving_fleet_learning.sh + replay
+
+Three-layer privacy-preserving fleet learning implementation combining:
+1. **Federated Posterior Aggregation** (T.1): Individual node contributions hidden via weighted aggregation
+2. **Differential Privacy** (T.2): (ε,δ)-noise injection protects against reconstruction attacks
+3. **Secure Aggregation** (T.3): Cryptographic masking ensures aggregator sees only the sum
+
+**Privacy Guarantees:**
+- Individual peer contribution contents are cryptographically protected
+- Only aggregate fleet-wide posteriors are revealed to coordinators  
+- Privacy budget tracking prevents excessive information disclosure
+- Logging discipline ensures no individual peer data appears in logs
+
+**Artifacts Generated:**
+- Privacy audit manifest with ε,δ budget consumption
+- Cryptographic aggregation proof (count only, no individual content)
+- Signed evidence bundle demonstrating three-layer protection
+- Per-peer contribution evidence (participation count, not values)
+
+**Components Tested:**
+- `crates/franken-engine/src/federated_posterior_aggregation.rs`
+- `crates/franken-engine/src/differential_privacy_posterior.rs` 
+- `crates/dp/` (Bonawitz 2017 secure aggregation primitive)
+- Integration test: `privacy_preserving_fleet_learning_integration.rs`
+
+**Usage:**
+```bash
+# Standard CI validation
+./scripts/run_rgc_privacy_preserving_fleet_learning.sh ci
+
+# Individual component testing  
+./scripts/run_rgc_privacy_preserving_fleet_learning.sh test
+
+# Privacy-aware clippy (ensures no data leaks in lint output)
+./scripts/run_rgc_privacy_preserving_fleet_learning.sh clippy
+```
+
+**Replay:**
+`scripts/e2e/rgc_privacy_preserving_fleet_learning_replay.sh ci` validates 
+the complete privacy-preserving workflow against the latest run artifacts.
+
+**Privacy Logging Discipline:**
+This gate follows bd-cixqu.45 logging requirements with privacy-specific carveouts:
+- ✅ Log: participation counts, privacy budget consumption, aggregate results
+- ❌ Never log: individual peer posteriors, confidence levels, node-specific risk data
+
 ## Limitations

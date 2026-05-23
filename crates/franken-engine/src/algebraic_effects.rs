@@ -165,7 +165,7 @@ pub trait Handler: fmt::Debug + Send + Sync {
     ///
     /// Returns Some(result) if the effect was handled, None if it should
     /// be passed to the next handler in the stack.
-    fn handle(&self, effect: &dyn Effect) -> Result<Option<EffectResult>, EffectError>;
+    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError>;
 
     /// Capabilities provided by this handler.
     fn provided_capabilities(&self) -> EffectCapabilities;
@@ -180,7 +180,7 @@ pub trait Handler: fmt::Debug + Send + Sync {
 }
 
 /// Result of handling an effect.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct EffectResult {
     /// The result value (type-erased).
     pub value: Box<dyn Any + Send + Sync>,
@@ -213,9 +213,7 @@ impl EffectResult {
     }
 
     /// Downcast the result to a specific type.
-    pub fn downcast<T: fmt::Debug + Clone + Send + Sync + 'static>(
-        self,
-    ) -> Result<T, EffectError> {
+    pub fn downcast<T: fmt::Debug + Clone + Send + Sync + 'static>(self) -> Result<T, EffectError> {
         if self.type_id == TypeId::of::<T>() {
             match self.value.downcast::<T>() {
                 Ok(value) => Ok(*value),
@@ -280,7 +278,10 @@ impl fmt::Display for EffectError {
             Self::HandlerError { handler, message } => {
                 write!(f, "Handler error in {}: {}", handler, message)
             }
-            Self::InvalidParameters { effect_name, reason } => {
+            Self::InvalidParameters {
+                effect_name,
+                reason,
+            } => {
                 write!(f, "Invalid parameters for {}: {}", effect_name, reason)
             }
             Self::StackOverflow => write!(f, "Handler stack overflow"),
@@ -375,7 +376,7 @@ impl HandlerStack {
     }
 
     /// Execute an effect through the handler stack.
-    pub fn handle_effect(&mut self, effect: &dyn Effect) -> Result<EffectResult, EffectError> {
+    pub fn handle_effect(&mut self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<EffectResult, EffectError> {
         // Check stack depth
         if self.dependency_path.len() >= self.max_depth {
             return Err(EffectError::StackOverflow);
@@ -590,11 +591,8 @@ impl EffectSet {
 
     /// Intersection of two effect sets.
     pub fn intersection(&self, other: &Self) -> Self {
-        let effects: BTreeSet<String> = self
-            .effects
-            .intersection(&other.effects)
-            .cloned()
-            .collect();
+        let effects: BTreeSet<String> =
+            self.effects.intersection(&other.effects).cloned().collect();
 
         // Capabilities intersection (minimum requirements)
         let runtime_caps: BTreeSet<RuntimeCapability> = self
@@ -810,7 +808,12 @@ impl Effect for ProcSpawnEffect {
     }
 
     fn parameter_type_id(&self) -> TypeId {
-        TypeId::of::<(String, Vec<String>, BTreeMap<String, String>, Option<String>)>()
+        TypeId::of::<(
+            String,
+            Vec<String>,
+            BTreeMap<String, String>,
+            Option<String>,
+        )>()
     }
 }
 
@@ -944,11 +947,23 @@ pub struct PromiseEffect {
 #[derive(Debug, Clone)]
 pub enum PromiseOperation {
     Create,
-    Resolve { promise_id: u32, value: BuiltinValue },
-    Reject { promise_id: u32, reason: BuiltinValue },
-    Then { promise_id: u32 },
-    All { promises: Vec<u32> },
-    Race { promises: Vec<u32> },
+    Resolve {
+        promise_id: u32,
+        value: BuiltinValue,
+    },
+    Reject {
+        promise_id: u32,
+        reason: BuiltinValue,
+    },
+    Then {
+        promise_id: u32,
+    },
+    All {
+        promises: Vec<u32>,
+    },
+    Race {
+        promises: Vec<u32>,
+    },
 }
 
 impl Effect for PromiseEffect {
@@ -1117,8 +1132,11 @@ impl Handler for ConsoleHandler {
         )
     }
 
-    fn handle(&self, effect: &dyn Effect) -> Result<Option<EffectResult>, EffectError> {
-        if let Some(console_effect) = effect.parameters().downcast_ref::<(ConsoleLevel, Vec<String>)>() {
+    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
+        if let Some(console_effect) = effect
+            .parameters()
+            .downcast_ref::<(ConsoleLevel, Vec<String>)>()
+        {
             let (level, args) = console_effect;
             let message = args.join(" ");
 
@@ -1182,7 +1200,10 @@ impl MockFsHandler {
 
     /// Add a mock file.
     pub fn add_file(&self, path: &str, content: &[u8]) {
-        self.files.lock().unwrap().insert(path.to_string(), content.to_vec());
+        self.files
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), content.to_vec());
     }
 
     /// Check if file exists.
@@ -1196,7 +1217,7 @@ impl Handler for MockFsHandler {
         matches!(effect_name, "fs:read" | "fs:write")
     }
 
-    fn handle(&self, effect: &dyn Effect) -> Result<Option<EffectResult>, EffectError> {
+    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
         match effect.effect_name() {
             "fs:read" => {
                 if !self.allow_reads {
@@ -1205,7 +1226,10 @@ impl Handler for MockFsHandler {
                     });
                 }
 
-                if let Some(params) = effect.parameters().downcast_ref::<(String, Option<(u64, u64)>)>() {
+                if let Some(params) = effect
+                    .parameters()
+                    .downcast_ref::<(String, Option<(u64, u64)>)>()
+                {
                     let (path, range) = params;
                     let files = self.files.lock().unwrap();
 
@@ -1239,7 +1263,10 @@ impl Handler for MockFsHandler {
                     });
                 }
 
-                if let Some(params) = effect.parameters().downcast_ref::<(String, Vec<u8>, bool)>() {
+                if let Some(params) = effect
+                    .parameters()
+                    .downcast_ref::<(String, Vec<u8>, bool)>()
+                {
                     let (path, data, append) = params;
                     let mut files = self.files.lock().unwrap();
 
@@ -1331,53 +1358,79 @@ impl HostcallMigrationAdapter {
         capability_mapping.insert("console:info".to_string(), EffectCapabilities::none());
 
         // File system capabilities
-        capability_mapping.insert("fs:read".to_string(),
-            EffectCapabilities::custom(vec!["fs:read".to_string()]));
-        capability_mapping.insert("fs:write".to_string(),
-            EffectCapabilities::custom(vec!["fs:write".to_string()]));
+        capability_mapping.insert(
+            "fs:read".to_string(),
+            EffectCapabilities::custom(vec!["fs:read".to_string()]),
+        );
+        capability_mapping.insert(
+            "fs:write".to_string(),
+            EffectCapabilities::custom(vec!["fs:write".to_string()]),
+        );
 
         // Network capabilities
-        capability_mapping.insert("net:connect".to_string(),
-            EffectCapabilities::runtime([RuntimeCapability::NetworkEgress]));
+        capability_mapping.insert(
+            "net:connect".to_string(),
+            EffectCapabilities::runtime([RuntimeCapability::NetworkEgress]),
+        );
 
         // Process capabilities
-        capability_mapping.insert("proc:spawn".to_string(),
-            EffectCapabilities::custom(vec!["proc:spawn".to_string()]));
+        capability_mapping.insert(
+            "proc:spawn".to_string(),
+            EffectCapabilities::custom(vec!["proc:spawn".to_string()]),
+        );
 
         // Policy capabilities
-        capability_mapping.insert("policy:request".to_string(),
-            EffectCapabilities::runtime([RuntimeCapability::PolicyRead]));
+        capability_mapping.insert(
+            "policy:request".to_string(),
+            EffectCapabilities::runtime([RuntimeCapability::PolicyRead]),
+        );
 
         // Timer capabilities
-        capability_mapping.insert("timer:setTimeout".to_string(),
-            EffectCapabilities::custom(vec!["timer".to_string()]));
-        capability_mapping.insert("timer:setInterval".to_string(),
-            EffectCapabilities::custom(vec!["timer".to_string()]));
-        capability_mapping.insert("timer:clearTimeout".to_string(),
-            EffectCapabilities::custom(vec!["timer".to_string()]));
-        capability_mapping.insert("timer:clearInterval".to_string(),
-            EffectCapabilities::custom(vec!["timer".to_string()]));
+        capability_mapping.insert(
+            "timer:setTimeout".to_string(),
+            EffectCapabilities::custom(vec!["timer".to_string()]),
+        );
+        capability_mapping.insert(
+            "timer:setInterval".to_string(),
+            EffectCapabilities::custom(vec!["timer".to_string()]),
+        );
+        capability_mapping.insert(
+            "timer:clearTimeout".to_string(),
+            EffectCapabilities::custom(vec!["timer".to_string()]),
+        );
+        capability_mapping.insert(
+            "timer:clearInterval".to_string(),
+            EffectCapabilities::custom(vec!["timer".to_string()]),
+        );
 
         // JavaScript builtin capabilities
-        capability_mapping.insert("builtin:call".to_string(),
-            EffectCapabilities::runtime([RuntimeCapability::VmDispatch]));
+        capability_mapping.insert(
+            "builtin:call".to_string(),
+            EffectCapabilities::runtime([RuntimeCapability::VmDispatch]),
+        );
 
         // Promise capabilities
         for op in ["create", "resolve", "reject", "then", "all", "race"] {
-            capability_mapping.insert(format!("promise:{}", op),
-                EffectCapabilities::runtime([RuntimeCapability::VmDispatch]));
+            capability_mapping.insert(
+                format!("promise:{}", op),
+                EffectCapabilities::runtime([RuntimeCapability::VmDispatch]),
+            );
         }
 
         // Number capabilities
         for op in ["parseInt", "parseFloat", "format", "isNaN", "isFinite"] {
-            capability_mapping.insert(format!("number:{}", op),
-                EffectCapabilities::runtime([RuntimeCapability::VmDispatch]));
+            capability_mapping.insert(
+                format!("number:{}", op),
+                EffectCapabilities::runtime([RuntimeCapability::VmDispatch]),
+            );
         }
 
         // Module capabilities
         for op in ["require", "import", "export"] {
-            capability_mapping.insert(format!("module:{}", op),
-                EffectCapabilities::runtime([RuntimeCapability::VmDispatch]));
+            capability_mapping.insert(
+                format!("module:{}", op),
+                EffectCapabilities::runtime([RuntimeCapability::VmDispatch]),
+            );
         }
 
         Self {
@@ -1417,7 +1470,7 @@ impl HostcallMigrationAdapter {
         &self,
         capability: &str,
         args: &[String],
-    ) -> Result<Box<dyn Effect>, EffectError> {
+    ) -> Result<Box<dyn Effect<Output = Box<dyn Any + Send + Sync>>>, EffectError> {
         match capability {
             cap if cap.starts_with("console:") => {
                 let level = match cap {
@@ -1425,10 +1478,12 @@ impl HostcallMigrationAdapter {
                     "console:error" => ConsoleLevel::Error,
                     "console:warn" => ConsoleLevel::Warn,
                     "console:info" => ConsoleLevel::Info,
-                    _ => return Err(EffectError::InvalidParameters {
-                        effect_name: cap.to_string(),
-                        reason: "Unknown console level".to_string(),
-                    }),
+                    _ => {
+                        return Err(EffectError::InvalidParameters {
+                            effect_name: cap.to_string(),
+                            reason: "Unknown console level".to_string(),
+                        });
+                    }
                 };
                 Ok(Box::new(ConsoleEffect {
                     level,
@@ -1467,10 +1522,12 @@ impl HostcallMigrationAdapter {
                         reason: "Missing host or port".to_string(),
                     });
                 }
-                let port = args[1].parse().map_err(|_| EffectError::InvalidParameters {
-                    effect_name: "net:connect".to_string(),
-                    reason: "Invalid port number".to_string(),
-                })?;
+                let port = args[1]
+                    .parse()
+                    .map_err(|_| EffectError::InvalidParameters {
+                        effect_name: "net:connect".to_string(),
+                        reason: "Invalid port number".to_string(),
+                    })?;
 
                 Ok(Box::new(NetConnectEffect {
                     host: args[0].clone(),
@@ -1487,10 +1544,13 @@ impl HostcallMigrationAdapter {
                                 reason: "Missing delay".to_string(),
                             });
                         }
-                        let delay_ms = args[0].parse().map_err(|_| EffectError::InvalidParameters {
-                            effect_name: cap.to_string(),
-                            reason: "Invalid delay".to_string(),
-                        })?;
+                        let delay_ms =
+                            args[0]
+                                .parse()
+                                .map_err(|_| EffectError::InvalidParameters {
+                                    effect_name: cap.to_string(),
+                                    reason: "Invalid delay".to_string(),
+                                })?;
                         TimerOperation::SetTimeout { delay_ms }
                     }
                     "timer:setInterval" => {
@@ -1500,10 +1560,13 @@ impl HostcallMigrationAdapter {
                                 reason: "Missing interval".to_string(),
                             });
                         }
-                        let interval_ms = args[0].parse().map_err(|_| EffectError::InvalidParameters {
-                            effect_name: cap.to_string(),
-                            reason: "Invalid interval".to_string(),
-                        })?;
+                        let interval_ms =
+                            args[0]
+                                .parse()
+                                .map_err(|_| EffectError::InvalidParameters {
+                                    effect_name: cap.to_string(),
+                                    reason: "Invalid interval".to_string(),
+                                })?;
                         TimerOperation::SetInterval { interval_ms }
                     }
                     "timer:clearTimeout" | "timer:clearInterval" => {
@@ -1513,20 +1576,25 @@ impl HostcallMigrationAdapter {
                                 reason: "Missing timer ID".to_string(),
                             });
                         }
-                        let timer_id = args[0].parse().map_err(|_| EffectError::InvalidParameters {
-                            effect_name: cap.to_string(),
-                            reason: "Invalid timer ID".to_string(),
-                        })?;
+                        let timer_id =
+                            args[0]
+                                .parse()
+                                .map_err(|_| EffectError::InvalidParameters {
+                                    effect_name: cap.to_string(),
+                                    reason: "Invalid timer ID".to_string(),
+                                })?;
                         if cap == "timer:clearTimeout" {
                             TimerOperation::ClearTimeout { timer_id }
                         } else {
                             TimerOperation::ClearInterval { timer_id }
                         }
                     }
-                    _ => return Err(EffectError::InvalidParameters {
-                        effect_name: cap.to_string(),
-                        reason: "Unknown timer operation".to_string(),
-                    }),
+                    _ => {
+                        return Err(EffectError::InvalidParameters {
+                            effect_name: cap.to_string(),
+                            reason: "Unknown timer operation".to_string(),
+                        });
+                    }
                 };
                 Ok(Box::new(TimerEffect { operation }))
             }
@@ -1598,8 +1666,7 @@ impl HostcallMigrationAdapter {
 
     /// Check if a capability is supported by the adapter.
     pub fn can_handle(&self, capability: &str) -> bool {
-        self.capability_mapping.contains_key(capability) ||
-        self.effect_stack.can_handle(capability)
+        self.capability_mapping.contains_key(capability) || self.effect_stack.can_handle(capability)
     }
 
     /// Get capabilities provided by the adapter.
@@ -1712,7 +1779,7 @@ mod tests {
             self.handled_effects.contains(&effect_name.to_string())
         }
 
-        fn handle(&self, effect: &dyn Effect) -> Result<Option<EffectResult>, EffectError> {
+        fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
             if self.can_handle(effect.effect_name()) {
                 let result = format!("handled by {}", self.name);
                 Ok(Some(EffectResult::new(result)))
@@ -1775,7 +1842,9 @@ mod tests {
             required_caps: EffectCapabilities::none(),
         };
 
-        let result = stack.handle_effect(&effect).expect("Effect should be handled");
+        let result = stack
+            .handle_effect(&effect)
+            .expect("Effect should be handled");
         let output: String = result.downcast().expect("Result should be String");
         assert_eq!(output, "handled by test_handler");
     }
@@ -1862,7 +1931,9 @@ mod tests {
         assert_eq!(effect.required_capabilities(), EffectCapabilities::none());
 
         let params = effect.parameters();
-        let (level, args) = params.downcast_ref::<(ConsoleLevel, Vec<String>)>().unwrap();
+        let (level, args) = params
+            .downcast_ref::<(ConsoleLevel, Vec<String>)>()
+            .unwrap();
         assert_eq!(*level, ConsoleLevel::Info);
         assert_eq!(*args, vec!["Hello".to_string(), "World".to_string()]);
     }
@@ -1875,10 +1946,17 @@ mod tests {
         };
 
         assert_eq!(effect.effect_name(), "fs:read");
-        assert!(effect.required_capabilities().custom_caps.contains("fs:read"));
+        assert!(
+            effect
+                .required_capabilities()
+                .custom_caps
+                .contains("fs:read")
+        );
 
         let params = effect.parameters();
-        let (path, range) = params.downcast_ref::<(String, Option<(u64, u64)>)>().unwrap();
+        let (path, range) = params
+            .downcast_ref::<(String, Option<(u64, u64)>)>()
+            .unwrap();
         assert_eq!(*path, "/tmp/test.txt");
         assert_eq!(*range, Some((0, 100)));
     }
@@ -1892,7 +1970,12 @@ mod tests {
         };
 
         assert_eq!(effect.effect_name(), "net:connect");
-        assert!(effect.required_capabilities().runtime_caps.contains(&RuntimeCapability::NetworkEgress));
+        assert!(
+            effect
+                .required_capabilities()
+                .runtime_caps
+                .contains(&RuntimeCapability::NetworkEgress)
+        );
 
         let params = effect.parameters();
         let (host, port, timeout) = params.downcast_ref::<(String, u16, Option<u64>)>().unwrap();
@@ -1912,10 +1995,17 @@ mod tests {
         };
 
         assert_eq!(effect.effect_name(), "policy:request");
-        assert!(effect.required_capabilities().runtime_caps.contains(&RuntimeCapability::PolicyRead));
+        assert!(
+            effect
+                .required_capabilities()
+                .runtime_caps
+                .contains(&RuntimeCapability::PolicyRead)
+        );
 
         let params = effect.parameters();
-        let (query, ctx) = params.downcast_ref::<(String, BTreeMap<String, String>)>().unwrap();
+        let (query, ctx) = params
+            .downcast_ref::<(String, BTreeMap<String, String>)>()
+            .unwrap();
         assert_eq!(*query, "can_access_file");
         assert_eq!(*ctx, context);
     }
@@ -2087,10 +2177,17 @@ mod tests {
         };
 
         assert_eq!(effect.effect_name(), "builtin:call");
-        assert!(effect.required_capabilities().runtime_caps.contains(&RuntimeCapability::VmDispatch));
+        assert!(
+            effect
+                .required_capabilities()
+                .runtime_caps
+                .contains(&RuntimeCapability::VmDispatch)
+        );
 
         let params = effect.parameters();
-        let (name, args) = params.downcast_ref::<(String, Vec<BuiltinValue>)>().unwrap();
+        let (name, args) = params
+            .downcast_ref::<(String, Vec<BuiltinValue>)>()
+            .unwrap();
         assert_eq!(*name, "ArrayPrototypePush");
         assert_eq!(args.len(), 2);
     }
@@ -2144,10 +2241,9 @@ mod tests {
     fn test_migration_adapter_console() {
         let mut adapter = HostcallMigrationAdapter::new();
 
-        let result = adapter.dispatch_hostcall(
-            "console:log",
-            &["Hello".to_string(), "World".to_string()],
-        ).unwrap();
+        let result = adapter
+            .dispatch_hostcall("console:log", &["Hello".to_string(), "World".to_string()])
+            .unwrap();
 
         assert!(matches!(result, HostcallResult::Success));
         assert!(adapter.can_handle("console:log"));
@@ -2159,10 +2255,12 @@ mod tests {
         let mut adapter = HostcallMigrationAdapter::new();
 
         // Write a file
-        let write_result = adapter.dispatch_hostcall(
-            "fs:write",
-            &["/test.txt".to_string(), "Hello, World!".to_string()],
-        ).unwrap();
+        let write_result = adapter
+            .dispatch_hostcall(
+                "fs:write",
+                &["/test.txt".to_string(), "Hello, World!".to_string()],
+            )
+            .unwrap();
 
         if let HostcallResult::Count(bytes) = write_result {
             assert_eq!(bytes, 13);
@@ -2171,10 +2269,9 @@ mod tests {
         }
 
         // Read the file back
-        let read_result = adapter.dispatch_hostcall(
-            "fs:read",
-            &["/test.txt".to_string()],
-        ).unwrap();
+        let read_result = adapter
+            .dispatch_hostcall("fs:read", &["/test.txt".to_string()])
+            .unwrap();
 
         if let HostcallResult::Data(data) = read_result {
             assert_eq!(data, b"Hello, World!");
@@ -2188,16 +2285,13 @@ mod tests {
         let mut adapter = HostcallMigrationAdapter::new();
 
         // Set timeout - should return a handle
-        let timeout_result = adapter.dispatch_hostcall(
-            "timer:setTimeout",
-            &["1000".to_string()],
-        );
+        let timeout_result = adapter.dispatch_hostcall("timer:setTimeout", &["1000".to_string()]);
 
         // Timer operations may not be fully implemented in mock, but should parse correctly
-        assert!(timeout_result.is_ok() || matches!(
-            timeout_result.unwrap_err(),
-            EffectError::Unhandled { .. }
-        ));
+        assert!(
+            timeout_result.is_ok()
+                || matches!(timeout_result.unwrap_err(), EffectError::Unhandled { .. })
+        );
     }
 
     #[test]
@@ -2210,20 +2304,14 @@ mod tests {
         );
 
         // Network operations may not be fully implemented in mock
-        assert!(result.is_ok() || matches!(
-            result.unwrap_err(),
-            EffectError::Unhandled { .. }
-        ));
+        assert!(result.is_ok() || matches!(result.unwrap_err(), EffectError::Unhandled { .. }));
     }
 
     #[test]
     fn test_migration_adapter_invalid_capability() {
         let mut adapter = HostcallMigrationAdapter::new();
 
-        let result = adapter.dispatch_hostcall(
-            "unknown:operation",
-            &[],
-        );
+        let result = adapter.dispatch_hostcall("unknown:operation", &[]);
 
         assert!(matches!(result, Err(EffectError::Unhandled { .. })));
         assert!(!adapter.can_handle("unknown:operation"));
@@ -2248,7 +2336,10 @@ mod tests {
     #[test]
     fn test_hostcall_result_display() {
         assert_eq!(format!("{}", HostcallResult::Success), "Success");
-        assert_eq!(format!("{}", HostcallResult::Data(vec![1, 2, 3])), "Data(3 bytes)");
+        assert_eq!(
+            format!("{}", HostcallResult::Data(vec![1, 2, 3])),
+            "Data(3 bytes)"
+        );
         assert_eq!(format!("{}", HostcallResult::Count(42)), "Count(42)");
         assert_eq!(format!("{}", HostcallResult::Handle(123)), "Handle(123)");
 
@@ -2260,7 +2351,9 @@ mod tests {
     #[test]
     fn test_policy_decision_serialization() {
         let allow = PolicyDecision::Allow;
-        let deny = PolicyDecision::Deny { reason: "Insufficient permissions".to_string() };
+        let deny = PolicyDecision::Deny {
+            reason: "Insufficient permissions".to_string(),
+        };
         let conditional = PolicyDecision::Conditional {
             requirements: vec!["auth".to_string(), "2fa".to_string()],
         };
@@ -2313,7 +2406,10 @@ mod tests {
         let composed2 = stack6.compose(stack5);
 
         // Both should have the same handlers (though order might differ due to priority)
-        assert_eq!(composed1.handler_names().len(), composed2.handler_names().len());
+        assert_eq!(
+            composed1.handler_names().len(),
+            composed2.handler_names().len()
+        );
     }
 
     #[test]
@@ -2322,12 +2418,19 @@ mod tests {
 
         // Verify all our implemented effects have capability mappings
         let expected_mappings = vec![
-            "console:log", "console:error", "console:warn", "console:info",
-            "fs:read", "fs:write",
+            "console:log",
+            "console:error",
+            "console:warn",
+            "console:info",
+            "fs:read",
+            "fs:write",
             "net:connect",
             "proc:spawn",
             "policy:request",
-            "timer:setTimeout", "timer:setInterval", "timer:clearTimeout", "timer:clearInterval",
+            "timer:setTimeout",
+            "timer:setInterval",
+            "timer:clearTimeout",
+            "timer:clearInterval",
             "builtin:call",
         ];
 

@@ -30,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::simd_lexer::{self, LexerConfig, LexerMode, LexerOutput, Token, TokenKind};
+use franken_engine_deterministic_trait::FixedLayout;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -55,6 +56,55 @@ pub const DEFAULT_MERGE_BUFFER_BYTES: u64 = 1_048_576;
 
 /// Default small-file overhead threshold (percent, fixed-point millionths).
 pub const DEFAULT_OVERHEAD_THRESHOLD_MILLIONTHS: u64 = 100_000; // 10%
+
+// ---------------------------------------------------------------------------
+// Canonical encoding helpers for FixedLayout migration
+// ---------------------------------------------------------------------------
+
+/// Helper for canonical encoding that uses FixedLayout instead of manual byte assembly.
+/// This eliminates length-prefix overhead for fixed-size hash types.
+struct CanonicalEncoder {
+    buffer: Vec<u8>,
+}
+
+impl CanonicalEncoder {
+    fn new() -> Self {
+        Self { buffer: Vec::new() }
+    }
+
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            buffer: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Encode a FixedLayout type directly without length prefixing.
+    fn encode_fixed<T: FixedLayout>(&mut self, value: &T) {
+        let start = self.buffer.len();
+        self.buffer.resize(start + T::LAYOUT_SIZE, 0);
+        value.encode_fixed(&mut self.buffer[start..start + T::LAYOUT_SIZE]);
+    }
+
+    /// Encode a primitive type using little-endian for consistency.
+    fn encode_u32(&mut self, value: u32) {
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    /// Encode a primitive type using little-endian for consistency.
+    fn encode_u64(&mut self, value: u64) {
+        self.buffer.extend_from_slice(&value.to_le_bytes());
+    }
+
+    /// Encode a single byte.
+    fn encode_u8(&mut self, value: u8) {
+        self.buffer.push(value);
+    }
+
+    /// Finalize and return the encoded bytes.
+    fn finalize(self) -> Vec<u8> {
+        self.buffer
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -545,17 +595,17 @@ fn token_kind_code(kind: TokenKind) -> u8 {
 
 #[must_use]
 fn compute_chunk_hash(chunk: &ChunkResult) -> ContentHash {
-    let mut bytes = Vec::with_capacity(32 + chunk.tokens.len() * 24);
-    bytes.extend_from_slice(&chunk.chunk_index.to_le_bytes());
-    bytes.extend_from_slice(&chunk.chunk_start.to_le_bytes());
-    bytes.extend_from_slice(&chunk.chunk_end.to_le_bytes());
-    bytes.extend_from_slice(&chunk.token_count.to_le_bytes());
+    let mut encoder = CanonicalEncoder::with_capacity(32 + chunk.tokens.len() * 24);
+    encoder.encode_u32(chunk.chunk_index);
+    encoder.encode_u64(chunk.chunk_start);
+    encoder.encode_u64(chunk.chunk_end);
+    encoder.encode_u32(chunk.token_count);
     for token in &chunk.tokens {
-        bytes.push(token_kind_code(token.kind));
-        bytes.extend_from_slice(&token.start.to_le_bytes());
-        bytes.extend_from_slice(&token.end.to_le_bytes());
+        encoder.encode_u8(token_kind_code(token.kind));
+        encoder.encode_u64(token.start);
+        encoder.encode_u64(token.end);
     }
-    ContentHash::compute(&bytes)
+    ContentHash::compute(&encoder.finalize())
 }
 
 #[must_use]
@@ -568,16 +618,18 @@ fn compute_merge_witness_hash(
     let mut ordered_chunks: Vec<&ChunkResult> = chunks.iter().collect();
     ordered_chunks.sort_by_key(|chunk| chunk.chunk_index);
 
-    let mut bytes = Vec::with_capacity(64 + ordered_chunks.len() * 40);
-    bytes.extend_from_slice(merged_hash.as_bytes());
-    bytes.extend_from_slice(&boundary_repairs.to_le_bytes());
-    bytes.extend_from_slice(&total_tokens.to_le_bytes());
-    bytes.extend_from_slice(&(ordered_chunks.len() as u32).to_le_bytes());
+    // Use canonical encoding with FixedLayout - eliminates length-prefix overhead
+    let mut encoder = CanonicalEncoder::with_capacity(64 + ordered_chunks.len() * 40);
+    encoder.encode_fixed(merged_hash); // ContentHash: 32 bytes, no length prefix
+    encoder.encode_u64(boundary_repairs);
+    encoder.encode_u64(total_tokens);
+    encoder.encode_u32(ordered_chunks.len() as u32);
     for chunk in ordered_chunks {
-        bytes.extend_from_slice(&chunk.chunk_index.to_le_bytes());
-        bytes.extend_from_slice(compute_chunk_hash(chunk).as_bytes());
+        encoder.encode_u64(chunk.chunk_index);
+        let chunk_hash = compute_chunk_hash(chunk);
+        encoder.encode_fixed(&chunk_hash); // ContentHash: 32 bytes, no length prefix
     }
-    ContentHash::compute(&bytes)
+    ContentHash::compute(&encoder.finalize())
 }
 
 /// Repair boundary tokens where a multi-character token was split across chunks.
@@ -703,21 +755,23 @@ fn compute_schedule_transcript_hash(
     execution_order: &[u32],
     dispatches: &[ScheduleDispatch],
 ) -> ContentHash {
-    let mut bytes = Vec::with_capacity(16 + 32 + execution_order.len() * 4 + dispatches.len() * 12);
-    bytes.extend_from_slice(&seed.to_le_bytes());
-    bytes.extend_from_slice(&worker_count.to_le_bytes());
-    bytes.extend_from_slice(plan_hash.as_bytes());
-    bytes.extend_from_slice(&(execution_order.len() as u32).to_le_bytes());
+    let mut encoder = CanonicalEncoder::with_capacity(
+        16 + 32 + execution_order.len() * 4 + dispatches.len() * 12,
+    );
+    encoder.encode_u64(seed);
+    encoder.encode_u32(worker_count);
+    encoder.encode_fixed(plan_hash);
+    encoder.encode_u32(execution_order.len() as u32);
     for chunk_index in execution_order {
-        bytes.extend_from_slice(&chunk_index.to_le_bytes());
+        encoder.encode_u32(*chunk_index);
     }
-    bytes.extend_from_slice(&(dispatches.len() as u32).to_le_bytes());
+    encoder.encode_u32(dispatches.len() as u32);
     for dispatch in dispatches {
-        bytes.extend_from_slice(&dispatch.step_index.to_le_bytes());
-        bytes.extend_from_slice(&dispatch.chunk_index.to_le_bytes());
-        bytes.extend_from_slice(&dispatch.worker_slot.to_le_bytes());
+        encoder.encode_u32(dispatch.step_index);
+        encoder.encode_u32(dispatch.chunk_index);
+        encoder.encode_u32(dispatch.worker_slot);
     }
-    ContentHash::compute(&bytes)
+    ContentHash::compute(&encoder.finalize())
 }
 
 /// Build a deterministic scheduler transcript from a chunk plan and seed.

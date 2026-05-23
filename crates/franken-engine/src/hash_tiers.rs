@@ -15,7 +15,7 @@
 use std::fmt;
 
 use franken_engine_deterministic_derive::Deterministic;
-use franken_engine_deterministic_trait::{Deterministic, FixedLayout};
+use franken_engine_deterministic_trait::{Deterministic, FixedLayout, FixedLayoutError};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -68,7 +68,7 @@ impl std::error::Error for HashError {}
 /// Scope: intra-process, ephemeral, NOT persisted across restarts, NOT
 /// security-relevant.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic, FixedLayout,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
 )]
 pub struct IntegrityHash(pub u64);
 
@@ -116,7 +116,6 @@ impl fmt::Display for IntegrityHash {
     Serialize,
     Deserialize,
     Deterministic,
-    FixedLayout,
 )]
 pub struct ContentHash(pub [u8; 32]);
 
@@ -167,7 +166,7 @@ impl fmt::Display for ContentHash {
 ///
 /// Scope: security-critical, epoch-scoped, used with signing keys.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic, FixedLayout,
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Deterministic,
 )]
 pub struct AuthenticityHash(pub [u8; 32]);
 
@@ -1409,5 +1408,90 @@ mod tests {
         h.hash(&mut hasher_a);
         h.hash(&mut hasher_b);
         assert_eq!(hasher_a.finish(), hasher_b.finish());
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FixedLayout implementations for hash types
+// ---------------------------------------------------------------------------
+
+impl FixedLayout for IntegrityHash {
+    const LAYOUT_SIZE: usize = 8; // u64
+
+    fn encode_fixed(&self, buffer: &mut [u8]) {
+        if buffer.len() != Self::LAYOUT_SIZE {
+            panic!(
+                "Buffer size mismatch: expected {}, got {}",
+                Self::LAYOUT_SIZE,
+                buffer.len()
+            );
+        }
+        buffer.copy_from_slice(&self.0.to_be_bytes());
+    }
+
+    fn decode_fixed(buffer: &[u8]) -> Result<Self, FixedLayoutError> {
+        if buffer.len() != Self::LAYOUT_SIZE {
+            return Err(FixedLayoutError::InvalidBufferSize {
+                expected: Self::LAYOUT_SIZE,
+                actual: buffer.len(),
+            });
+        }
+        let mut bytes = [0u8; 8];
+        bytes.copy_from_slice(buffer);
+        Ok(Self(u64::from_be_bytes(bytes)))
+    }
+}
+
+impl FixedLayout for ContentHash {
+    const LAYOUT_SIZE: usize = 32; // [u8; 32]
+
+    fn encode_fixed(&self, buffer: &mut [u8]) {
+        if buffer.len() != Self::LAYOUT_SIZE {
+            panic!(
+                "Buffer size mismatch: expected {}, got {}",
+                Self::LAYOUT_SIZE,
+                buffer.len()
+            );
+        }
+        buffer.copy_from_slice(&self.0);
+    }
+
+    fn decode_fixed(buffer: &[u8]) -> Result<Self, FixedLayoutError> {
+        if buffer.len() != Self::LAYOUT_SIZE {
+            return Err(FixedLayoutError::InvalidBufferSize {
+                expected: Self::LAYOUT_SIZE,
+                actual: buffer.len(),
+            });
+        }
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(buffer);
+        Ok(Self(bytes))
+    }
+}
+
+impl FixedLayout for AuthenticityHash {
+    const LAYOUT_SIZE: usize = 32; // [u8; 32]
+
+    fn encode_fixed(&self, buffer: &mut [u8]) {
+        if buffer.len() != Self::LAYOUT_SIZE {
+            panic!(
+                "Buffer size mismatch: expected {}, got {}",
+                Self::LAYOUT_SIZE,
+                buffer.len()
+            );
+        }
+        buffer.copy_from_slice(&self.0);
+    }
+
+    fn decode_fixed(buffer: &[u8]) -> Result<Self, FixedLayoutError> {
+        if buffer.len() != Self::LAYOUT_SIZE {
+            return Err(FixedLayoutError::InvalidBufferSize {
+                expected: Self::LAYOUT_SIZE,
+                actual: buffer.len(),
+            });
+        }
+        let mut bytes = [0u8; 32];
+        bytes.copy_from_slice(buffer);
+        Ok(Self(bytes))
     }
 }

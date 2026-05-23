@@ -20,6 +20,9 @@
 )]
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use frankenengine_engine::causal_replay::{
     CounterfactualConfig, DecisionSnapshot, RecorderConfig, RecordingMode, TraceRecord,
@@ -28,12 +31,16 @@ use frankenengine_engine::causal_replay::{
 use frankenengine_engine::counterfactual_evaluator::{EnvelopeStatus, EstimatorKind, PolicyId};
 use frankenengine_engine::counterfactual_replay_engine::{
     AlternatePolicy, AssumptionCard, AssumptionCategory, CounterfactualReplayEngine,
-    DecisionComparison, PolicyComparisonReport, REPLAY_ENGINE_SCHEMA_VERSION, Recommendation,
-    ReplayComparisonResult, ReplayEngineConfig, ReplayEngineError, ReplayScope,
+    DecisionComparison, FLEET_COUNTERFACTUAL_SCHEMA_VERSION, FleetCounterfactualReport,
+    PolicyComparisonReport, REPLAY_ENGINE_SCHEMA_VERSION, Recommendation, ReplayComparisonResult,
+    ReplayEngineConfig, ReplayEngineError, ReplayScope, SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION,
+    SubstitutedPolicySnapshot,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::runtime_decision_theory::LaneAction;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+
+static TEST_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -67,8 +74,12 @@ fn make_decision(index: u64, action: &str, outcome: i64) -> DecisionSnapshot {
 }
 
 fn make_trace(decisions: Vec<DecisionSnapshot>) -> TraceRecord {
+    let trace_id = decisions
+        .first()
+        .map(|decision| decision.trace_id.clone())
+        .unwrap_or_else(|| "test-trace".to_string());
     let mut recorder = TraceRecorder::new(RecorderConfig {
-        trace_id: "test-trace".to_string(),
+        trace_id,
         recording_mode: RecordingMode::Full,
         epoch: test_epoch(),
         start_tick: 100,
@@ -132,6 +143,61 @@ fn simple_trace() -> TraceRecord {
     ])
 }
 
+fn unique_fleet_dir(label: &str) -> PathBuf {
+    let n = TEST_DIR_COUNTER.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "franken-engine-fleet-counterfactual-{label}-{}-{n}",
+        std::process::id()
+    ))
+}
+
+fn make_node_trace(node_id: &str, trace_id: &str, outcomes: &[i64]) -> TraceRecord {
+    let decisions: Vec<DecisionSnapshot> = outcomes
+        .iter()
+        .enumerate()
+        .map(|(index, outcome)| {
+            let mut decision = make_decision(index as u64, "native", *outcome);
+            decision.trace_id = trace_id.to_string();
+            decision.decision_id = format!("{trace_id}-decision-{index}");
+            decision
+        })
+        .collect();
+    let mut trace = make_trace(decisions);
+    trace
+        .metadata
+        .insert("node_id".to_string(), node_id.to_string());
+    trace
+}
+
+fn write_trace(root: &Path, relative_path: &str, trace: &TraceRecord) -> PathBuf {
+    let path = root.join(relative_path);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    let bytes = serde_json::to_vec(trace).unwrap();
+    fs::write(&path, bytes).unwrap();
+    path
+}
+
+fn substituted_policy_snapshot(scope: ReplayScope) -> SubstitutedPolicySnapshot {
+    SubstitutedPolicySnapshot::new(
+        PolicyId("fleet-policy-v1".to_string()),
+        "force deterministic safe-mode for fleet replay".to_string(),
+        CounterfactualConfig {
+            branch_id: "fleet-branch".to_string(),
+            threshold_override_millionths: None,
+            loss_matrix_overrides: BTreeMap::new(),
+            policy_version_override: Some(2),
+            containment_overrides: BTreeMap::new(),
+            evidence_weight_overrides: BTreeMap::new(),
+            branch_from_index: 0,
+        },
+        Some(LaneAction::FallbackSafe),
+        scope,
+        Some(ContentHash::compute(b"fleet-policy-v1")),
+    )
+}
+
 // ===========================================================================
 // 1. Constants
 // ===========================================================================
@@ -140,6 +206,156 @@ fn simple_trace() -> TraceRecord {
 fn schema_version_nonempty() {
     assert!(!REPLAY_ENGINE_SCHEMA_VERSION.is_empty());
     assert!(REPLAY_ENGINE_SCHEMA_VERSION.contains("counterfactual-replay-engine"));
+}
+
+#[test]
+fn fleet_counterfactual_schema_versions_are_stable() {
+    assert_eq!(
+        FLEET_COUNTERFACTUAL_SCHEMA_VERSION,
+        "franken-engine.fleet-counterfactual-report.v1"
+    );
+    assert_eq!(
+        SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION,
+        "franken-engine.substituted-policy-snapshot.v1"
+    );
+}
+
+#[test]
+fn substituted_policy_snapshot_serde_roundtrip() {
+    let snapshot = substituted_policy_snapshot(default_scope());
+    let json = serde_json::to_string(&snapshot).unwrap();
+    let back: SubstitutedPolicySnapshot = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, snapshot);
+}
+
+#[test]
+fn fleet_trace_dir_replay_aggregates_by_node_and_trace() {
+    let root = unique_fleet_dir("aggregate");
+    fs::create_dir_all(&root).unwrap();
+    let trace_a1 = make_node_trace("node-a", "trace-a1", &[800_000, 700_000]);
+    let trace_a2 = make_node_trace("node-a", "trace-a2", &[600_000]);
+    let trace_b1 = make_node_trace("node-b", "trace-b1", &[900_000, 500_000]);
+    write_trace(&root, "node-b/trace-b1.json", &trace_b1);
+    write_trace(&root, "node-a/trace-a2.json", &trace_a2);
+    write_trace(&root, "node-a/trace-a1.json", &trace_a1);
+
+    let snapshot = substituted_policy_snapshot(default_scope());
+    let mut engine = default_engine();
+    let report = engine
+        .compare_fleet_trace_dir(&root, &snapshot, None)
+        .expect("fleet counterfactual report");
+
+    assert_eq!(report.schema_version, FLEET_COUNTERFACTUAL_SCHEMA_VERSION);
+    assert_eq!(report.substituted_policy, snapshot);
+    assert_eq!(report.node_count, 2);
+    assert_eq!(report.trace_count, 3);
+    assert_eq!(report.total_decisions, 5);
+    assert_eq!(report.aggregate_result.trace_count, 3);
+    assert_eq!(report.aggregate_result.total_decisions, 5);
+    assert_eq!(report.node_reports.len(), 2);
+    assert_eq!(report.node_reports[0].node_id, "node-a");
+    assert_eq!(report.node_reports[0].trace_count, 2);
+    assert_eq!(
+        report.node_reports[0].trace_ids,
+        vec!["trace-a1".to_string(), "trace-a2".to_string()]
+    );
+    assert_eq!(
+        report.node_reports[0].trace_paths,
+        vec![
+            "node-a/trace-a1.json".to_string(),
+            "node-a/trace-a2.json".to_string()
+        ]
+    );
+    assert_eq!(report.node_reports[1].node_id, "node-b");
+    assert_eq!(report.node_reports[1].trace_count, 1);
+    assert_eq!(
+        report.total_divergences,
+        report
+            .node_reports
+            .iter()
+            .map(|node| node.divergence_count)
+            .sum::<u64>()
+    );
+    assert_eq!(
+        report.net_improvement_millionths,
+        report
+            .node_reports
+            .iter()
+            .map(|node| node.net_improvement_millionths)
+            .sum::<i64>()
+    );
+    assert_ne!(report.artifact_hash, ContentHash::compute(b""));
+}
+
+#[test]
+fn fleet_trace_dir_report_is_serde_roundtrip_stable() {
+    let root = unique_fleet_dir("serde");
+    fs::create_dir_all(&root).unwrap();
+    let trace = make_node_trace("node-c", "trace-c1", &[750_000, 650_000]);
+    write_trace(&root, "trace-c1.json", &trace);
+
+    let snapshot = substituted_policy_snapshot(default_scope());
+    let mut engine = default_engine();
+    let report = engine
+        .compare_fleet_trace_dir(&root, &snapshot, None)
+        .expect("fleet counterfactual report");
+    let json = serde_json::to_string(&report).unwrap();
+    let back: FleetCounterfactualReport = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(back, report);
+}
+
+#[test]
+fn fleet_trace_dir_uses_trace_id_when_node_metadata_absent() {
+    let root = unique_fleet_dir("fallback-node");
+    fs::create_dir_all(&root).unwrap();
+    let mut trace = make_node_trace("node-unused", "trace-fallback", &[700_000]);
+    trace.metadata.clear();
+    write_trace(&root, "trace-fallback.json", &trace);
+
+    let snapshot = substituted_policy_snapshot(default_scope());
+    let mut engine = default_engine();
+    let report = engine
+        .compare_fleet_trace_dir(&root, &snapshot, None)
+        .expect("fleet counterfactual report");
+
+    assert_eq!(report.node_count, 1);
+    assert_eq!(report.node_reports[0].node_id, "trace-fallback");
+}
+
+#[test]
+fn fleet_trace_dir_rejects_invalid_snapshot_schema() {
+    let root = unique_fleet_dir("bad-schema");
+    fs::create_dir_all(&root).unwrap();
+    let trace = make_node_trace("node-a", "trace-a", &[800_000]);
+    write_trace(&root, "trace-a.json", &trace);
+    let mut snapshot = substituted_policy_snapshot(default_scope());
+    snapshot.schema_version = "franken-engine.substituted-policy-snapshot.v0".to_string();
+
+    let mut engine = default_engine();
+    let err = engine
+        .compare_fleet_trace_dir(&root, &snapshot, None)
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        ReplayEngineError::InvalidPolicySnapshotSchema { .. }
+    ));
+}
+
+#[test]
+fn fleet_trace_dir_rejects_invalid_trace_json() {
+    let root = unique_fleet_dir("bad-json");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("not-a-trace.json"), b"{\"schema\":\"wrong\"}").unwrap();
+
+    let snapshot = substituted_policy_snapshot(default_scope());
+    let mut engine = default_engine();
+    let err = engine
+        .compare_fleet_trace_dir(&root, &snapshot, None)
+        .unwrap_err();
+
+    assert!(matches!(err, ReplayEngineError::FleetTraceDecode { .. }));
 }
 
 // ===========================================================================

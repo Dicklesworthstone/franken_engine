@@ -11,20 +11,22 @@
 //! replacements, validates each receipt, and verifies the complete
 //! chain integrity including content hash linkage.
 
-use std::collections::BTreeMap;
 use frankenengine_engine::{
-    self_replacement::{
-        ReplacementReceipt, SchemaVersion, ValidationArtifactRef, ValidationStatus,
-        CreateReceiptInput, SignatureBundle, DelegateCellManifest, DelegateType,
-        SandboxConfiguration,
-    },
-    slot_registry::{SlotId, AuthorityEnvelope, Capability},
     engine_object_id::{self, EngineObjectId, ObjectDomain},
+    pre_signed_demotion_fallback::{
+        DemotionTrigger, FallbackStatus, PreSignedFallbackStore, PromotionId,
+    },
     security_epoch::SecurityEpoch,
-    signature_preimage::{SigningKey, VerificationKey, Signature},
-    pre_signed_demotion_fallback::{PreSignedFallbackStore, PromotionId, DemotionTrigger, FallbackStatus},
+    self_replacement::{
+        CreateReceiptInput, DelegateCellManifest, DelegateType, ReplacementReceipt,
+        SandboxConfiguration, SchemaVersion, SignatureBundle, ValidationArtifactRef,
+        ValidationStatus,
+    },
+    signature_preimage::{Signature, SigningKey, VerificationKey},
+    slot_registry::{AuthorityEnvelope, Capability, SlotId},
 };
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct LineageChainEntry {
@@ -104,9 +106,18 @@ fn create_replacement_receipt(
 
     // Create validation artifacts
     let validation_artifacts = vec![
-        create_validation_artifact_ref(&format!("perf_check_step_{}", step), ValidationStatus::Approved),
-        create_validation_artifact_ref(&format!("security_scan_step_{}", step), ValidationStatus::Approved),
-        create_validation_artifact_ref(&format!("behavior_equiv_step_{}", step), ValidationStatus::Approved),
+        create_validation_artifact_ref(
+            &format!("perf_check_step_{}", step),
+            ValidationStatus::Approved,
+        ),
+        create_validation_artifact_ref(
+            &format!("security_scan_step_{}", step),
+            ValidationStatus::Approved,
+        ),
+        create_validation_artifact_ref(
+            &format!("behavior_equiv_step_{}", step),
+            ValidationStatus::Approved,
+        ),
     ];
 
     Ok(ReplacementReceipt {
@@ -121,7 +132,10 @@ fn create_replacement_receipt(
         content_hash_chain_into_lineage: content_hash_chain.to_string(),
         validation_artifacts,
         rollback_token: format!("rollback_token_step_{}", step),
-        promotion_rationale: format!("Performance improvement step {} - 15% latency reduction", step),
+        promotion_rationale: format!(
+            "Performance improvement step {} - 15% latency reduction",
+            step
+        ),
         timestamp_ns,
         epoch: SecurityEpoch::from_raw(1),
         zone: zone.to_string(),
@@ -192,7 +206,8 @@ fn verify_lineage_chain(chain: &LineageChain) -> Result<(), Box<dyn std::error::
     for (i, entry) in chain.entries.iter().enumerate() {
         let receipt = &entry.receipt;
 
-        println!("  📝 Step {}: {} -> {}",
+        println!(
+            "  📝 Step {}: {} -> {}",
             i + 1,
             receipt.old_cell_digest,
             receipt.new_cell_digest
@@ -219,8 +234,11 @@ fn verify_lineage_chain(chain: &LineageChain) -> Result<(), Box<dyn std::error::
 
         for artifact in &receipt.validation_artifacts {
             if artifact.status != ValidationStatus::Approved {
-                return Err(format!("Step {}: artifact {} not approved: {:?}",
-                    i, artifact.artifact_id, artifact.status).into());
+                return Err(format!(
+                    "Step {}: artifact {} not approved: {:?}",
+                    i, artifact.artifact_id, artifact.status
+                )
+                .into());
             }
         }
 
@@ -236,8 +254,11 @@ fn verify_lineage_chain(chain: &LineageChain) -> Result<(), Box<dyn std::error::
         if i + 1 < chain.entries.len() {
             let next_receipt = &chain.entries[i + 1].receipt;
             if receipt.new_cell_digest != next_receipt.old_cell_digest {
-                return Err(format!("Step {}: chain break - {} != {}",
-                    i, receipt.new_cell_digest, next_receipt.old_cell_digest).into());
+                return Err(format!(
+                    "Step {}: chain break - {} != {}",
+                    i, receipt.new_cell_digest, next_receipt.old_cell_digest
+                )
+                .into());
             }
         }
     }
@@ -247,26 +268,37 @@ fn verify_lineage_chain(chain: &LineageChain) -> Result<(), Box<dyn std::error::
     let last_receipt = &chain.entries.last().unwrap().receipt;
 
     if first_receipt.old_cell_digest != chain.initial_delegate_hash {
-        return Err(format!("Chain start mismatch: {} != {}",
-            first_receipt.old_cell_digest, chain.initial_delegate_hash).into());
+        return Err(format!(
+            "Chain start mismatch: {} != {}",
+            first_receipt.old_cell_digest, chain.initial_delegate_hash
+        )
+        .into());
     }
 
     if last_receipt.new_cell_digest != chain.final_native_hash {
-        return Err(format!("Chain end mismatch: {} != {}",
-            last_receipt.new_cell_digest, chain.final_native_hash).into());
+        return Err(format!(
+            "Chain end mismatch: {} != {}",
+            last_receipt.new_cell_digest, chain.final_native_hash
+        )
+        .into());
     }
 
-    println!("  ✅ Chain integrity verified: {} steps", chain.entries.len());
-    println!("  🔗 Complete lineage: {} -> {}",
-        chain.initial_delegate_hash,
-        chain.final_native_hash
+    println!(
+        "  ✅ Chain integrity verified: {} steps",
+        chain.entries.len()
+    );
+    println!(
+        "  🔗 Complete lineage: {} -> {}",
+        chain.initial_delegate_hash, chain.final_native_hash
     );
 
     Ok(())
 }
 
 /// Test the pre-signed demotion fallback integration.
-fn test_demotion_fallback_integration(chain: &LineageChain) -> Result<(), Box<dyn std::error::Error>> {
+fn test_demotion_fallback_integration(
+    chain: &LineageChain,
+) -> Result<(), Box<dyn std::error::Error>> {
     println!("🛡️  Testing pre-signed demotion fallback integration...");
 
     let mut fallback_store = PreSignedFallbackStore::new();
@@ -294,8 +326,11 @@ fn test_demotion_fallback_integration(chain: &LineageChain) -> Result<(), Box<dy
             )?;
         }
 
-        println!("  📦 Step {}: demotion fallback sealed for {}",
-            i + 1, promotion_id.as_str());
+        println!(
+            "  📦 Step {}: demotion fallback sealed for {}",
+            i + 1,
+            promotion_id.as_str()
+        );
     }
 
     println!("  ✅ All demotion fallbacks verified");
@@ -321,12 +356,16 @@ fn generate_lineage_report(chain: &LineageChain) {
     println!("\nSTEP DETAILS:");
     for (i, entry) in chain.entries.iter().enumerate() {
         let receipt = &entry.receipt;
-        println!("  Step {}: {} -> {}",
+        println!(
+            "  Step {}: {} -> {}",
             i + 1,
             &receipt.old_cell_digest[..20],
             &receipt.new_cell_digest[..20]
         );
-        println!("    Validation artifacts: {}", receipt.validation_artifacts.len());
+        println!(
+            "    Validation artifacts: {}",
+            receipt.validation_artifacts.len()
+        );
         println!("    Rationale: {}", receipt.promotion_rationale);
     }
 
@@ -340,7 +379,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create synthetic lineage chain
     println!("📋 Creating synthetic lineage chain...");
     let chain = create_lineage_chain()?;
-    println!("  ✅ Created chain with {} replacement steps\n", chain.entries.len());
+    println!(
+        "  ✅ Created chain with {} replacement steps\n",
+        chain.entries.len()
+    );
 
     // Verify lineage integrity
     verify_lineage_chain(&chain)?;
@@ -382,10 +424,22 @@ mod tests {
             let receipt = &entry.receipt;
 
             // Verify all required fields from bd-cixqu.22.1 are present
-            assert!(!receipt.old_slot_id.as_str().is_empty(), "old_slot_id required");
-            assert!(!receipt.new_slot_id.as_str().is_empty(), "new_slot_id required");
-            assert!(!receipt.translation_validation_proof_ref.is_empty(), "translation_validation_proof_ref required");
-            assert!(!receipt.content_hash_chain_into_lineage.is_empty(), "content_hash_chain_into_lineage required");
+            assert!(
+                !receipt.old_slot_id.as_str().is_empty(),
+                "old_slot_id required"
+            );
+            assert!(
+                !receipt.new_slot_id.as_str().is_empty(),
+                "new_slot_id required"
+            );
+            assert!(
+                !receipt.translation_validation_proof_ref.is_empty(),
+                "translation_validation_proof_ref required"
+            );
+            assert!(
+                !receipt.content_hash_chain_into_lineage.is_empty(),
+                "content_hash_chain_into_lineage required"
+            );
         }
     }
 

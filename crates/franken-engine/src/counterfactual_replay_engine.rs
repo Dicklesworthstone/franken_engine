@@ -8,6 +8,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -27,6 +29,14 @@ const MILLION: i64 = 1_000_000;
 
 /// Schema version for replay comparison artifacts.
 pub const REPLAY_ENGINE_SCHEMA_VERSION: &str = "franken-engine.counterfactual-replay-engine.v1";
+
+/// Schema version for fleet-level counterfactual replay artifacts.
+pub const FLEET_COUNTERFACTUAL_SCHEMA_VERSION: &str =
+    "franken-engine.fleet-counterfactual-report.v1";
+
+/// Schema version for substituted policy snapshots consumed by fleet replay.
+pub const SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION: &str =
+    "franken-engine.substituted-policy-snapshot.v1";
 
 /// Maximum number of alternate policies in a single comparison run.
 const MAX_ALTERNATE_POLICIES: usize = 64;
@@ -274,6 +284,118 @@ pub struct ReplayComparisonResult {
     pub artifact_hash: ContentHash,
 }
 
+// ── Fleet Counterfactual API ───────────────────────────────────────────────
+
+/// A policy snapshot substituted over every trace in a fleet replay run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubstitutedPolicySnapshot {
+    /// Schema version.
+    pub schema_version: String,
+    /// Alternate policy identifier.
+    pub policy_id: PolicyId,
+    /// Human-readable policy description.
+    pub description: String,
+    /// Counterfactual configuration applied to every node trace.
+    pub counterfactual_config: CounterfactualConfig,
+    /// Optional default action override for every decision.
+    pub default_action: Option<LaneAction>,
+    /// Replay scope for the fleet run.
+    pub scope: ReplayScope,
+    /// Optional content hash of the operator-supplied policy snapshot.
+    pub source_policy_hash: Option<ContentHash>,
+}
+
+impl SubstitutedPolicySnapshot {
+    /// Build a snapshot with the current schema version.
+    pub fn new(
+        policy_id: PolicyId,
+        description: String,
+        counterfactual_config: CounterfactualConfig,
+        default_action: Option<LaneAction>,
+        scope: ReplayScope,
+        source_policy_hash: Option<ContentHash>,
+    ) -> Self {
+        Self {
+            schema_version: SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION.to_string(),
+            policy_id,
+            description,
+            counterfactual_config,
+            default_action,
+            scope,
+            source_policy_hash,
+        }
+    }
+
+    fn to_alternate_policy(&self) -> AlternatePolicy {
+        AlternatePolicy {
+            policy_id: self.policy_id.clone(),
+            description: self.description.clone(),
+            counterfactual_config: self.counterfactual_config.clone(),
+            default_action: self.default_action.clone(),
+        }
+    }
+}
+
+/// Per-node counterfactual replay result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetNodeCounterfactualReport {
+    /// Stable node identifier from trace metadata, or trace id if absent.
+    pub node_id: String,
+    /// Trace ids evaluated for this node.
+    pub trace_ids: Vec<String>,
+    /// Relative trace JSON paths evaluated for this node.
+    pub trace_paths: Vec<String>,
+    /// Number of traces included for this node.
+    pub trace_count: u64,
+    /// Decisions evaluated for this node.
+    pub decisions_evaluated: u64,
+    /// Decisions that diverged under the substituted policy.
+    pub divergence_count: u64,
+    /// Original outcome total across node traces.
+    pub total_original_outcome_millionths: i64,
+    /// Counterfactual outcome total across node traces.
+    pub total_counterfactual_outcome_millionths: i64,
+    /// Counterfactual minus original outcome total.
+    pub net_improvement_millionths: i64,
+    /// Per-regime node improvement totals.
+    pub regime_breakdown: BTreeMap<String, i64>,
+    /// Divergent decisions under the substituted policy.
+    pub divergent_decisions: Vec<DecisionComparison>,
+    /// Node report artifact hash.
+    pub artifact_hash: ContentHash,
+}
+
+/// Fleet-level report for replaying many node traces under one policy snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetCounterfactualReport {
+    /// Schema version.
+    pub schema_version: String,
+    /// Fleet trace directory used as input.
+    pub fleet_trace_dir: String,
+    /// Policy snapshot substituted over the fleet traces.
+    pub substituted_policy: SubstitutedPolicySnapshot,
+    /// Number of distinct nodes evaluated.
+    pub node_count: u64,
+    /// Number of traces evaluated.
+    pub trace_count: u64,
+    /// Total decisions evaluated across the fleet.
+    pub total_decisions: u64,
+    /// Total divergent decisions across the fleet.
+    pub total_divergences: u64,
+    /// Original outcome total across the fleet.
+    pub total_original_outcome_millionths: i64,
+    /// Counterfactual outcome total across the fleet.
+    pub total_counterfactual_outcome_millionths: i64,
+    /// Counterfactual minus original outcome total across the fleet.
+    pub net_improvement_millionths: i64,
+    /// Aggregate replay comparison across all traces.
+    pub aggregate_result: ReplayComparisonResult,
+    /// Per-node reports sorted by node id.
+    pub node_reports: Vec<FleetNodeCounterfactualReport>,
+    /// Fleet report artifact hash.
+    pub artifact_hash: ContentHash,
+}
+
 #[derive(Serialize)]
 struct PolicyComparisonReportHashView<'a> {
     schema_version: &'a str,
@@ -302,6 +424,37 @@ struct ReplayComparisonResultHashView<'a> {
     ranked_recommendations: &'a [Recommendation],
     global_assumptions: &'a [AssumptionCard],
     causal_effects: &'a [CausalEffect],
+}
+
+#[derive(Serialize)]
+struct FleetNodeCounterfactualReportHashView<'a> {
+    node_id: &'a str,
+    trace_ids: &'a [String],
+    trace_paths: &'a [String],
+    trace_count: u64,
+    decisions_evaluated: u64,
+    divergence_count: u64,
+    total_original_outcome_millionths: i64,
+    total_counterfactual_outcome_millionths: i64,
+    net_improvement_millionths: i64,
+    regime_breakdown: &'a BTreeMap<String, i64>,
+    divergent_decisions: &'a [DecisionComparison],
+}
+
+#[derive(Serialize)]
+struct FleetCounterfactualReportHashView<'a> {
+    schema_version: &'a str,
+    fleet_trace_dir: &'a str,
+    substituted_policy: &'a SubstitutedPolicySnapshot,
+    node_count: u64,
+    trace_count: u64,
+    total_decisions: u64,
+    total_divergences: u64,
+    total_original_outcome_millionths: i64,
+    total_counterfactual_outcome_millionths: i64,
+    net_improvement_millionths: i64,
+    aggregate_result: &'a ReplayComparisonResult,
+    node_reports: &'a [FleetNodeCounterfactualReport],
 }
 
 fn compute_artifact_hash<T: Serialize>(value: &T, _artifact_name: &str) -> ContentHash {
@@ -345,6 +498,45 @@ fn compute_replay_result_artifact_hash(result: &ReplayComparisonResult) -> Conte
             causal_effects: &result.causal_effects,
         },
         "replay comparison result",
+    )
+}
+
+fn compute_fleet_node_artifact_hash(report: &FleetNodeCounterfactualReport) -> ContentHash {
+    compute_artifact_hash(
+        &FleetNodeCounterfactualReportHashView {
+            node_id: &report.node_id,
+            trace_ids: &report.trace_ids,
+            trace_paths: &report.trace_paths,
+            trace_count: report.trace_count,
+            decisions_evaluated: report.decisions_evaluated,
+            divergence_count: report.divergence_count,
+            total_original_outcome_millionths: report.total_original_outcome_millionths,
+            total_counterfactual_outcome_millionths: report.total_counterfactual_outcome_millionths,
+            net_improvement_millionths: report.net_improvement_millionths,
+            regime_breakdown: &report.regime_breakdown,
+            divergent_decisions: &report.divergent_decisions,
+        },
+        "fleet node counterfactual report",
+    )
+}
+
+fn compute_fleet_report_artifact_hash(report: &FleetCounterfactualReport) -> ContentHash {
+    compute_artifact_hash(
+        &FleetCounterfactualReportHashView {
+            schema_version: &report.schema_version,
+            fleet_trace_dir: &report.fleet_trace_dir,
+            substituted_policy: &report.substituted_policy,
+            node_count: report.node_count,
+            trace_count: report.trace_count,
+            total_decisions: report.total_decisions,
+            total_divergences: report.total_divergences,
+            total_original_outcome_millionths: report.total_original_outcome_millionths,
+            total_counterfactual_outcome_millionths: report.total_counterfactual_outcome_millionths,
+            net_improvement_millionths: report.net_improvement_millionths,
+            aggregate_result: &report.aggregate_result,
+            node_reports: &report.node_reports,
+        },
+        "fleet counterfactual report",
     )
 }
 
@@ -404,6 +596,14 @@ pub enum ReplayEngineError {
     EmptyScope,
     /// Duplicate policy IDs.
     DuplicatePolicy { policy_id: String },
+    /// Fleet trace directory could not be scanned.
+    FleetTraceDirectory { path: String, detail: String },
+    /// Fleet trace file could not be read.
+    FleetTraceRead { path: String, detail: String },
+    /// Fleet trace file could not be decoded.
+    FleetTraceDecode { path: String, detail: String },
+    /// Substituted policy snapshot schema did not match the expected version.
+    InvalidPolicySnapshotSchema { expected: String, found: String },
 }
 
 impl fmt::Display for ReplayEngineError {
@@ -427,6 +627,21 @@ impl fmt::Display for ReplayEngineError {
             Self::EmptyScope => write!(f, "replay scope excludes all decisions"),
             Self::DuplicatePolicy { policy_id } => {
                 write!(f, "duplicate policy ID: {policy_id}")
+            }
+            Self::FleetTraceDirectory { path, detail } => {
+                write!(f, "cannot scan fleet trace directory {path}: {detail}")
+            }
+            Self::FleetTraceRead { path, detail } => {
+                write!(f, "cannot read fleet trace file {path}: {detail}")
+            }
+            Self::FleetTraceDecode { path, detail } => {
+                write!(f, "cannot decode fleet trace file {path}: {detail}")
+            }
+            Self::InvalidPolicySnapshotSchema { expected, found } => {
+                write!(
+                    f,
+                    "invalid substituted policy snapshot schema: expected {expected}, found {found}"
+                )
             }
         }
     }
@@ -597,6 +812,120 @@ impl CounterfactualReplayEngine {
         result.artifact_hash = compute_replay_result_artifact_hash(&result);
 
         Ok(result)
+    }
+
+    /// Load all trace JSON files under a fleet directory and replay them under
+    /// one substituted policy snapshot.
+    pub fn compare_fleet_trace_dir(
+        &mut self,
+        fleet_trace_dir: impl AsRef<Path>,
+        substituted_policy: &SubstitutedPolicySnapshot,
+        causal_model: Option<&StructuralCausalModel>,
+    ) -> Result<FleetCounterfactualReport, ReplayEngineError> {
+        if substituted_policy.schema_version != SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION {
+            return Err(ReplayEngineError::InvalidPolicySnapshotSchema {
+                expected: SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION.to_string(),
+                found: substituted_policy.schema_version.clone(),
+            });
+        }
+
+        let root = fleet_trace_dir.as_ref();
+        let trace_inputs = load_fleet_trace_inputs(root)?;
+        if trace_inputs.is_empty() {
+            return Err(ReplayEngineError::NoTraces);
+        }
+
+        let alternate_policy = substituted_policy.to_alternate_policy();
+        let alternate_policies = [alternate_policy];
+        let traces: Vec<TraceRecord> = trace_inputs
+            .iter()
+            .map(|input| input.trace.clone())
+            .collect();
+        let aggregate_result = self.compare(
+            &traces,
+            &alternate_policies,
+            &substituted_policy.scope,
+            causal_model,
+        )?;
+        let aggregate_policy_report = aggregate_result
+            .policy_reports
+            .first()
+            .ok_or(ReplayEngineError::NoPolicies)?;
+
+        let mut by_node: BTreeMap<String, Vec<&FleetTraceInput>> = BTreeMap::new();
+        for input in &trace_inputs {
+            by_node
+                .entry(trace_node_id(&input.trace))
+                .or_default()
+                .push(input);
+        }
+
+        let mut node_reports = Vec::with_capacity(by_node.len());
+        for (node_id, inputs) in by_node {
+            let node_traces: Vec<TraceRecord> =
+                inputs.iter().map(|input| input.trace.clone()).collect();
+            let node_result = self.compare(
+                &node_traces,
+                &alternate_policies,
+                &substituted_policy.scope,
+                causal_model,
+            )?;
+            let node_policy_report = node_result
+                .policy_reports
+                .first()
+                .ok_or(ReplayEngineError::NoPolicies)?;
+            let mut trace_ids: Vec<String> = inputs
+                .iter()
+                .map(|input| input.trace.trace_id.clone())
+                .collect();
+            trace_ids.sort();
+            let mut trace_paths: Vec<String> = inputs
+                .iter()
+                .map(|input| input.relative_path.clone())
+                .collect();
+            trace_paths.sort();
+
+            let mut node_report = FleetNodeCounterfactualReport {
+                node_id,
+                trace_ids,
+                trace_paths,
+                trace_count: node_result.trace_count,
+                decisions_evaluated: node_policy_report.decisions_evaluated,
+                divergence_count: node_policy_report.divergence_count,
+                total_original_outcome_millionths: node_policy_report
+                    .total_original_outcome_millionths,
+                total_counterfactual_outcome_millionths: node_policy_report
+                    .total_counterfactual_outcome_millionths,
+                net_improvement_millionths: node_policy_report.net_improvement_millionths,
+                regime_breakdown: node_policy_report.regime_breakdown.clone(),
+                divergent_decisions: node_policy_report.divergent_decisions.clone(),
+                artifact_hash: ContentHash::compute(b""),
+            };
+            node_report.artifact_hash = compute_fleet_node_artifact_hash(&node_report);
+            node_reports.push(node_report);
+        }
+
+        let root_display = root.to_string_lossy().into_owned();
+        let mut fleet_report = FleetCounterfactualReport {
+            schema_version: FLEET_COUNTERFACTUAL_SCHEMA_VERSION.to_string(),
+            fleet_trace_dir: root_display,
+            substituted_policy: substituted_policy.clone(),
+            node_count: node_reports.len() as u64,
+            trace_count: aggregate_result.trace_count,
+            total_decisions: aggregate_result.total_decisions,
+            total_divergences: aggregate_policy_report.divergence_count,
+            total_original_outcome_millionths: aggregate_policy_report
+                .total_original_outcome_millionths,
+            total_counterfactual_outcome_millionths: aggregate_policy_report
+                .total_counterfactual_outcome_millionths,
+            net_improvement_millionths: aggregate_policy_report.net_improvement_millionths,
+            aggregate_result,
+            node_reports,
+            artifact_hash: ContentHash::compute(b""),
+        };
+        fleet_report.artifact_hash = compute_fleet_report_artifact_hash(&fleet_report);
+
+        Ok(fleet_report)
     }
 
     // ── Internal: Collect in-scope decisions ──────────────────────
@@ -1009,6 +1338,90 @@ impl CounterfactualReplayEngine {
 
         effects
     }
+}
+
+struct FleetTraceInput {
+    relative_path: String,
+    trace: TraceRecord,
+}
+
+fn load_fleet_trace_inputs(root: &Path) -> Result<Vec<FleetTraceInput>, ReplayEngineError> {
+    if !root.is_dir() {
+        return Err(ReplayEngineError::FleetTraceDirectory {
+            path: root.to_string_lossy().into_owned(),
+            detail: "path is not a directory".to_string(),
+        });
+    }
+
+    let mut paths = Vec::new();
+    collect_trace_json_paths(root, &mut paths)?;
+    paths.sort();
+
+    let mut traces = Vec::with_capacity(paths.len());
+    for path in paths {
+        let bytes = fs::read(&path).map_err(|err| ReplayEngineError::FleetTraceRead {
+            path: path.to_string_lossy().into_owned(),
+            detail: err.to_string(),
+        })?;
+        let trace = serde_json::from_slice::<TraceRecord>(&bytes).map_err(|err| {
+            ReplayEngineError::FleetTraceDecode {
+                path: path.to_string_lossy().into_owned(),
+                detail: err.to_string(),
+            }
+        })?;
+        traces.push(FleetTraceInput {
+            relative_path: relative_trace_path(root, &path),
+            trace,
+        });
+    }
+
+    Ok(traces)
+}
+
+fn collect_trace_json_paths(
+    root: &Path,
+    paths: &mut Vec<PathBuf>,
+) -> Result<(), ReplayEngineError> {
+    let entries = fs::read_dir(root).map_err(|err| ReplayEngineError::FleetTraceDirectory {
+        path: root.to_string_lossy().into_owned(),
+        detail: err.to_string(),
+    })?;
+
+    let mut sorted_entries = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| ReplayEngineError::FleetTraceDirectory {
+            path: root.to_string_lossy().into_owned(),
+            detail: err.to_string(),
+        })?;
+        sorted_entries.push(entry.path());
+    }
+    sorted_entries.sort();
+
+    for path in sorted_entries {
+        if path.is_dir() {
+            collect_trace_json_paths(&path, paths)?;
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            paths.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn relative_trace_path(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn trace_node_id(trace: &TraceRecord) -> String {
+    trace
+        .metadata
+        .get("node_id")
+        .or_else(|| trace.metadata.get("fleet_node_id"))
+        .cloned()
+        .unwrap_or_else(|| trace.trace_id.clone())
 }
 
 // ── Helper: Integer square root ──────────────────────────────────────────

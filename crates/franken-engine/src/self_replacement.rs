@@ -488,6 +488,8 @@ pub struct ReplacementReceipt {
     pub receipt_id: EngineObjectId,
     /// Schema version.
     pub schema_version: SchemaVersion,
+    /// Slot being replaced (for backward compatibility, equals old_slot_id).
+    pub slot_id: SlotId,
     /// Slot being replaced (old slot).
     pub old_slot_id: SlotId,
     /// New slot after replacement.
@@ -519,6 +521,7 @@ pub struct ReplacementReceipt {
 impl ReplacementReceipt {
     /// Derive receipt ID from its contents.
     pub fn derive_receipt_id(
+        slot_id: &SlotId,
         old_slot_id: &SlotId,
         new_slot_id: &SlotId,
         old_digest: &str,
@@ -529,6 +532,8 @@ impl ReplacementReceipt {
         zone: &str,
     ) -> Result<EngineObjectId, IdError> {
         let mut canonical = Vec::new();
+        canonical.extend_from_slice(slot_id.as_str().as_bytes());
+        canonical.push(b'|');
         canonical.extend_from_slice(old_slot_id.as_str().as_bytes());
         canonical.push(b'|');
         canonical.extend_from_slice(new_slot_id.as_str().as_bytes());
@@ -626,6 +631,7 @@ impl ReplacementReceipt {
 
 /// Input for creating a replacement receipt.
 pub struct CreateReceiptInput<'a> {
+    pub slot_id: &'a SlotId,
     pub old_slot_id: &'a SlotId,
     pub new_slot_id: &'a SlotId,
     pub old_cell_digest: &'a str,

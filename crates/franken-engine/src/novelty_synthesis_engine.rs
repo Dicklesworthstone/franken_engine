@@ -341,6 +341,35 @@ impl SynthesizedCandidate {
     pub fn exceeds_novelty(&self, threshold: u64) -> bool {
         self.novelty_score_millionths >= threshold
     }
+
+    /// Deterministic semantic fingerprint used to reject cosmetic variants.
+    pub fn semantic_fingerprint(&self) -> SemanticFingerprint {
+        SemanticFingerprint::from_candidate(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SemanticFingerprint
+// ---------------------------------------------------------------------------
+
+/// Canonical semantic identity for duplicate detection.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SemanticFingerprint {
+    /// Program ecosystem kind.
+    pub kind: ProgramKind,
+    /// Source normalized for cosmetic edits such as comments, whitespace,
+    /// identifier renames, and literal spelling.
+    pub canonical_source: String,
+}
+
+impl SemanticFingerprint {
+    /// Build a semantic fingerprint for a synthesized candidate.
+    pub fn from_candidate(candidate: &SynthesizedCandidate) -> Self {
+        Self {
+            kind: candidate.kind,
+            canonical_source: canonicalize_source_semantics(&candidate.source_text),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -753,13 +782,43 @@ pub fn filter_candidates(
     Vec<SynthesizedCandidate>,
     Vec<(SynthesizedCandidate, SynthesisDenialReason)>,
 ) {
+    filter_candidates_against_corpus(
+        candidates,
+        constraint,
+        std::iter::empty::<&SynthesizedCandidate>(),
+    )
+}
+
+/// Filter candidates against constraints and an existing semantic corpus.
+pub fn filter_candidates_against_corpus<'a, I>(
+    candidates: Vec<SynthesizedCandidate>,
+    constraint: &SynthesisConstraint,
+    existing_corpus: I,
+) -> (
+    Vec<SynthesizedCandidate>,
+    Vec<(SynthesizedCandidate, SynthesisDenialReason)>,
+)
+where
+    I: IntoIterator<Item = &'a SynthesizedCandidate>,
+{
     let mut accepted = Vec::new();
     let mut denied: Vec<(SynthesizedCandidate, SynthesisDenialReason)> = Vec::new();
     let mut seen_hashes: BTreeSet<ContentHash> = BTreeSet::new();
+    let mut seen_semantics: BTreeSet<SemanticFingerprint> = BTreeSet::new();
+
+    for existing in existing_corpus {
+        seen_hashes.insert(existing.content_hash);
+        seen_semantics.insert(existing.semantic_fingerprint());
+    }
 
     for candidate in candidates {
         // Check for duplicates first.
         if seen_hashes.contains(&candidate.content_hash) {
+            denied.push((candidate, SynthesisDenialReason::DuplicateCandidate));
+            continue;
+        }
+        let semantic_fingerprint = candidate.semantic_fingerprint();
+        if seen_semantics.contains(&semantic_fingerprint) {
             denied.push((candidate, SynthesisDenialReason::DuplicateCandidate));
             continue;
         }
@@ -799,6 +858,7 @@ pub fn filter_candidates(
 
         // Accepted.
         seen_hashes.insert(candidate.content_hash);
+        seen_semantics.insert(semantic_fingerprint);
         accepted.push(candidate);
     }
 
@@ -1197,6 +1257,134 @@ fn derive_target_cells(seed: u64, kind: ProgramKind) -> Vec<String> {
             format!("{kind_prefix}-cell-{cell_id:04}")
         })
         .collect()
+}
+
+fn canonicalize_source_semantics(source: &str) -> String {
+    let keywords = [
+        "async",
+        "await",
+        "break",
+        "case",
+        "catch",
+        "class",
+        "const",
+        "continue",
+        "default",
+        "delete",
+        "do",
+        "else",
+        "export",
+        "extends",
+        "finally",
+        "for",
+        "from",
+        "function",
+        "if",
+        "import",
+        "in",
+        "instanceof",
+        "let",
+        "new",
+        "return",
+        "static",
+        "throw",
+        "try",
+        "typeof",
+        "var",
+        "while",
+        "yield",
+    ];
+
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = source.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        if c.is_whitespace() {
+            i += 1;
+            continue;
+        }
+
+        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '/' {
+            i += 2;
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+
+        if c == '/' && i + 1 < chars.len() && chars[i + 1] == '*' {
+            i += 2;
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '/') {
+                i += 1;
+            }
+            i = (i + 2).min(chars.len());
+            continue;
+        }
+
+        if c == '\'' || c == '"' || c == '`' {
+            let quote = c;
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == '\\' {
+                    i = (i + 2).min(chars.len());
+                    continue;
+                }
+                if chars[i] == quote {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            tokens.push("str".to_string());
+            continue;
+        }
+
+        if c.is_ascii_digit() {
+            i += 1;
+            while i < chars.len()
+                && (chars[i].is_ascii_alphanumeric()
+                    || chars[i] == '.'
+                    || chars[i] == '_'
+                    || chars[i] == 'x'
+                    || chars[i] == 'X')
+            {
+                i += 1;
+            }
+            tokens.push("num".to_string());
+            continue;
+        }
+
+        if is_identifier_start(c) {
+            let start = i;
+            i += 1;
+            while i < chars.len() && is_identifier_continue(chars[i]) {
+                i += 1;
+            }
+            let ident: String = chars[start..i].iter().collect();
+            if keywords.binary_search(&ident.as_str()).is_ok() {
+                tokens.push(ident);
+            } else {
+                tokens.push("id".to_string());
+            }
+            continue;
+        }
+
+        tokens.push(c.to_string());
+        i += 1;
+    }
+
+    tokens.join(" ")
+}
+
+fn is_identifier_start(c: char) -> bool {
+    c.is_ascii_alphabetic() || c == '_' || c == '$'
+}
+
+fn is_identifier_continue(c: char) -> bool {
+    is_identifier_start(c) || c.is_ascii_digit()
 }
 
 // ---------------------------------------------------------------------------

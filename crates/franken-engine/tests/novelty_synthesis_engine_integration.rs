@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use frankenengine_engine::novelty_synthesis_engine::{
     self, BEAD_ID, COMPONENT, DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, DEFAULT_MIN_NOVELTY,
     KIND_COUNT, POLICY_ID, ProgramKind, SCHEMA_VERSION, STRATEGY_COUNT, SynthesisConstraint,
-    SynthesisDenialReason, SynthesisError, SynthesisStrategy,
+    SynthesisDenialReason, SynthesisError, SynthesisStrategy, SynthesizedCandidate,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
@@ -32,6 +32,22 @@ fn test_epoch() -> SecurityEpoch {
 
 fn default_constraint() -> SynthesisConstraint {
     SynthesisConstraint::new(DEFAULT_MAX_AST_NODES, DEFAULT_MAX_BYTES, 0)
+}
+
+fn cosmetic_candidate(id: &str, source_text: &str) -> SynthesizedCandidate {
+    SynthesizedCandidate {
+        candidate_id: id.into(),
+        kind: ProgramKind::PlainJs,
+        strategy: SynthesisStrategy::GrammarGuided,
+        source_text: source_text.into(),
+        ast_node_count: 12,
+        novelty_score_millionths: 700_000,
+        coverage_delta_millionths: 100_000,
+        target_cells: vec!["plain_js-cell-0001".into()],
+        content_hash: frankenengine_engine::hash_tiers::ContentHash::compute(
+            format!("{id}:{source_text}").as_bytes(),
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +408,37 @@ fn test_evaluate_novelty_duplicate() {
     existing.insert(c.content_hash);
     let novelty = novelty_synthesis_engine::evaluate_candidate_novelty(&c, &existing);
     assert_eq!(novelty, 0);
+}
+
+#[test]
+fn test_semantic_fingerprint_ignores_cosmetic_attack_rewrites() {
+    let a = cosmetic_candidate("baseline", "function exploit(input) { return input + 1; }");
+    let b = cosmetic_candidate(
+        "renamed",
+        "// same attack with comments and renamed bindings\nfunction attempt(value) {\n  return value + 1;\n}\n",
+    );
+
+    assert_ne!(a.content_hash, b.content_hash);
+    assert_eq!(a.semantic_fingerprint(), b.semantic_fingerprint());
+}
+
+#[test]
+fn test_filter_candidates_against_corpus_denies_cosmetic_variant() {
+    let existing = cosmetic_candidate("existing", "function exploit(input) { return input + 1; }");
+    let cosmetic = cosmetic_candidate(
+        "cosmetic",
+        "/* cosmetic variant */\nfunction renamed(value) { return value + 1; }\n",
+    );
+
+    let (accepted, denied) = novelty_synthesis_engine::filter_candidates_against_corpus(
+        vec![cosmetic],
+        &default_constraint(),
+        [&existing],
+    );
+
+    assert!(accepted.is_empty());
+    assert_eq!(denied.len(), 1);
+    assert_eq!(denied[0].1, SynthesisDenialReason::DuplicateCandidate);
 }
 
 // ---------------------------------------------------------------------------

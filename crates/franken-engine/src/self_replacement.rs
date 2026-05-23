@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::deterministic_serde::{CanonicalValue, SchemaHash};
 use crate::engine_object_id::{self, EngineObjectId, IdError, ObjectDomain};
+use crate::pre_signed_demotion_fallback::{FallbackError, PreSignedFallbackStore, PromotionId};
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
     self, SIGNATURE_SENTINEL, Signature, SignatureError, SignaturePreimage, SigningKey,
@@ -487,12 +488,18 @@ pub struct ReplacementReceipt {
     pub receipt_id: EngineObjectId,
     /// Schema version.
     pub schema_version: SchemaVersion,
-    /// Slot being replaced.
-    pub slot_id: SlotId,
+    /// Slot being replaced (old slot).
+    pub old_slot_id: SlotId,
+    /// New slot after replacement.
+    pub new_slot_id: SlotId,
     /// Digest of the old cell implementation.
     pub old_cell_digest: String,
     /// Digest of the new cell implementation.
     pub new_cell_digest: String,
+    /// Translation validation proof reference.
+    pub translation_validation_proof_ref: String,
+    /// Content hash chain linking into replacement lineage.
+    pub content_hash_chain_into_lineage: String,
     /// Validation artifact references with results.
     pub validation_artifacts: Vec<ValidationArtifactRef>,
     /// Rollback token (digest of last-known-good for reversal).
@@ -512,18 +519,27 @@ pub struct ReplacementReceipt {
 impl ReplacementReceipt {
     /// Derive receipt ID from its contents.
     pub fn derive_receipt_id(
-        slot_id: &SlotId,
+        old_slot_id: &SlotId,
+        new_slot_id: &SlotId,
         old_digest: &str,
         new_digest: &str,
+        translation_validation_proof_ref: &str,
+        content_hash_chain_into_lineage: &str,
         timestamp_ns: u64,
         zone: &str,
     ) -> Result<EngineObjectId, IdError> {
         let mut canonical = Vec::new();
-        canonical.extend_from_slice(slot_id.as_str().as_bytes());
+        canonical.extend_from_slice(old_slot_id.as_str().as_bytes());
+        canonical.push(b'|');
+        canonical.extend_from_slice(new_slot_id.as_str().as_bytes());
         canonical.push(b'|');
         canonical.extend_from_slice(old_digest.as_bytes());
         canonical.push(b'|');
         canonical.extend_from_slice(new_digest.as_bytes());
+        canonical.push(b'|');
+        canonical.extend_from_slice(translation_validation_proof_ref.as_bytes());
+        canonical.push(b'|');
+        canonical.extend_from_slice(content_hash_chain_into_lineage.as_bytes());
         canonical.push(b'|');
         canonical.extend_from_slice(&timestamp_ns.to_be_bytes());
         let schema_id =
@@ -543,9 +559,12 @@ impl ReplacementReceipt {
         }
 
         let receipt_id = Self::derive_receipt_id(
-            input.slot_id,
+            input.old_slot_id,
+            input.new_slot_id,
             input.old_cell_digest,
             input.new_cell_digest,
+            input.translation_validation_proof_ref,
+            input.content_hash_chain_into_lineage,
             input.timestamp_ns,
             input.zone,
         )
@@ -554,9 +573,12 @@ impl ReplacementReceipt {
         Ok(Self {
             receipt_id,
             schema_version: SchemaVersion::V1,
-            slot_id: input.slot_id.clone(),
+            old_slot_id: input.old_slot_id.clone(),
+            new_slot_id: input.new_slot_id.clone(),
             old_cell_digest: input.old_cell_digest.to_string(),
             new_cell_digest: input.new_cell_digest.to_string(),
+            translation_validation_proof_ref: input.translation_validation_proof_ref.to_string(),
+            content_hash_chain_into_lineage: input.content_hash_chain_into_lineage.to_string(),
             validation_artifacts: input.validation_artifacts.to_vec(),
             rollback_token: input.rollback_token.to_string(),
             promotion_rationale: input.promotion_rationale.to_string(),
@@ -594,13 +616,22 @@ impl ReplacementReceipt {
     pub fn all_validations_passed(&self) -> bool {
         self.validation_artifacts.iter().all(|v| v.passed)
     }
+
+    /// Stable join key for the pre-signed demotion fallback protecting
+    /// this promotion.
+    pub fn promotion_id(&self) -> Result<PromotionId, SelfReplacementError> {
+        PromotionId::try_new(self.receipt_id.to_string()).map_err(SelfReplacementError::from)
+    }
 }
 
 /// Input for creating a replacement receipt.
 pub struct CreateReceiptInput<'a> {
-    pub slot_id: &'a SlotId,
+    pub old_slot_id: &'a SlotId,
+    pub new_slot_id: &'a SlotId,
     pub old_cell_digest: &'a str,
     pub new_cell_digest: &'a str,
+    pub translation_validation_proof_ref: &'a str,
+    pub content_hash_chain_into_lineage: &'a str,
     pub validation_artifacts: &'a [ValidationArtifactRef],
     pub rollback_token: &'a str,
     pub promotion_rationale: &'a str,
@@ -1050,6 +1081,30 @@ impl ReplacementLifecycle {
         Ok(())
     }
 
+    /// Record a replacement receipt only if its matching pre-signed
+    /// demotion fallback is still sealed.
+    ///
+    /// This is the promotion-side V.5 guard: no sealed fallback means
+    /// the promotion is refused before the lifecycle advances.
+    pub fn record_receipt_requiring_demotion_fallback(
+        &mut self,
+        receipt: ReplacementReceipt,
+        fallback_store: &mut PreSignedFallbackStore,
+    ) -> Result<(), SelfReplacementError> {
+        let promotion_id = receipt.promotion_id()?;
+        if !fallback_store.has_sealed_fallback_for(&promotion_id) {
+            return Err(SelfReplacementError::MissingFallbackReceipt {
+                promotion_id: promotion_id.to_string(),
+            });
+        }
+
+        self.record_receipt(receipt)?;
+        fallback_store
+            .mark_promotion_applied(&promotion_id)
+            .map_err(SelfReplacementError::from)?;
+        Ok(())
+    }
+
     /// Advance to the next stage.
     fn advance_stage(&mut self) {
         self.current_stage = match self.current_stage {
@@ -1094,6 +1149,10 @@ pub enum SelfReplacementError {
     ValidationFailed { slot_id: String },
     /// Schema version not supported.
     UnsupportedSchemaVersion { version: String },
+    /// A promotion was attempted without the required sealed fallback.
+    MissingFallbackReceipt { promotion_id: String },
+    /// Pre-signed fallback store rejected the operation.
+    FallbackStoreFailed { reason: String },
 }
 
 impl fmt::Display for SelfReplacementError {
@@ -1122,11 +1181,26 @@ impl fmt::Display for SelfReplacementError {
             Self::UnsupportedSchemaVersion { version } => {
                 write!(f, "unsupported schema version: {version}")
             }
+            Self::MissingFallbackReceipt { promotion_id } => write!(
+                f,
+                "missing pre-signed demotion fallback receipt for promotion {promotion_id}"
+            ),
+            Self::FallbackStoreFailed { reason } => {
+                write!(f, "pre-signed demotion fallback store failed: {reason}")
+            }
         }
     }
 }
 
 impl std::error::Error for SelfReplacementError {}
+
+impl From<FallbackError> for SelfReplacementError {
+    fn from(value: FallbackError) -> Self {
+        Self::FallbackStoreFailed {
+            reason: value.to_string(),
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Schema hash helper — returns 'static reference

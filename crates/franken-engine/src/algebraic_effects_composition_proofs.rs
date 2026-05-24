@@ -13,13 +13,13 @@
 
 #![forbid(unsafe_code)]
 
+use std::any::{Any, TypeId};
 use std::collections::BTreeSet;
 use std::sync::Arc;
-use std::any::{Any, TypeId};
 
 use crate::algebraic_effects::{
-    HandlerStack, Handler, Effect, EffectResult, EffectError,
-    EffectCapabilities, EffectPriority
+    Effect, EffectCapabilities, EffectError, EffectPriority, EffectResult, ErasedEffect, Handler,
+    HandlerStack,
 };
 
 // ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ impl Handler for IdentityHandler {
         false // Identity handler never handles any effects
     }
 
-    fn handle(&self, _effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
+    fn handle(&self, _effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         Ok(None) // Always pass through to next handler
     }
 
@@ -119,7 +119,12 @@ pub struct TestHandler {
 }
 
 impl TestHandler {
-    pub fn new(name: &'static str, effects: &[&'static str], priority: EffectPriority, multiplier: i32) -> Self {
+    pub fn new(
+        name: &'static str,
+        effects: &[&'static str],
+        priority: EffectPriority,
+        multiplier: i32,
+    ) -> Self {
         Self {
             name,
             handled_effects: effects.iter().copied().collect(),
@@ -134,14 +139,14 @@ impl Handler for TestHandler {
         self.handled_effects.contains(effect_name)
     }
 
-    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         if !self.can_handle(effect.effect_name()) {
             return Ok(None);
         }
 
         // Extract the test value and apply transformation
         let params = effect.parameters();
-        if let Ok(value) = params.downcast_ref::<i32>() {
+        if let Some(value) = params.downcast_ref::<i32>() {
             let result = value * self.multiplier;
             Ok(Some(EffectResult::new(result)))
         } else {
@@ -198,18 +203,21 @@ pub fn handler_sequence(stack: &HandlerStack) -> Vec<(&'static str, EffectPriori
     // For testing purposes, we'll create a mapping of known test handlers to priorities
     // In a real implementation, we'd need access to the internal handlers
     // For now, we'll assume the order returned by handler_names() reflects priority order
-    names.into_iter().map(|name| {
-        // Map known test handler names to their priorities
-        let priority = match name {
-            "high_priority_handler" => EffectPriority::High,
-            "normal_priority_handler" => EffectPriority::Normal,
-            "low_priority_handler" => EffectPriority::Low,
-            "critical_priority_handler" => EffectPriority::Critical,
-            "identity_handler" => EffectPriority::Normal,
-            _ => EffectPriority::Normal,
-        };
-        (name, priority)
-    }).collect()
+    names
+        .into_iter()
+        .map(|name| {
+            // Map known test handler names to their priorities
+            let priority = match name {
+                "high_priority_handler" => EffectPriority::High,
+                "normal_priority_handler" => EffectPriority::Normal,
+                "low_priority_handler" => EffectPriority::Low,
+                "critical_priority_handler" => EffectPriority::Critical,
+                "identity_handler" => EffectPriority::Normal,
+                _ => EffectPriority::Normal,
+            };
+            (name, priority)
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -225,18 +233,42 @@ pub fn test_associativity_law(
     name_prefix: &str,
     priorities1: &[EffectPriority],
     priorities2: &[EffectPriority],
-    priorities3: &[EffectPriority]
+    priorities3: &[EffectPriority],
 ) -> bool {
     // Generate fresh stacks for left association: (h1 ∘ h2) ∘ h3
-    let stack1_left = generate_test_stack(&format!("{}_1l", name_prefix), priorities1.len(), priorities1);
-    let stack2_left = generate_test_stack(&format!("{}_2l", name_prefix), priorities2.len(), priorities2);
-    let stack3_left = generate_test_stack(&format!("{}_3l", name_prefix), priorities3.len(), priorities3);
+    let stack1_left = generate_test_stack(
+        &format!("{}_1l", name_prefix),
+        priorities1.len(),
+        priorities1,
+    );
+    let stack2_left = generate_test_stack(
+        &format!("{}_2l", name_prefix),
+        priorities2.len(),
+        priorities2,
+    );
+    let stack3_left = generate_test_stack(
+        &format!("{}_3l", name_prefix),
+        priorities3.len(),
+        priorities3,
+    );
     let left_composed = stack1_left.compose(stack2_left).compose(stack3_left);
 
     // Generate fresh stacks for right association: h1 ∘ (h2 ∘ h3)
-    let stack1_right = generate_test_stack(&format!("{}_1r", name_prefix), priorities1.len(), priorities1);
-    let stack2_right = generate_test_stack(&format!("{}_2r", name_prefix), priorities2.len(), priorities2);
-    let stack3_right = generate_test_stack(&format!("{}_3r", name_prefix), priorities3.len(), priorities3);
+    let stack1_right = generate_test_stack(
+        &format!("{}_1r", name_prefix),
+        priorities1.len(),
+        priorities1,
+    );
+    let stack2_right = generate_test_stack(
+        &format!("{}_2r", name_prefix),
+        priorities2.len(),
+        priorities2,
+    );
+    let stack3_right = generate_test_stack(
+        &format!("{}_3r", name_prefix),
+        priorities3.len(),
+        priorities3,
+    );
     let right_composed = stack1_right.compose(stack2_right.compose(stack3_right));
 
     stacks_equivalent(&left_composed, &right_composed)
@@ -286,8 +318,16 @@ pub fn associativity_proof() -> &'static str {
 /// Test left identity law: id ∘ h = h
 pub fn test_left_identity_law(name_prefix: &str, priorities: &[EffectPriority]) -> bool {
     let identity = identity_stack();
-    let original = generate_test_stack(&format!("{}_orig", name_prefix), priorities.len(), priorities);
-    let reference = generate_test_stack(&format!("{}_ref", name_prefix), priorities.len(), priorities);
+    let original = generate_test_stack(
+        &format!("{}_orig", name_prefix),
+        priorities.len(),
+        priorities,
+    );
+    let reference = generate_test_stack(
+        &format!("{}_ref", name_prefix),
+        priorities.len(),
+        priorities,
+    );
     let composed = identity.compose(original);
     stacks_equivalent(&composed, &reference)
 }
@@ -295,8 +335,16 @@ pub fn test_left_identity_law(name_prefix: &str, priorities: &[EffectPriority]) 
 /// Test right identity law: h ∘ id = h
 pub fn test_right_identity_law(name_prefix: &str, priorities: &[EffectPriority]) -> bool {
     let identity = identity_stack();
-    let original = generate_test_stack(&format!("{}_orig", name_prefix), priorities.len(), priorities);
-    let reference = generate_test_stack(&format!("{}_ref", name_prefix), priorities.len(), priorities);
+    let original = generate_test_stack(
+        &format!("{}_orig", name_prefix),
+        priorities.len(),
+        priorities,
+    );
+    let reference = generate_test_stack(
+        &format!("{}_ref", name_prefix),
+        priorities.len(),
+        priorities,
+    );
     let composed = original.compose(identity);
     stacks_equivalent(&composed, &reference)
 }
@@ -374,7 +422,11 @@ pub fn right_identity_proof() -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// Generate a test handler stack with specified characteristics.
-pub fn generate_test_stack(name_prefix: &str, handler_count: usize, priorities: &[EffectPriority]) -> HandlerStack {
+pub fn generate_test_stack(
+    name_prefix: &str,
+    handler_count: usize,
+    priorities: &[EffectPriority],
+) -> HandlerStack {
     let mut stack = HandlerStack::new();
 
     for (i, &priority) in priorities.iter().take(handler_count).enumerate() {
@@ -425,7 +477,12 @@ mod tests {
         let priorities2 = [EffectPriority::Normal, EffectPriority::Critical];
         let priorities3 = [EffectPriority::Normal];
 
-        assert!(test_associativity_law("assoc_test", &priorities1, &priorities2, &priorities3));
+        assert!(test_associativity_law(
+            "assoc_test",
+            &priorities1,
+            &priorities2,
+            &priorities3
+        ));
     }
 
     /// Test left identity law.
@@ -434,7 +491,7 @@ mod tests {
         let priorities = [
             EffectPriority::High,
             EffectPriority::Normal,
-            EffectPriority::Low
+            EffectPriority::Low,
         ];
 
         assert!(test_left_identity_law("left_test", &priorities));
@@ -446,7 +503,7 @@ mod tests {
         let priorities = [
             EffectPriority::Critical,
             EffectPriority::High,
-            EffectPriority::Normal
+            EffectPriority::Normal,
         ];
 
         assert!(test_right_identity_law("right_test", &priorities));
@@ -461,8 +518,14 @@ mod tests {
             let priorities3 = generate_random_priorities(seed + 200, 4);
 
             assert!(
-                test_associativity_law(&format!("assoc_{}", seed), &priorities1, &priorities2, &priorities3),
-                "Associativity failed for seed {}", seed
+                test_associativity_law(
+                    &format!("assoc_{}", seed),
+                    &priorities1,
+                    &priorities2,
+                    &priorities3
+                ),
+                "Associativity failed for seed {}",
+                seed
             );
         }
     }
@@ -474,7 +537,8 @@ mod tests {
             let priorities = generate_random_priorities(seed, 5);
             assert!(
                 test_left_identity_law(&format!("left_{}", seed), &priorities),
-                "Left identity failed for seed {}", seed
+                "Left identity failed for seed {}",
+                seed
             );
         }
     }
@@ -486,7 +550,8 @@ mod tests {
             let priorities = generate_random_priorities(seed, 5);
             assert!(
                 test_right_identity_law(&format!("right_{}", seed), &priorities),
-                "Right identity failed for seed {}", seed
+                "Right identity failed for seed {}",
+                seed
             );
         }
     }
@@ -497,7 +562,12 @@ mod tests {
         let empty_priorities: &[EffectPriority] = &[];
 
         // Associativity with empty stacks
-        assert!(test_associativity_law("empty", empty_priorities, empty_priorities, empty_priorities));
+        assert!(test_associativity_law(
+            "empty",
+            empty_priorities,
+            empty_priorities,
+            empty_priorities
+        ));
 
         // Identity with empty stack
         assert!(test_left_identity_law("empty_left", empty_priorities));
@@ -511,7 +581,12 @@ mod tests {
         let priorities2 = [EffectPriority::Normal, EffectPriority::Normal];
         let priorities3 = [EffectPriority::Normal];
 
-        assert!(test_associativity_law("same_prio", &priorities1, &priorities2, &priorities3));
+        assert!(test_associativity_law(
+            "same_prio",
+            &priorities1,
+            &priorities2,
+            &priorities3
+        ));
     }
 
     /// Test composition preserves handler order within same priority.

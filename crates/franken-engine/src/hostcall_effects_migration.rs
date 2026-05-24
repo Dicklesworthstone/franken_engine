@@ -9,13 +9,13 @@
 #![forbid(unsafe_code)]
 
 use std::any::{Any, TypeId};
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use crate::algebraic_effects::{
-    Effect, EffectCapabilities, EffectError, EffectPriority, EffectResult, Handler, HandlerStack,
+    Effect, EffectCapabilities, EffectError, EffectPriority, EffectResult, ErasedEffect, Handler,
+    HandlerStack,
 };
 use crate::capability::{CapabilityProfile, ProfileKind, RuntimeCapability};
 
@@ -31,7 +31,7 @@ pub struct ConsoleHostcallEffect {
 }
 
 impl Effect for ConsoleHostcallEffect {
-    type Output = Box<dyn Any + Send + Sync>;
+    type Output = ();
 
     fn effect_name(&self) -> &'static str {
         "hostcall:console"
@@ -69,7 +69,7 @@ pub enum FsOperation {
 }
 
 impl Effect for FsHostcallEffect {
-    type Output = Box<dyn Any + Send + Sync>;
+    type Output = ();
 
     fn effect_name(&self) -> &'static str {
         match self.operation {
@@ -86,7 +86,11 @@ impl Effect for FsHostcallEffect {
     }
 
     fn parameters(&self) -> Box<dyn Any + Send + Sync> {
-        Box::new((self.operation.clone(), self.path.clone(), self.content.clone()))
+        Box::new((
+            self.operation.clone(),
+            self.path.clone(),
+            self.content.clone(),
+        ))
     }
 
     fn parameter_type_id(&self) -> TypeId {
@@ -104,7 +108,7 @@ pub struct NetworkHostcallEffect {
 }
 
 impl Effect for NetworkHostcallEffect {
-    type Output = Box<dyn Any + Send + Sync>;
+    type Output = ();
 
     fn effect_name(&self) -> &'static str {
         "hostcall:network"
@@ -152,7 +156,7 @@ pub enum TimerOperation {
 }
 
 impl Effect for TimerHostcallEffect {
-    type Output = Box<dyn Any + Send + Sync>;
+    type Output = ();
 
     fn effect_name(&self) -> &'static str {
         "hostcall:timer"
@@ -163,11 +167,7 @@ impl Effect for TimerHostcallEffect {
     }
 
     fn parameters(&self) -> Box<dyn Any + Send + Sync> {
-        Box::new((
-            self.operation.clone(),
-            self.duration_ms,
-            self.timer_id,
-        ))
+        Box::new((self.operation.clone(), self.duration_ms, self.timer_id))
     }
 
     fn parameter_type_id(&self) -> TypeId {
@@ -189,7 +189,7 @@ pub enum ModuleImportType {
 }
 
 impl Effect for ModuleHostcallEffect {
-    type Output = Box<dyn Any + Send + Sync>;
+    type Output = ();
 
     fn effect_name(&self) -> &'static str {
         "hostcall:module"
@@ -210,7 +210,7 @@ impl Effect for ModuleHostcallEffect {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModuleExports {
-    pub default: Option<String>, // Serialized value
+    pub default: Option<String>,      // Serialized value
     pub named: Vec<(String, String)>, // name -> serialized value
 }
 
@@ -227,24 +227,26 @@ impl Handler for FullCapsHandler {
         effect_name.starts_with("hostcall:")
     }
 
-    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         // FullCaps allows all hostcalls - dispatch to actual implementation
         match effect.effect_name() {
             "hostcall:console" => {
-                if let Ok(params) = effect.parameters().downcast_ref::<(String, Vec<String>)>() {
-                    let (method, args) = params;
+                if let Ok(params) = effect.parameters().downcast::<(String, Vec<String>)>() {
+                    let (method, args) = *params;
                     // Simulate console output
                     match method.as_str() {
                         "log" => println!("[LOG] {}", args.join(" ")),
                         "error" => eprintln!("[ERROR] {}", args.join(" ")),
                         "warn" => eprintln!("[WARN] {}", args.join(" ")),
                         "info" => println!("[INFO] {}", args.join(" ")),
-                        _ => return Err(EffectError::InvalidParameters {
-                            effect_name: effect.effect_name().to_string(),
-                            reason: format!("Unknown console method: {}", method),
-                        }),
+                        _ => {
+                            return Err(EffectError::InvalidParameters {
+                                effect_name: effect.effect_name().to_string(),
+                                reason: format!("Unknown console method: {}", method),
+                            });
+                        }
                     }
-                    Ok(Some(EffectResult::new(Box::new(()) as Box<dyn Any + Send + Sync>)))
+                    Ok(Some(EffectResult::new(())))
                 } else {
                     Err(EffectError::InvalidParameters {
                         effect_name: effect.effect_name().to_string(),
@@ -253,44 +255,61 @@ impl Handler for FullCapsHandler {
                 }
             }
             "hostcall:fs:read" => {
-                if let Ok(params) = effect.parameters().downcast_ref::<(FsOperation, String, Option<Vec<u8>>)>() {
-                    let (_, path, _) = params;
+                if let Ok(params) = effect
+                    .parameters()
+                    .downcast::<(FsOperation, String, Option<Vec<u8>>)>()
+                {
+                    let (_, path, _) = *params;
                     // Simulate file read
                     let content = format!("simulated content of {}", path).into_bytes();
-                    Ok(Some(EffectResult::new(Box::new(Some(content)) as Box<dyn Any + Send + Sync>)))
+                    Ok(Some(EffectResult::new(Some(content))))
                 } else {
                     Err(EffectError::InvalidParameters {
                         effect_name: effect.effect_name().to_string(),
-                        reason: "Expected (FsOperation, String, Option<Vec<u8>>) parameters".to_string(),
+                        reason: "Expected (FsOperation, String, Option<Vec<u8>>) parameters"
+                            .to_string(),
                     })
                 }
             }
             "hostcall:fs:write" => {
-                if let Ok(params) = effect.parameters().downcast_ref::<(FsOperation, String, Option<Vec<u8>>)>() {
-                    let (_, path, content) = params;
+                if let Ok(params) = effect
+                    .parameters()
+                    .downcast::<(FsOperation, String, Option<Vec<u8>>)>()
+                {
+                    let (_, path, content) = *params;
                     // Simulate file write
-                    println!("Writing {} bytes to {}",
+                    println!(
+                        "Writing {} bytes to {}",
                         content.as_ref().map_or(0, |c| c.len()),
                         path
                     );
-                    Ok(Some(EffectResult::new(Box::new(Some(Vec::new())) as Box<dyn Any + Send + Sync>)))
+                    Ok(Some(EffectResult::new(Some(Vec::<u8>::new()))))
                 } else {
                     Err(EffectError::InvalidParameters {
                         effect_name: effect.effect_name().to_string(),
-                        reason: "Expected (FsOperation, String, Option<Vec<u8>>) parameters".to_string(),
+                        reason: "Expected (FsOperation, String, Option<Vec<u8>>) parameters"
+                            .to_string(),
                     })
                 }
             }
             "hostcall:network" => {
-                if let Ok(params) = effect.parameters().downcast_ref::<(String, String, Vec<(String, String)>, Option<Vec<u8>>)>() {
-                    let (url, method, _, _) = params;
+                if let Ok(params) =
+                    effect
+                        .parameters()
+                        .downcast::<(String, String, Vec<(String, String)>, Option<Vec<u8>>)>()
+                {
+                    let (url, method, _, _) = *params;
                     // Simulate network request
                     let response = NetworkResponse {
                         status: 200,
                         headers: vec![("content-type".to_string(), "application/json".to_string())],
-                        body: format!(r#"{{"result": "simulated response for {} {}", "success": true}}"#, method, url).into_bytes(),
+                        body: format!(
+                            r#"{{"result": "simulated response for {} {}", "success": true}}"#,
+                            method, url
+                        )
+                        .into_bytes(),
                     };
-                    Ok(Some(EffectResult::new(Box::new(response) as Box<dyn Any + Send + Sync>)))
+                    Ok(Some(EffectResult::new(response)))
                 } else {
                     Err(EffectError::InvalidParameters {
                         effect_name: effect.effect_name().to_string(),
@@ -299,18 +318,25 @@ impl Handler for FullCapsHandler {
                 }
             }
             "hostcall:timer" => {
-                if let Ok(params) = effect.parameters().downcast_ref::<(TimerOperation, Option<u64>, Option<u64>)>() {
-                    let (operation, duration_ms, timer_id) = params;
+                if let Ok(params) = effect
+                    .parameters()
+                    .downcast::<(TimerOperation, Option<u64>, Option<u64>)>()
+                {
+                    let (operation, duration_ms, timer_id) = *params;
                     // Simulate timer operations
                     match operation {
                         TimerOperation::SetTimeout | TimerOperation::SetInterval => {
                             let new_timer_id = 42u64; // Simulated timer ID
-                            println!("Setting timer for {}ms -> ID {}", duration_ms.unwrap_or(0), new_timer_id);
-                            Ok(Some(EffectResult::new(Box::new(Some(new_timer_id)) as Box<dyn Any + Send + Sync>)))
+                            println!(
+                                "Setting timer for {}ms -> ID {}",
+                                duration_ms.unwrap_or(0),
+                                new_timer_id
+                            );
+                            Ok(Some(EffectResult::new(Some(new_timer_id))))
                         }
                         TimerOperation::ClearTimeout | TimerOperation::ClearInterval => {
                             println!("Clearing timer ID {}", timer_id.unwrap_or(0));
-                            Ok(Some(EffectResult::new(Box::new(None::<u64>) as Box<dyn Any + Send + Sync>)))
+                            Ok(Some(EffectResult::new(None::<u64>)))
                         }
                     }
                 } else {
@@ -321,17 +347,20 @@ impl Handler for FullCapsHandler {
                 }
             }
             "hostcall:module" => {
-                if let Ok(params) = effect.parameters().downcast_ref::<(String, ModuleImportType)>() {
-                    let (module_path, import_type) = params;
+                if let Ok(params) = effect.parameters().downcast::<(String, ModuleImportType)>() {
+                    let (module_path, import_type) = *params;
                     // Simulate module loading
                     let exports = ModuleExports {
-                        default: Some(format!(r#"{{"module": "{}", "type": "{:?}"}}"#, module_path, import_type)),
+                        default: Some(format!(
+                            r#"{{"module": "{}", "type": "{:?}"}}"#,
+                            module_path, import_type
+                        )),
                         named: vec![
                             ("version".to_string(), r#""1.0.0""#.to_string()),
                             ("name".to_string(), format!(r#""{}""#, module_path)),
                         ],
                     };
-                    Ok(Some(EffectResult::new(Box::new(exports) as Box<dyn Any + Send + Sync>)))
+                    Ok(Some(EffectResult::new(exports)))
                 } else {
                     Err(EffectError::InvalidParameters {
                         effect_name: effect.effect_name().to_string(),
@@ -363,28 +392,31 @@ pub struct EngineCoreHandler;
 
 impl Handler for EngineCoreHandler {
     fn can_handle(&self, effect_name: &str) -> bool {
-        matches!(effect_name,
+        matches!(
+            effect_name,
             "hostcall:console" | "hostcall:timer" | "hostcall:builtin"
         )
     }
 
-    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         match effect.effect_name() {
             "hostcall:console" => {
-                if let Ok(params) = effect.parameters().downcast_ref::<(String, Vec<String>)>() {
-                    let (method, args) = params;
+                if let Ok(params) = effect.parameters().downcast::<(String, Vec<String>)>() {
+                    let (method, args) = *params;
                     // EngineCore allows console operations
                     match method.as_str() {
                         "log" => println!("[ENGINE-LOG] {}", args.join(" ")),
                         "error" => eprintln!("[ENGINE-ERROR] {}", args.join(" ")),
                         "warn" => eprintln!("[ENGINE-WARN] {}", args.join(" ")),
                         "info" => println!("[ENGINE-INFO] {}", args.join(" ")),
-                        _ => return Err(EffectError::InvalidParameters {
-                            effect_name: effect.effect_name().to_string(),
-                            reason: format!("Unknown console method: {}", method),
-                        }),
+                        _ => {
+                            return Err(EffectError::InvalidParameters {
+                                effect_name: effect.effect_name().to_string(),
+                                reason: format!("Unknown console method: {}", method),
+                            });
+                        }
                     }
-                    Ok(Some(EffectResult::new(Box::new(()) as Box<dyn Any + Send + Sync>)))
+                    Ok(Some(EffectResult::new(())))
                 } else {
                     Err(EffectError::InvalidParameters {
                         effect_name: effect.effect_name().to_string(),
@@ -394,17 +426,24 @@ impl Handler for EngineCoreHandler {
             }
             "hostcall:timer" => {
                 // EngineCore allows timer operations
-                if let Ok(params) = effect.parameters().downcast_ref::<(TimerOperation, Option<u64>, Option<u64>)>() {
-                    let (operation, duration_ms, timer_id) = params;
+                if let Ok(params) = effect
+                    .parameters()
+                    .downcast::<(TimerOperation, Option<u64>, Option<u64>)>()
+                {
+                    let (operation, duration_ms, timer_id) = *params;
                     match operation {
                         TimerOperation::SetTimeout | TimerOperation::SetInterval => {
                             let new_timer_id = 100u64; // Engine-specific timer ID
-                            println!("[ENGINE] Setting timer for {}ms -> ID {}", duration_ms.unwrap_or(0), new_timer_id);
-                            Ok(Some(EffectResult::new(Box::new(Some(new_timer_id)) as Box<dyn Any + Send + Sync>)))
+                            println!(
+                                "[ENGINE] Setting timer for {}ms -> ID {}",
+                                duration_ms.unwrap_or(0),
+                                new_timer_id
+                            );
+                            Ok(Some(EffectResult::new(Some(new_timer_id))))
                         }
                         TimerOperation::ClearTimeout | TimerOperation::ClearInterval => {
                             println!("[ENGINE] Clearing timer ID {}", timer_id.unwrap_or(0));
-                            Ok(Some(EffectResult::new(Box::new(None::<u64>) as Box<dyn Any + Send + Sync>)))
+                            Ok(Some(EffectResult::new(None::<u64>)))
                         }
                     }
                 } else {
@@ -421,7 +460,13 @@ impl Handler for EngineCoreHandler {
     fn provided_capabilities(&self) -> EffectCapabilities {
         use RuntimeCapability::*;
         EffectCapabilities::runtime([
-            VmDispatch, GcInvoke, IrLowering, HeapAllocate, Console, Timer, Builtin
+            VmDispatch,
+            GcInvoke,
+            IrLowering,
+            HeapAllocate,
+            Console,
+            Timer,
+            Builtin,
         ])
     }
 
@@ -443,7 +488,7 @@ impl Handler for ComputeOnlyHandler {
         effect_name.starts_with("hostcall:")
     }
 
-    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         // ComputeOnly denies all hostcalls
         Err(EffectError::CapabilityDenied {
             required: effect.required_capabilities(),
@@ -505,8 +550,8 @@ pub fn create_handler_stack_from_profile(profile: &CapabilityProfile) -> Handler
 /// by converting hostcall tags and parameters to the new Effect types.
 pub fn create_effect_from_hostcall_tag(
     tag: &str,
-    args: &[String]
-) -> Result<Box<dyn Effect<Output = Box<dyn Any + Send + Sync>>>, EffectError> {
+    args: &[String],
+) -> Result<Box<dyn ErasedEffect>, EffectError> {
     match tag {
         tag if tag.starts_with("console:") => {
             let method = tag.strip_prefix("console:").unwrap_or("log");
@@ -527,7 +572,7 @@ pub fn create_effect_from_hostcall_tag(
                     reason: "Unknown fs operation".to_string(),
                 });
             };
-            let path = args.get(0).unwrap_or(&String::new()).clone();
+            let path = args.first().cloned().unwrap_or_default();
             let content = if matches!(operation, FsOperation::Write) {
                 args.get(1).map(|s| s.as_bytes().to_vec())
             } else {
@@ -546,10 +591,12 @@ pub fn create_effect_from_hostcall_tag(
                 "timer:setInterval" => TimerOperation::SetInterval,
                 "timer:clearTimeout" => TimerOperation::ClearTimeout,
                 "timer:clearInterval" => TimerOperation::ClearInterval,
-                _ => return Err(EffectError::InvalidParameters {
-                    effect_name: tag.to_string(),
-                    reason: "Unknown timer operation".to_string(),
-                }),
+                _ => {
+                    return Err(EffectError::InvalidParameters {
+                        effect_name: tag.to_string(),
+                        reason: "Unknown timer operation".to_string(),
+                    });
+                }
             };
             let duration_ms = args.get(0).and_then(|s| s.parse().ok());
             let timer_id = args.get(1).and_then(|s| s.parse().ok());
@@ -608,7 +655,10 @@ mod tests {
         assert!(handler.can_handle(effect.effect_name()));
         let result = handler.handle(&effect);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), EffectError::CapabilityDenied { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            EffectError::CapabilityDenied { .. }
+        ));
     }
 
     #[test]
@@ -651,13 +701,15 @@ mod tests {
 
     #[test]
     fn test_hostcall_tag_to_effect_conversion() {
-        let effect = create_effect_from_hostcall_tag("console:log", &["hello".to_string()]).unwrap();
+        let effect =
+            create_effect_from_hostcall_tag("console:log", &["hello".to_string()]).unwrap();
         assert_eq!(effect.effect_name(), "hostcall:console");
 
         let effect = create_effect_from_hostcall_tag("fs:read", &["test.txt".to_string()]).unwrap();
         assert_eq!(effect.effect_name(), "hostcall:fs:read");
 
-        let effect = create_effect_from_hostcall_tag("timer:setTimeout", &["1000".to_string()]).unwrap();
+        let effect =
+            create_effect_from_hostcall_tag("timer:setTimeout", &["1000".to_string()]).unwrap();
         assert_eq!(effect.effect_name(), "hostcall:timer");
     }
 
@@ -675,6 +727,9 @@ mod tests {
         // ComputeOnly should block before FullCaps gets to handle it
         let result = stack.handle_effect(&effect);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), EffectError::CapabilityDenied { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            EffectError::CapabilityDenied { .. }
+        ));
     }
 }

@@ -64,6 +64,47 @@ pub trait Effect: fmt::Debug + Send + Sync + 'static {
     fn parameter_type_id(&self) -> TypeId;
 }
 
+/// Object-safe view of an [`Effect`] for dynamic handler dispatch.
+///
+/// `Effect` carries an associated `Output` type, so `dyn Effect` is only
+/// usable when `Output` is pinned to a concrete type — which makes it
+/// impossible to dispatch heterogeneous effects (each has its own `Output`)
+/// through a single trait object. Handlers never need `Output`: they inspect
+/// the effect's name/parameters/capabilities and produce a type-erased
+/// [`EffectResult`]. They therefore dispatch over `&dyn ErasedEffect`, which
+/// exposes exactly the object-safe operations. The blanket impl makes every
+/// `Effect` usable as `&dyn ErasedEffect` for free.
+pub trait ErasedEffect: fmt::Debug + Send + Sync {
+    /// Unique identifier for this effect type.
+    fn effect_name(&self) -> &'static str;
+    /// Set of capabilities required to invoke this effect.
+    fn required_capabilities(&self) -> EffectCapabilities;
+    /// Execution priority for handler ordering.
+    fn priority(&self) -> EffectPriority;
+    /// Type-erased parameters for dynamic dispatch.
+    fn parameters(&self) -> Box<dyn Any + Send + Sync>;
+    /// Type identifier for effect parameters (used for dynamic casting).
+    fn parameter_type_id(&self) -> TypeId;
+}
+
+impl<E: Effect> ErasedEffect for E {
+    fn effect_name(&self) -> &'static str {
+        Effect::effect_name(self)
+    }
+    fn required_capabilities(&self) -> EffectCapabilities {
+        Effect::required_capabilities(self)
+    }
+    fn priority(&self) -> EffectPriority {
+        Effect::priority(self)
+    }
+    fn parameters(&self) -> Box<dyn Any + Send + Sync> {
+        Effect::parameters(self)
+    }
+    fn parameter_type_id(&self) -> TypeId {
+        Effect::parameter_type_id(self)
+    }
+}
+
 /// Priority levels for effect handler ordering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum EffectPriority {
@@ -165,7 +206,7 @@ pub trait Handler: fmt::Debug + Send + Sync {
     ///
     /// Returns Some(result) if the effect was handled, None if it should
     /// be passed to the next handler in the stack.
-    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError>;
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError>;
 
     /// Capabilities provided by this handler.
     fn provided_capabilities(&self) -> EffectCapabilities;
@@ -376,7 +417,10 @@ impl HandlerStack {
     }
 
     /// Execute an effect through the handler stack.
-    pub fn handle_effect(&mut self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<EffectResult, EffectError> {
+    pub fn handle_effect(
+        &mut self,
+        effect: &dyn ErasedEffect,
+    ) -> Result<EffectResult, EffectError> {
         // Check stack depth
         if self.dependency_path.len() >= self.max_depth {
             return Err(EffectError::StackOverflow);
@@ -444,7 +488,7 @@ impl HandlerStack {
     /// Update combined capabilities from all handlers.
     fn update_capabilities(&mut self) {
         let mut runtime_caps = BTreeSet::new();
-        let mut min_epoch = None;
+        let mut min_epoch: Option<crate::security_epoch::SecurityEpoch> = None;
         let mut custom_caps = BTreeSet::new();
 
         for handler in &self.handlers {
@@ -1132,7 +1176,7 @@ impl Handler for ConsoleHandler {
         )
     }
 
-    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         if let Some(console_effect) = effect
             .parameters()
             .downcast_ref::<(ConsoleLevel, Vec<String>)>()
@@ -1217,7 +1261,7 @@ impl Handler for MockFsHandler {
         matches!(effect_name, "fs:read" | "fs:write")
     }
 
-    fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
+    fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
         match effect.effect_name() {
             "fs:read" => {
                 if !self.allow_reads {
@@ -1470,7 +1514,7 @@ impl HostcallMigrationAdapter {
         &self,
         capability: &str,
         args: &[String],
-    ) -> Result<Box<dyn Effect<Output = Box<dyn Any + Send + Sync>>>, EffectError> {
+    ) -> Result<Box<dyn ErasedEffect>, EffectError> {
         match capability {
             cap if cap.starts_with("console:") => {
                 let level = match cap {
@@ -1779,7 +1823,7 @@ mod tests {
             self.handled_effects.contains(&effect_name.to_string())
         }
 
-        fn handle(&self, effect: &dyn Effect<Output = Box<dyn Any + Send + Sync>>) -> Result<Option<EffectResult>, EffectError> {
+        fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
             if self.can_handle(effect.effect_name()) {
                 let result = format!("handled by {}", self.name);
                 Ok(Some(EffectResult::new(result)))
@@ -1842,9 +1886,7 @@ mod tests {
             required_caps: EffectCapabilities::none(),
         };
 
-        let result = stack
-            .handle_effect(&effect)
-            .expect("Effect should be handled");
+        let result = stack.handle_effecteffect.expect("Effect should be handled");
         let output: String = result.downcast().expect("Result should be String");
         assert_eq!(output, "handled by test_handler");
     }
@@ -1859,7 +1901,7 @@ mod tests {
             required_caps: EffectCapabilities::none(),
         };
 
-        let result = stack.handle_effect(&effect);
+        let result = stack.handle_effecteffect;
         assert!(matches!(result, Err(EffectError::Unhandled { .. })));
     }
 
@@ -1873,7 +1915,7 @@ mod tests {
             required_caps: EffectCapabilities::runtime([RuntimeCapability::VmDispatch]),
         };
 
-        let result = stack.handle_effect(&effect);
+        let result = stack.handle_effecteffect;
         assert!(matches!(result, Err(EffectError::CapabilityDenied { .. })));
     }
 
@@ -1916,7 +1958,7 @@ mod tests {
             required_caps: EffectCapabilities::none(),
         };
 
-        let result = stack.handle_effect(&effect);
+        let result = stack.handle_effecteffect;
         assert!(matches!(result, Err(EffectError::StackOverflow)));
     }
 
@@ -2022,7 +2064,7 @@ mod tests {
             args: vec!["Error message".to_string()],
         };
 
-        let result = handler.handle(&effect).unwrap().unwrap();
+        let result = handler.handleeffect.unwrap().unwrap();
         let output: () = result.downcast().unwrap();
         assert_eq!(output, ());
 

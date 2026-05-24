@@ -15,6 +15,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use franken_engine_deterministic_trait::FixedLayout;
+
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 
 // ---------------------------------------------------------------------------
@@ -790,10 +792,18 @@ fn compute_rolling_hash(
     marker_id: u64,
     marker_hash: &ContentHash,
 ) -> ContentHash {
-    let mut preimage = Vec::new();
-    preimage.extend_from_slice(previous_rolling_hash.as_bytes());
-    preimage.extend_from_slice(&marker_id.to_be_bytes());
-    preimage.extend_from_slice(marker_hash.as_bytes());
+    // Fixed-layout canonical emit: `previous_rolling_hash || marker_id || marker_hash`.
+    // Every field is FixedLayout (32 + 8 + 32 bytes), so the layout is invariant by
+    // construction; no length prefix is needed and no length-prefix bug is possible.
+    // The marker_id encodes big-endian via the u64 FixedLayout impl, matching the
+    // prior `to_be_bytes()` byte-for-byte. Stack buffer avoids a heap allocation.
+    let mut preimage =
+        [0u8; ContentHash::LAYOUT_SIZE + u64::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE];
+    let (prev_slot, rest) = preimage.split_at_mut(ContentHash::LAYOUT_SIZE);
+    let (id_slot, marker_slot) = rest.split_at_mut(u64::LAYOUT_SIZE);
+    previous_rolling_hash.encode_fixed(prev_slot);
+    marker_id.encode_fixed(id_slot);
+    marker_hash.encode_fixed(marker_slot);
     ContentHash::compute(&preimage)
 }
 
@@ -811,10 +821,17 @@ fn sign_chain_head(
     latest_marker_hash: &ContentHash,
     rolling_chain_hash: &ContentHash,
 ) -> AuthenticityHash {
-    let mut preimage = Vec::new();
-    preimage.extend_from_slice(&marker_id.to_be_bytes());
-    preimage.extend_from_slice(latest_marker_hash.as_bytes());
-    preimage.extend_from_slice(rolling_chain_hash.as_bytes());
+    // Fixed-layout canonical emit: `marker_id || latest_marker_hash || rolling_chain_hash`.
+    // All three fields are FixedLayout (8 + 32 + 32 bytes); the signing preimage layout
+    // is invariant by construction, eliminating any length-prefix ambiguity. Byte-for-byte
+    // identical to the prior manual assembly (u64 FixedLayout is big-endian).
+    let mut preimage =
+        [0u8; u64::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE];
+    let (id_slot, rest) = preimage.split_at_mut(u64::LAYOUT_SIZE);
+    let (latest_slot, rolling_slot) = rest.split_at_mut(ContentHash::LAYOUT_SIZE);
+    marker_id.encode_fixed(id_slot);
+    latest_marker_hash.encode_fixed(latest_slot);
+    rolling_chain_hash.encode_fixed(rolling_slot);
     AuthenticityHash::compute_keyed(checkpoint_key, &preimage)
 }
 

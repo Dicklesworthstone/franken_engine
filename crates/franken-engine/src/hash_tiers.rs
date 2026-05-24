@@ -1495,3 +1495,130 @@ impl FixedLayout for AuthenticityHash {
         Ok(Self(bytes))
     }
 }
+
+// ---------------------------------------------------------------------------
+// FixedLayout canonical-emit regression tests (Track CC.3)
+// ---------------------------------------------------------------------------
+//
+// These tests lock in the invariant that migrating canonical_value emitters to
+// the FixedLayout `encode_fixed` path is *behavior-preserving*: the bytes fed to
+// the hasher are identical to the legacy manual `as_bytes()` / `to_be_bytes()`
+// assembly, while gaining a fixed, length-prefix-free layout that is correct by
+// construction. If any `encode_fixed` ever diverges from the legacy emit bytes,
+// these tests fail before a determinism/golden regression can ship.
+#[cfg(test)]
+mod fixed_layout_emit_tests {
+    use super::*;
+
+    #[test]
+    fn layout_sizes_match_byte_widths() {
+        assert_eq!(IntegrityHash::LAYOUT_SIZE, 8);
+        assert_eq!(ContentHash::LAYOUT_SIZE, 32);
+        assert_eq!(AuthenticityHash::LAYOUT_SIZE, 32);
+    }
+
+    #[test]
+    fn integrity_hash_encode_fixed_matches_legacy_be_bytes() {
+        // Legacy emit path appended `value.0.to_be_bytes()`.
+        for raw in [0u64, 1, 0xDEAD_BEEF, u64::MAX, 0x0102_0304_0506_0708] {
+            let hash = IntegrityHash(raw);
+            let mut buf = [0u8; IntegrityHash::LAYOUT_SIZE];
+            hash.encode_fixed(&mut buf);
+            assert_eq!(
+                buf,
+                raw.to_be_bytes(),
+                "encode_fixed must equal legacy to_be_bytes"
+            );
+        }
+    }
+
+    #[test]
+    fn content_hash_encode_fixed_matches_legacy_as_bytes() {
+        // Legacy emit path appended `hash.as_bytes()` (the raw 32 bytes).
+        let hash = ContentHash::compute(b"track-cc.3 content emit");
+        let mut buf = [0u8; ContentHash::LAYOUT_SIZE];
+        hash.encode_fixed(&mut buf);
+        assert_eq!(
+            &buf,
+            hash.as_bytes(),
+            "encode_fixed must equal legacy as_bytes"
+        );
+    }
+
+    #[test]
+    fn authenticity_hash_encode_fixed_matches_legacy_as_bytes() {
+        let hash = AuthenticityHash::compute_keyed(b"key", b"track-cc.3 auth emit");
+        let mut buf = [0u8; AuthenticityHash::LAYOUT_SIZE];
+        hash.encode_fixed(&mut buf);
+        assert_eq!(
+            &buf,
+            hash.as_bytes(),
+            "encode_fixed must equal legacy as_bytes"
+        );
+    }
+
+    #[test]
+    fn integrity_hash_round_trips() {
+        let hash = IntegrityHash(0x1122_3344_5566_7788);
+        let mut buf = [0u8; IntegrityHash::LAYOUT_SIZE];
+        hash.encode_fixed(&mut buf);
+        assert_eq!(IntegrityHash::decode_fixed(&buf).unwrap(), hash);
+    }
+
+    #[test]
+    fn content_hash_round_trips() {
+        let hash = ContentHash::compute(b"round trip");
+        let mut buf = [0u8; ContentHash::LAYOUT_SIZE];
+        hash.encode_fixed(&mut buf);
+        assert_eq!(ContentHash::decode_fixed(&buf).unwrap(), hash);
+    }
+
+    #[test]
+    fn authenticity_hash_round_trips() {
+        let hash = AuthenticityHash::compute_keyed(b"k", b"round trip");
+        let mut buf = [0u8; AuthenticityHash::LAYOUT_SIZE];
+        hash.encode_fixed(&mut buf);
+        assert_eq!(AuthenticityHash::decode_fixed(&buf).unwrap(), hash);
+    }
+
+    #[test]
+    fn decode_rejects_wrong_buffer_size() {
+        let err = ContentHash::decode_fixed(&[0u8; 16]).unwrap_err();
+        assert_eq!(
+            err,
+            FixedLayoutError::InvalidBufferSize {
+                expected: 32,
+                actual: 16
+            }
+        );
+        assert!(IntegrityHash::decode_fixed(&[0u8; 4]).is_err());
+        assert!(AuthenticityHash::decode_fixed(&[0u8; 31]).is_err());
+    }
+
+    #[test]
+    #[should_panic(expected = "Buffer size mismatch")]
+    fn encode_into_wrong_size_slice_panics() {
+        let mut buf = [0u8; 7]; // ContentHash needs 32
+        ContentHash::compute(b"x").encode_fixed(&mut buf);
+    }
+
+    #[test]
+    fn two_hash_concatenation_is_byte_equivalent() {
+        // Proves the migrated chain-hash emitters (causal_replay::TraceEntry::compute_hash,
+        // marker_stream::compute_rolling_hash) produce the same preimage as the legacy
+        // `extend_from_slice(a.as_bytes()); extend_from_slice(b.as_bytes())` assembly.
+        let a = ContentHash::compute(b"prev");
+        let b = ContentHash::compute(b"cur");
+
+        let mut legacy = Vec::new();
+        legacy.extend_from_slice(a.as_bytes());
+        legacy.extend_from_slice(b.as_bytes());
+
+        let mut fixed = [0u8; ContentHash::LAYOUT_SIZE * 2];
+        a.encode_fixed(&mut fixed[..ContentHash::LAYOUT_SIZE]);
+        b.encode_fixed(&mut fixed[ContentHash::LAYOUT_SIZE..]);
+
+        assert_eq!(legacy.as_slice(), &fixed[..]);
+        assert_eq!(ContentHash::compute(&legacy), ContentHash::compute(&fixed));
+    }
+}

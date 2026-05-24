@@ -11,6 +11,8 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use franken_engine_deterministic_trait::FixedLayout;
+
 use crate::engine_object_id::{EngineObjectId, IdError, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::security_epoch::SecurityEpoch;
@@ -279,10 +281,14 @@ pub struct TraceEntry {
 impl TraceEntry {
     fn compute_hash(prev_hash: &ContentHash, decision: &DecisionSnapshot) -> ContentHash {
         let decision_hash = decision.content_hash();
-        let mut buf = Vec::new();
-        buf.extend_from_slice(prev_hash.as_bytes());
-        buf.extend_from_slice(decision_hash.as_bytes());
-        ContentHash::compute(&buf)
+        // Fixed-layout canonical emit: `prev_hash || decision_hash`. Both fields are
+        // FixedLayout (32 bytes each), so the preimage layout is invariant by
+        // construction — no length prefix and no length-prefix bug is possible. The
+        // stack-allocated buffer also avoids a heap allocation on this chain path.
+        let mut preimage = [0u8; ContentHash::LAYOUT_SIZE * 2];
+        prev_hash.encode_fixed(&mut preimage[..ContentHash::LAYOUT_SIZE]);
+        decision_hash.encode_fixed(&mut preimage[ContentHash::LAYOUT_SIZE..]);
+        ContentHash::compute(&preimage)
     }
 }
 

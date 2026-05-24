@@ -8,6 +8,61 @@ For a quick overview, see the main [README.md](../../README.md).
 
 ---
 
+## RGC Signed Decision Receipt Gate (FE-CLAIM-004)
+
+`bd-cixqu.1.4` defines the canonical gate for FE-CLAIM-004 (cryptographic
+decision receipts + transparency log + TEE attestation). The `ci` mode
+cross-references every FE-CLAIM-004 sub-claim to its in-tree proof surface and
+content-addresses each artifact (sha256), failing closed if any required file
+is missing or if any sub-claim (A.1/A.2/A.3) has zero present artifacts:
+
+- **A.1** receipt-only proof handle — `proof_schema.rs` (`OptReceipt`),
+  `receipt_verifier_pipeline.rs`, `evidence_contract.rs`, and the receipt tests.
+- **A.2** transparency log — `transparency_log.rs`, `mmr_proof.rs`
+  (Merkle inclusion + consistency proofs).
+- **A.3** TEE attestation — `tee_attestation_policy.rs`, `tee_live_quote.rs`.
+
+Like the other RGC reality-check gates, `ci` does **not** invoke cargo; the
+in-tree test is run separately via rch.
+
+```bash
+# FE-CLAIM-004 signed-decision-receipt gate
+./scripts/run_rgc_signed_decision_receipt.sh ci
+
+# shape-only self-check (no filesystem mutation beyond the run dir)
+./scripts/run_rgc_signed_decision_receipt.sh selftest
+
+# deterministic replay wrapper — auto-detects the latest complete bundle,
+# or honours RGC_SIGNED_DECISION_RECEIPT_REPLAY_RUN_DIR=<dir>; fails closed
+# (exit 1) if no complete bundle exists.
+./scripts/e2e/rgc_signed_decision_receipt_replay.sh ci
+
+# in-tree cargo companion (run via rch)
+cargo test --test rgc_signed_decision_receipt
+```
+
+Test companion and surface:
+
+- `crates/franken-engine/tests/rgc_signed_decision_receipt.rs`
+- `crates/franken-engine/src/proof_schema.rs`
+- `crates/franken-engine/src/receipt_verifier_pipeline.rs`
+- `crates/franken-engine/src/transparency_log.rs`
+- `crates/franken-engine/src/tee_attestation_policy.rs`
+
+Artifacts are written under `artifacts/signed_decision_receipt/<timestamp>/`:
+
+- `run_manifest.json` — verdict + content-addressed required-surface set
+- `events.jsonl` — one event per cross-referenced artifact + per-sub-claim rollup
+- `commands.txt` — rerun command transcript
+- `trace_ids.json` — canonical trace/decision/policy ids + per-step trace ids
+- `step_logs/` — one log file per cross-reference step
+
+Replay comparison (exit codes): `0` verdict + surface match · `1` no complete
+source bundle · `2` invalid bundle / no replay manifest · `3` verdict mismatch ·
+`4` required-surface (content-address) mismatch.
+
+---
+
 ## RGC Docs and Help Surface Audit
 
 The shipped CLI contract above is guarded by an explicit docs/help audit pack so
@@ -2778,5 +2833,92 @@ the complete privacy-preserving workflow against the latest run artifacts.
 This gate follows bd-cixqu.45 logging requirements with privacy-specific carveouts:
 - ✅ Log: participation counts, privacy budget consumption, aggregate results
 - ❌ Never log: individual peer posteriors, confidence levels, node-specific risk data
+
+## Sibling-repo integration verification
+
+Track M (`bd-cixqu.13`) verifies that FrankenEngine still integrates cleanly
+with each sibling repository it reuses, while holding a pinned commit per
+sibling so a silent upstream regression cannot flow into our build. M.4
+(`bd-cixqu.13.4`) is the operator surface for that posture.
+
+**Source of truth.** The deterministic core lives in
+`crates/franken-engine/src/sibling_repo_verification.rs`. The two runbook
+scripts and the SHA-pin table mirror it; the JSON they emit conforms to
+`franken-engine.sibling-repo-health.v1`.
+
+### Per-sibling pass / skip / fail semantics
+
+Each pinned sibling resolves to exactly one verdict:
+
+- **pass** — the local `/dp/<slug>` HEAD matches the pinned SHA (or the
+  integration smoke passed against it). Non-blocking.
+- **skip** — the sibling repository is not present locally / its integration is
+  feature-gated off. Skips never block a release.
+- **fail** — the local HEAD has drifted from the pin, or the integration smoke
+  failed against the pinned SHA. **Blocking**: a single `fail` marks the fleet
+  view `DEGRADED`.
+
+### SHA-pin governance
+
+The pinned commit for every sibling lives in the table under *Sibling
+Repository SHA Pinning* in
+[`docs/CROSS_REPO_DEPENDENCY_ISOLATION_V1.md`](../CROSS_REPO_DEPENDENCY_ISOLATION_V1.md).
+The pin is the safety lever: if a sibling's `main` branch breaks our
+integration, the pin holds us at the last-passed SHA. SHAs are validated as
+`^[a-f0-9]{7,40}$`.
+
+To list current status (plain English + JSON, and a written artifact under
+`artifacts/sibling_repo_health/<ts>/`):
+
+```bash
+runbooks/scripts/sibling_status.sh          # summary + artifact
+runbooks/scripts/sibling_status.sh json     # JSON only (pipe-friendly)
+runbooks/scripts/sibling_status.sh selftest # deterministic fixture self-test
+```
+
+### How to update a pinned SHA
+
+Never hand-edit the pin table directly. Use the governed update, which (a)
+records the prior pin in the append-only audit ledger
+(`artifacts/sibling_repo_health/ledger.json`), (b) reruns the integration smoke
+against the new SHA, and (c) writes the new SHA into
+`CROSS_REPO_DEPENDENCY_ISOLATION_V1.md` **only if the smoke passes**:
+
+```bash
+# Advance the frankentui pin; smoke gates the commit.
+runbooks/scripts/sibling_pin_update.sh frankentui <new_sha>
+
+# Override the smoke command (default: ./scripts/test_standalone_build.sh ci):
+SMOKE_CMD='cargo test -p frankenengine-engine --no-default-features' \
+  runbooks/scripts/sibling_pin_update.sh frankensqlite <new_sha>
+```
+
+On smoke failure the script exits non-zero, the doc is left untouched (the pin
+holds), and the held attempt is still recorded in the ledger for triage. After
+a successful advance, commit the updated `CROSS_REPO_DEPENDENCY_ISOLATION_V1.md`
+as part of the release cut.
+
+### How to triage a cross-repo regression
+
+1. Run `runbooks/scripts/sibling_status.sh` and read the `DEGRADED` summary —
+   it names every `fail` sibling, its pinned vs local SHA, and the last-failed
+   reason from the ledger.
+2. For a drifted sibling, decide whether the upstream change is one we want.
+   If yes, run `sibling_pin_update.sh <slug> <new_sha>`; the smoke must pass
+   before the pin advances. If no, leave the pin held — that is the intended
+   protection, not a bug.
+3. Inspect the audit ledger (`artifacts/sibling_repo_health/ledger.json`) for
+   the full pin history; each entry records prior SHA, new SHA, smoke outcome,
+   whether it was committed, and a human note.
+4. The frankentui "sibling-repo health" dashboard
+   (`SiblingRepoHealthDashboard`) renders the same data as an aligned panel,
+   with a per-sibling pin-advance count drawn from the ledger.
+
+**Logging discipline (bd-cixqu.45).** Both scripts run under `set -euo
+pipefail`, capture `commands.txt` (with `RUSTFLAGS` / `CARGO_INCREMENTAL` /
+siblings root), and write the report and summary under
+`artifacts/sibling_repo_health/<ts>/`. The Rust core emits a `SiblingLogEvent`
+(`component=sibling_repo_verification`) per pin-update with a `committed` /
+`held` outcome.
 
 ## Limitations

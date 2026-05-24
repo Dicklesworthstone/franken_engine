@@ -434,6 +434,99 @@ fn encode_into_impl(buf: &mut Vec<u8>, value: &CanonicalValue) {
 }
 
 // ---------------------------------------------------------------------------
+// Buffer-reuse encoding (PERF-H4 / bd-o4cbn.5.3)
+//
+// Design: docs/PERFORMANCE_BASELINE.md, "Reusable canonical-encoding buffers".
+// ---------------------------------------------------------------------------
+
+/// Encode `value` into `buf`, reusing its existing capacity instead of
+/// allocating a fresh `Vec`.
+///
+/// `buf` is [`Vec::clear`]ed at entry, so callers may hand back a dirty buffer
+/// from a previous encode; the output never observes stale bytes. The encoder
+/// is **infallible** (oversized fields are length-clamped, never errored) and
+/// **fully reentrant**: it only appends to `buf` (`push` / `extend_from_slice`)
+/// and recurses into nested `Array` / `Map` values with the *same* buffer,
+/// never reading back what it wrote. A single buffer threaded through the
+/// recursion is therefore correct — there is no buffer-sharing hazard, so the
+/// rejected thread-local `RefCell<Vec<u8>>` design (which would panic on
+/// re-entry) is unnecessary.
+///
+/// For any `buf`, `encode_value_into(&mut buf, v)` leaves `buf` byte-identical
+/// to the `Vec` returned by [`encode_value`]`(v)`.
+pub fn encode_value_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
+    buf.clear();
+    encode_into(buf, value);
+}
+
+/// A caller-owned buffer reused across many canonical encodes.
+///
+/// Holds one growable `Vec<u8>` whose capacity persists between calls, so a
+/// hot loop that encodes (and e.g. hashes) many [`CanonicalValue`]s allocates
+/// at most a handful of times total instead of once per element.
+///
+/// The pool is single-threaded *by use*, not by type: [`encode`](Self::encode)
+/// takes `&mut self`, so the borrow checker already forbids concurrent calls on
+/// one pool — no `!Sync` marker is needed for soundness.
+#[derive(Debug, Default)]
+pub struct EncodeBufferPool {
+    buf: Vec<u8>,
+}
+
+impl EncodeBufferPool {
+    /// Create an empty pool. The first [`encode`](Self::encode) allocates.
+    pub fn new() -> Self {
+        Self { buf: Vec::new() }
+    }
+
+    /// Create a pool with `cap` bytes preallocated.
+    pub fn with_capacity(cap: usize) -> Self {
+        Self {
+            buf: Vec::with_capacity(cap),
+        }
+    }
+
+    /// Encode `value` into the owned buffer and return a borrow of the bytes.
+    /// Infallible (see [`encode_value_into`]). The returned slice is valid
+    /// until the next mutating call on this pool.
+    pub fn encode(&mut self, value: &CanonicalValue) -> &[u8] {
+        encode_value_into(&mut self.buf, value);
+        &self.buf
+    }
+
+    /// Current reusable capacity in bytes.
+    pub fn capacity(&self) -> usize {
+        self.buf.capacity()
+    }
+}
+
+impl ContentHash {
+    /// Content hash over the canonical encoding of `value`, reusing `pool`'s
+    /// buffer instead of allocating a fresh `Vec` per call.
+    ///
+    /// Equivalent to `ContentHash::compute(&encode_value(value))` but with no
+    /// per-call allocation once `pool` has warmed up. Intended for hot loops
+    /// that hash many values in sequence.
+    pub fn compute_with_pool(value: &CanonicalValue, pool: &mut EncodeBufferPool) -> Self {
+        Self::compute(pool.encode(value))
+    }
+
+    /// Content hashes for many values, reusing one buffer across the whole
+    /// iteration. Each result equals [`compute_with_pool`](Self::compute_with_pool)
+    /// on the corresponding element.
+    pub fn compute_many<'a, I>(values: I) -> Vec<Self>
+    where
+        I: IntoIterator<Item = &'a CanonicalValue>,
+    {
+        let mut pool = EncodeBufferPool::new();
+        values
+            .into_iter()
+            .map(|v| Self::compute_with_pool(v, &mut pool))
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Decoding
 // ---------------------------------------------------------------------------
 
@@ -785,6 +878,98 @@ mod tests {
 
     fn test_schema() -> SchemaHash {
         SchemaHash::from_definition(b"test-schema-v1")
+    }
+
+    // -- Buffer-reuse encoding (bd-o4cbn.5.3) --
+
+    fn sample_values() -> Vec<CanonicalValue> {
+        let mut map = BTreeMap::new();
+        map.insert("z".to_string(), CanonicalValue::U64(7));
+        map.insert("a".to_string(), CanonicalValue::String("hi".to_string()));
+        vec![
+            CanonicalValue::Null,
+            CanonicalValue::Bool(true),
+            CanonicalValue::U64(u64::MAX),
+            CanonicalValue::I64(i64::MIN),
+            CanonicalValue::Float(CanonicalF64::new(3.5)),
+            CanonicalValue::Bytes(vec![1, 2, 3]),
+            CanonicalValue::String("franken".to_string()),
+            CanonicalValue::Array(vec![CanonicalValue::U64(1), CanonicalValue::Null]),
+            CanonicalValue::Map(map),
+        ]
+    }
+
+    #[test]
+    fn encode_value_into_matches_encode_value() {
+        for v in sample_values() {
+            let mut buf = Vec::new();
+            encode_value_into(&mut buf, &v);
+            assert_eq!(buf, encode_value(&v), "mismatch for {v:?}");
+        }
+    }
+
+    #[test]
+    fn encode_value_into_clears_dirty_buffer() {
+        // A dirty, oversized buffer must yield output identical to a fresh one.
+        let v = CanonicalValue::U64(42);
+        let mut dirty = vec![0xAA; 256];
+        encode_value_into(&mut dirty, &v);
+        assert_eq!(dirty, encode_value(&v));
+    }
+
+    #[test]
+    fn encode_value_into_reentrant_deep_nesting() {
+        // Depth-100 nested Map: proves the additive single-buffer recursion has
+        // no buffer-sharing bug (the rejected RefCell design would panic here).
+        let mut v = CanonicalValue::U64(0);
+        for depth in 0..100u64 {
+            let mut m = BTreeMap::new();
+            m.insert("k".to_string(), v);
+            m.insert("d".to_string(), CanonicalValue::U64(depth));
+            v = CanonicalValue::Map(m);
+        }
+        let mut buf = Vec::new();
+        encode_value_into(&mut buf, &v);
+        assert_eq!(buf, encode_value(&v));
+        assert_eq!(decode_value(&buf).expect("decode deep nesting"), v);
+    }
+
+    #[test]
+    fn pool_reuse_matches_and_retains_capacity() {
+        let mut pool = EncodeBufferPool::new();
+        for v in &sample_values() {
+            let bytes = pool.encode(v).to_vec();
+            assert_eq!(bytes, encode_value(v));
+        }
+        // Capacity grew to hold encoded elements and persists for reuse.
+        assert!(pool.capacity() > 0);
+    }
+
+    #[test]
+    fn pool_with_capacity_preallocates() {
+        let pool = EncodeBufferPool::with_capacity(1024);
+        assert!(pool.capacity() >= 1024);
+    }
+
+    #[test]
+    fn content_hash_compute_with_pool_matches_compute() {
+        let mut pool = EncodeBufferPool::with_capacity(64);
+        for v in sample_values() {
+            let pooled = ContentHash::compute_with_pool(&v, &mut pool);
+            let direct = ContentHash::compute(&encode_value(&v));
+            assert_eq!(pooled, direct, "hash mismatch for {v:?}");
+        }
+    }
+
+    #[test]
+    fn content_hash_compute_many_matches_per_element() {
+        let values = sample_values();
+        let many = ContentHash::compute_many(&values);
+        let per: Vec<_> = values
+            .iter()
+            .map(|v| ContentHash::compute(&encode_value(v)))
+            .collect();
+        assert_eq!(many, per);
     }
 
     // -- Encode/decode round-trip for each value type --

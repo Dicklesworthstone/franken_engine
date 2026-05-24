@@ -326,6 +326,30 @@ impl SubstitutedPolicySnapshot {
         }
     }
 
+    /// Load an operator-supplied policy snapshot from a single JSON file and
+    /// validate its schema version. This is the file-system intake path the
+    /// fleet replay wrapper uses to answer "what if we had run policy X?".
+    pub fn load_from_file(path: impl AsRef<Path>) -> Result<Self, ReplayEngineError> {
+        let path = path.as_ref();
+        let bytes = fs::read(path).map_err(|err| ReplayEngineError::PolicySnapshotRead {
+            path: path.to_string_lossy().into_owned(),
+            detail: err.to_string(),
+        })?;
+        let snapshot = serde_json::from_slice::<Self>(&bytes).map_err(|err| {
+            ReplayEngineError::PolicySnapshotDecode {
+                path: path.to_string_lossy().into_owned(),
+                detail: err.to_string(),
+            }
+        })?;
+        if snapshot.schema_version != SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION {
+            return Err(ReplayEngineError::InvalidPolicySnapshotSchema {
+                expected: SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION.to_string(),
+                found: snapshot.schema_version,
+            });
+        }
+        Ok(snapshot)
+    }
+
     fn to_alternate_policy(&self) -> AlternatePolicy {
         AlternatePolicy {
             policy_id: self.policy_id.clone(),
@@ -602,6 +626,10 @@ pub enum ReplayEngineError {
     FleetTraceRead { path: String, detail: String },
     /// Fleet trace file could not be decoded.
     FleetTraceDecode { path: String, detail: String },
+    /// Substituted policy snapshot file could not be read.
+    PolicySnapshotRead { path: String, detail: String },
+    /// Substituted policy snapshot file could not be decoded.
+    PolicySnapshotDecode { path: String, detail: String },
     /// Substituted policy snapshot schema did not match the expected version.
     InvalidPolicySnapshotSchema { expected: String, found: String },
 }
@@ -636,6 +664,12 @@ impl fmt::Display for ReplayEngineError {
             }
             Self::FleetTraceDecode { path, detail } => {
                 write!(f, "cannot decode fleet trace file {path}: {detail}")
+            }
+            Self::PolicySnapshotRead { path, detail } => {
+                write!(f, "cannot read policy snapshot file {path}: {detail}")
+            }
+            Self::PolicySnapshotDecode { path, detail } => {
+                write!(f, "cannot decode policy snapshot file {path}: {detail}")
             }
             Self::InvalidPolicySnapshotSchema { expected, found } => {
                 write!(

@@ -229,6 +229,82 @@ fn substituted_policy_snapshot_serde_roundtrip() {
 }
 
 #[test]
+fn substituted_policy_snapshot_load_from_file_roundtrips() {
+    let root = unique_fleet_dir("policy-load");
+    fs::create_dir_all(&root).unwrap();
+    let snapshot = substituted_policy_snapshot(default_scope());
+    let path = root.join("policy.json");
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+
+    let loaded = SubstitutedPolicySnapshot::load_from_file(&path).expect("load policy snapshot");
+    assert_eq!(loaded, snapshot);
+}
+
+#[test]
+fn substituted_policy_snapshot_load_from_file_drives_fleet_replay() {
+    let root = unique_fleet_dir("policy-load-replay");
+    fs::create_dir_all(&root).unwrap();
+    let trace = make_node_trace("node-load", "trace-load-1", &[820_000, 610_000]);
+    write_trace(&root, "node-load/trace-load-1.json", &trace);
+    let policy_path = root.join("substituted-policy.json");
+    fs::write(
+        &policy_path,
+        serde_json::to_vec(&substituted_policy_snapshot(default_scope())).unwrap(),
+    )
+    .unwrap();
+
+    let snapshot = SubstitutedPolicySnapshot::load_from_file(&policy_path).expect("load snapshot");
+    let mut engine = default_engine();
+    let report = engine
+        .compare_fleet_trace_dir(&root, &snapshot, None)
+        .expect("fleet counterfactual report");
+    assert_eq!(report.schema_version, FLEET_COUNTERFACTUAL_SCHEMA_VERSION);
+    assert_eq!(report.substituted_policy, snapshot);
+    assert_eq!(report.trace_count, 1);
+}
+
+#[test]
+fn substituted_policy_snapshot_load_from_file_missing_path_errors() {
+    let root = unique_fleet_dir("policy-missing");
+    let path = root.join("does-not-exist.json");
+    match SubstitutedPolicySnapshot::load_from_file(&path) {
+        Err(ReplayEngineError::PolicySnapshotRead { .. }) => {}
+        other => panic!("expected PolicySnapshotRead, got {other:?}"),
+    }
+}
+
+#[test]
+fn substituted_policy_snapshot_load_from_file_rejects_bad_schema() {
+    let root = unique_fleet_dir("policy-bad-schema");
+    fs::create_dir_all(&root).unwrap();
+    let mut snapshot = substituted_policy_snapshot(default_scope());
+    snapshot.schema_version = "franken-engine.substituted-policy-snapshot.v0".to_string();
+    let path = root.join("policy.json");
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+
+    match SubstitutedPolicySnapshot::load_from_file(&path) {
+        Err(ReplayEngineError::InvalidPolicySnapshotSchema { expected, found }) => {
+            assert_eq!(expected, SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION);
+            assert_eq!(found, "franken-engine.substituted-policy-snapshot.v0");
+        }
+        other => panic!("expected InvalidPolicySnapshotSchema, got {other:?}"),
+    }
+}
+
+#[test]
+fn substituted_policy_snapshot_load_from_file_rejects_malformed_json() {
+    let root = unique_fleet_dir("policy-malformed");
+    fs::create_dir_all(&root).unwrap();
+    let path = root.join("policy.json");
+    fs::write(&path, b"{not valid json").unwrap();
+
+    match SubstitutedPolicySnapshot::load_from_file(&path) {
+        Err(ReplayEngineError::PolicySnapshotDecode { .. }) => {}
+        other => panic!("expected PolicySnapshotDecode, got {other:?}"),
+    }
+}
+
+#[test]
 fn fleet_trace_dir_replay_aggregates_by_node_and_trace() {
     let root = unique_fleet_dir("aggregate");
     fs::create_dir_all(&root).unwrap();

@@ -2234,6 +2234,48 @@ mod loop_iteration_counter_tests {
 }
 
 // ---------------------------------------------------------------------------
+// SeedTrackedField — type discipline for PERF-H2.2
+// ---------------------------------------------------------------------------
+
+/// Type wrapper for execution seed surface fields. NO DerefMut.
+/// Direct field access is internal; mutation only via mutate_<field> helpers.
+pub(crate) struct SeedTrackedField<T> {
+    value: T,
+}
+
+impl<T> SeedTrackedField<T> {
+    pub(crate) fn new(value: T) -> Self {
+        Self { value }
+    }
+}
+
+impl<T> std::ops::Deref for SeedTrackedField<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+// INTENTIONALLY NO DerefMut.
+
+// ---------------------------------------------------------------------------
+// ExecutionSeed — lazy materialization for PERF-H2.2
+// ---------------------------------------------------------------------------
+
+/// Execution seed for lazy materialization optimization.
+pub enum ExecutionSeed {
+    Lazy {
+        epoch: u64,
+        max_regs: u32,
+    },
+    Materialized {
+        registers: Vec<Value>,
+        heap: Vec<HeapObject>,
+        function_prototypes: BTreeMap<u32, ObjectId>,
+    },
+}
+
+// ---------------------------------------------------------------------------
 // InterpreterCore — shared execution engine
 // ---------------------------------------------------------------------------
 
@@ -2241,20 +2283,24 @@ mod loop_iteration_counter_tests {
 pub struct InterpreterCore {
     config: InterpreterConfig,
     hook: Option<Arc<dyn InterpreterHook>>,
-    /// Register file (flat, indexed by register number).
-    registers: Vec<Value>,
+    /// Register file (flat, indexed by register number). SEED-SURFACE.
+    registers: SeedTrackedField<Vec<Value>>,
     /// Call stack.
     call_stack: Vec<CallFrame>,
-    /// Object heap.
-    heap: Vec<HeapObject>,
+    /// Object heap. SEED-SURFACE.
+    heap: SeedTrackedField<Vec<HeapObject>>,
     /// Approximate live memory tracked for fail-closed budget enforcement.
     estimated_memory_bytes: u64,
     /// Dedicated iterator runtime state used by iterator-specific IR3 ops.
     iterators: Vec<RuntimeIteratorState>,
     /// Replay-visible iterator protocol traces keyed by runtime iterator state.
     iteration_traces: Vec<IterationTrace>,
-    /// Lazily allocated prototype objects for constructor functions.
-    function_prototypes: BTreeMap<u32, ObjectId>,
+    /// Lazily allocated prototype objects for constructor functions. SEED-SURFACE.
+    function_prototypes: SeedTrackedField<BTreeMap<u32, ObjectId>>,
+    /// Current seed epoch for lazy materialization.
+    seed_epoch: u64,
+    /// Pending lazy seeds to materialize on next write.
+    pending_lazy_seeds: Vec<std::rc::Weak<std::cell::RefCell<ExecutionSeed>>>,
     /// Current instruction pointer.
     ip: usize,
     /// Instructions executed counter.
@@ -2383,13 +2429,15 @@ impl InterpreterCore {
         Self {
             config,
             hook: None,
-            registers: vec![Value::Undefined; max_regs],
+            registers: SeedTrackedField::new(vec![Value::Undefined; max_regs]),
             call_stack: Vec::new(),
-            heap: Vec::new(),
+            heap: SeedTrackedField::new(Vec::new()),
             estimated_memory_bytes: 0,
             iterators: Vec::new(),
             iteration_traces: Vec::new(),
-            function_prototypes: BTreeMap::new(),
+            function_prototypes: SeedTrackedField::new(BTreeMap::new()),
+            seed_epoch: 0,
+            pending_lazy_seeds: Vec::new(),
             ip: 0,
             instructions_executed: 0,
             witness_events: Vec::new(),
@@ -2447,6 +2495,93 @@ impl InterpreterCore {
 
     pub fn clear_hook(&mut self) {
         self.hook = None;
+    }
+
+    // ---------------------------------------------------------------------------
+    // ExecutionSeed management for PERF-H2.2
+    // ---------------------------------------------------------------------------
+
+    pub(crate) fn capture_execution_seed(
+        &mut self,
+    ) -> std::rc::Rc<std::cell::RefCell<ExecutionSeed>> {
+        let seed = std::rc::Rc::new(std::cell::RefCell::new(ExecutionSeed::Lazy {
+            epoch: self.seed_epoch,
+            max_regs: self.config.max_registers,
+        }));
+        self.pending_lazy_seeds.push(std::rc::Rc::downgrade(&seed));
+        seed
+    }
+
+    // ---- THE ONLY WAY to mutate a seed-surface field ----
+    pub(crate) fn mutate_registers<R>(&mut self, f: impl FnOnce(&mut Vec<Value>) -> R) -> R {
+        self.before_seed_surface_write();
+        f(&mut self.registers.value)
+    }
+
+    pub(crate) fn mutate_heap<R>(&mut self, f: impl FnOnce(&mut Vec<HeapObject>) -> R) -> R {
+        self.before_seed_surface_write();
+        f(&mut self.heap.value)
+    }
+
+    pub(crate) fn mutate_function_prototypes<R>(
+        &mut self,
+        f: impl FnOnce(&mut BTreeMap<u32, ObjectId>) -> R,
+    ) -> R {
+        self.before_seed_surface_write();
+        f(&mut self.function_prototypes.value)
+    }
+
+    fn before_seed_surface_write(&mut self) {
+        self.materialize_pending_lazy_seeds_with_current_state();
+        self.seed_epoch = self.seed_epoch.wrapping_add(1);
+    }
+
+    fn materialize_pending_lazy_seeds_with_current_state(&mut self) {
+        let mut keepers = Vec::with_capacity(self.pending_lazy_seeds.len());
+        for weak in std::mem::take(&mut self.pending_lazy_seeds) {
+            let Some(strong) = weak.upgrade() else {
+                continue;
+            };
+            let mut seed = strong.borrow_mut();
+            if let ExecutionSeed::Lazy { .. } = *seed {
+                *seed = ExecutionSeed::Materialized {
+                    registers: self.registers.value.clone(),
+                    heap: self.heap.value.clone(),
+                    function_prototypes: self.function_prototypes.value.clone(),
+                };
+            }
+            keepers.push(std::rc::Rc::downgrade(&strong));
+        }
+        self.pending_lazy_seeds = keepers;
+    }
+
+    pub(crate) fn reset_execution_state_from_seed(
+        &mut self,
+        seed: &std::rc::Rc<std::cell::RefCell<ExecutionSeed>>,
+    ) {
+        let snapshot = seed.borrow();
+        match &*snapshot {
+            ExecutionSeed::Lazy { epoch, .. } if *epoch == self.seed_epoch => {
+                // No writes between capture and reset — nothing to do.
+            }
+            ExecutionSeed::Lazy { epoch, .. } => {
+                // Should be unreachable: writes are supposed to materialize.
+                panic!(
+                    "BUG: Lazy seed survived a write (seed_epoch={}, core_epoch={}). \\
+                     The before_seed_surface_write chokepoint missed a write site.",
+                    epoch, self.seed_epoch
+                );
+            }
+            ExecutionSeed::Materialized {
+                registers,
+                heap,
+                function_prototypes,
+            } => {
+                self.mutate_registers(|r| *r = registers.clone());
+                self.mutate_heap(|h| *h = heap.clone());
+                self.mutate_function_prototypes(|fp| *fp = function_prototypes.clone());
+            }
+        }
     }
 
     // ---------------------------------------------------------------------------
@@ -2667,7 +2802,7 @@ impl InterpreterCore {
             });
         }
 
-        self.registers[reg as usize] = value;
+        self.mutate_registers(|r| r[reg as usize] = value);
         self.last_pre_run_seed = None;
         self.last_post_run_seed = None;
         Ok(())
@@ -2842,12 +2977,12 @@ impl InterpreterCore {
 
     fn reset_execution_state_from_seed(&mut self, seed: &ExecutionSeed) {
         self.register_base = 0;
-        self.registers = seed.registers.clone();
+        self.mutate_registers(|r| *r = seed.registers.clone());
         self.call_stack.clear();
-        self.heap = seed.heap.clone();
+        self.mutate_heap(|h| *h = seed.heap.clone());
         self.iterators.clear();
         self.iteration_traces.clear();
-        self.function_prototypes = seed.function_prototypes.clone();
+        self.mutate_function_prototypes(|fp| *fp = seed.function_prototypes.clone());
         self.ip = 0;
         self.instructions_executed = 0;
         self.witness_events.clear();
@@ -2902,8 +3037,10 @@ impl InterpreterCore {
 
     fn prepare_module_execution(&mut self, module_specifier: &str) -> Result<(), InterpreterError> {
         let max_regs = self.config.max_registers as usize;
-        self.registers.clear();
-        self.registers.resize(max_regs, Value::Undefined);
+        self.mutate_registers(|r| {
+            r.clear();
+            r.resize(max_regs, Value::Undefined);
+        });
         self.call_stack.clear();
         self.ip = 0;
         self.register_base = 0;
@@ -3942,9 +4079,11 @@ impl InterpreterCore {
         }
 
         // perf: hot path - use into_iter to avoid cloning each register value
-        for (i, value) in saved_registers.into_iter().enumerate() {
-            self.registers[reg_start + i] = value;
-        }
+        self.mutate_registers(|r| {
+            for (i, value) in saved_registers.into_iter().enumerate() {
+                r[reg_start + i] = value;
+            }
+        });
 
         // Store the settled value in the result register
         let resolved_value = match microtask {
@@ -4491,12 +4630,14 @@ impl InterpreterCore {
             self.ip = saved_ip;
             self.register_base = saved_base;
             let req_len = saved_base + saved_regs.len();
-            if req_len > self.registers.len() {
-                self.registers.resize(req_len, Value::Undefined);
-            }
-            for (i, val) in saved_regs.into_iter().enumerate() {
-                self.registers[saved_base + i] = val;
-            }
+            self.mutate_registers(|r| {
+                if req_len > r.len() {
+                    r.resize(req_len, Value::Undefined);
+                }
+                for (i, val) in saved_regs.into_iter().enumerate() {
+                    r[saved_base + i] = val;
+                }
+            });
         }
 
         let result = self.run_loop(module);
@@ -5041,11 +5182,13 @@ impl InterpreterCore {
                         self.register_base += self.config.max_registers as usize;
 
                         let req_len = self.register_base + self.config.max_registers as usize;
-                        if req_len > self.registers.len() {
-                            self.registers.resize(req_len, Value::Undefined);
-                        } else {
-                            self.registers[self.register_base..req_len].fill(Value::Undefined);
-                        }
+                        self.mutate_registers(|r| {
+                            if req_len > r.len() {
+                                r.resize(req_len, Value::Undefined);
+                            } else {
+                                r[self.register_base..req_len].fill(Value::Undefined);
+                            }
+                        });
 
                         for (i, val) in arg_vals.into_iter().enumerate() {
                             let reg = i as u32;
@@ -5211,11 +5354,13 @@ impl InterpreterCore {
 
                             // Clear all registers in the new frame to prevent data leakage from previous calls
                             let req_len = self.register_base + self.config.max_registers as usize;
-                            if req_len > self.registers.len() {
-                                self.registers.resize(req_len, Value::Undefined);
-                            } else {
-                                self.registers[self.register_base..req_len].fill(Value::Undefined);
-                            }
+                            self.mutate_registers(|r| {
+                                if req_len > r.len() {
+                                    r.resize(req_len, Value::Undefined);
+                                } else {
+                                    r[self.register_base..req_len].fill(Value::Undefined);
+                                }
+                            });
 
                             // Copy arguments into registers for the callee.
                             for (i, val) in arg_vals.into_iter().enumerate() {
@@ -5401,11 +5546,13 @@ impl InterpreterCore {
                         self.register_base += self.config.max_registers as usize;
 
                         let req_len = self.register_base + self.config.max_registers as usize;
-                        if req_len > self.registers.len() {
-                            self.registers.resize(req_len, Value::Undefined);
-                        } else {
-                            self.registers[self.register_base..req_len].fill(Value::Undefined);
-                        }
+                        self.mutate_registers(|r| {
+                            if req_len > r.len() {
+                                r.resize(req_len, Value::Undefined);
+                            } else {
+                                r[self.register_base..req_len].fill(Value::Undefined);
+                            }
+                        });
 
                         for (i, val) in arg_vals.into_iter().enumerate() {
                             let reg = i as u32;
@@ -5513,11 +5660,13 @@ impl InterpreterCore {
 
                     self.register_base += self.config.max_registers as usize;
                     let req_len = self.register_base + self.config.max_registers as usize;
-                    if req_len > self.registers.len() {
-                        self.registers.resize(req_len, Value::Undefined);
-                    } else {
-                        self.registers[self.register_base..req_len].fill(Value::Undefined);
-                    }
+                    self.mutate_registers(|r| {
+                        if req_len > r.len() {
+                            r.resize(req_len, Value::Undefined);
+                        } else {
+                            r[self.register_base..req_len].fill(Value::Undefined);
+                        }
+                    });
 
                     for (i, val) in arg_vals.into_iter().enumerate() {
                         let reg = i as u32;
@@ -6178,11 +6327,13 @@ impl InterpreterCore {
 
                             self.register_base += self.config.max_registers as usize;
                             let req_len = self.register_base + self.config.max_registers as usize;
-                            if req_len > self.registers.len() {
-                                self.registers.resize(req_len, Value::Undefined);
-                            } else {
-                                self.registers[self.register_base..req_len].fill(Value::Undefined);
-                            }
+                            self.mutate_registers(|r| {
+                                if req_len > r.len() {
+                                    r.resize(req_len, Value::Undefined);
+                                } else {
+                                    r[self.register_base..req_len].fill(Value::Undefined);
+                                }
+                            });
 
                             // Register 0 = `this` for the constructor body.
                             self.write_reg(0, this_val)?;
@@ -13422,7 +13573,7 @@ impl InterpreterCore {
                         .properties
                         .insert("length".to_string(), Value::Int(elements.len() as i64));
 
-                    self.heap.push(result_obj);
+                    self.mutate_heap(|h| h.push(result_obj));
                     Ok(Value::Object(result_id))
                 } else {
                     Ok(Value::Undefined)
@@ -18945,10 +19096,12 @@ impl InterpreterCore {
     #[cfg(all(test, feature = "legacy_lib_tests_bd_2j7uk"))]
     fn set_register(&mut self, reg: u32, value: Value) -> Result<(), InterpreterError> {
         let idx = reg as usize;
-        if idx >= self.registers.len() {
-            self.registers.resize(idx + 1, Value::Undefined);
-        }
-        self.registers[idx] = value;
+        self.mutate_registers(|r| {
+            if idx >= r.len() {
+                r.resize(idx + 1, Value::Undefined);
+            }
+            r[idx] = value;
+        });
         Ok(())
     }
 
@@ -19197,19 +19350,20 @@ impl InterpreterCore {
             });
         }
         let actual_reg = self.register_base + reg as usize;
-        if actual_reg >= self.registers.len() {
-            // The new slots are `Value::Undefined`. `estimate_value_bytes`
-            // returns 0 for non-string values, so the resize itself does
-            // not change the running memory total.
-            let new_len = actual_reg + 1;
-            // Pre-allocate capacity to avoid O(n log n) reallocations during
-            // repeated register writes. Reserve 25% growth buffer for subsequent
-            // calls within the same function frame.
-            let growth_capacity = new_len + (new_len >> 2);
-            self.registers
-                .reserve(growth_capacity.saturating_sub(self.registers.capacity()));
-            self.registers.resize(new_len, Value::Undefined);
-        }
+        self.mutate_registers(|r| {
+            if actual_reg >= r.len() {
+                // The new slots are `Value::Undefined`. `estimate_value_bytes`
+                // returns 0 for non-string values, so the resize itself does
+                // not change the running memory total.
+                let new_len = actual_reg + 1;
+                // Pre-allocate capacity to avoid O(n log n) reallocations during
+                // repeated register writes. Reserve 25% growth buffer for subsequent
+                // calls within the same function frame.
+                let growth_capacity = new_len + (new_len >> 2);
+                r.reserve(growth_capacity.saturating_sub(r.capacity()));
+                r.resize(new_len, Value::Undefined);
+            }
+        });
         // bd-31ijt: the previous implementation called sync_estimated_memory_bytes()
         // after every register write, walking the full heap, registers, scope chain,
         // closures, call stack, iterators, and generators each time — turning every
@@ -19227,7 +19381,7 @@ impl InterpreterCore {
         if projected > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(projected, self.heap_object_count_u32()));
         }
-        self.registers[actual_reg] = value;
+        self.mutate_registers(|r| r[actual_reg] = value);
         self.estimated_memory_bytes = projected;
         Ok(())
     }
@@ -19531,7 +19685,7 @@ impl InterpreterCore {
         if requested_bytes > self.config.max_total_memory_bytes {
             return Err(self.memory_budget_error(requested_bytes, requested_heap_objects));
         }
-        self.heap.push(object);
+        self.mutate_heap(|h| h.push(object));
         self.estimated_memory_bytes = requested_bytes;
 
         // Record object allocation profiling
@@ -19742,7 +19896,7 @@ impl InterpreterCore {
             Ok(*existing)
         } else {
             let prototype = self.alloc_object_with_prototype(None)?;
-            self.function_prototypes.insert(func_idx, prototype);
+            self.mutate_function_prototypes(|fp| fp.insert(func_idx, prototype));
             Ok(prototype)
         }
     }

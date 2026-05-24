@@ -96,6 +96,150 @@ For evidence supporting this optimization, see `tests/artifacts/perf/20260520T21
 
 **Note:** Any additional cached cryptographic material must follow this same pattern: deterministic construction from constant bytes with LazyLock initialization to ensure thread-safety and replay compatibility.
 
+## Reusable canonical-encoding buffers
+
+This section is the API design for `bd-o4cbn.5.2` (PERF-H4.2). It specifies a
+buffer-reuse entry point for `deterministic_serde` so hot-loop callers can stop
+allocating a fresh `Vec<u8>` per encode. **No code lands here** — implementation
+is `bd-o4cbn.5.3` (PERF-H4.3). The signatures below are corrected against the
+*actual* code in `crates/franken-engine/src/deterministic_serde.rs`; the original
+bead draft proposed a fallible `encode_into_with_buffer(...) -> Result<(), DeterministicSerdeError>`
+plus an `estimate_size` helper, none of which match what exists.
+
+### Reality check: the encoder is already recursion-safe
+
+The internal encoder is **purely additive** on a single buffer:
+
+```rust
+// crates/franken-engine/src/deterministic_serde.rs (current code)
+pub fn encode_value(value: &CanonicalValue) -> Vec<u8> {     // allocates fresh Vec per call
+    let mut buf = Vec::new();
+    encode_into(&mut buf, value);
+    buf
+}
+fn encode_into(buf: &mut Vec<u8>, value: &CanonicalValue);   // private; buf-first; infallible
+fn encode_into_impl(buf: &mut Vec<u8>, value: &CanonicalValue);
+```
+
+`encode_into_impl` only ever calls `buf.push(..)` / `buf.extend_from_slice(..)`
+and recurses into child values **with the same `buf`** (see the `Array`/`Map`
+arms). It never random-access reads what it wrote. Therefore one buffer threaded
+through the whole recursion is already correct: a parent appends its tag/length,
+then each child appends after it. There is **no buffer-sharing-during-recursion
+hazard** to design around — the codebase solved it by construction.
+
+Consequences for this design:
+
+- The encoder is **infallible** (it clamps lengths to `u32::MAX` rather than
+  erroring), so the public buffer entry returns `()`, **not** `Result`. There is
+  no `DeterministicSerdeError`; the crate's error type is `SerdeError` and it is
+  only produced on the *decode* path.
+- No `estimate_size` is needed. Reuse amortizes allocation across calls, which is
+  the whole point; a per-call size estimate would re-introduce a walk of the tree.
+
+### 1. Public function signatures (for H4.3)
+
+```rust
+// crates/franken-engine/src/deterministic_serde.rs
+
+/// Encode `value` into `buf`, reusing its existing capacity. `buf` is
+/// `.clear()`-ed at entry, so callers may pass a dirty buffer from a prior
+/// encode. Infallible and fully reentrant: the encoder appends to the single
+/// `buf` as it recurses (it never reads back what it wrote), so nested
+/// `Object`/`Array` values share `buf` without conflict.
+pub fn encode_value_into(buf: &mut Vec<u8>, value: &CanonicalValue) {
+    buf.clear();
+    encode_into(buf, value); // existing private additive encoder
+}
+
+/// Allocating convenience entry — unchanged behavior, now defined in terms of
+/// the buffer-reuse path. Single-shot callers keep using this.
+pub fn encode_value(value: &CanonicalValue) -> Vec<u8> {
+    let mut buf = Vec::new();
+    encode_value_into(&mut buf, value);
+    buf
+}
+```
+
+Naming note: the public entry is `encode_value_into` (mirrors the existing public
+`encode_value`), **not** `encode_into_with_buffer` from the draft. `encode_into`
+is already taken by the private buf-first encoder; reusing the `encode_value*`
+prefix keeps the public surface coherent and avoids a clash.
+
+### 2. Caller-owned pool (per-loop, single-threaded)
+
+```rust
+/// A per-loop buffer the caller owns and reuses across many encodes. Holds one
+/// growable `Vec<u8>`; capacity persists across `encode` calls. Single-threaded
+/// by use, not by type: `encode(&mut self)` takes `&mut self`, so the borrow
+/// checker already forbids concurrent calls on one pool. (If a hard `!Sync`
+/// marker is ever wanted, add `PhantomData<core::cell::Cell<()>>`; it is not
+/// required for soundness here.)
+pub struct EncodeBufferPool {
+    buf: Vec<u8>,
+}
+impl EncodeBufferPool {
+    pub fn new() -> Self { Self { buf: Vec::new() } }
+    pub fn with_capacity(cap: usize) -> Self { Self { buf: Vec::with_capacity(cap) } }
+    /// Encode into the owned buffer and return a borrow of the bytes. No
+    /// `Result`: encoding is infallible.
+    pub fn encode(&mut self, value: &CanonicalValue) -> &[u8] {
+        encode_value_into(&mut self.buf, value);
+        &self.buf
+    }
+}
+```
+
+A hot loop that hashes many records holds one pool and reuses it:
+
+```rust
+let mut pool = EncodeBufferPool::with_capacity(4096);
+for record in records {
+    let bytes = pool.encode(&record.canonical_value());
+    sink.push(ContentHash::compute(bytes));
+}
+```
+
+### 3. Caller adoption (scope for H4.3)
+
+`encode_value` has ~191 call sites. The overwhelming majority are in
+`golden_vectors.rs` and other tests/one-shot paths — **leave those unchanged**
+(`encode_value` stays). Convert only the hot, repeated-encode loops to hold an
+`EncodeBufferPool` (or a plain reused `Vec<u8>` + `encode_value_into`):
+
+- `flow_envelope.rs` — `encode_value(&unsigned_view())` on the sign/verify path
+- `module_resolver.rs` — per-module digest (`ContentHash::compute(&encode_value(..))`)
+- `react_compile_operator_surface.rs`, `module_compatibility_matrix.rs` — canonical-value encodes in repeated operations
+
+### 4. Invariants
+
+- `encode_value_into` `.clear()`s `buf` at entry → output never observes stale
+  bytes from a previous encode.
+- The encoder is purely additive on `buf` (only `push`/`extend_from_slice`, no
+  random-access reads), so a single buffer threaded through recursion is correct;
+  child encodes cannot corrupt the parent's view.
+- `encode_value_into(&mut b, v)` produces byte-identical output to
+  `encode_value(v)` for any `b` (the `.clear()` makes prior contents irrelevant).
+  This is the H4.3 conformance property.
+- `EncodeBufferPool::encode` is exclusive (`&mut self`); concurrent use on one
+  pool is a compile error. Capacity persists across calls and is not cleared on
+  `Drop`.
+
+### 5. Why NOT a thread-local `RefCell<Vec<u8>>`
+
+Rejected for two reasons. (a) Reentrancy: `encode` of a nested `Map`/`Array`
+would re-enter and try to borrow the same `RefCell` again → `BorrowMutError`
+panic. (b) Cost: thread-local access is non-trivial on the hot path, and it hides
+the buffer's lifetime. An explicit caller-owned pool is faster and honest about
+ownership. The single-additive-buffer design above sidesteps the reentrancy
+problem entirely because there is exactly one buffer and recursion only appends.
+
+### Acceptance (this bead)
+
+- Design note recorded here and in the bead body. ✅
+- Recursion-safety property stated explicitly (§4, and the "Reality check"). ✅
+- No code change in this bead (implementation is `bd-o4cbn.5.3`). ✅
+
 ## Future Performance Roadmap
 
 ### Planned Optimizations (Future Releases)

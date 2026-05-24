@@ -1501,6 +1501,7 @@ fn parse_doctor_command(args: &[String]) -> Result<CommandSpec, String> {
     }
 
     let mut input: Option<PathBuf> = None;
+    let mut artifact_dir: Option<PathBuf> = None;
     let mut summary = false;
     let mut out_dir: Option<PathBuf> = None;
     let mut workload_id: Option<String> = None;
@@ -2607,7 +2608,16 @@ fn run_cli_capabilities(parse_goal: ParseGoal) -> Vec<String> {
 }
 
 fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
-    let input = load_json_file::<RuntimeDiagnosticsCliInput>(&args.input)?;
+    // The doctor consumes either a bare runtime_input.json (`--input`) or a full
+    // artifact bundle directory (`--artifact-dir <dir>`) emitted under
+    // artifacts/<gate>/<ts>/, which carries run_manifest.json, events.jsonl,
+    // step_logs/, and (by convention) the runtime_input.json that drove the run.
+    let input_path = resolve_doctor_input_path(&args)?;
+    let input = load_json_file::<RuntimeDiagnosticsCliInput>(&input_path)?;
+    let artifact_bundle = args
+        .artifact_dir
+        .as_ref()
+        .map(|dir| inspect_artifact_bundle(dir, &input_path));
     let redaction_policy = if args.redact_keys.is_empty() {
         SupportBundleRedactionPolicy::default()
     } else {
@@ -2675,7 +2685,7 @@ fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
         trace_id: input.trace_id.clone(),
         decision_id: input.decision_id.clone(),
         policy_id: input.policy_id.clone(),
-        input_path: args.input.display().to_string(),
+        input_path: input_path.display().to_string(),
         workload_id: onboarding_scorecard.workload_id.clone(),
         package_name: onboarding_scorecard.package_name.clone(),
         target_platforms: onboarding_scorecard.target_platforms.clone(),
@@ -2693,6 +2703,7 @@ fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
         preflight,
         onboarding_scorecard,
         rollout_decision,
+        artifact_bundle,
         observability_mode: if args.out_dir.is_some() {
             support_bundle_export_observability_mode()
         } else {
@@ -2732,6 +2743,238 @@ fn execute_doctor(args: DoctorArgs) -> Result<i32, String> {
     }
 
     if blocked { Ok(25) } else { Ok(0) }
+}
+
+/// Resolve the runtime input the doctor should analyze. An explicit `--input`
+/// wins; otherwise the conventional `runtime_input.json` inside the artifact
+/// bundle directory is used.
+fn resolve_doctor_input_path(args: &DoctorArgs) -> Result<PathBuf, String> {
+    if let Some(path) = &args.input {
+        return Ok(path.clone());
+    }
+    if let Some(dir) = &args.artifact_dir {
+        let candidate = dir.join("runtime_input.json");
+        if candidate.is_file() {
+            return Ok(candidate);
+        }
+        return Err(format!(
+            "artifact bundle `{}` has no runtime_input.json; pass --input <runtime_input.json> explicitly",
+            dir.display()
+        ));
+    }
+    Err("doctor requires --input <runtime_input.json> or --artifact-dir <bundle>".to_string())
+}
+
+/// Inspect a full artifact bundle directory (`artifacts/<gate>/<ts>/`) and report
+/// on the presence/validity of `run_manifest.json`, `events.jsonl`, and
+/// `step_logs/`, plus a categorized inventory of every file the bundle carries.
+fn inspect_artifact_bundle(bundle_dir: &Path, resolved_input: &Path) -> DoctorArtifactBundleStatus {
+    let mut diagnostics = Vec::new();
+
+    let manifest_path = bundle_dir.join("run_manifest.json");
+    let events_path = bundle_dir.join("events.jsonl");
+    let step_logs_dir = bundle_dir.join("step_logs");
+
+    // run_manifest.json: must exist, parse as JSON, and (ideally) carry a schema_version.
+    let manifest_present = manifest_path.is_file();
+    let mut manifest_valid_json = false;
+    let mut manifest_schema_version = None;
+    if manifest_present {
+        match fs::read_to_string(&manifest_path) {
+            Ok(content) => match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(value) => {
+                    manifest_valid_json = true;
+                    manifest_schema_version = value
+                        .get("schema_version")
+                        .and_then(|field| field.as_str())
+                        .map(|version| version.to_string());
+                    if manifest_schema_version.is_none() {
+                        diagnostics.push(DoctorArtifactBundleDiagnostic {
+                            severity: "warning".to_string(),
+                            code: "manifest_no_schema_version".to_string(),
+                            path: manifest_path.display().to_string(),
+                            message: "run_manifest.json has no schema_version field".to_string(),
+                        });
+                    }
+                }
+                Err(error) => diagnostics.push(DoctorArtifactBundleDiagnostic {
+                    severity: "critical".to_string(),
+                    code: "manifest_invalid_json".to_string(),
+                    path: manifest_path.display().to_string(),
+                    message: format!("run_manifest.json is not valid JSON: {error}"),
+                }),
+            },
+            Err(error) => diagnostics.push(DoctorArtifactBundleDiagnostic {
+                severity: "critical".to_string(),
+                code: "manifest_unreadable".to_string(),
+                path: manifest_path.display().to_string(),
+                message: format!("failed to read run_manifest.json: {error}"),
+            }),
+        }
+    } else {
+        diagnostics.push(DoctorArtifactBundleDiagnostic {
+            severity: "critical".to_string(),
+            code: "manifest_missing".to_string(),
+            path: manifest_path.display().to_string(),
+            message: "run_manifest.json missing from artifact bundle".to_string(),
+        });
+    }
+
+    // events.jsonl: must exist and every non-empty line must parse as JSON.
+    let events_present = events_path.is_file();
+    let mut events_valid_jsonl = false;
+    let mut event_count = 0usize;
+    if events_present {
+        match fs::read_to_string(&events_path) {
+            Ok(content) => {
+                let mut all_valid = true;
+                for (index, line) in content.lines().enumerate() {
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_str::<serde_json::Value>(line) {
+                        Ok(_) => event_count += 1,
+                        Err(error) => {
+                            all_valid = false;
+                            diagnostics.push(DoctorArtifactBundleDiagnostic {
+                                severity: "warning".to_string(),
+                                code: "events_invalid_line".to_string(),
+                                path: events_path.display().to_string(),
+                                message: format!(
+                                    "events.jsonl line {} is not valid JSON: {error}",
+                                    index + 1
+                                ),
+                            });
+                        }
+                    }
+                }
+                events_valid_jsonl = all_valid;
+            }
+            Err(error) => diagnostics.push(DoctorArtifactBundleDiagnostic {
+                severity: "critical".to_string(),
+                code: "events_unreadable".to_string(),
+                path: events_path.display().to_string(),
+                message: format!("failed to read events.jsonl: {error}"),
+            }),
+        }
+    } else {
+        diagnostics.push(DoctorArtifactBundleDiagnostic {
+            severity: "warning".to_string(),
+            code: "events_missing".to_string(),
+            path: events_path.display().to_string(),
+            message: "events.jsonl missing from artifact bundle".to_string(),
+        });
+    }
+
+    // step_logs/: directory of per-step capture; present + non-empty is ideal.
+    let step_logs_present = step_logs_dir.is_dir();
+    let mut step_log_count = 0usize;
+    if step_logs_present {
+        let mut step_files = Vec::new();
+        collect_bundle_files(&step_logs_dir, &step_logs_dir, &mut step_files);
+        step_log_count = step_files.len();
+        if step_log_count == 0 {
+            diagnostics.push(DoctorArtifactBundleDiagnostic {
+                severity: "info".to_string(),
+                code: "step_logs_empty".to_string(),
+                path: step_logs_dir.display().to_string(),
+                message: "step_logs/ directory is present but empty".to_string(),
+            });
+        }
+    } else {
+        diagnostics.push(DoctorArtifactBundleDiagnostic {
+            severity: "warning".to_string(),
+            code: "step_logs_missing".to_string(),
+            path: step_logs_dir.display().to_string(),
+            message: "step_logs/ directory missing from artifact bundle".to_string(),
+        });
+    }
+
+    // Categorized inventory of every file in the bundle.
+    let mut all_files = Vec::new();
+    collect_bundle_files(bundle_dir, bundle_dir, &mut all_files);
+    if all_files.is_empty() {
+        diagnostics.push(DoctorArtifactBundleDiagnostic {
+            severity: "critical".to_string(),
+            code: "bundle_empty".to_string(),
+            path: bundle_dir.display().to_string(),
+            message: "artifact bundle directory contains no files".to_string(),
+        });
+    }
+    let mut artifact_paths: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for relative in &all_files {
+        artifact_paths
+            .entry(categorize_bundle_path(relative).to_string())
+            .or_default()
+            .push(relative.clone());
+    }
+    for paths in artifact_paths.values_mut() {
+        paths.sort();
+        paths.dedup();
+    }
+
+    let complete = manifest_present
+        && manifest_valid_json
+        && events_present
+        && events_valid_jsonl
+        && step_logs_present;
+
+    DoctorArtifactBundleStatus {
+        bundle_dir: bundle_dir.display().to_string(),
+        input_path: Some(resolved_input.display().to_string()),
+        manifest_path: manifest_path.display().to_string(),
+        manifest_present,
+        manifest_valid_json,
+        manifest_schema_version,
+        artifact_paths,
+        events_path: events_path.display().to_string(),
+        events_present,
+        events_valid_jsonl,
+        event_count,
+        step_logs_dir: step_logs_dir.display().to_string(),
+        step_logs_present,
+        step_log_count,
+        complete,
+        diagnostics,
+    }
+}
+
+/// Recursively collect files under `dir`, returning each path relative to `root`
+/// with forward-slash separators for deterministic, platform-stable categorization.
+fn collect_bundle_files(root: &Path, dir: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    for path in paths {
+        if path.is_dir() {
+            collect_bundle_files(root, &path, out);
+        } else if let Ok(relative) = path.strip_prefix(root) {
+            out.push(relative.to_string_lossy().replace('\\', "/"));
+        }
+    }
+}
+
+/// Classify a bundle-relative path into a coarse artifact category for the inventory.
+fn categorize_bundle_path(relative: &str) -> &'static str {
+    if relative == "run_manifest.json" {
+        "manifest"
+    } else if relative == "events.jsonl" {
+        "events"
+    } else if relative == "runtime_input.json" {
+        "runtime_input"
+    } else if relative.starts_with("step_logs/") {
+        "step_logs"
+    } else if relative.ends_with(".jsonl") {
+        "event_streams"
+    } else if relative.ends_with(".json") {
+        "reports"
+    } else if relative.ends_with(".md") {
+        "summaries"
+    } else {
+        "other"
+    }
 }
 
 fn execute_verify(args: VerifyArgs) -> Result<i32, String> {
@@ -5820,6 +6063,40 @@ fn render_doctor_summary(output: &DoctorCommandOutput) -> String {
         lines.push(format!("  - {command}"));
     }
 
+    if let Some(bundle) = &output.artifact_bundle {
+        lines.push(format!("artifact_bundle: {}", bundle.bundle_dir));
+        lines.push(format!(
+            "  manifest: present={} valid_json={} schema_version={}",
+            bundle.manifest_present,
+            bundle.manifest_valid_json,
+            bundle
+                .manifest_schema_version
+                .as_deref()
+                .unwrap_or("<none>")
+        ));
+        lines.push(format!(
+            "  events: present={} valid_jsonl={} count={}",
+            bundle.events_present, bundle.events_valid_jsonl, bundle.event_count
+        ));
+        lines.push(format!(
+            "  step_logs: present={} count={}",
+            bundle.step_logs_present, bundle.step_log_count
+        ));
+        lines.push(format!("  complete: {}", bundle.complete));
+        for (category, paths) in &bundle.artifact_paths {
+            lines.push(format!("  {} ({}):", category, paths.len()));
+            for path in paths {
+                lines.push(format!("    - {path}"));
+            }
+        }
+        for diagnostic in &bundle.diagnostics {
+            lines.push(format!(
+                "  [{}] {} ({}): {}",
+                diagnostic.severity, diagnostic.code, diagnostic.path, diagnostic.message
+            ));
+        }
+    }
+
     lines.join("\n")
 }
 
@@ -5832,7 +6109,8 @@ fn usage() -> String {
         "  frankenctl compile --input <source.js> --out <artifact.json> [--goal script|module]",
         "      [--trace-id <id>] [--decision-id <id>] [--policy-id <id>]",
         "  frankenctl run --input <source.js> --extension-id <id> [--goal script|module] [--out <report.json>]",
-        "  frankenctl doctor --input <runtime_input.json> [--summary] [--out-dir <path>]",
+        "  frankenctl doctor (--input <runtime_input.json> | --artifact-dir <artifacts/<gate>/<ts>>)",
+        "      [--summary] [--out-dir <path>]",
         "      [--workload-id <id>] [--package-name <name>] [--target-platform <value>]...",
         "      [--signals <signals.json>] [--advisories <signals_or_bundle.json>]",
         "      [--scenario-report <compatibility_scenario_report.json>] [--platform-signals <signals.json>]",
@@ -5966,7 +6244,8 @@ fn run_usage() -> String {
 fn doctor_usage() -> String {
     [
         "doctor usage:",
-        "  frankenctl doctor --input <runtime_input.json> [--summary] [--out-dir <path>]",
+        "  frankenctl doctor (--input <runtime_input.json> | --artifact-dir <artifacts/<gate>/<ts>>)",
+        "      [--summary] [--out-dir <path>]",
         "      [--workload-id <id>] [--package-name <name>] [--target-platform <value>]...",
         "      [--signals <signals.json>] [--advisories <signals_or_bundle.json>]",
         "      [--scenario-report <compatibility_scenario_report.json>] [--platform-signals <signals.json>]",
@@ -7119,7 +7398,8 @@ mod tests {
         let parsed = parse_command(&args).expect("doctor command should parse");
         match parsed {
             CommandSpec::Doctor(spec) => {
-                assert_eq!(spec.input, PathBuf::from("runtime_input.json"));
+                assert_eq!(spec.input, Some(PathBuf::from("runtime_input.json")));
+                assert_eq!(spec.artifact_dir, None);
                 assert!(spec.summary);
                 assert_eq!(spec.out_dir, Some(PathBuf::from("artifacts/doctor")));
                 assert_eq!(spec.workload_id.as_deref(), Some("demo-workload"));
@@ -7133,6 +7413,133 @@ mod tests {
             }
             other => panic!("expected doctor command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn parse_doctor_command_accepts_artifact_dir() {
+        let args = vec![
+            "doctor".to_string(),
+            "--artifact-dir".to_string(),
+            "artifacts/gate/2026-05-24T00-00-00Z".to_string(),
+            "--summary".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("doctor command should parse with --artifact-dir");
+        match parsed {
+            CommandSpec::Doctor(spec) => {
+                assert_eq!(spec.input, None);
+                assert_eq!(
+                    spec.artifact_dir,
+                    Some(PathBuf::from("artifacts/gate/2026-05-24T00-00-00Z"))
+                );
+                assert!(spec.summary);
+            }
+            other => panic!("expected doctor command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_doctor_command_requires_input_or_artifact_dir() {
+        let args = vec!["doctor".to_string(), "--summary".to_string()];
+        let error = parse_command(&args).expect_err("doctor without input or bundle must fail");
+        assert!(
+            error.contains("--input") && error.contains("--artifact-dir"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn resolve_doctor_input_path_prefers_explicit_input() {
+        let args = DoctorArgs {
+            input: Some(PathBuf::from("explicit/runtime_input.json")),
+            artifact_dir: Some(PathBuf::from("artifacts/gate/ts")),
+            summary: false,
+            out_dir: None,
+            workload_id: None,
+            package_name: None,
+            target_platforms: Vec::new(),
+            signals: None,
+            advisories: None,
+            scenario_report: None,
+            platform_signals: None,
+            filter: EvidenceExportFilter::default(),
+            redact_keys: Vec::new(),
+        };
+        let resolved = resolve_doctor_input_path(&args).expect("explicit input resolves");
+        assert_eq!(resolved, PathBuf::from("explicit/runtime_input.json"));
+    }
+
+    #[test]
+    fn inspect_artifact_bundle_reports_complete_bundle() {
+        let bundle_dir =
+            std::env::temp_dir().join(format!("frankenctl-bundle-complete-{}", current_unix_ns()));
+        fs::create_dir_all(bundle_dir.join("step_logs")).expect("create bundle dirs");
+        fs::write(
+            bundle_dir.join("run_manifest.json"),
+            "{\"schema_version\":\"franken-engine.run-manifest.v1\"}",
+        )
+        .expect("write manifest");
+        fs::write(
+            bundle_dir.join("events.jsonl"),
+            "{\"event\":\"start\"}\n{\"event\":\"finish\"}\n",
+        )
+        .expect("write events");
+        fs::write(bundle_dir.join("runtime_input.json"), "{}").expect("write input");
+        fs::write(bundle_dir.join("step_logs/step_0.log"), "ok").expect("write step log");
+
+        let input_path = bundle_dir.join("runtime_input.json");
+        let status = inspect_artifact_bundle(&bundle_dir, &input_path);
+
+        assert!(status.manifest_present);
+        assert!(status.manifest_valid_json);
+        assert_eq!(
+            status.manifest_schema_version.as_deref(),
+            Some("franken-engine.run-manifest.v1")
+        );
+        assert!(status.events_present);
+        assert!(status.events_valid_jsonl);
+        assert_eq!(status.event_count, 2);
+        assert!(status.step_logs_present);
+        assert_eq!(status.step_log_count, 1);
+        assert!(status.complete);
+        assert!(
+            status.diagnostics.is_empty(),
+            "expected no diagnostics, got {:?}",
+            status.diagnostics
+        );
+        assert!(status.artifact_paths.contains_key("manifest"));
+        assert!(status.artifact_paths.contains_key("events"));
+        assert!(status.artifact_paths.contains_key("step_logs"));
+        assert!(status.artifact_paths.contains_key("runtime_input"));
+
+        fs::remove_dir_all(&bundle_dir).ok();
+    }
+
+    #[test]
+    fn inspect_artifact_bundle_flags_missing_and_invalid_artifacts() {
+        let bundle_dir =
+            std::env::temp_dir().join(format!("frankenctl-bundle-broken-{}", current_unix_ns()));
+        fs::create_dir_all(&bundle_dir).expect("create bundle dir");
+        // Invalid manifest JSON, one malformed events line, no step_logs/ directory.
+        fs::write(bundle_dir.join("run_manifest.json"), "{not json").expect("write manifest");
+        fs::write(bundle_dir.join("events.jsonl"), "{\"ok\":true}\nnot-json\n")
+            .expect("write events");
+
+        let input_path = bundle_dir.join("runtime_input.json");
+        let status = inspect_artifact_bundle(&bundle_dir, &input_path);
+
+        assert!(status.manifest_present);
+        assert!(!status.manifest_valid_json);
+        assert!(status.events_present);
+        assert!(!status.events_valid_jsonl);
+        assert_eq!(status.event_count, 1);
+        assert!(!status.step_logs_present);
+        assert!(!status.complete);
+        let codes: Vec<&str> = status.diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert!(codes.contains(&"manifest_invalid_json"), "codes: {codes:?}");
+        assert!(codes.contains(&"events_invalid_line"), "codes: {codes:?}");
+        assert!(codes.contains(&"step_logs_missing"), "codes: {codes:?}");
+
+        fs::remove_dir_all(&bundle_dir).ok();
     }
 
     #[test]

@@ -1,0 +1,102 @@
+name: Perf Regression Gate
+
+# PERF-INFRA.6 (bd-o4cbn.8.6): run the hot_paths Criterion suite on PRs that
+# touch perf-sensitive code and fail the job if any sub-bench regresses past
+# 5% versus the most recent frozen baseline under
+# tests/artifacts/perf/baselines/<git-sha>/.
+
+on:
+  pull_request:
+    paths:
+      - 'crates/franken-engine/src/baseline_interpreter.rs'
+      - 'crates/franken-engine/src/lowering_pipeline.rs'
+      - 'crates/franken-engine/src/parser_arena.rs'
+      - 'crates/franken-engine/src/evidence_ledger.rs'
+      - 'crates/franken-engine/src/deterministic_serde.rs'
+      - 'crates/franken-engine/src/engine_object_id.rs'
+      - 'crates/franken-engine/src/hash_tiers.rs'
+      - 'crates/franken-engine/benches/**'
+      - '**/*.bench.rs'
+      - 'scripts/perf/regression_gate.sh'
+      - '.github/workflows/perf_regression_gate.yml'
+  workflow_dispatch:
+
+jobs:
+  perf-regression-gate:
+    name: hot_paths regression gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+      # Canonical bench build flags (keep in sync with the local profiling pass).
+      CARGO_INCREMENTAL: '0'
+      RUSTFLAGS: '-C linker=cc'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: perf-regression-gate-frankenengine-engine
+
+      - name: Ensure jq present
+        run: jq --version || (sudo apt-get update && sudo apt-get install -y jq)
+
+      - name: Build bench (canonical flags)
+        run: cargo bench --bench hot_paths --no-run
+
+      - name: Run hot_paths benchmark
+        run: cargo bench --bench hot_paths
+
+      - name: Resolve latest frozen baseline
+        id: baseline
+        run: |
+          set -euo pipefail
+          latest=""
+          latest_ts=""
+          for d in tests/artifacts/perf/baselines/*/; do
+            [ -f "$d/baseline_summary.json" ] || continue
+            ts="$(jq -r '.timestamp // empty' "$d/baseline_summary.json" 2>/dev/null || true)"
+            if [ -z "$ts" ]; then ts="$(basename "$d")"; fi
+            if [ -z "$latest_ts" ] || [ "$ts" \> "$latest_ts" ]; then
+              latest_ts="$ts"
+              latest="$d"
+            fi
+          done
+          if [ -z "$latest" ]; then
+            echo "::notice::No frozen baseline found under tests/artifacts/perf/baselines/; skipping regression gate."
+            echo "have_baseline=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Selected baseline: $latest (ts=$latest_ts)"
+            echo "have_baseline=true" >> "$GITHUB_OUTPUT"
+            echo "baseline_dir=$latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run regression gate
+        if: steps.baseline.outputs.have_baseline == 'true'
+        run: |
+          set -euo pipefail
+          ./scripts/perf/regression_gate.sh \
+            --baseline "${{ steps.baseline.outputs.baseline_dir }}" \
+            --current target/criterion/real_runtime_hot_paths/ \
+            --threshold-pct 5 \
+            --out tests/artifacts/perf/regressions/ci-${{ github.run_id }}/
+
+      - name: Upload perf artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-regression-bundle-${{ github.run_id }}
+          path: |
+            tests/artifacts/perf/regressions/ci-${{ github.run_id }}/
+            target/criterion/real_runtime_hot_paths/
+          if-no-files-found: warn
+          retention-days: 14

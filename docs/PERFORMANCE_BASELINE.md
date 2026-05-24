@@ -280,6 +280,72 @@ node scripts/run_baseline_benchmarks.js
 
 All performance claims are backed by reproducible artifacts in `artifacts/performance_baselines/`.
 
+## Continuous Perf-Regression Gate (CI)
+
+The `hot_paths` Criterion suite (`crates/franken-engine/benches/hot_paths.rs`)
+is guarded in CI by `.github/workflows/perf_regression_gate.yml`
+(PERF-INFRA.6).
+
+**Trigger.** The workflow runs on pull requests that touch perf-sensitive
+sources — `baseline_interpreter.rs`, `lowering_pipeline.rs`, `parser_arena.rs`,
+`evidence_ledger.rs`, `deterministic_serde.rs`, `engine_object_id.rs`,
+`hash_tiers.rs` — or anything under `crates/franken-engine/benches/`, any
+`*.bench.rs`, or the gate script itself. It is also dispatchable manually.
+
+**What it does.**
+
+1. Builds and runs `cargo bench --bench hot_paths` (canonical flags:
+   `CARGO_INCREMENTAL=0`, `RUSTFLAGS=-C linker=cc`).
+2. Resolves the most recent frozen baseline under
+   `tests/artifacts/perf/baselines/<git-sha>/` (newest `baseline_summary.json`
+   timestamp).
+3. Runs `scripts/perf/regression_gate.sh` comparing the current run against
+   that baseline at a **5% threshold** per sub-bench. Any sub-bench whose
+   mean exceeds the baseline by more than 5% fails the job.
+4. On failure, uploads the regression bundle (`regressions.jsonl`,
+   `regression_report.md`) plus the raw Criterion output as a CI artifact.
+
+If no baseline has been frozen yet, the gate step is skipped with a notice
+(nothing to compare against) and the job stays green.
+
+### Freezing a baseline
+
+Run the bench locally on a clean checkout, then freeze:
+
+```bash
+cargo bench --bench hot_paths
+scripts/perf/freeze_baseline.sh "$(git rev-parse HEAD)"
+git add tests/artifacts/perf/baselines/<git-sha>/
+```
+
+Retention policy: keep the last 12 baselines plus the current claim-matrix
+anchor (see `tests/artifacts/perf/README.md`).
+
+### Local regression check
+
+The same gate the CI uses runs locally:
+
+```bash
+scripts/perf/regression_gate.sh \
+    --baseline tests/artifacts/perf/baselines/<git-sha>/ \
+    --current  target/criterion/real_runtime_hot_paths/ \
+    --threshold-pct 5 \
+    --out tests/artifacts/perf/regressions/<ts>/
+```
+
+Exit 0 = no regression, exit 1 = regression, exit 2 = usage/env error.
+
+### Wall-clock A/B comparison
+
+For cross-version wall-clock comparison of two built binaries:
+
+```bash
+scripts/perf/hyperfine_ab.sh <bin_a> <bin_b> <invocation_args...>
+```
+
+Emits `a_vs_b.json` and a `comparison.md` (mean / std-dev / 95% CI per binary
+plus relative speedup) under `tests/artifacts/perf/hyperfine/<ts>/`.
+
 ## Honest Performance Statement
 
 **FrankenEngine is intentionally slower than mainstream JavaScript engines.** 

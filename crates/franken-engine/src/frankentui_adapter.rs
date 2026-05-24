@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::capability_witness::{CapabilityEscrowReceiptRecord, ProofKind, WitnessReplayJoinRow};
+use crate::persistence_homology::{PersistenceDiagram, WassersteinDistance, wasserstein_distance};
 use crate::slot_registry::{
     PromotionStatus, PromotionTransition, ReplacementProgressEvent, ReplacementProgressSnapshot,
     SlotEntry, SlotRegistry,
@@ -25,6 +26,7 @@ pub enum FrankentuiViewPayload {
     CapabilityDeltaDashboard(CapabilityDeltaDashboardView),
     ReplacementProgressDashboard(ReplacementProgressDashboardView),
     ProofSpecializationLineageDashboard(ProofSpecializationLineageDashboardView),
+    SimilarIncidents(SimilarIncidentsView),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +40,7 @@ pub enum AdapterStream {
     CapabilityDeltaDashboard,
     ReplacementProgressDashboard,
     ProofSpecializationLineageDashboard,
+    SimilarIncidents,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2124,6 +2127,197 @@ pub struct CapabilityDeltaReplayJoinPartial {
     pub event_subscription_cursor: Option<String>,
     pub high_escrow_alert_threshold: Option<u64>,
     pub pending_override_alert_threshold: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Similar Incidents View (NN.3)
+// ---------------------------------------------------------------------------
+
+/// View for displaying similar historical incidents using Wasserstein distance.
+/// Operator-facing panel that surfaces the top-K most similar incidents
+/// by persistence homology analysis.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimilarIncidentsView {
+    /// ID of the reference incident for similarity comparison.
+    pub reference_incident_id: String,
+    /// Reference incident scenario name.
+    pub reference_scenario: String,
+    /// List of similar incidents ordered by similarity (closest first).
+    pub similar_incidents: Vec<SimilarIncidentEntry>,
+    /// Analysis metadata including computation details.
+    pub analysis_metadata: SimilarityAnalysisMetadata,
+    /// Timestamp when this analysis was performed.
+    pub generated_at_unix_ms: u64,
+}
+
+/// A single similar incident entry with distance metrics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimilarIncidentEntry {
+    /// ID of the similar incident.
+    pub incident_id: String,
+    /// Scenario name of the similar incident.
+    pub scenario_name: String,
+    /// Wasserstein distance to the reference incident (lower = more similar).
+    pub wasserstein_distance_millionths: u64,
+    /// Persistence homology analysis score.
+    pub similarity_score_millionths: u64,
+    /// Common topological features between incidents.
+    pub shared_features_count: u32,
+    /// Reference to the incident replay bundle.
+    pub replay_bundle_ref: String,
+    /// Timestamp of the similar incident.
+    pub incident_timestamp_unix_ms: u64,
+}
+
+/// Metadata about the similarity analysis computation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimilarityAnalysisMetadata {
+    /// Number of candidate incidents analyzed.
+    pub candidates_analyzed: u32,
+    /// Total incidents in the historical corpus.
+    pub corpus_size: u32,
+    /// Distance metric order used (1 = L1, 2 = L2).
+    pub distance_order: u8,
+    /// Analysis algorithm version.
+    pub algorithm_version: String,
+    /// Computation time in milliseconds.
+    pub computation_time_ms: u64,
+}
+
+impl SimilarIncidentsView {
+    /// Create a new similar incidents view.
+    pub fn new(
+        reference_incident_id: String,
+        reference_scenario: String,
+        similar_incidents: Vec<SimilarIncidentEntry>,
+        analysis_metadata: SimilarityAnalysisMetadata,
+        generated_at_unix_ms: u64,
+    ) -> Self {
+        Self {
+            reference_incident_id: normalize_non_empty(reference_incident_id),
+            reference_scenario: normalize_non_empty(reference_scenario),
+            similar_incidents,
+            analysis_metadata,
+            generated_at_unix_ms,
+        }
+    }
+
+    /// Get the top K most similar incidents.
+    pub fn top_k_similar(&self, k: usize) -> &[SimilarIncidentEntry] {
+        let limit = k.min(self.similar_incidents.len());
+        &self.similar_incidents[..limit]
+    }
+
+    /// Check if any highly similar incidents exist (below threshold).
+    pub fn has_highly_similar_incidents(&self, threshold_millionths: u64) -> bool {
+        self.similar_incidents
+            .iter()
+            .any(|incident| incident.wasserstein_distance_millionths < threshold_millionths)
+    }
+}
+
+/// Find similar incidents using Wasserstein distance comparison of persistence diagrams.
+/// Returns incidents ordered by similarity (most similar first).
+pub fn find_similar_incidents(
+    reference_diagram: &PersistenceDiagram,
+    reference_incident_id: String,
+    reference_scenario: String,
+    incident_corpus: &[(String, String, PersistenceDiagram)], // (id, scenario, diagram)
+    max_results: usize,
+    distance_order: u8,
+) -> Result<SimilarIncidentsView, crate::persistence_homology::PersistenceError> {
+    let start_time = std::time::Instant::now();
+    let mut candidates = Vec::new();
+
+    // Compute Wasserstein distances for all incidents in corpus
+    for (incident_id, scenario_name, diagram) in incident_corpus {
+        if incident_id == &reference_incident_id {
+            continue; // Skip self-comparison
+        }
+
+        let distance = wasserstein_distance(reference_diagram, diagram, distance_order)?;
+        let similarity_score = compute_similarity_score(&distance);
+
+        candidates.push(SimilarIncidentEntry {
+            incident_id: incident_id.clone(),
+            scenario_name: scenario_name.clone(),
+            wasserstein_distance_millionths: distance.millionths as u64,
+            similarity_score_millionths: similarity_score,
+            shared_features_count: count_shared_features(reference_diagram, diagram),
+            replay_bundle_ref: format!("bundle-{}", incident_id),
+            incident_timestamp_unix_ms: 0, // Would be populated from actual incident data
+        });
+    }
+
+    // Sort by distance (ascending - smaller distance = more similar)
+    candidates.sort_by_key(|entry| entry.wasserstein_distance_millionths);
+
+    // Limit to max_results
+    if candidates.len() > max_results {
+        candidates.truncate(max_results);
+    }
+
+    let computation_time_ms = start_time.elapsed().as_millis() as u64;
+
+    let analysis_metadata = SimilarityAnalysisMetadata {
+        candidates_analyzed: incident_corpus.len() as u32,
+        corpus_size: incident_corpus.len() as u32,
+        distance_order,
+        algorithm_version: "NN.3-v1.0".to_string(),
+        computation_time_ms,
+    };
+
+    Ok(SimilarIncidentsView::new(
+        reference_incident_id,
+        reference_scenario,
+        candidates,
+        analysis_metadata,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+    ))
+}
+
+/// Compute a similarity score from Wasserstein distance (higher score = more similar).
+fn compute_similarity_score(distance: &WassersteinDistance) -> u64 {
+    // Convert distance to similarity: similarity = 1 / (1 + distance)
+    // This gives values between 0 and 1_000_000 millionths
+    let distance_millionths = distance.millionths as u64;
+    if distance_millionths == 0 {
+        1_000_000 // Perfect similarity
+    } else {
+        1_000_000_000_000u64 / (1_000_000 + distance_millionths)
+    }
+}
+
+/// Count shared topological features between two persistence diagrams.
+fn count_shared_features(diagram1: &PersistenceDiagram, diagram2: &PersistenceDiagram) -> u32 {
+    // Simple heuristic: count bars with similar birth/death ranges
+    let mut shared_count = 0;
+    const TOLERANCE_MILLIONTHS: u64 = 100_000; // 10% tolerance
+
+    for bar1 in &diagram1.bars {
+        for bar2 in &diagram2.bars {
+            if bar1.dimension == bar2.dimension {
+                let birth_diff = u64::from(bar1.birth.millionths.abs_diff(bar2.birth.millionths));
+                let death_similar = match (bar1.death, bar2.death) {
+                    (None, None) => true, // Both infinite
+                    (Some(d1), Some(d2)) => {
+                        u64::from(d1.millionths.abs_diff(d2.millionths)) <= TOLERANCE_MILLIONTHS
+                    }
+                    _ => false, // One finite, one infinite
+                };
+
+                if birth_diff <= TOLERANCE_MILLIONTHS && death_similar {
+                    shared_count += 1;
+                    break; // Avoid double-counting
+                }
+            }
+        }
+    }
+
+    shared_count
 }
 
 impl CapabilityDeltaDashboardView {

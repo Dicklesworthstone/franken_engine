@@ -1605,12 +1605,19 @@ pub struct ExecutionResult {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ExecutionSeed {
+pub struct ExecutionSeed {
     registers: Vec<Value>,
     register_labels: Vec<crate::ifc_artifacts::Label>,
     heap: Vec<HeapObject>,
     function_prototypes: BTreeMap<u32, ObjectId>,
     function_objects: BTreeMap<FunctionObjectKey, ObjectId>,
+}
+
+/// Eager execution seed for testing comparison
+#[derive(Debug, Clone)]
+pub struct EagerExecutionSeed {
+    pub registers: Vec<Value>,
+    pub heap: Vec<HeapObject>,
 }
 
 #[derive(Debug, Clone)]
@@ -1969,7 +1976,7 @@ impl InterpreterCore {
         }
     }
 
-    fn capture_execution_seed(&self) -> ExecutionSeed {
+    pub fn capture_execution_seed(&self) -> ExecutionSeed {
         let max_regs = self.config.max_registers as usize;
         let mut registers = self.registers.clone();
         registers.resize(max_regs, Value::Undefined);
@@ -1986,7 +1993,7 @@ impl InterpreterCore {
         }
     }
 
-    fn reset_execution_state_from_seed(&mut self, seed: &ExecutionSeed) {
+    pub fn reset_execution_state_from_seed(&mut self, seed: &ExecutionSeed) {
         self.register_base = 0;
         self.registers = seed.registers.clone();
         self.register_labels = seed.register_labels.clone();
@@ -1997,6 +2004,108 @@ impl InterpreterCore {
         self.iterators.clear();
         self.function_prototypes = seed.function_prototypes.clone();
         self.function_objects = seed.function_objects.clone();
+        self.ip = 0;
+        self.instructions_executed = 0;
+        self.witness_events.clear();
+        self.hostcall_decisions.clear();
+        self.events.clear();
+        self.witness_seq = 0;
+        self.catch_frames.clear();
+        self.pending_exception = None;
+        self.pending_return = None;
+        self.suspended_abrupt_completions.clear();
+        self.finally_modes.clear();
+        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        self.module_state = ModuleState::new();
+        self.active_cjs_context = None;
+        self.current_module_specifier = None;
+        self.promise_combinators.clear();
+        self.promise_combinator_watchers.clear();
+        self.next_promise_combinator_id = 0;
+    }
+
+    // ---- Proptest helper methods (H2.4) ---------------------------------
+
+    /// Create new interpreter instance for proptest (normal lazy seed mode)
+    pub fn new_for_proptest() -> Self {
+        let config = InterpreterConfig {
+            instruction_budget: 10000,
+            max_registers: 32,
+            max_call_depth: 100,
+            max_string_size: 1024,
+            max_heap_objects: 1000,
+            max_total_memory_bytes: 1024 * 1024,
+            max_scope_depth: 100,
+            module_root: None,
+            granted_capabilities: std::collections::BTreeSet::new(),
+            extension_id: Some("proptest".to_string()),
+            cancellation_token: None,
+            checkpoint_density: 1000,
+        };
+
+        Self::new(config, "proptest")
+    }
+
+    /// Create new interpreter instance for eager seed comparison testing
+    pub fn new_for_proptest_eager_seeds() -> Self {
+        Self::new_for_proptest()
+    }
+
+    /// Write to register (test helper)
+    pub fn write_register(&mut self, reg: usize, value: Value) {
+        if reg < self.registers.len() {
+            self.registers[reg] = value;
+        } else if reg < self.config.max_registers as usize {
+            self.registers.resize(reg + 1, Value::Undefined);
+            self.registers[reg] = value;
+        }
+    }
+
+    /// Write to heap slot (test helper)
+    pub fn write_heap_slot(&mut self, slot: u32, value: Value) {
+        let slot_idx = slot as usize;
+        while self.heap.len() <= slot_idx {
+            self.heap.push(HeapObject {
+                properties: std::collections::BTreeMap::new(),
+                accessors: std::collections::BTreeMap::new(),
+                prototype: None,
+                constructor_function: None,
+                is_array: false,
+            });
+        }
+
+        if let Some(heap_obj) = self.heap.get_mut(slot_idx) {
+            heap_obj.properties.insert("value".to_string(), value);
+        }
+    }
+
+    /// Get register values for comparison (test helper)
+    pub fn get_registers(&self) -> &Vec<Value> {
+        &self.registers
+    }
+
+    /// Get heap for comparison (test helper)
+    pub fn get_heap(&self) -> &Vec<HeapObject> {
+        &self.heap
+    }
+
+    /// Capture execution seed in eager format for testing
+    pub fn capture_execution_seed_eager_for_test(&self) -> EagerExecutionSeed {
+        EagerExecutionSeed {
+            registers: self.registers.clone(),
+            heap: self.heap.clone(),
+        }
+    }
+
+    /// Reset from eager seed format for testing
+    pub fn reset_execution_state_from_seed_eager_for_test(&mut self, seed: &EagerExecutionSeed) {
+        self.registers = seed.registers.clone();
+        self.heap = seed.heap.clone();
+
+        // Reset other state like the normal reset method
+        self.register_base = 0;
+        self.call_stack.clear();
+        self.iterators.clear();
         self.ip = 0;
         self.instructions_executed = 0;
         self.witness_events.clear();

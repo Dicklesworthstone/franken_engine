@@ -22,3 +22,6 @@ thiserror = "2.0"
 uuid = { version = "1.16", features = ["v7", "serde"] }
 toml = "0.8"
 frankenengine-extension-host = { path = "../franken-extension-host" }
+
+[dev-dependencies]
+proptest = "1.0"

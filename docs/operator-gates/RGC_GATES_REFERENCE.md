@@ -61,6 +61,80 @@ Replay comparison (exit codes): `0` verdict + surface match · `1` no complete
 source bundle · `2` invalid bundle / no replay manifest · `3` verdict mismatch ·
 `4` required-surface (content-address) mismatch.
 
+### Receipt verification & incident triage (A.7)
+
+`bd-cixqu.1.7` adds the operator-facing surface for verifying an individual
+signed decision receipt and triaging a failure. The CLI is
+`frankenctl verify receipt`; the operator wrapper
+`runbooks/scripts/verify_receipt.sh` renders its verdict in plain English and
+adds two incident-triage views.
+
+```bash
+# verify one receipt, rendering the three layers + targeted remediation
+runbooks/scripts/verify_receipt.sh --input verifier_input.json --receipt-id <id>
+
+# also surface the decision posterior snapshot the receipt binds
+runbooks/scripts/verify_receipt.sh --input verifier_input.json --receipt-id <id> \
+    --show-posterior-path
+
+# also surface the transparency-log inclusion/consistency proofs + provenance chain
+runbooks/scripts/verify_receipt.sh --input verifier_input.json --receipt-id <id> \
+    --show-evidence-chain
+
+# offline render/triage of a previously emitted verdict (no engine build required)
+runbooks/scripts/verify_receipt.sh --receipt-id <id> --verdict-json verdict.json
+
+# self-check the wrapper's rendering/extraction against built-in fixtures
+runbooks/scripts/verify_receipt.sh selftest
+```
+
+Exit codes: `0` receipt verified · `1` usage/environment error (missing args,
+`jq`, or `frankenctl`) · `2` verifier ran but the receipt **failed**.
+
+**The verdict has three independent layers** (`UnifiedReceiptVerificationVerdict`):
+
+| Layer | What it proves | Failure class |
+|---|---|---|
+| `signature` | The receipt carries a valid threshold signature from the attested signing quorum. | `Signature` |
+| `transparency` | The receipt is included in the transparency log and the log is internally consistent. | `Transparency` |
+| `attestation` | The producing runtime presented a valid, fresh TEE quote. | `Attestation` |
+
+A `StaleData` failure class means the verifier input itself is outside the
+accepted timestamp/epoch window — re-export `verifier_input.json` and re-run.
+
+**Reading inclusion + consistency proofs** (transparency layer): `--show-evidence-chain`
+prints each `LayerCheck` (`check`, `outcome`, `detail`) for the transparency layer:
+
+- `mmr_inclusion` — the receipt's leaf is provably under the published log root.
+  A `fail` here means the receipt is **not in the published log**: the log
+  operator either never included it or is equivocating/omitting it. The decision
+  is not publicly auditable — treat as untrusted and escalate to the
+  log-operator on-call.
+- `mmr_consistency` — the new checkpoint is an append-only extension of the prior
+  checkpoint. A `fail` here means the log was **forked or rewritten** between
+  checkpoints (history was altered). This is a transparency-log integrity
+  incident, not a single-receipt problem — freeze promotions and escalate.
+
+**"Attestation degraded to safe-mode"** (failure class `Attestation`): the runtime
+could not validate its TEE quote (typically a stale quote or a measurement that no
+longer matches `tee_attestation_policy`). It therefore **drops to safe-mode**: it
+keeps running but only under the restricted capability posture, refusing any
+attested-only operation, because it can no longer prove it is executing inside a
+trusted enclave. Operationally: do **not** promote any decision that requires a
+trusted enclave while a receipt verifies with `failure_class=Attestation`;
+re-attest (refresh the quote / reconcile the measurement) and re-run the verifier
+before lifting the safe-mode posture.
+
+**Operator override (manual halt).** When `verify_receipt.sh` exits non-zero on a
+production receipt, halt promotion of the bound decision (`decision_id` /
+`policy_id` shown in the output and via `--show-posterior-path`) until the failure
+class is resolved. The verifier is fail-closed by design — a non-zero exit is an
+instruction to stop, not a warning to note.
+
+> **Pending:** the frankentui "receipt verifier" panel (renders this wrapper's
+> output interactively) is tracked separately under Track A as it lives in
+> `/dp/frankentui`; the CLI wrapper above is the authoritative operator surface.
+
 ---
 
 ## RGC Docs and Help Surface Audit

@@ -456,6 +456,7 @@ pub mod seqlock_fastpath;
 pub mod seqlock_reader_writer_contract;
 pub mod seqlock_rollout_guard;
 pub mod session_hostcall_channel;
+pub mod session_signing_batch;
 pub mod shadow_ablation_engine;
 pub mod shadow_adoption_gates;
 pub mod shadow_decision_composer;

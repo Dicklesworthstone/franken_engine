@@ -6,7 +6,7 @@
 
 use frankenengine_engine::fleet_convergence::PartitionMode;
 use frankenengine_engine::fleet_convergence_harness::{
-    ConvergenceHarnessConfig, ConvergenceResult, FleetConvergenceHarness,
+    ConvergenceAttempt, ConvergenceHarnessConfig, ConvergenceResult, FleetConvergenceHarness,
 };
 
 // Test utilities
@@ -330,7 +330,8 @@ fn integration_convergence_attempt_serialization() {
     let attempt = &harness.convergence_history()[0];
     let json = serde_json::to_string(attempt).expect("ConvergenceAttempt should serialize");
 
-    let decoded = serde_json::from_str(&json).expect("ConvergenceAttempt should deserialize");
+    let decoded: ConvergenceAttempt =
+        serde_json::from_str(&json).expect("ConvergenceAttempt should deserialize");
 
     // Verify deserialization preserved key fields
     assert_eq!(decoded.attempt_id, attempt.attempt_id);

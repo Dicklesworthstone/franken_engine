@@ -319,12 +319,13 @@ fn end_to_end_federated_learning_workflow() {
             .unwrap();
 
         assert!(delta.is_valid());
-        computed_deltas.push(delta);
 
         // Submit delta to aggregation coordinator
         coordinator
             .submit_delta(&round_id, node_id, &delta)
             .unwrap();
+
+        computed_deltas.push(delta);
     }
 
     // Verify all nodes have contributed

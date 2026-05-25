@@ -52,8 +52,12 @@ fn promotion_receipt() -> ReplacementReceipt {
     }];
     ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id: &slot(),
+        old_slot_id: &SlotId::new("old-enrich-slot").expect("valid old slot id"),
+        new_slot_id: &SlotId::new("new-enrich-slot").expect("valid new slot id"),
         old_cell_digest: "old-delegate-enrich",
         new_cell_digest: "new-native-enrich",
+        translation_validation_proof_ref: "enrich-translation-proof",
+        content_hash_chain_into_lineage: "enrich-content-hash-chain",
         validation_artifacts: &artifacts,
         rollback_token: "rollback-enrich-token",
         promotion_rationale: "enrichment test",

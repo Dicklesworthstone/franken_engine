@@ -12,6 +12,7 @@ use std::path::Path;
 use frankenengine_engine::{
     ast::Expression,
     effect_set::EffectKind,
+    ir_contract::Ir0Module,
     lowering_pipeline::{LoweringPipelineError, lower_ir0_to_ir1},
     parser_api_stability::parse_module,
 };
@@ -58,14 +59,15 @@ fn red_team_scenarios_rejected_at_lowering_time() {
         };
 
         // Parse to IR0
-        let parse_result = parse_module(&source, &scenario_path.to_string_lossy());
-        let ir0 = match parse_result {
-            Ok(ir0) => ir0,
+        let parse_result = parse_module(&source);
+        let tree = match parse_result {
+            Ok(tree) => tree,
             Err(e) => {
                 println!("Failed to parse {scenario_name}: {e:?}");
                 continue;
             }
         };
+        let ir0 = Ir0Module::from_syntax_tree(tree, scenario_path.to_string_lossy());
 
         tested_scenarios += 1;
 
@@ -139,8 +141,9 @@ fn specific_ambient_authority_patterns_rejected() {
         // Wrap in a minimal module
         let module_source = format!("({source});");
 
-        let parse_result = parse_module(&module_source, "test");
-        let ir0 = parse_result.expect("Test pattern should parse successfully");
+        let parse_result = parse_module(&module_source);
+        let tree = parse_result.expect("Test pattern should parse successfully");
+        let ir0 = Ir0Module::from_syntax_tree(tree, "test");
 
         let lowering_result = lower_ir0_to_ir1(&ir0);
 
@@ -182,8 +185,9 @@ fn ambient_authority_error_includes_source_span() {
     let source = "globalThis.process.env.PATH";
     let module_source = format!("({source});");
 
-    let parse_result = parse_module(&module_source, "span_test");
-    let ir0 = parse_result.expect("Should parse successfully");
+    let parse_result = parse_module(&module_source);
+    let tree = parse_result.expect("Should parse successfully");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "span_test");
 
     let lowering_result = lower_ir0_to_ir1(&ir0);
 

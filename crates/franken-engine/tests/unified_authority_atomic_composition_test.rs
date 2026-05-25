@@ -55,7 +55,7 @@ impl MockConcurrentAuthorityContext {
     fn get_authority_atomic(&self) -> AuthorityLattice {
         // This simulates the CORRECT implementation where all three axes
         // are read as a consistent snapshot
-        let ifc = *self.ifc_label.read().unwrap();
+        let ifc = self.ifc_label.read().unwrap().clone();
         let caps = self.capability_set.read().unwrap().clone();
         let budget = self.budget_envelope.read().unwrap().clone();
 
@@ -74,7 +74,7 @@ impl MockConcurrentAuthorityContext {
         // are read sequentially, potentially seeing inconsistent state
 
         // Read IFC label first
-        let ifc = *self.ifc_label.read().unwrap();
+        let ifc = self.ifc_label.read().unwrap().clone();
         self.access_log.lock().unwrap().push("ifc_read".to_string());
 
         // Small delay to increase chance of inconsistency
@@ -186,7 +186,7 @@ fn test_atomic_composition_consistency_under_concurrent_updates() {
     .unwrap();
 
     let context =
-        MockConcurrentAuthorityContext::new(initial_ifc, initial_caps.clone(), initial_budget);
+        MockConcurrentAuthorityContext::new(initial_ifc.clone(), initial_caps.clone(), initial_budget);
 
     // Define a cross-axis requirement that's borderline
     // (will pass after the concurrent update, but might be inconsistent during)

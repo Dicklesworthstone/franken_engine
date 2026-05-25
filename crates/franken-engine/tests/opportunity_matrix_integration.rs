@@ -125,6 +125,7 @@ fn make_benchmark_case(workload: &str, franken_tps: f64, baseline_tps: f64) -> B
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     }
 }
 

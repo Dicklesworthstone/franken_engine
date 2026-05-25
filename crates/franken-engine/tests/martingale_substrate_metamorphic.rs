@@ -14,13 +14,21 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-use frankenengine_engine::guardplane_adapter::{GuardplaneDecisionRecord, GuardplaneAdapter};
-use frankenengine_engine::martingale_decision_ledger::{MartingaleLedger, MartingaleState};
+use frankenengine_engine::guardplane_adapter::{GuardplaneDecisionRecord, GuardplaneAdapter, GuardplaneOperation};
+use frankenengine_engine::baseline_interpreter::{HookContext, HookAction};
+use frankenengine_engine::bayesian_posterior::{Posterior, RiskState};
+use frankenengine_engine::expected_loss_selector::ContainmentAction;
+use frankenengine_engine::fleet_immune_protocol::ContainmentAction as ThresholdContainmentAction;
+use frankenengine_engine::martingale_decision_ledger::{MartingaleLedger, MartingaleState, StoppingThreshold};
+use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::runtime_decision_core::{
     AsymmetricLossPolicy, RegimeEstimate, default_routing_loss_policy,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use serde::{Deserialize, Serialize};
+
+// Type alias for compatibility
+pub type SelectorContainmentAction = ContainmentAction;
 
 /// Test case representing a historical decision scenario.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -173,7 +181,7 @@ impl HistoricalCaseGenerator {
                         ("runtime_risk".to_string(), 900_000),
                         ("injection_risk".to_string(), 850_000),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string(), "fallback:safe_mode".to_string()],
                     threat_surface: vec!["network".to_string(), "filesystem".to_string(), "ipc".to_string(), "memory".to_string()],
                 },
@@ -265,7 +273,7 @@ impl HistoricalCaseGenerator {
                         ("runtime_risk".to_string(), 800_000),
                         ("injection_risk".to_string(), 750_000),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
                     threat_surface: vec!["network".to_string(), "filesystem".to_string(), "ipc".to_string(), "memory".to_string(), "runtime".to_string()],
                 },
@@ -287,7 +295,7 @@ impl HistoricalCaseGenerator {
                         ("runtime_risk".to_string(), 200_000),
                         ("injection_risk".to_string(), 600_000),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["fallback:safe_mode".to_string(), "hold".to_string()],
                     threat_surface: vec!["supply_chain".to_string(), "network".to_string(), "filesystem".to_string()],
                 },
@@ -305,7 +313,7 @@ impl HistoricalCaseGenerator {
                         ("runtime_risk".to_string(), 300_000),
                         ("injection_risk".to_string(), 950_000),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string(), "fallback:safe_mode".to_string()],
                     threat_surface: vec!["runtime".to_string(), "memory".to_string(), "ipc".to_string()],
                 },
@@ -324,7 +332,7 @@ impl HistoricalCaseGenerator {
                         ("injection_risk".to_string(), 800_000),
                         ("network_risk".to_string(), 550_000),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
                     threat_surface: vec!["network".to_string(), "filesystem".to_string(), "runtime".to_string(), "memory".to_string(), "supply_chain".to_string()],
                 },
@@ -360,7 +368,7 @@ impl HistoricalCaseGenerator {
                         ("injection_risk".to_string(), 850_000),
                         ("exploit_risk".to_string(), 950_000),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
                     threat_surface: vec!["runtime".to_string(), "kernel".to_string(), "memory".to_string()],
                 },
@@ -396,7 +404,7 @@ impl HistoricalCaseGenerator {
                         ("injection_risk".to_string(), 500_000),
                         ("privilege_risk".to_string(), 850_000),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string(), "fallback:safe_mode".to_string()],
                     threat_surface: vec!["runtime".to_string(), "kernel".to_string(), "privilege".to_string()],
                 },
@@ -432,7 +440,7 @@ impl HistoricalCaseGenerator {
                         ("injection_risk".to_string(), 400_000),
                         ("exfiltration_risk".to_string(), 800_000),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
                     threat_surface: vec!["network".to_string(), "filesystem".to_string(), "memory".to_string()],
                 },
@@ -451,7 +459,7 @@ impl HistoricalCaseGenerator {
                         ("persistence_risk".to_string(), 900_000),
                         ("stealth_risk".to_string(), 850_000),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
                     threat_surface: vec!["network".to_string(), "filesystem".to_string(), "runtime".to_string(), "memory".to_string(), "registry".to_string(), "kernel".to_string()],
                 },
@@ -517,7 +525,7 @@ impl HistoricalCaseGenerator {
                     risk_posteriors: BTreeMap::from([
                         ("supply_chain_risk".to_string(), 999_999),
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["select:baseline_deterministic_profile".to_string(), "hold".to_string()],
                     threat_surface: vec!["all".to_string()],
                 },
@@ -548,7 +556,7 @@ impl HistoricalCaseGenerator {
                     risk_posteriors: BTreeMap::from([
                         ("critical_risk".to_string(), 1_000_000), // Maximum possible
                     ]),
-                    regime: RegimeEstimate::Critical,
+                    regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
                     threat_surface: vec!["all".to_string()],
                 },
@@ -655,10 +663,14 @@ impl HistoricalCaseGenerator {
         use frankenengine_engine::guardplane_adapter::*;
 
         GuardplaneDecisionRecord {
-            hook_context: HookContext::new("test_context".to_string()),
-            operation: GuardplaneOperation::ExecutionProfile,
-            posterior: Posterior::default(),
-            risk_state: RiskState::default(),
+            hook_context: HookContext {
+                extension_id: "test_context".to_string(),
+                instruction_count: 100,
+                current_ip: 0
+            },
+            operation: GuardplaneOperation::Call { callee_name: Some("test_function".to_string()), arg_count: 0 },
+            posterior: Posterior::default_prior(),
+            risk_state: RiskState::Benign,
             posterior_delta_millionths: 100_000,
             log_likelihood_ratio_millionths: 50_000,
             selected_action: SelectorContainmentAction::Allow,
@@ -666,8 +678,8 @@ impl HistoricalCaseGenerator {
             action: match action {
                 "select:baseline_deterministic_profile" => HookAction::Allow,
                 "select:baseline_throughput_profile" => HookAction::Allow,
-                "fallback:safe_mode" => HookAction::Fallback,
-                "hold" => HookAction::Deny,
+                "fallback:safe_mode" => HookAction::Sandbox,
+                "hold" => HookAction::Terminate("hold".to_string()),
                 _ => HookAction::Allow,
             },
             expected_loss_millionths: 75_000,
@@ -684,7 +696,7 @@ pub struct MartingaleDecisionAdapter {
 impl MartingaleDecisionAdapter {
     pub fn new() -> Self {
         Self {
-            ledger: MartingaleLedger::new(),
+            ledger: MartingaleLedger::new(StoppingThreshold::try_from_log_millionths(1000).unwrap(), SecurityEpoch::from_raw(0)),
             policy: default_routing_loss_policy(),
         }
     }
@@ -697,7 +709,8 @@ impl MartingaleDecisionAdapter {
         let regime = context.regime;
 
         // Use new martingale substrate to make decision
-        let decision = self.policy.select_min_loss_action(candidates, risk_posteriors, regime);
+        let decision_result = self.policy.select_min_loss_action(candidates, risk_posteriors, regime);
+        let decision = decision_result.map(|(action, _loss)| action).unwrap_or_else(|| "default_action".to_string());
 
         // Convert decision back to GuardplaneDecisionRecord format for comparison
         self.convert_to_legacy_format(decision, context)
@@ -708,18 +721,22 @@ impl MartingaleDecisionAdapter {
 
         // This conversion represents the semantic mapping between old and new substrates
         Ok(GuardplaneDecisionRecord {
-            hook_context: HookContext::new("martingale_context".to_string()),
-            operation: GuardplaneOperation::ExecutionProfile,
-            posterior: Posterior::default(),
-            risk_state: RiskState::default(),
+            hook_context: HookContext {
+                extension_id: "martingale_context".to_string(),
+                instruction_count: 200,
+                current_ip: 1
+            },
+            operation: GuardplaneOperation::Call { callee_name: Some("test_function".to_string()), arg_count: 0 },
+            posterior: Posterior::default_prior(),
+            risk_state: RiskState::Benign,
             posterior_delta_millionths: 100_000,
             log_likelihood_ratio_millionths: 50_000,
             selected_action: SelectorContainmentAction::Allow,
             threshold_action: ThresholdContainmentAction::Allow,
             action: match decision.as_str() {
                 action if action.starts_with("select:") => HookAction::Allow,
-                action if action.starts_with("fallback:") => HookAction::Fallback,
-                "hold" => HookAction::Deny,
+                action if action.starts_with("fallback:") => HookAction::Sandbox,
+                "hold" => HookAction::Terminate("hold".to_string()),
                 _ => HookAction::Allow,
             },
             expected_loss_millionths: 75_000,
@@ -733,10 +750,10 @@ impl MartingaleDecisionAdapter {
 
 #[test]
 fn test_martingale_substrate_metamorphic_preservation() {
-    tracing_subscriber::fmt()
-        .with_env_filter("frankenengine_engine=debug")
-        .with_test_writer()
-        .init();
+    // tracing_subscriber::fmt()
+    //     .with_env_filter("frankenengine_engine=debug")
+    //     .with_test_writer()
+    //     .init();
 
     let generator = HistoricalCaseGenerator::new();
     let cases = generator.cases();
@@ -767,8 +784,8 @@ fn test_martingale_substrate_metamorphic_preservation() {
             "timestamp": SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis(),
             "test_case": case.case_id,
             "description": case.description,
-            "legacy_verdict_hash": format!("{:x}", legacy_hash.as_bytes()),
-            "new_verdict_hash": format!("{:x}", new_hash.as_bytes()),
+            "legacy_verdict_hash": legacy_hash.to_hex(),
+            "new_verdict_hash": new_hash.to_hex(),
             "verdict_preserved": legacy_hash == new_hash,
             "regime": format!("{:?}", case.input_context.regime),
             "risk_count": case.input_context.risk_posteriors.len(),
@@ -781,16 +798,16 @@ fn test_martingale_substrate_metamorphic_preservation() {
             passed += 1;
             tracing::debug!(
                 case_id = %case.case_id,
-                legacy_hash = %format!("{:x}", legacy_hash.as_bytes()),
-                new_hash = %format!("{:x}", new_hash.as_bytes()),
+                legacy_hash = %legacy_hash.to_hex(),
+                new_hash = %new_hash.to_hex(),
                 "✓ Verdict preserved byte-for-byte"
             );
         } else {
             failed += 1;
             tracing::error!(
                 case_id = %case.case_id,
-                legacy_hash = %format!("{:x}", legacy_hash.as_bytes()),
-                new_hash = %format!("{:x}", new_hash.as_bytes()),
+                legacy_hash = %legacy_hash.to_hex(),
+                new_hash = %new_hash.to_hex(),
                 expected = %format!("{:?}", case.legacy_verdict),
                 actual = %format!("{:?}", new_verdict),
                 "✗ Verdict divergence detected"
@@ -798,13 +815,13 @@ fn test_martingale_substrate_metamorphic_preservation() {
 
             // This is the critical failure condition mentioned in the bead
             panic!(
-                "CRITICAL: Verdict divergence in case {} ({}). Legacy hash: {:x}, New hash: {:x}. \
+                "CRITICAL: Verdict divergence in case {} ({}). Legacy hash: {}, New hash: {}. \
                 If verdicts change in any case, AA.3 (migration) is unsound — back out AA.3, \
                 do NOT silently accept the new verdicts as correct.",
                 case.case_id,
                 case.description,
-                legacy_hash.as_bytes(),
-                new_hash.as_bytes()
+                legacy_hash.to_hex(),
+                new_hash.to_hex()
             );
         }
     }
@@ -816,10 +833,10 @@ fn test_martingale_substrate_metamorphic_preservation() {
 
 #[test]
 fn test_martingale_substrate_negative_case_corrupted_loss_matrix() {
-    tracing_subscriber::fmt()
-        .with_env_filter("frankenengine_engine=debug")
-        .with_test_writer()
-        .init();
+    // tracing_subscriber::fmt()
+    //     .with_env_filter("frankenengine_engine=debug")
+    //     .with_test_writer()
+    //     .init();
 
     tracing::info!("Testing negative case: corrupted loss-matrix entry");
 
@@ -856,16 +873,16 @@ fn test_martingale_substrate_negative_case_corrupted_loss_matrix() {
     let event = serde_json::json!({
         "timestamp": SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis(),
         "test_type": "negative_case_corruption",
-        "baseline_hash": format!("{:x}", baseline_hash.as_bytes()),
-        "corrupted_hash": format!("{:x}", corrupted_hash.as_bytes()),
+        "baseline_hash": baseline_hash.to_hex(),
+        "corrupted_hash": corrupted_hash.to_hex(),
         "divergence_detected": baseline_hash != corrupted_hash,
     });
     println!("{}", event);
 
     if baseline_hash != corrupted_hash {
         tracing::error!(
-            baseline_hash = %format!("{:x}", baseline_hash.as_bytes()),
-            corrupted_hash = %format!("{:x}", corrupted_hash.as_bytes()),
+            baseline_hash = %baseline_hash.to_hex(),
+            corrupted_hash = %corrupted_hash.to_hex(),
             "✓ Negative case: Corruption correctly detected via divergent decision id"
         );
     } else {
@@ -879,10 +896,10 @@ fn test_martingale_substrate_negative_case_corrupted_loss_matrix() {
 
 #[test]
 fn test_decision_logging_discipline() {
-    tracing_subscriber::fmt()
-        .with_env_filter("frankenengine_engine=debug")
-        .with_test_writer()
-        .init();
+    // tracing_subscriber::fmt()
+    //     .with_env_filter("frankenengine_engine=debug")
+    //     .with_test_writer()
+    //     .init();
 
     tracing::info!("Testing logging discipline per bd-cixqu.45");
 
@@ -903,7 +920,7 @@ fn test_decision_logging_discipline() {
         "timestamp": SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_millis(),
         "event_type": "decision_replay",
         "substrate": "martingale",
-        "decision_id": format!("{:x}", ContentHash::compute(&serde_json::to_vec(&verdict).unwrap()).as_bytes()),
+        "decision_id": ContentHash::compute(&serde_json::to_vec(&verdict).unwrap()).to_hex(),
         "regime": format!("{:?}", test_context.regime),
         "risk_posteriors": test_context.risk_posteriors,
         "candidates": test_context.candidates,
@@ -913,7 +930,7 @@ fn test_decision_logging_discipline() {
     println!("{}", structured_event);
 
     tracing::debug!(
-        decision_id = %format!("{:x}", ContentHash::compute(&serde_json::to_vec(&verdict).unwrap()).as_bytes()),
+        decision_id = %ContentHash::compute(&serde_json::to_vec(&verdict).unwrap()).to_hex(),
         regime = ?test_context.regime,
         action = ?verdict.action,
         "Decision replay completed with structured logging"

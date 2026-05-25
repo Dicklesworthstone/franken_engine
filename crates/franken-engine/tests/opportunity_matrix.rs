@@ -31,6 +31,7 @@ fn benchmark_case(workload: &str, franken: f64, baseline: f64) -> BenchmarkCase 
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     }
 }
 

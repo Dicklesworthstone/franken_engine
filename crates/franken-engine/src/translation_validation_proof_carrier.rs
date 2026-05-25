@@ -638,7 +638,7 @@ mod tests {
         };
 
         let proof = TranslationValidationProof {
-            proof_id: EngineObjectId::from_definition(b"test-proof"),
+            proof_id: EngineObjectId([0u8; 32]),
             source_spec: create_slot_specification(
                 SlotId::new("source").expect("valid ID"),
                 b"source code",

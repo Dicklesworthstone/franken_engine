@@ -20,18 +20,20 @@
     clippy::manual_abs_diff
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::eprocess_guardrail::*;
+use frankenengine_engine::martingale_decision_ledger::{MartingaleError, MartingaleVerdict, StoppingThreshold};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ── helpers ────────────────────────────────────────────────────────────
 
-fn test_blocked() -> BTreeSet<String> {
-    let mut s = BTreeSet::new();
-    s.insert("low".to_string());
-    s.insert("medium".to_string());
-    s
+fn test_loss_matrix() -> ExpectedLossMatrix {
+    let mut action_losses = BTreeMap::new();
+    action_losses.insert("low".to_string(), 500_000);    // 0.5
+    action_losses.insert("medium".to_string(), 1_500_000); // 1.5
+    action_losses.insert("high".to_string(), 100_000);   // 0.1 (below threshold)
+    ExpectedLossMatrix::new(action_losses, 1_000_000) // Block threshold = 1.0
 }
 
 fn test_threshold_lr() -> Box<ThresholdLikelihoodRatio> {
@@ -47,8 +49,8 @@ fn test_guardrail() -> EProcessGuardrail {
         "fnr-guard",
         "false_negative_rate",
         "false-negative rate <= 0.01",
-        20_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     )
@@ -243,10 +245,11 @@ fn guardrail_error_display_not_triggered() {
 
 #[test]
 fn guardrail_error_display_overflow() {
-    let e = GuardrailError::EValueOverflow {
+    let e = GuardrailError::MartingaleError {
         guardrail_id: "g6".to_string(),
+        source: MartingaleError::LogAccumulatorOverflow,
     };
-    assert_eq!(e.to_string(), "e-value overflow for guardrail 'g6'");
+    assert!(e.to_string().contains("martingale error for guardrail 'g6'"));
 }
 
 #[test]
@@ -276,8 +279,9 @@ fn guardrail_error_debug_all_distinct() {
         GuardrailError::NotTriggered {
             guardrail_id: "a".to_string(),
         },
-        GuardrailError::EValueOverflow {
+        GuardrailError::MartingaleError {
             guardrail_id: "a".to_string(),
+            source: MartingaleError::LogAccumulatorOverflow,
         },
     ];
     let dbgs: BTreeSet<String> = variants.iter().map(|v| format!("{v:?}")).collect();
@@ -302,8 +306,9 @@ fn guardrail_error_serde_roundtrip_all() {
         GuardrailError::NotTriggered {
             guardrail_id: "e".to_string(),
         },
-        GuardrailError::EValueOverflow {
+        GuardrailError::MartingaleError {
             guardrail_id: "f".to_string(),
+            source: MartingaleError::LogAccumulatorOverflow,
         },
     ];
     for v in &variants {
@@ -337,12 +342,12 @@ fn reset_receipt_serde_roundtrip() {
 
 #[test]
 fn guardrail_event_serde_roundtrip_updated() {
-    let ev = GuardrailEvent::EValueUpdated {
+    let ev = GuardrailEvent::MartingaleUpdated {
         guardrail_id: "g1".to_string(),
-        previous_e_value: 1_000_000,
-        new_e_value: 5_000_000,
         observation: 2_000_000,
-        likelihood_ratio: 5_000_000,
+        log_likelihood_ratio: 5_000_000,
+        verdict: MartingaleVerdict::Continue,
+        sequence: 1,
     };
     let json = serde_json::to_vec(&ev).unwrap();
     let back: GuardrailEvent = serde_json::from_slice(&json).unwrap();
@@ -353,9 +358,9 @@ fn guardrail_event_serde_roundtrip_updated() {
 fn guardrail_event_serde_roundtrip_triggered() {
     let ev = GuardrailEvent::Triggered {
         guardrail_id: "g1".to_string(),
-        e_value: 25_000_000,
-        threshold: 20_000_000,
+        sequence: 1,
         blocked_actions: vec!["low".to_string()],
+        expected_losses: BTreeMap::from([("low".to_string(), 500_000)]),
     };
     let json = serde_json::to_vec(&ev).unwrap();
     let back: GuardrailEvent = serde_json::from_slice(&json).unwrap();
@@ -402,7 +407,7 @@ fn guardrail_event_serde_roundtrip_resumed() {
 fn guardrail_starts_active_with_e_value_one() {
     let gr = test_guardrail();
     assert_eq!(gr.state(), GuardrailState::Active);
-    assert_eq!(gr.e_value(), 1_000_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, 1_000_000);
     assert_eq!(gr.observation_count(), 0);
 }
 
@@ -412,7 +417,7 @@ fn guardrail_update_below_threshold() {
     // observation below threshold => low_ratio = 0.5
     gr.update(5_000).unwrap(); // below 10_000
     assert_eq!(gr.state(), GuardrailState::Active);
-    assert_eq!(gr.e_value(), 500_000); // 1.0 * 0.5
+    assert_eq!(gr.martingale_state().log_m_millionths, 500_000); // 1.0 * 0.5
     assert_eq!(gr.observation_count(), 1);
 }
 
@@ -422,8 +427,8 @@ fn guardrail_update_triggers() {
         "test",
         "metric",
         "null",
-        5_000_000, // threshold = 5.0
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(), // threshold = 5.0
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
@@ -438,8 +443,8 @@ fn guardrail_blocks_action_when_triggered() {
         "test",
         "metric",
         "null",
-        5_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
@@ -456,8 +461,8 @@ fn guardrail_update_on_triggered_returns_error() {
         "test",
         "metric",
         "null",
-        5_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
@@ -488,8 +493,8 @@ fn guardrail_reset_from_triggered() {
         "test",
         "metric",
         "null",
-        5_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
@@ -497,7 +502,7 @@ fn guardrail_reset_from_triggered() {
     assert_eq!(gr.state(), GuardrailState::Triggered);
     gr.reset(&test_receipt()).unwrap();
     assert_eq!(gr.state(), GuardrailState::Active);
-    assert_eq!(gr.e_value(), 1_000_000);
+    assert_eq!(gr.martingale_state().log_m_millionths, 1_000_000);
     assert_eq!(gr.observation_count(), 0);
 }
 
@@ -516,8 +521,8 @@ fn guardrail_reset_unauthorized_returns_error() {
         "test",
         "metric",
         "null",
-        5_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
@@ -539,7 +544,7 @@ fn guardrail_drain_events() {
     gr.update(5_000).unwrap();
     let events = gr.drain_events();
     assert!(!events.is_empty());
-    assert!(matches!(&events[0], GuardrailEvent::EValueUpdated { .. }));
+    assert!(matches!(&events[0], GuardrailEvent::MartingaleUpdated { .. }));
     let events2 = gr.drain_events();
     assert!(events2.is_empty());
 }
@@ -553,7 +558,7 @@ fn guardrail_config_epoch() {
 #[test]
 fn guardrail_threshold() {
     let gr = test_guardrail();
-    assert_eq!(gr.threshold(), 20_000_000);
+    assert_eq!(gr.threshold(), StoppingThreshold::try_from_log_millionths(20_000_000).unwrap());
 }
 
 // ── GuardrailRegistry ──────────────────────────────────────────────────
@@ -580,8 +585,8 @@ fn registry_is_blocked_when_triggered() {
         "test",
         "metric",
         "null",
-        5_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
@@ -595,26 +600,26 @@ fn registry_is_blocked_when_triggered() {
 #[test]
 fn registry_blocked_actions_union() {
     let mut reg = GuardrailRegistry::new();
-    let mut blocked1 = BTreeSet::new();
-    blocked1.insert("action-a".to_string());
+    let blocked1_losses = BTreeMap::from([("action-a".to_string(), 2_000_000)]);
+    let blocked1 = ExpectedLossMatrix::new(blocked1_losses, 1_000_000);
     let mut gr1 = EProcessGuardrail::new(
         "g1",
         "m",
         "n",
-        5_000_000,
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
         blocked1,
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
     gr1.update(100_000).unwrap();
 
-    let mut blocked2 = BTreeSet::new();
-    blocked2.insert("action-b".to_string());
+    let blocked2_losses = BTreeMap::from([("action-b".to_string(), 2_000_000)]);
+    let blocked2 = ExpectedLossMatrix::new(blocked2_losses, 1_000_000);
     let mut gr2 = EProcessGuardrail::new(
         "g2",
         "m",
         "n",
-        5_000_000,
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
         blocked2,
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
@@ -635,8 +640,8 @@ fn registry_blocking_guardrails() {
         "g1",
         "m",
         "n",
-        5_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
@@ -653,8 +658,8 @@ fn registry_permitted_actions() {
         "g1",
         "m",
         "n",
-        5_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );
@@ -673,8 +678,8 @@ fn registry_update_stream_targets_matching() {
         "g1",
         "stream-a",
         "n",
-        20_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     ));
@@ -682,8 +687,8 @@ fn registry_update_stream_targets_matching() {
         "g2",
         "stream-b",
         "n",
-        20_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     ));
@@ -721,8 +726,8 @@ fn registry_reset_all_triggered() {
         "g1",
         "m",
         "n",
-        5_000_000,
-        test_blocked(),
+        StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+        test_loss_matrix(),
         SecurityEpoch::GENESIS,
         test_threshold_lr(),
     );

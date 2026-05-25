@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::ir_contract::{Ir1Op, Ir2Op, Ir3Instruction};
 
 /// Statement types supported in translation validation.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum StatementKind {
     Assignment,
     Declaration,

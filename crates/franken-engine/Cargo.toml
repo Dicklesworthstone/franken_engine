@@ -30,6 +30,10 @@ path = "src/bin/franken_decision_demo.rs"
 name = "franken-quarantine-mesh-demo"
 path = "src/bin/franken_quarantine_mesh_demo.rs"
 
+[[bin]]
+name = "runtime-lockstep-orchestrator"
+path = "src/bin/runtime_lockstep_orchestrator.rs"
+
 [[example]]
 name = "live_ifc_declassification_example"
 path = "../../examples/live_ifc_declassification_example.rs"
@@ -224,7 +228,7 @@ thiserror = "2.0"
 uuid = { version = "1.16", features = ["v7", "serde"] }
 syn = { version = "2.0", features = ["full", "visit"] }
 toml = "0.8"
-clap = "4.5"
+clap = { version = "4.5", features = ["derive"] }
 sqlmodel = { path = "/dp/sqlmodel_rust/crates/sqlmodel" }
 sqlmodel-core = { path = "/dp/sqlmodel_rust/crates/sqlmodel-core" }
 sqlmodel-frankensqlite = { path = "/dp/sqlmodel_rust/crates/sqlmodel-frankensqlite" }

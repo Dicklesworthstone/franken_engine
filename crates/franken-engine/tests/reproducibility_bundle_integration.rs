@@ -505,7 +505,7 @@ fn manifest_json_claim_section_complete() {
             .as_str()
             .expect(&format!("claim.id should be string for {}", claim_id));
         assert_eq!(
-            claim_id_in_manifest, claim_id,
+            claim_id_in_manifest, *claim_id,
             "claim.id should match expected claim ID"
         );
 

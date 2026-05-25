@@ -73,8 +73,12 @@ fn make_receipt_slot(slot_name: &str, old: &str, new: &str, ts_ns: u64) -> Repla
     let sid = slot(slot_name);
     let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id: &sid,
+        old_slot_id: &sid,
+        new_slot_id: &sid,
         old_cell_digest: old,
         new_cell_digest: new,
+        translation_validation_proof_ref: "tv-proof-ref",
+        content_hash_chain_into_lineage: "content-hash-chain",
         validation_artifacts: &arts,
         rollback_token: "rollback-token",
         promotion_rationale: "Testing lineage log",

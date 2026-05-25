@@ -64,7 +64,7 @@ fn test_receipt(slot_name: &str, old: &str, new: &str, ts: u64) -> ReplacementRe
     ReplacementReceipt {
         receipt_id,
         schema_version: SchemaVersion::V1,
-        slot_id,
+        slot_id: slot_id.clone(),
         old_slot_id: slot_id.clone(),
         new_slot_id: slot_id.clone(),
         old_cell_digest: old.to_string(),

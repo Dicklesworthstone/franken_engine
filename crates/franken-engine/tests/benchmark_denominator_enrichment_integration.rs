@@ -35,6 +35,7 @@ fn make_case(workload_id: &str, franken: f64, baseline: f64) -> BenchmarkCase {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     }
 }
 
@@ -52,6 +53,7 @@ fn make_weighted_case(
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     }
 }
 

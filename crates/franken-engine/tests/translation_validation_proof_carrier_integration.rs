@@ -22,7 +22,7 @@ use frankenengine_engine::{
 /// Create a test signing key for demonstrations.
 fn create_test_signing_key() -> SigningKey {
     let test_seed = [42u8; 32];
-    SigningKey::from_bytes(&test_seed).expect("valid test seed")
+    SigningKey::from_bytes(test_seed).expect("valid test seed")
 }
 
 /// Create a test signature bundle.
@@ -271,7 +271,7 @@ fn test_engine_configuration() {
         "{}/scripts/run_rgc_translation_validation_pilot.sh",
         custom_project_root
     );
-    assert_eq!(engine.validation_script.to_str(), Some(&expected_script));
+    assert_eq!(engine.validation_script.to_str(), Some(expected_script.as_str()));
 }
 
 /// Test that demonstrates the full workflow: promotion request -> validation -> receipt creation.

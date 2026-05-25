@@ -226,6 +226,7 @@ fn benchmark_case(workload_id: &str, franken_tps: f64, baseline_tps: f64) -> Ben
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     }
 }
 

@@ -153,7 +153,7 @@ fn wait_for_pidfd<P: AsFd>(pidfd: &P, timeout: Duration) -> std::io::Result<bool
         };
 
         let poll_fd = PollFd::new(pidfd, PollFlags::IN);
-        match poll(&mut [poll_fd], &timeout_spec) {
+        match poll(&mut [poll_fd], Some(&timeout_spec)) {
             Ok(n) if n > 0 => return Ok(true),
             Ok(_) => return Ok(false),                // timeout
             Err(rustix::io::Errno::INTR) => continue, // interrupted, retry

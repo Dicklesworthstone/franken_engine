@@ -128,8 +128,12 @@ fn receipt_for(
     let artifacts = validation_artifacts(passed);
     ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id,
+        old_slot_id: slot_id,
+        new_slot_id: slot_id,
         old_cell_digest: old_digest,
         new_cell_digest: new_digest,
+        translation_validation_proof_ref: "test-validation-proof",
+        content_hash_chain_into_lineage: "test-content-hash-chain",
         validation_artifacts: &artifacts,
         rollback_token: "rollback-old-cell",
         promotion_rationale: "V.5 negative-test fixture",

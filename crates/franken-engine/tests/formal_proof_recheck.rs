@@ -10,6 +10,9 @@
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+
 /// Test that the formal proof recheck script exists and is executable.
 #[test]
 fn formal_proof_recheck_script_exists() {
@@ -23,6 +26,8 @@ fn formal_proof_recheck_script_exists() {
     let metadata = script_path
         .metadata()
         .expect("Should be able to read script metadata");
+
+    #[cfg(unix)]
     assert!(
         metadata.permissions().mode() & 0o111 != 0,
         "Formal proof recheck script must be executable"

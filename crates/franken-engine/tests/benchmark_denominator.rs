@@ -26,6 +26,7 @@ fn case(workload_id: &str, speedup: f64, weight: Option<f64>) -> BenchmarkCase {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     }
 }
 
@@ -223,6 +224,7 @@ fn weighted_geometric_mean_rejects_empty_workload_id() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     let err = weighted_geometric_mean(&[bad], BaselineEngine::Node)
         .expect_err("empty workload_id should fail");
@@ -253,6 +255,7 @@ fn weighted_geometric_mean_rejects_zero_baseline_throughput() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     let err = weighted_geometric_mean(&[bad], BaselineEngine::Bun)
         .expect_err("zero baseline throughput should fail");
@@ -460,6 +463,7 @@ fn benchmark_case_speedup_computes_ratio() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     assert!((c.speedup() - 3.0).abs() < 1e-12);
 }
@@ -562,6 +566,7 @@ fn weighted_geometric_mean_negative_throughput_rejected() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     let err = weighted_geometric_mean(&[bad], BaselineEngine::Node)
         .expect_err("negative throughput should fail");
@@ -695,6 +700,7 @@ fn enrichment_wgm_err_whitespace_only_workload() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     let err = weighted_geometric_mean(&[bad], BaselineEngine::Node).unwrap_err();
     assert!(matches!(
@@ -713,6 +719,7 @@ fn enrichment_wgm_err_neg_inf_throughput() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     assert!(weighted_geometric_mean(&[bad], BaselineEngine::Node).is_err());
 }
@@ -727,6 +734,7 @@ fn enrichment_wgm_err_baseline_nan() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     assert!(weighted_geometric_mean(&[bad], BaselineEngine::Node).is_err());
 }
@@ -741,6 +749,7 @@ fn enrichment_wgm_err_baseline_negative() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     assert!(weighted_geometric_mean(&[bad], BaselineEngine::Node).is_err());
 }
@@ -755,6 +764,7 @@ fn enrichment_wgm_err_baseline_inf() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     assert!(weighted_geometric_mean(&[bad], BaselineEngine::Node).is_err());
 }
@@ -1667,6 +1677,7 @@ fn enrichment_speedup_exact_ratio() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     assert!((c.speedup() - 3.0).abs() < 1e-12);
 }
@@ -1681,6 +1692,7 @@ fn enrichment_speedup_fractional() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     assert!((c.speedup() - 0.25).abs() < 1e-12);
 }
@@ -1701,6 +1713,7 @@ fn enrichment_speedup_very_high() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     };
     assert!((c.speedup() - 1_000_000.0).abs() < 1e-3);
 }

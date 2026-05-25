@@ -145,6 +145,7 @@ fn make_valid_benchmark_bundle() -> BenchmarkClaimBundle {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     }];
     let bun_cases = vec![BenchmarkCase {
         workload_id: "w1".to_string(),
@@ -154,6 +155,7 @@ fn make_valid_benchmark_bundle() -> BenchmarkClaimBundle {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     }];
     let coverage = vec![NativeCoveragePoint {
         recorded_at_utc: "2026-02-27T00:00:00Z".to_string(),
@@ -761,6 +763,7 @@ fn benchmark_workload_fairness_mismatch_fails() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     });
     let report = verify_benchmark_claim(&bundle);
     // At minimum the fairness check fails
@@ -1357,6 +1360,7 @@ fn enrichment_benchmark_fairness_fails_extra_bun_workload() {
         behavior_equivalent: true,
         latency_envelope_ok: true,
         error_envelope_ok: true,
+        execution_authentic: true,
     });
     let report = verify_benchmark_claim(&bundle);
     let check = report
@@ -2582,6 +2586,7 @@ fn enrichment_benchmark_claim_with_many_workloads_verifies() {
             behavior_equivalent: true,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         });
         bun_cases.push(BenchmarkCase {
             workload_id: wid,
@@ -2591,6 +2596,7 @@ fn enrichment_benchmark_claim_with_many_workloads_verifies() {
             behavior_equivalent: true,
             latency_envelope_ok: true,
             error_envelope_ok: true,
+            execution_authentic: true,
         });
     }
     let input = PublicationGateInput {

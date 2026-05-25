@@ -6707,6 +6707,7 @@ mod tests {
                 compare_trace: Some(PathBuf::from("candidate.json")),
                 mode: ReplayMode::Validate,
                 out: None,
+                fleet_trace: None,
             })
         );
     }

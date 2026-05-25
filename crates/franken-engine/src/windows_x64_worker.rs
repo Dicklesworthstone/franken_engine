@@ -8,10 +8,12 @@
 use crate::worker_env_capture::{WindowsX64EnvCapture, WorkerEnvCapture, WorkerEnvironment, EnvCaptureError};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use wait_timeout::ChildExt;
 
 /// Static counter for generating unique worker IDs.
 static NEXT_WORKER_ID: AtomicU64 = AtomicU64::new(1);
@@ -336,7 +338,8 @@ impl WindowsX64WorkerManager {
         cmd.args(command);
 
         // Set working directory
-        let work_dir = working_dir.unwrap_or(&self.config.work_dir.join(worker_id));
+        let default_work_dir = self.config.work_dir.join(worker_id);
+        let work_dir = working_dir.unwrap_or(&default_work_dir);
         cmd.current_dir(work_dir);
 
         // Configure command execution
@@ -354,14 +357,14 @@ impl WindowsX64WorkerManager {
         let output = if let Some(timeout_secs) = timeout_seconds {
             match child.wait_timeout(Duration::from_secs(timeout_secs)) {
                 Ok(Some(status)) => {
-                    let stdout = std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut String::new())
-                        .unwrap_or_default();
-                    let stderr = std::io::Read::read_to_string(&mut child.stderr.take().unwrap(), &mut String::new())
-                        .unwrap_or_default();
+                    let mut stdout = Vec::new();
+                    let mut stderr = Vec::new();
+                    let _ = child.stdout.take().unwrap().read_to_end(&mut stdout);
+                    let _ = child.stderr.take().unwrap().read_to_end(&mut stderr);
                     std::process::Output {
                         status,
-                        stdout: stdout.into_bytes(),
-                        stderr: stderr.into_bytes(),
+                        stdout,
+                        stderr,
                     }
                 }
                 Ok(None) => {

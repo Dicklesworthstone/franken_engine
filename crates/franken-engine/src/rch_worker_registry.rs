@@ -5,12 +5,51 @@
 
 #![forbid(unsafe_code)]
 
-use crate::macos_arm64_worker::{MacOSArm64WorkerManager, MacOSArm64WorkerConfig, MacOSWorkerError};
-use crate::windows_x64_worker::{WindowsX64WorkerManager, WindowsX64WorkerConfig, WindowsWorkerError, WorkerExecutionResult};
+use crate::macos_arm64_worker::{MacOSArm64WorkerManager, MacOSArm64WorkerConfig, MacOSWorkerError, WorkerExecutionResult as MacOSExecutionResult};
+use crate::windows_x64_worker::{WindowsX64WorkerManager, WindowsX64WorkerConfig, WindowsWorkerError, WorkerExecutionResult as WindowsExecutionResult};
 use crate::worker_env_capture::{WorkerEnvironment, WorkerEnvCapture, MacOSArm64EnvCapture, WindowsX64EnvCapture};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+/// Common execution result for cross-platform worker operations.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkerExecutionResult {
+    /// Exit code of the command.
+    pub exit_code: Option<i32>,
+    /// Standard output from the command.
+    pub stdout: String,
+    /// Standard error from the command.
+    pub stderr: String,
+    /// Elapsed time in seconds.
+    pub elapsed_seconds: u64,
+    /// ID of the worker that executed the command.
+    pub worker_id: String,
+}
+
+impl From<MacOSExecutionResult> for WorkerExecutionResult {
+    fn from(result: MacOSExecutionResult) -> Self {
+        Self {
+            exit_code: result.exit_code,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            elapsed_seconds: result.elapsed_seconds,
+            worker_id: result.worker_id,
+        }
+    }
+}
+
+impl From<WindowsExecutionResult> for WorkerExecutionResult {
+    fn from(result: WindowsExecutionResult) -> Self {
+        Self {
+            exit_code: result.exit_code,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            elapsed_seconds: result.elapsed_seconds,
+            worker_id: result.worker_id,
+        }
+    }
+}
 
 /// Supported worker platform types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -131,7 +170,6 @@ pub enum PlatformConfig {
 }
 
 /// Central registry for managing RCH worker pools across platforms.
-#[derive(Debug)]
 pub struct RchWorkerRegistry {
     /// Registry configuration.
     config: RchWorkerRegistryConfig,
@@ -270,6 +308,7 @@ impl RchWorkerRegistry {
                     .ok_or(RchWorkerError::PlatformNotConfigured { platform })?;
 
                 manager.execute_on_worker(worker_id, command, working_dir, timeout_seconds)
+                    .map(WorkerExecutionResult::from)
                     .map_err(|e| RchWorkerError::PlatformError {
                         platform,
                         details: e.to_string(),
@@ -375,12 +414,15 @@ impl RchWorkerRegistry {
         let stats = self.get_all_pool_stats();
         let current_platform = self.detect_current_platform().ok();
 
+        let total_workers = stats.values().map(|s| s.total_workers).sum();
+        let total_available = stats.values().map(|s| s.available_workers).sum();
+
         let report = RegistryStatusReport {
             current_platform,
             implemented_platforms: self.get_implemented_platforms(),
             pool_stats: stats,
-            total_workers: stats.values().map(|s| s.total_workers).sum(),
-            total_available: stats.values().map(|s| s.available_workers).sum(),
+            total_workers,
+            total_available,
         };
 
         let json = serde_json::to_string_pretty(&report)

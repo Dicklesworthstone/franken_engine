@@ -14,7 +14,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 use frankenengine_engine::runtime_lockstep_helpers::{
     RuntimeId, RuntimeLockstepConfig, generate_trace_session_id,

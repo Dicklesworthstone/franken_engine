@@ -148,9 +148,9 @@ fn candidate_policy(name: &str, version: u32, threshold: Option<u64>) -> Substit
         format!("candidate policy {name}"),
         CounterfactualConfig {
             branch_id: format!("branch-{name}"),
-            threshold_override_millionths: threshold,
+            threshold_override_millionths: threshold.map(|t| t as i64),
             loss_matrix_overrides: BTreeMap::new(),
-            policy_version_override: Some(version),
+            policy_version_override: Some(u64::from(version)),
             containment_overrides: BTreeMap::new(),
             evidence_weight_overrides: BTreeMap::new(),
             branch_from_index: 0,

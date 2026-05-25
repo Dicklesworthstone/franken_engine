@@ -2995,4 +2995,88 @@ siblings root), and write the report and summary under
 (`component=sibling_repo_verification`) per pin-update with a `committed` /
 `held` outcome.
 
+## Self-replacement lineage
+
+Track V (`bd-cixqu.22`) delivers verified self-replacement lineage: a slot is
+promoted from a delegate cell to successive native cells, each promotion bound
+to a `ReplacementReceipt` carrying a translation-validation proof and a
+pre-signed demotion fallback. V.6 (`bd-cixqu.22.6`) is the operator surface for
+walking that lineage and reading a triggered demotion.
+
+**Source of truth.** The receipt schema lives in
+`crates/franken-engine/src/self_replacement.rs::ReplacementReceipt`; the
+pre-signed fallback + its lifecycle live in
+`crates/franken-engine/src/pre_signed_demotion_fallback.rs`
+(`PreSignedDemotionFallback` / `FallbackStatus`). The two runbook scripts
+mirror those types; the `self_replacement_lineage_replay` example
+(`cargo run --example self_replacement_lineage_replay`, V.4) builds the same
+`LineageChain` shape the scripts consume.
+
+### How to read a ReplacementReceipt
+
+Each receipt records one promotion step: `old_slot_id -> new_slot_id`, the old
+and new cell digests, the `translation_validation_proof_ref` proving the new
+cell preserves the old cell's observable behavior, the
+`content_hash_chain_into_lineage` linking it to the prior step, the
+`validation_artifacts` and their verdicts, the `rollback_token` (digest of the
+last-known-good for reversal), the `promotion_rationale`, and the
+`signature_bundle` that authorized it.
+
+### How to walk the lineage chain across N replacements
+
+Given a slot id and a serialized chain, walk every receipt in promotion order
+and verify lineage integrity (each step's `old_cell_digest` must equal the
+previous step's `new_cell_digest`; a mismatch is a broken link):
+
+```bash
+runbooks/scripts/walk_lineage.sh <slot_id> <lineage.json>          # walk + artifact
+runbooks/scripts/walk_lineage.sh --json <slot_id> <lineage.json>   # JSON only (pipe-friendly)
+runbooks/scripts/walk_lineage.sh selftest                          # deterministic in-tree self-test
+```
+
+The walk verdict is `ok` only when the chain is non-empty, every link is
+intact, the queried slot terminates the chain, and every validation artifact is
+approved. A `broken-linkage` verdict names the first step whose
+`old_cell_digest` does not chain into its predecessor — the signal that a
+receipt was tampered with or a step is missing. Output conforms to
+`franken-engine.self-replacement-lineage.v1`.
+
+### How to interpret a triggered demotion fallback receipt
+
+When a promotion is rolled back, inspect the demotion-fallback bundle to surface
+the original promotion receipt, the pre-signed demotion fallback, the trigger
+that fired, and the post-demotion safe-mode state:
+
+```bash
+runbooks/scripts/inspect_demotion_receipt.sh <fallback.json>          # inspect + artifact
+runbooks/scripts/inspect_demotion_receipt.sh --json <fallback.json>   # JSON only (pipe-friendly)
+runbooks/scripts/inspect_demotion_receipt.sh selftest                 # deterministic in-tree self-test
+```
+
+Verdicts: `sealed` (fallback armed, no demotion fired), `active` (promotion
+live), `demoted` (a *permitted* trigger fired — the expected rollback path),
+`voided` (promotion succeeded, fallback retired). The fail-closed alarm is
+**`ILLEGAL-TRIGGER`**: a demotion that fired on a trigger the fallback was not
+sealed to honor (`DigestDrift`, `SeverityThresholdCrossed`,
+`GatekeeperRejection`, `ManualOperator`). That is never expected and must be
+escalated — it means a demotion was activated outside its sealed authority.
+Output conforms to `franken-engine.demotion-fallback.v1`.
+
+### When to manually halt promotion (operator override)
+
+Operator override — manually halting a slot's promotion — is the safety valve.
+Halt promotion when: `walk_lineage.sh` reports `broken-linkage` or
+`unapproved-artifacts` for a slot; `inspect_demotion_receipt.sh` reports
+`ILLEGAL-TRIGGER`; or a sibling/calibration gate is `DEGRADED` and the slot is
+about to tier up. A manual halt is itself a `ManualOperator` demotion trigger,
+so it flows through the same pre-signed-fallback path and lands the slot in its
+recorded safe-mode state (typically `delegate_fallback_active`) — the operator
+is never trusting a black box, and the override is itself an auditable receipt.
+
+**Logging discipline (bd-cixqu.45).** Both scripts run under `set -euo
+pipefail`, force `TZ=UTC` / `LC_ALL=C`, write a `commands.txt` plus the report
+and summary under `artifacts/self_replacement_lineage/<ts>/` and
+`artifacts/demotion_inspect/<ts>/`, and ship a deterministic `selftest` mode so
+the parse + verdict logic is verifiable without an engine build.
+
 ## Limitations

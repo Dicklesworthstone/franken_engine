@@ -100,6 +100,7 @@ pub mod component_shape_catalog;
 pub mod composable_gate_framework;
 pub mod compression_residual_gate;
 pub mod compromise_rate_disruptive_floor_metric_gate;
+pub mod conformal_calibration;
 pub mod conformance_catalog;
 pub mod conformance_harness;
 pub mod conformance_vector_gen;

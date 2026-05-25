@@ -346,6 +346,59 @@ scripts/perf/hyperfine_ab.sh <bin_a> <bin_b> <invocation_args...>
 Emits `a_vs_b.json` and a `comparison.md` (mean / std-dev / 95% CI per binary
 plus relative speedup) under `tests/artifacts/perf/hyperfine/<ts>/`.
 
+## Profile-Guided Optimization (PGO)
+
+PGO is driven through [`cargo-pgo`](https://github.com/Kobzol/cargo-pgo)
+(PERF-ALIEN-3, parent bead `bd-o4cbn.11`). This section pins the toolchain
+and the training corpus so instrumentation/optimization runs are
+reproducible across machines.
+
+### Toolchain setup (PERF-ALIEN-3.1)
+
+```bash
+cargo install cargo-pgo                       # pinned to >= 0.3.0
+rustup component add llvm-tools-preview        # provides llvm-profdata / llvm-cov
+cargo pgo --version                            # acceptance: prints cargo-pgo-pgo 0.3.0
+```
+
+`llvm-tools-preview` supplies the `llvm-profdata` binary `cargo-pgo` uses to
+merge the raw `.profraw` files emitted by an instrumented build. The
+nightly toolchain already in use for this crate (see the project default
+toolchain) ships these components.
+
+### Training corpus
+
+The PGO profile is collected by exercising the runtime's real hot paths,
+not synthetic micro-loops, so the merged profile reflects production-shaped
+control flow. Two input sources make up the corpus:
+
+1. **`real_runtime` hot-path bench inputs** — the
+   `crates/franken-engine/benches/hot_paths.rs` Criterion suite running in
+   its `real_runtime` mode (parser-arena, lowering, baseline-interpreter,
+   iterator-protocol, scheduler, and evidence digests). These drive the
+   parse → lower → execute → evidence pipeline end to end.
+2. **Macro workloads** — every script under `benchmarks/macro/`:
+   - `event_emitter_simulation.js`
+   - `index.js`
+   - `json_transformation.js`
+   - `recursive_algorithms.js`
+   - `text_processing.js`
+   - `tree_traversal.js`
+
+   These cover allocation-heavy, recursion-heavy, string-heavy, and
+   tree-walking patterns, broadening branch coverage beyond the micro hot
+   paths.
+
+Rationale: the `hot_paths` inputs concentrate samples on the
+latency-critical inner loops the regression gate already guards, while the
+macro scripts widen coverage so the optimizer does not over-fit to the
+micro benches. The instrumentation/collection pass that consumes this
+corpus is tracked separately in `bd-o4cbn.11.2` (PERF-ALIEN-3.2).
+
+Collection and optimization runs use the canonical perf build flags
+(`CARGO_INCREMENTAL=0`, `RUSTFLAGS=-C linker=cc`) so PGO artifacts compare
+cleanly against the frozen baselines above.
+
 ## Honest Performance Statement
 
 **FrankenEngine is intentionally slower than mainstream JavaScript engines.** 

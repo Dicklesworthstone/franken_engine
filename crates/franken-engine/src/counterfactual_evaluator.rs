@@ -242,6 +242,27 @@ pub enum CounterfactualError {
     InvalidConfidence { value: i64 },
     /// The improvement threshold is negative.
     NegativeThreshold { value: i64 },
+    /// A substituted policy snapshot claims a generation newer than the current
+    /// accepted generation. Substituting it would silently re-interpret recorded
+    /// bytes under a schema the recording never used. (Track S — bd-cixqu.19.5.)
+    IncompatibleGeneration { expected: u64, actual: u64 },
+    /// A substituted policy snapshot claims a generation that has been retired;
+    /// re-substituting a retired generation is fail-closed. (Track S.)
+    RetiredGeneration { generation: u64 },
+    /// A substituted policy snapshot's schema id does not match the baseline
+    /// schema the fleet traces were recorded under. (Track S.)
+    PolicySchemaMismatch {
+        policy_id: String,
+        expected: String,
+        actual: String,
+    },
+    /// A substituted policy snapshot's bytes do not hash to its declared content
+    /// hash — bytes were mutated after the snapshot was sealed. (Track S.)
+    PolicyContentHashMismatch {
+        policy_id: String,
+        expected: String,
+        actual: String,
+    },
 }
 
 impl fmt::Display for CounterfactualError {
@@ -274,6 +295,35 @@ impl fmt::Display for CounterfactualError {
             }
             Self::NegativeThreshold { value } => {
                 write!(f, "improvement threshold must be non-negative: {value}")
+            }
+            Self::IncompatibleGeneration { expected, actual } => {
+                write!(
+                    f,
+                    "incompatible policy generation: accepted <= {expected}, snapshot claims {actual}"
+                )
+            }
+            Self::RetiredGeneration { generation } => {
+                write!(f, "policy generation {generation} is retired")
+            }
+            Self::PolicySchemaMismatch {
+                policy_id,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "policy {policy_id} schema mismatch: expected {expected}, snapshot claims {actual}"
+                )
+            }
+            Self::PolicyContentHashMismatch {
+                policy_id,
+                expected,
+                actual,
+            } => {
+                write!(
+                    f,
+                    "policy {policy_id} content-hash mismatch: declared {expected}, recomputed {actual}"
+                )
             }
         }
     }

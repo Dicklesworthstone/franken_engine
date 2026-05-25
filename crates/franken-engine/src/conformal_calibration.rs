@@ -29,10 +29,10 @@
 // rational `(1+c)/(n+1)` and the bound is an order statistic, so calibration
 // is bit-for-bit reproducible across platforms and replayable.
 //
-// Scope (this bead): the substrate + per-decision bound emission over a
-// ledger. Calibration-drift refusal (bd-cixqu.33.2) and the
-// same-distribution negative test (bd-cixqu.33.4) build on this surface and
-// are intentionally out of scope here.
+// Scope: the conformal substrate + per-decision bound emission over a ledger
+// (GG.1, bd-cixqu.33.1) plus the calibration-freshness refusal gate (GG.2,
+// bd-cixqu.33.2 — see `ConformalCalibrator::gate`). The same-distribution
+// negative test (bd-cixqu.33.4) builds on this surface and is out of scope here.
 
 use crate::hash_tiers::ContentHash;
 use crate::martingale_decision_ledger::MartingaleLedger;
@@ -418,6 +418,167 @@ impl ConformalCalibrator {
 }
 
 // ---------------------------------------------------------------------------
+// Calibration freshness gate (bd-cixqu.33.2, GG.2)
+// ---------------------------------------------------------------------------
+
+/// Policy governing when a calibration sample is fresh and adequate enough to
+/// certify a confidence-bounded decision.
+///
+/// Conformal validity assumes the calibration scores remain exchangeable with
+/// the current decision. A calibration set gathered many epochs ago may no
+/// longer reflect the operating regime — its `1-α` bound would then be a
+/// stale, unjustified claim. This policy bounds that staleness and the minimum
+/// sample size, so the gate can **fail closed** rather than publish an
+/// uncertified confidence bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CalibrationFreshnessPolicy {
+    /// Maximum epoch lag between the calibration data and the decision before
+    /// the calibration is considered stale. `0` requires same-epoch calibration.
+    pub max_staleness_epochs: u64,
+    /// Minimum calibration sample size required to attempt certification.
+    pub min_calibration_size: u64,
+}
+
+impl CalibrationFreshnessPolicy {
+    /// Build a freshness policy.
+    pub fn new(max_staleness_epochs: u64, min_calibration_size: u64) -> Self {
+        Self {
+            max_staleness_epochs,
+            min_calibration_size,
+        }
+    }
+}
+
+/// Verdict of the freshness/adequacy gate. Only [`Self::Certified`] authorizes
+/// publishing the conformal bound; every `Refused*` variant directs the
+/// guardplane to fall back to safe-mode, evidence-only output (no
+/// confidence-bounded claim).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CalibrationGateVerdict {
+    /// Calibration is fresh and adequate: publish the confidence-bounded
+    /// decision using this bound.
+    Certified { bound: CalibratedRegretBound },
+    /// The freshness window has expired — refuse the confidence-bounded claim.
+    RefusedStale {
+        calibration_epoch: u64,
+        decision_epoch: u64,
+        lag: u64,
+        max_staleness_epochs: u64,
+    },
+    /// Too few calibration points to attempt certification.
+    RefusedInsufficientSample {
+        calibration_size: u64,
+        min_required: u64,
+    },
+    /// Fresh and adequately sized, but the sample still cannot certify the
+    /// requested `1-α` (the order-statistic bound saturates).
+    RefusedUncertifiable {
+        calibration_size: u64,
+        quantile_rank: u64,
+    },
+}
+
+impl CalibrationGateVerdict {
+    /// Whether the gate authorized a confidence-bounded decision.
+    pub fn is_certified(&self) -> bool {
+        matches!(self, Self::Certified { .. })
+    }
+
+    /// Whether the gate refused (caller must fall back to safe-mode evidence).
+    pub fn is_refused(&self) -> bool {
+        !self.is_certified()
+    }
+
+    /// The certified bound, if any.
+    pub fn bound(&self) -> Option<CalibratedRegretBound> {
+        match self {
+            Self::Certified { bound } => Some(*bound),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for CalibrationGateVerdict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Certified { bound } => write!(f, "certified: {bound}"),
+            Self::RefusedStale {
+                lag,
+                max_staleness_epochs,
+                ..
+            } => write!(
+                f,
+                "refused: stale calibration (lag {lag} > max {max_staleness_epochs})"
+            ),
+            Self::RefusedInsufficientSample {
+                calibration_size,
+                min_required,
+            } => write!(
+                f,
+                "refused: insufficient calibration (n={calibration_size} < {min_required})"
+            ),
+            Self::RefusedUncertifiable {
+                calibration_size,
+                quantile_rank,
+            } => write!(
+                f,
+                "refused: uncertifiable coverage (n={calibration_size}, need rank {quantile_rank})"
+            ),
+        }
+    }
+}
+
+impl ConformalCalibrator {
+    /// Fail-closed freshness/adequacy gate (GG.2).
+    ///
+    /// Returns [`CalibrationGateVerdict::Certified`] only when the calibration
+    /// is fresh (decision epoch lags the calibration epoch by at most
+    /// `policy.max_staleness_epochs`), large enough
+    /// (`>= policy.min_calibration_size`), and can certify the requested
+    /// coverage (bound does not saturate). Otherwise a `Refused*` verdict is
+    /// returned and the guardplane MUST fall back to safe-mode evidence-only
+    /// output rather than publish an unjustified confidence bound.
+    ///
+    /// Staleness is evaluated first: an expired freshness window is reported
+    /// even when the sample is also too small, because a stale sample's size
+    /// is moot. A decision epoch earlier than the calibration epoch (clock
+    /// skew / replay) yields zero lag and is treated as fresh.
+    pub fn gate(
+        &self,
+        calibration_epoch: SecurityEpoch,
+        decision_epoch: SecurityEpoch,
+        policy: &CalibrationFreshnessPolicy,
+    ) -> CalibrationGateVerdict {
+        let cal = calibration_epoch.as_u64();
+        let dec = decision_epoch.as_u64();
+        let lag = dec.saturating_sub(cal);
+        if lag > policy.max_staleness_epochs {
+            return CalibrationGateVerdict::RefusedStale {
+                calibration_epoch: cal,
+                decision_epoch: dec,
+                lag,
+                max_staleness_epochs: policy.max_staleness_epochs,
+            };
+        }
+        let n = self.calibration().len() as u64;
+        if n < policy.min_calibration_size {
+            return CalibrationGateVerdict::RefusedInsufficientSample {
+                calibration_size: n,
+                min_required: policy.min_calibration_size,
+            };
+        }
+        let bound = self.regret_bound();
+        if bound.saturated {
+            return CalibrationGateVerdict::RefusedUncertifiable {
+                calibration_size: n,
+                quantile_rank: bound.quantile_rank,
+            };
+        }
+        CalibrationGateVerdict::Certified { bound }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Ledger integration — a calibrated regret bound on every decision
 // ---------------------------------------------------------------------------
 
@@ -783,5 +944,146 @@ mod tests {
         let sat = ConformalCalibrator::from_scores(1..=3, Alpha::FIVE_PERCENT).regret_bound();
         assert!(format!("{sat}").contains("SATURATED"));
         assert_eq!(format!("{}", Alpha::FIVE_PERCENT), "α=50000/1e6");
+    }
+}
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+
+    fn fresh_adequate_calibrator() -> ConformalCalibrator {
+        // n=100, α=0.05 -> regret bound certifiable (rank 96 <= 100).
+        ConformalCalibrator::from_scores(1..=100, Alpha::FIVE_PERCENT)
+    }
+
+    fn ep(n: u64) -> SecurityEpoch {
+        SecurityEpoch::from_raw(n)
+    }
+
+    #[test]
+    fn gate_certifies_fresh_adequate() {
+        let c = fresh_adequate_calibrator();
+        let policy = CalibrationFreshnessPolicy::new(5, 30);
+        // calibration epoch 10, decision epoch 12 -> lag 2 <= 5, n=100 >= 30.
+        let v = c.gate(ep(10), ep(12), &policy);
+        assert!(v.is_certified());
+        assert!(!v.is_refused());
+        assert_eq!(v.bound().unwrap().bound_millionths, 96);
+    }
+
+    #[test]
+    fn gate_refuses_stale_when_window_expired() {
+        let c = fresh_adequate_calibrator();
+        let policy = CalibrationFreshnessPolicy::new(5, 30);
+        // lag = 100 - 90 = 10 > 5 -> stale.
+        let v = c.gate(ep(90), ep(100), &policy);
+        assert_eq!(
+            v,
+            CalibrationGateVerdict::RefusedStale {
+                calibration_epoch: 90,
+                decision_epoch: 100,
+                lag: 10,
+                max_staleness_epochs: 5,
+            }
+        );
+        assert!(v.is_refused());
+        assert!(v.bound().is_none());
+    }
+
+    #[test]
+    fn gate_fresh_at_exact_staleness_boundary() {
+        let c = fresh_adequate_calibrator();
+        let policy = CalibrationFreshnessPolicy::new(5, 30);
+        // lag == max (5) -> still fresh (boundary inclusive).
+        assert!(c.gate(ep(10), ep(15), &policy).is_certified());
+        // lag == max + 1 (6) -> stale.
+        assert!(matches!(
+            c.gate(ep(10), ep(16), &policy),
+            CalibrationGateVerdict::RefusedStale { .. }
+        ));
+    }
+
+    #[test]
+    fn gate_refuses_insufficient_sample() {
+        // n=40 fresh, but policy demands >= 50.
+        let c = ConformalCalibrator::from_scores(1..=40, Alpha::FIVE_PERCENT);
+        let policy = CalibrationFreshnessPolicy::new(100, 50);
+        let v = c.gate(ep(1), ep(2), &policy);
+        assert_eq!(
+            v,
+            CalibrationGateVerdict::RefusedInsufficientSample {
+                calibration_size: 40,
+                min_required: 50,
+            }
+        );
+    }
+
+    #[test]
+    fn gate_refuses_uncertifiable_when_bound_saturates() {
+        // n=10, α=0.05 -> rank 11 > 10 -> saturated, even though fresh and
+        // above the (low) min sample size.
+        let c = ConformalCalibrator::from_scores(1..=10, Alpha::FIVE_PERCENT);
+        let policy = CalibrationFreshnessPolicy::new(100, 5);
+        let v = c.gate(ep(1), ep(1), &policy);
+        assert_eq!(
+            v,
+            CalibrationGateVerdict::RefusedUncertifiable {
+                calibration_size: 10,
+                quantile_rank: 11,
+            }
+        );
+    }
+
+    #[test]
+    fn gate_clock_skew_decision_before_calibration_is_fresh() {
+        let c = fresh_adequate_calibrator();
+        let policy = CalibrationFreshnessPolicy::new(0, 1);
+        // decision epoch (5) < calibration epoch (20): saturating lag = 0 -> fresh.
+        assert!(c.gate(ep(20), ep(5), &policy).is_certified());
+    }
+
+    #[test]
+    fn gate_max_staleness_zero_requires_same_epoch() {
+        let c = fresh_adequate_calibrator();
+        let policy = CalibrationFreshnessPolicy::new(0, 1);
+        assert!(c.gate(ep(7), ep(7), &policy).is_certified());
+        assert!(matches!(
+            c.gate(ep(7), ep(8), &policy),
+            CalibrationGateVerdict::RefusedStale { .. }
+        ));
+    }
+
+    #[test]
+    fn gate_evaluates_staleness_before_sample_size() {
+        // Stale AND too small -> staleness reported first (its size is moot).
+        let c = ConformalCalibrator::from_scores(1..=3, Alpha::FIVE_PERCENT);
+        let policy = CalibrationFreshnessPolicy::new(2, 100);
+        let v = c.gate(ep(0), ep(50), &policy);
+        assert!(matches!(v, CalibrationGateVerdict::RefusedStale { .. }));
+    }
+
+    #[test]
+    fn gate_verdict_serde_round_trip() {
+        let policy = CalibrationFreshnessPolicy::new(5, 30);
+        let certified = fresh_adequate_calibrator().gate(ep(1), ep(2), &policy);
+        let refused = fresh_adequate_calibrator().gate(ep(1), ep(100), &policy);
+        for v in [certified, refused] {
+            let json = serde_json::to_string(&v).unwrap();
+            let back: CalibrationGateVerdict = serde_json::from_str(&json).unwrap();
+            assert_eq!(v, back);
+        }
+        let pj = serde_json::to_string(&policy).unwrap();
+        assert_eq!(
+            serde_json::from_str::<CalibrationFreshnessPolicy>(&pj).unwrap(),
+            policy
+        );
+    }
+
+    #[test]
+    fn gate_display_distinguishes_outcomes() {
+        let policy = CalibrationFreshnessPolicy::new(5, 30);
+        let c = fresh_adequate_calibrator();
+        assert!(format!("{}", c.gate(ep(1), ep(2), &policy)).starts_with("certified"));
+        assert!(format!("{}", c.gate(ep(1), ep(100), &policy)).contains("stale"));
     }
 }

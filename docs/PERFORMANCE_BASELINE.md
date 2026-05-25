@@ -1,6 +1,6 @@
 # FrankenEngine Performance Baseline
 
-**Last Updated:** 2026-04-16  
+**Last Updated:** 2026-05-25  
 **Baseline Version:** FrankenEngine baseline interpreter (not JIT-optimized)  
 **Artifact Location:** `artifacts/performance_baselines/2026-04-16_12-41-04/`
 
@@ -279,6 +279,59 @@ node scripts/run_baseline_benchmarks.js
 ### Artifact Verification
 
 All performance claims are backed by reproducible artifacts in `artifacts/performance_baselines/`.
+
+## What counts as a perf win
+
+This section is the binding acceptance standard for every performance claim
+recorded in this document (PERF-ARTIFACT-1.3, `bd-o4cbn.12.3`). It exists so
+that a favourable-looking point estimate cannot, by itself, be promoted to a
+recorded win. Every `H[N]` and `ALIEN-N` bench-validation bead **must cite this
+section as its gate**, and a win is admitted to `PERFORMANCE_BASELINE.md` only
+after all five criteria below are demonstrably satisfied on committed artifacts.
+
+A perf delta is a **win** iff **ALL** of the following hold:
+
+1. **Magnitude.** The Criterion point-estimate of the relative change
+   `(post − pre) / pre` is `≤ −5 %` (i.e. at least a 5 % reduction in the
+   measured statistic — mean or slope — for a latency/time bench). The point
+   estimate is read from Criterion's `estimates.json` for both samples.
+2. **Confidence.** The **BCa 95 % CI** upper bound on that same quantity
+   `(post − pre) / pre` is `< 0 %`. The interval is computed by the paired
+   bias-corrected-and-accelerated bootstrap in `scripts/perf/bootstrap_ci.py`
+   (PERF-ARTIFACT-1.1, `bd-o4cbn.12.1`); a win only counts when the CI excludes
+   the no-change value (0 %) in the favourable direction. Equivalently, the
+   pre and post Criterion 95 % CIs must not overlap.
+3. **Bench truthfulness.** The honest-gate score is `≥ 12 / 14`, as scored by
+   the honest-gate walker (PERF-ARTIFACT-1.2, `bd-o4cbn.12.2`). This rejects
+   benches that are optimised away by the compiler, that measure setup instead
+   of the hot path, that lack a `black_box` boundary, or that otherwise fail to
+   exercise the claimed code.
+4. **Determinism preserved.** The replay-coverage gate (PERF-H1.5,
+   `bd-o4cbn.1.5`) and the metamorphic suite are **green on a fresh bundle**
+   produced from the optimised build. A speedup that perturbs replay semantics
+   or bit-stable canonical output is not a win regardless of magnitude.
+5. **Variance envelope.** The coefficient of variation `CV = std / mean` is
+   `≤ 10 %` on **both** the pre and post samples. High-variance measurements are
+   not trustworthy enough to anchor a claim, even when the means differ.
+
+**No partial credit.** Any acknowledged failure on criteria (1) through (5)
+means the delta is **NOT recorded** as a win in `PERFORMANCE_BASELINE.md`, even
+if the point estimate looks favourable. The failure is documented on the
+originating bead instead, and the claim stays in the "hypothesis" state of the
+claim-to-proof matrix until it is re-measured and passes cleanly.
+
+### Reference implementation
+
+`scripts/perf/h1_bench_validate.sh` (PERF-H1.4, `bd-o4cbn.1.4`) is the worked
+example of this gate for the `evidence_ledger_bundle` hot path: it builds
+`hot_paths` with the frozen baseline flags, diffs the post sample against the
+saved `pass1` Criterion baseline, and asserts criteria (1)/(2) (magnitude +
+non-overlapping CI), criterion (5) (CV ≤ 10 %), and a no-regression guard on the
+other seven sub-benches before writing its `events.jsonl` /
+`summary.md` evidence bundle. New bench-validation beads should follow the same
+shape: build with canonical flags, compare against a frozen baseline, evaluate
+all five criteria, emit a signed/reproducible artifact bundle, and cite this
+section in their acceptance notes.
 
 ## Continuous Perf-Regression Gate (CI)
 

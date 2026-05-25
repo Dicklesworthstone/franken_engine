@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # scripts/run_rgc_fleet_counterfactual_replay.sh
 #
-# Track S fleet-counterfactual-replay gate (bd-cixqu.19.3). Validates the
-# counterfactual fleet-replay proof surface — the S.1 fleet-counterfactual API
-# (replay N captured traces under one substituted policy in a single
-# operation), the S.2 signed N-counterfactual report schema
-# (franken-engine.fleet-counterfactual-report.v1), and the S.3 in-tree
-# companion test + replay wrapper — and emits a replayable proof bundle.
+# Track S fleet-counterfactual-replay gate (bd-cixqu.19.3, bd-cixqu.19.4).
+# Validates the counterfactual fleet-replay proof surface — the S.1
+# fleet-counterfactual API (replay N captured traces under one substituted
+# policy in a single operation), the S.2 signed N-counterfactual report schema
+# (franken-engine.fleet-counterfactual-report.v1), the S.3 in-tree companion
+# test + replay wrapper, and the S.4 metamorphic substitution test
+# (counterfactual(trace, policy_original) === original_outcome) — and emits a
+# replayable proof bundle.
 #
 # Modes:
-#   ci        — Cross-reference every Track-S sub-claim (S.1/S.2/S.3) to its
+#   ci        — Cross-reference every Track-S sub-claim (S.1/S.2/S.3/S.4) to its
 #               in-tree source + test surface, content-address each file
 #               (sha256), and emit a structured artifact bundle:
 #                 run_manifest.json + events.jsonl + commands.txt +
@@ -126,13 +128,16 @@ emit_event() {
 # Track-S required proof surface. Each row is "sub_claim|path".
 # S.1 = fleet-counterfactual API (replay N traces under one substituted policy),
 # S.2 = signed N-counterfactual report schema,
-# S.3 = in-tree companion test + deterministic replay wrapper.
+# S.3 = in-tree companion test + deterministic replay wrapper,
+# S.4 = metamorphic substitution test (counterfactual(trace, policy_original)
+#       === original_outcome).
 readonly REQUIRED_SURFACE=(
   "S.1|crates/franken-engine/src/counterfactual_replay_engine.rs"
   "S.1|crates/franken-engine/tests/counterfactual_replay_engine_integration.rs"
   "S.2|crates/franken-engine/src/fleet_counterfactual_report.rs"
   "S.3|crates/franken-engine/tests/rgc_fleet_counterfactual_replay.rs"
   "S.3|scripts/e2e/rgc_fleet_counterfactual_replay_e2e.sh"
+  "S.4|crates/franken-engine/tests/rgc_fleet_counterfactual_metamorphic.rs"
 )
 
 # ---------------------------------------------------------------------------
@@ -196,7 +201,7 @@ run_ci_mode() {
 
   # Each sub-claim must contribute at least one present artifact.
   local sub
-  for sub in S.1 S.2 S.3; do
+  for sub in S.1 S.2 S.3 S.4; do
     local count
     count="$(jq -r --arg s "${sub}" '[.[] | select(.sub_claim == $s and .status == "present")] | length' <<<"${surface_json}")"
     if [[ "${count}" -eq 0 ]]; then
@@ -286,7 +291,7 @@ run_selftest_mode() {
     failures=$((failures + 1))
   fi
   local row sub_claim path
-  local saw_s1=0 saw_s2=0 saw_s3=0
+  local saw_s1=0 saw_s2=0 saw_s3=0 saw_s4=0
   for row in "${REQUIRED_SURFACE[@]}"; do
     sub_claim="${row%%|*}"
     path="${row#*|}"
@@ -298,10 +303,11 @@ run_selftest_mode() {
       S.1) saw_s1=1 ;;
       S.2) saw_s2=1 ;;
       S.3) saw_s3=1 ;;
+      S.4) saw_s4=1 ;;
     esac
   done
-  if [[ "${saw_s1}" -eq 0 || "${saw_s2}" -eq 0 || "${saw_s3}" -eq 0 ]]; then
-    echo "FAIL selftest: surface must cover S.1, S.2 and S.3" >&2
+  if [[ "${saw_s1}" -eq 0 || "${saw_s2}" -eq 0 || "${saw_s3}" -eq 0 || "${saw_s4}" -eq 0 ]]; then
+    echo "FAIL selftest: surface must cover S.1, S.2, S.3 and S.4" >&2
     failures=$((failures + 1))
   fi
   if [[ "${failures}" -eq 0 ]]; then

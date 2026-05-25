@@ -21,6 +21,17 @@ const ERROR_WEIGHT_SUM: &str = "FE-BENCH-1004";
 const ERROR_MISSING_COVERAGE: &str = "FE-BENCH-1005";
 const ERROR_MISSING_LINEAGE: &str = "FE-BENCH-1006";
 const ERROR_PUBLICATION_GATE_DENY: &str = "FE-BENCH-1007";
+const ERROR_INVALID_WEIGHT_CONTRACT: &str = "FE-BENCH-1008";
+const ERROR_CONTRACT_WEIGHT_SUM: &str = "FE-BENCH-1009";
+const ERROR_WORKLOAD_NOT_IN_CONTRACT: &str = "FE-BENCH-1010";
+
+/// Typed workload-class weight contract embedded at compile time.
+///
+/// The canonical source lives at `docs/benchmark_denominator_weights_v1.json`
+/// (repo root). Embedding it via `include_str!` keeps scoring deterministic and
+/// replay-friendly: the gate never reads the filesystem at runtime.
+pub const WEIGHT_CONTRACT_V1_JSON: &str =
+    include_str!("../../../docs/benchmark_denominator_weights_v1.json");
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -152,6 +163,20 @@ pub enum BenchmarkDenominatorError {
     MissingReplacementLineage,
     #[error("serialization failure: {0}")]
     SerializationFailure(String),
+    #[error("weight contract parse failure: {0}")]
+    WeightContractParse(String),
+    #[error("weight contract is empty (no workload classes)")]
+    EmptyWeightContract,
+    #[error("duplicate workload class id `{class_id}` in weight contract")]
+    DuplicateWorkloadClass { class_id: String },
+    #[error("invalid weight for workload class `{class_id}`: {reason}")]
+    InvalidClassWeight { class_id: String, reason: String },
+    #[error("workload `{workload_id}` appears in more than one workload class")]
+    DuplicateWorkloadMembership { workload_id: String },
+    #[error("workload class weights do not sum to 1 (sum={sum})")]
+    ContractWeightSum { sum: f64 },
+    #[error("workload `{workload_id}` is not declared in any weight-contract class")]
+    WorkloadNotInContract { workload_id: String },
 }
 
 impl BenchmarkDenominatorError {
@@ -166,6 +191,13 @@ impl BenchmarkDenominatorError {
             Self::MissingCoverageProgression => ERROR_MISSING_COVERAGE,
             Self::MissingReplacementLineage => ERROR_MISSING_LINEAGE,
             Self::SerializationFailure(_) => ERROR_PUBLICATION_GATE_DENY,
+            Self::WeightContractParse(_)
+            | Self::EmptyWeightContract
+            | Self::DuplicateWorkloadClass { .. }
+            | Self::InvalidClassWeight { .. }
+            | Self::DuplicateWorkloadMembership { .. } => ERROR_INVALID_WEIGHT_CONTRACT,
+            Self::ContractWeightSum { .. } => ERROR_CONTRACT_WEIGHT_SUM,
+            Self::WorkloadNotInContract { .. } => ERROR_WORKLOAD_NOT_IN_CONTRACT,
         }
     }
 }
@@ -194,6 +226,211 @@ pub fn weighted_geometric_mean(
     Ok(deterministic_round(log_sum.exp()))
 }
 
+/// One workload class in the typed weight contract.
+///
+/// `weight` is the class-level policy weight; member workloads inherit an equal
+/// share of it (renormalised over admitted classes at scoring time).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WorkloadClassWeight {
+    pub class_id: String,
+    pub weight: f64,
+    #[serde(default)]
+    pub description: String,
+    pub member_workload_ids: Vec<String>,
+}
+
+/// Typed workload-class weight contract for the throughput denominator.
+///
+/// Weights are assigned per workload *class* (not per hand-picked workload) so
+/// the cross-class weighting is fixed by policy rather than cherry-picked per
+/// run. See `docs/benchmark_denominator_weights_v1.json` for the canonical
+/// source and rationale.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WeightContract {
+    pub contract_version: String,
+    #[serde(default)]
+    pub rationale: String,
+    pub workload_classes: Vec<WorkloadClassWeight>,
+}
+
+impl WeightContract {
+    /// Loads and validates the contract embedded at compile time
+    /// (`WEIGHT_CONTRACT_V1_JSON`).
+    pub fn embedded_v1() -> Result<Self, BenchmarkDenominatorError> {
+        Self::from_json_str(WEIGHT_CONTRACT_V1_JSON)
+    }
+
+    /// Parses and validates a contract from a JSON string.
+    pub fn from_json_str(json: &str) -> Result<Self, BenchmarkDenominatorError> {
+        let contract: Self = serde_json::from_str(json)
+            .map_err(|error| BenchmarkDenominatorError::WeightContractParse(error.to_string()))?;
+        contract.validate()?;
+        Ok(contract)
+    }
+
+    /// Validates structural and numeric invariants:
+    /// non-empty classes, unique class ids, positive finite weights summing to
+    /// 1.0, and workload memberships that are unique across classes.
+    pub fn validate(&self) -> Result<(), BenchmarkDenominatorError> {
+        if self.workload_classes.is_empty() {
+            return Err(BenchmarkDenominatorError::EmptyWeightContract);
+        }
+
+        let mut seen_classes = BTreeSet::new();
+        let mut seen_members = BTreeSet::new();
+        let mut weight_sum = 0.0_f64;
+
+        for class in &self.workload_classes {
+            let class_id = class.class_id.trim();
+            if class_id.is_empty() {
+                return Err(BenchmarkDenominatorError::InvalidClassWeight {
+                    class_id: class.class_id.clone(),
+                    reason: "class_id must not be empty".to_string(),
+                });
+            }
+            if !seen_classes.insert(class_id.to_string()) {
+                return Err(BenchmarkDenominatorError::DuplicateWorkloadClass {
+                    class_id: class_id.to_string(),
+                });
+            }
+            if !class.weight.is_finite() || class.weight <= 0.0 {
+                return Err(BenchmarkDenominatorError::InvalidClassWeight {
+                    class_id: class_id.to_string(),
+                    reason: "weight must be finite and > 0".to_string(),
+                });
+            }
+            if class.member_workload_ids.is_empty() {
+                return Err(BenchmarkDenominatorError::InvalidClassWeight {
+                    class_id: class_id.to_string(),
+                    reason: "class must declare at least one member workload".to_string(),
+                });
+            }
+            for member in &class.member_workload_ids {
+                let member = member.trim();
+                if member.is_empty() {
+                    return Err(BenchmarkDenominatorError::InvalidClassWeight {
+                        class_id: class_id.to_string(),
+                        reason: "member workload id must not be empty".to_string(),
+                    });
+                }
+                if !seen_members.insert(member.to_string()) {
+                    return Err(BenchmarkDenominatorError::DuplicateWorkloadMembership {
+                        workload_id: member.to_string(),
+                    });
+                }
+            }
+            weight_sum += class.weight;
+        }
+
+        if (weight_sum - 1.0).abs() > WEIGHT_SUM_EPSILON {
+            return Err(BenchmarkDenominatorError::ContractWeightSum {
+                sum: deterministic_round(weight_sum),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Resolves a per-workload weight map for an admitted set of workload ids.
+    ///
+    /// Class weights are renormalised over the classes that have at least one
+    /// admitted member, and each admitted class's renormalised weight is split
+    /// equally across its admitted members. The returned weights sum to 1.0
+    /// (within `WEIGHT_SUM_EPSILON`). Every input id must belong to exactly one
+    /// declared class.
+    pub fn resolve_weights(
+        &self,
+        workload_ids: &[String],
+    ) -> Result<std::collections::BTreeMap<String, f64>, BenchmarkDenominatorError> {
+        // workload_id -> class_id membership map (contract already validated for
+        // uniqueness across classes by `validate`).
+        let mut membership: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for class in &self.workload_classes {
+            for member in &class.member_workload_ids {
+                membership.insert(member.trim().to_string(), class.class_id.trim().to_string());
+            }
+        }
+
+        // Group admitted workloads by class.
+        let mut admitted_by_class: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        for id in workload_ids {
+            let id = id.trim().to_string();
+            let class_id = membership.get(&id).ok_or_else(|| {
+                BenchmarkDenominatorError::WorkloadNotInContract {
+                    workload_id: id.clone(),
+                }
+            })?;
+            admitted_by_class
+                .entry(class_id.clone())
+                .or_default()
+                .push(id);
+        }
+
+        // Class weight lookup.
+        let class_weight = |class_id: &str| -> f64 {
+            self.workload_classes
+                .iter()
+                .find(|class| class.class_id.trim() == class_id)
+                .map(|class| class.weight)
+                .unwrap_or(0.0)
+        };
+
+        let admitted_weight_sum: f64 = admitted_by_class
+            .keys()
+            .map(|class_id| class_weight(class_id))
+            .sum();
+        if admitted_weight_sum <= 0.0 {
+            return Err(BenchmarkDenominatorError::ContractWeightSum {
+                sum: deterministic_round(admitted_weight_sum),
+            });
+        }
+
+        let mut weights = std::collections::BTreeMap::new();
+        for (class_id, members) in &admitted_by_class {
+            let renormalised = class_weight(class_id) / admitted_weight_sum;
+            let per_member = renormalised / members.len() as f64;
+            for member in members {
+                weights.insert(member.clone(), per_member);
+            }
+        }
+
+        Ok(weights)
+    }
+}
+
+/// Computes the weighted geometric-mean speedup using class weights from the
+/// typed contract instead of per-case weights.
+///
+/// Per-case `weight` fields are ignored here: weights come from the contract.
+/// Every case's `workload_id` must be declared in exactly one contract class.
+pub fn weighted_geometric_mean_with_contract(
+    cases: &[BenchmarkCase],
+    baseline: BaselineEngine,
+    contract: &WeightContract,
+) -> Result<f64, BenchmarkDenominatorError> {
+    let prepared = prepare_cases(cases, baseline)?;
+    let workload_ids: Vec<String> = prepared
+        .iter()
+        .map(|case| case.workload_id.trim().to_string())
+        .collect();
+    let weights = contract.resolve_weights(&workload_ids)?;
+
+    let mut log_sum = 0.0_f64;
+    for case in &prepared {
+        let key = case.workload_id.trim();
+        let weight = weights.get(key).copied().ok_or_else(|| {
+            BenchmarkDenominatorError::WorkloadNotInContract {
+                workload_id: key.to_string(),
+            }
+        })?;
+        log_sum += weight * case.speedup.ln();
+    }
+
+    Ok(deterministic_round(log_sum.exp()))
+}
+
 /// Evaluates publication-gate rules for the normative `>= 3x` claim.
 ///
 /// Publication requires:
@@ -206,6 +443,50 @@ pub fn evaluate_publication_gate(
     input: &PublicationGateInput,
     ctx: &PublicationContext,
 ) -> Result<PublicationGateDecision, BenchmarkDenominatorError> {
+    let lineage_ids = validate_coverage_and_lineage(input)?;
+
+    let score_vs_node = weighted_geometric_mean(&input.node_cases, BaselineEngine::Node)?;
+    let score_vs_bun = weighted_geometric_mean(&input.bun_cases, BaselineEngine::Bun)?;
+
+    Ok(finalize_gate_decision(
+        input,
+        ctx,
+        lineage_ids,
+        score_vs_node,
+        score_vs_bun,
+    ))
+}
+
+/// Identical to [`evaluate_publication_gate`] but derives per-workload weights
+/// from the typed workload-class weight contract (`docs/benchmark_denominator_weights_v1.json`)
+/// instead of per-case weights. This is the canonical FE-CLAIM-010 scoring
+/// path: cross-class weighting is fixed by policy, not cherry-picked per run.
+pub fn evaluate_publication_gate_with_contract(
+    input: &PublicationGateInput,
+    ctx: &PublicationContext,
+    contract: &WeightContract,
+) -> Result<PublicationGateDecision, BenchmarkDenominatorError> {
+    let lineage_ids = validate_coverage_and_lineage(input)?;
+
+    let score_vs_node =
+        weighted_geometric_mean_with_contract(&input.node_cases, BaselineEngine::Node, contract)?;
+    let score_vs_bun =
+        weighted_geometric_mean_with_contract(&input.bun_cases, BaselineEngine::Bun, contract)?;
+
+    Ok(finalize_gate_decision(
+        input,
+        ctx,
+        lineage_ids,
+        score_vs_node,
+        score_vs_bun,
+    ))
+}
+
+/// Validates the coverage progression + replacement lineage prerequisites and
+/// returns the normalised (sorted, deduplicated, non-empty) lineage id set.
+fn validate_coverage_and_lineage(
+    input: &PublicationGateInput,
+) -> Result<Vec<String>, BenchmarkDenominatorError> {
     if input.native_coverage_progression.is_empty() {
         return Err(BenchmarkDenominatorError::MissingCoverageProgression);
     }
@@ -222,9 +503,19 @@ pub fn evaluate_publication_gate(
         return Err(BenchmarkDenominatorError::MissingReplacementLineage);
     }
 
-    let score_vs_node = weighted_geometric_mean(&input.node_cases, BaselineEngine::Node)?;
-    let score_vs_bun = weighted_geometric_mean(&input.bun_cases, BaselineEngine::Bun)?;
+    Ok(lineage_ids)
+}
 
+/// Builds the publication-gate decision from already-computed scores, applying
+/// the case-quality and `>= 3.0` threshold blockers and emitting the audit
+/// event stream. Shared by the per-case and contract-weighted gate paths.
+fn finalize_gate_decision(
+    input: &PublicationGateInput,
+    ctx: &PublicationContext,
+    lineage_ids: Vec<String>,
+    score_vs_node: f64,
+    score_vs_bun: f64,
+) -> PublicationGateDecision {
     let mut blockers = Vec::new();
 
     append_case_quality_blockers(&input.node_cases, BaselineEngine::Node, &mut blockers);
@@ -287,7 +578,7 @@ pub fn evaluate_publication_gate(
     let mut events: Vec<BenchmarkPublicationEvent> = baseline_events.collect();
     events.push(final_event);
 
-    Ok(PublicationGateDecision {
+    PublicationGateDecision {
         score_vs_node,
         score_vs_bun,
         publish_allowed,
@@ -295,7 +586,7 @@ pub fn evaluate_publication_gate(
         native_coverage_progression: input.native_coverage_progression.clone(),
         replacement_lineage_ids: lineage_ids,
         events,
-    })
+    }
 }
 
 fn append_case_quality_blockers(
@@ -1970,5 +2261,202 @@ mod tests {
         original.replacement_lineage_ids.push("extra".into());
         assert_eq!(cloned.node_cases.len(), 1);
         assert_eq!(cloned.replacement_lineage_ids.len(), 1);
+    }
+
+    // ── Weight contract (bd-cixqu.5.4) ───────────────────────────────
+
+    fn contract_gate_input(franken_per_baseline: f64) -> PublicationGateInput {
+        // Spread cases across distinct contract classes so renormalisation has
+        // something to do; baseline fixed at 1000 tps.
+        let ids = ["json_parse_small", "http_route_dispatch", "sha256_digest"];
+        let cases: Vec<BenchmarkCase> = ids
+            .iter()
+            .map(|id| test_case(id, franken_per_baseline * 1000.0, 1000.0))
+            .collect();
+        PublicationGateInput {
+            node_cases: cases.clone(),
+            bun_cases: cases,
+            native_coverage_progression: vec![NativeCoveragePoint {
+                recorded_at_utc: "2026-05-24T00:00:00Z".into(),
+                native_slots: 10,
+                total_slots: 20,
+            }],
+            replacement_lineage_ids: vec!["lineage-1".into()],
+        }
+    }
+
+    #[test]
+    fn embedded_contract_loads_and_validates() {
+        let contract = WeightContract::embedded_v1().expect("embedded contract must validate");
+        assert_eq!(contract.contract_version, "v1");
+        assert!(!contract.workload_classes.is_empty());
+        let sum: f64 = contract.workload_classes.iter().map(|c| c.weight).sum();
+        assert!((sum - 1.0).abs() <= WEIGHT_SUM_EPSILON, "weights sum={sum}");
+    }
+
+    #[test]
+    fn contract_resolve_weights_sum_to_one() {
+        let contract = WeightContract::embedded_v1().unwrap();
+        let ids = vec![
+            "json_parse_small".to_string(),
+            "http_route_dispatch".to_string(),
+            "sha256_digest".to_string(),
+            "fibonacci_recursive".to_string(),
+        ];
+        let weights = contract.resolve_weights(&ids).unwrap();
+        let sum: f64 = weights.values().sum();
+        assert!((sum - 1.0).abs() <= WEIGHT_SUM_EPSILON, "sum={sum}");
+        assert_eq!(weights.len(), ids.len());
+    }
+
+    #[test]
+    fn contract_resolve_renormalises_over_admitted_classes() {
+        let contract = WeightContract::embedded_v1().unwrap();
+        // One member each from json_processing (0.20) and http (0.22).
+        let ids = vec![
+            "json_parse_small".to_string(),
+            "http_route_dispatch".to_string(),
+        ];
+        let weights = contract.resolve_weights(&ids).unwrap();
+        let sum: f64 = weights.values().sum();
+        assert!((sum - 1.0).abs() <= WEIGHT_SUM_EPSILON);
+        let json_w = weights["json_parse_small"];
+        let http_w = weights["http_route_dispatch"];
+        // Class-weight ratio (0.22 / 0.20 = 1.1) is preserved after renormalisation.
+        assert!(
+            (http_w / json_w - 1.1).abs() < 1e-9,
+            "ratio={}",
+            http_w / json_w
+        );
+    }
+
+    #[test]
+    fn contract_resolve_equal_split_within_class() {
+        let contract = WeightContract::embedded_v1().unwrap();
+        // Two members of the same class → equal share, summing to 1.0.
+        let ids = vec![
+            "json_parse_small".to_string(),
+            "json_parse_large".to_string(),
+        ];
+        let weights = contract.resolve_weights(&ids).unwrap();
+        assert!((weights["json_parse_small"] - 0.5).abs() < 1e-12);
+        assert!((weights["json_parse_large"] - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn contract_resolve_unknown_workload_errors() {
+        let contract = WeightContract::embedded_v1().unwrap();
+        let ids = vec!["not_a_real_workload".to_string()];
+        let err = contract.resolve_weights(&ids).unwrap_err();
+        assert!(matches!(
+            err,
+            BenchmarkDenominatorError::WorkloadNotInContract { .. }
+        ));
+        assert_eq!(err.stable_code(), "FE-BENCH-1010");
+    }
+
+    #[test]
+    fn weighted_geometric_mean_with_contract_uniform_speedup_equals_ratio() {
+        let contract = WeightContract::embedded_v1().unwrap();
+        // All cases 4x ⇒ weighted geometric mean = 4.0 regardless of weights.
+        let cases = vec![
+            test_case("json_parse_small", 4000.0, 1000.0),
+            test_case("http_route_dispatch", 4000.0, 1000.0),
+            test_case("matrix_multiply", 4000.0, 1000.0),
+        ];
+        let score =
+            weighted_geometric_mean_with_contract(&cases, BaselineEngine::Node, &contract).unwrap();
+        assert!((score - 4.0).abs() < 1e-9, "score={score}");
+    }
+
+    #[test]
+    fn gate_with_contract_passes_at_threshold() {
+        let contract = WeightContract::embedded_v1().unwrap();
+        let input = contract_gate_input(3.5);
+        let decision =
+            evaluate_publication_gate_with_contract(&input, &test_context(), &contract).unwrap();
+        assert!(decision.publish_allowed, "blockers={:?}", decision.blockers);
+        assert!(decision.score_vs_node >= SCORE_THRESHOLD);
+        assert!(decision.score_vs_bun >= SCORE_THRESHOLD);
+    }
+
+    #[test]
+    fn gate_with_contract_denies_below_threshold() {
+        let contract = WeightContract::embedded_v1().unwrap();
+        let input = contract_gate_input(2.0); // 2x < 3.0
+        let decision =
+            evaluate_publication_gate_with_contract(&input, &test_context(), &contract).unwrap();
+        assert!(!decision.publish_allowed);
+        assert!(decision.score_vs_node < SCORE_THRESHOLD);
+    }
+
+    #[test]
+    fn contract_validate_rejects_bad_weight_sum() {
+        let json = r#"{
+            "contract_version": "v1",
+            "workload_classes": [
+                {"class_id": "a", "weight": 0.5, "member_workload_ids": ["wa"]},
+                {"class_id": "b", "weight": 0.6, "member_workload_ids": ["wb"]}
+            ]
+        }"#;
+        let err = WeightContract::from_json_str(json).unwrap_err();
+        assert!(matches!(
+            err,
+            BenchmarkDenominatorError::ContractWeightSum { .. }
+        ));
+        assert_eq!(err.stable_code(), "FE-BENCH-1009");
+    }
+
+    #[test]
+    fn contract_validate_rejects_duplicate_membership() {
+        let json = r#"{
+            "contract_version": "v1",
+            "workload_classes": [
+                {"class_id": "a", "weight": 0.5, "member_workload_ids": ["shared"]},
+                {"class_id": "b", "weight": 0.5, "member_workload_ids": ["shared"]}
+            ]
+        }"#;
+        let err = WeightContract::from_json_str(json).unwrap_err();
+        assert!(matches!(
+            err,
+            BenchmarkDenominatorError::DuplicateWorkloadMembership { .. }
+        ));
+    }
+
+    #[test]
+    fn contract_validate_rejects_empty() {
+        let json = r#"{"contract_version": "v1", "workload_classes": []}"#;
+        let err = WeightContract::from_json_str(json).unwrap_err();
+        assert!(matches!(
+            err,
+            BenchmarkDenominatorError::EmptyWeightContract
+        ));
+    }
+
+    #[test]
+    fn contract_validate_rejects_nonpositive_class_weight() {
+        let json = r#"{
+            "contract_version": "v1",
+            "workload_classes": [
+                {"class_id": "a", "weight": 0.0, "member_workload_ids": ["wa"]},
+                {"class_id": "b", "weight": 1.0, "member_workload_ids": ["wb"]}
+            ]
+        }"#;
+        let err = WeightContract::from_json_str(json).unwrap_err();
+        assert!(matches!(
+            err,
+            BenchmarkDenominatorError::InvalidClassWeight { .. }
+        ));
+        assert_eq!(err.stable_code(), "FE-BENCH-1008");
+    }
+
+    #[test]
+    fn contract_parse_failure_maps_to_stable_code() {
+        let err = WeightContract::from_json_str("{ not json").unwrap_err();
+        assert!(matches!(
+            err,
+            BenchmarkDenominatorError::WeightContractParse(_)
+        ));
+        assert_eq!(err.stable_code(), "FE-BENCH-1008");
     }
 }

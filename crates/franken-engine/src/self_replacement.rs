@@ -564,6 +564,7 @@ impl ReplacementReceipt {
         }
 
         let receipt_id = Self::derive_receipt_id(
+            input.slot_id,
             input.old_slot_id,
             input.new_slot_id,
             input.old_cell_digest,
@@ -577,6 +578,7 @@ impl ReplacementReceipt {
 
         Ok(Self {
             receipt_id,
+            slot_id: input.slot_id.clone(),
             schema_version: SchemaVersion::V1,
             old_slot_id: input.old_slot_id.clone(),
             new_slot_id: input.new_slot_id.clone(),
@@ -1527,8 +1529,12 @@ mod tests {
     fn receipt_creation_requires_validation_artifacts() {
         let result = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old-001",
             new_cell_digest: "new-001",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &[],
             rollback_token: "rollback-001",
             promotion_rationale: "performance improvement",
@@ -1548,8 +1554,12 @@ mod tests {
         let artifacts = test_validation_artifacts();
         let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old-001",
             new_cell_digest: "new-001",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rollback-001",
             promotion_rationale: "performance improvement",
@@ -1579,8 +1589,12 @@ mod tests {
         let artifacts = test_validation_artifacts();
         let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old-001",
             new_cell_digest: "new-001",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rollback-001",
             promotion_rationale: "perf",
@@ -1608,10 +1622,30 @@ mod tests {
     #[test]
     fn receipt_id_deterministic() {
         let id1 =
-            ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-a")
+            ReplacementReceipt::derive_receipt_id(
+                &test_slot_id(),
+                &test_slot_id(),
+                &test_slot_id(),
+                "old",
+                "new",
+                "translation_proof",
+                "content_hash_chain",
+                1000,
+                "zone-a"
+            )
                 .expect("serde deserialization should succeed");
         let id2 =
-            ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-a")
+            ReplacementReceipt::derive_receipt_id(
+                &test_slot_id(),
+                &test_slot_id(),
+                &test_slot_id(),
+                "old",
+                "new",
+                "translation_proof",
+                "content_hash_chain",
+                1000,
+                "zone-a"
+            )
                 .expect("serde deserialization should succeed");
         assert_eq!(id1, id2);
     }
@@ -1619,10 +1653,30 @@ mod tests {
     #[test]
     fn receipt_id_differs_by_timestamp() {
         let id1 =
-            ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-a")
+            ReplacementReceipt::derive_receipt_id(
+                &test_slot_id(),
+                &test_slot_id(),
+                &test_slot_id(),
+                "old",
+                "new",
+                "translation_proof",
+                "content_hash_chain",
+                1000,
+                "zone-a"
+            )
                 .expect("serde deserialization should succeed");
         let id2 =
-            ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 2000, "zone-a")
+            ReplacementReceipt::derive_receipt_id(
+                &test_slot_id(),
+                &test_slot_id(),
+                &test_slot_id(),
+                "old",
+                "new",
+                "translation_proof",
+                "content_hash_chain",
+                2000,
+                "zone-a"
+            )
                 .expect("serde deserialization should succeed");
         assert_ne!(id1, id2);
     }
@@ -1632,8 +1686,12 @@ mod tests {
         let artifacts = test_validation_artifacts();
         let receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old-001",
             new_cell_digest: "new-001",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rollback-001",
             promotion_rationale: "perf",
@@ -1655,8 +1713,12 @@ mod tests {
         let artifacts = test_validation_artifacts();
         let receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old-001",
             new_cell_digest: "new-001",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rollback-001",
             promotion_rationale: "perf",
@@ -1902,8 +1964,12 @@ mod tests {
         // Stage 1: Research -> Shadow.
         let mut r1 = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old",
             new_cell_digest: "new-shadow",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rb-1",
             promotion_rationale: "shadow test pass",
@@ -1924,8 +1990,12 @@ mod tests {
         // Stage 2: Shadow -> Canary.
         let mut r2 = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "new-shadow",
             new_cell_digest: "new-canary",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rb-2",
             promotion_rationale: "canary test pass",
@@ -1945,8 +2015,12 @@ mod tests {
         // Stage 3: Canary -> Production.
         let mut r3 = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "new-canary",
             new_cell_digest: "new-production",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rb-3",
             promotion_rationale: "production test pass",
@@ -1978,8 +2052,12 @@ mod tests {
         }];
         let receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old",
             new_cell_digest: "new",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &failed_artifacts,
             rollback_token: "rb-1",
             promotion_rationale: "attempt",
@@ -2007,8 +2085,12 @@ mod tests {
         let artifacts = test_validation_artifacts();
         let receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &wrong_slot,
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old",
             new_cell_digest: "new",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rb-1",
             promotion_rationale: "attempt",
@@ -2202,10 +2284,30 @@ mod tests {
         assert_ne!(id_a, id_b, "different content must yield different IDs");
 
         let id_c =
-            ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old-a", "new-a", 1000, "zone")
+            ReplacementReceipt::derive_receipt_id(
+                &test_slot_id(),
+                &test_slot_id(),
+                &test_slot_id(),
+                "old-a",
+                "new-a",
+                "translation_proof",
+                "content_hash_chain",
+                1000,
+                "zone"
+            )
                 .expect("serde deserialization should succeed");
         let id_d =
-            ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old-b", "new-a", 1000, "zone")
+            ReplacementReceipt::derive_receipt_id(
+                &test_slot_id(),
+                &test_slot_id(),
+                &test_slot_id(),
+                "old-b",
+                "new-a",
+                "translation_proof",
+                "content_hash_chain",
+                1000,
+                "zone"
+            )
                 .expect("serde deserialization should succeed");
         assert_ne!(id_c, id_d);
 
@@ -2223,8 +2325,12 @@ mod tests {
         let artifacts = test_validation_artifacts();
         let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old",
             new_cell_digest: "new",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rb",
             promotion_rationale: "test",
@@ -2530,8 +2636,12 @@ mod tests {
         ];
         let receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old",
             new_cell_digest: "new",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rb",
             promotion_rationale: "test",
@@ -2593,10 +2703,30 @@ mod tests {
     #[test]
     fn receipt_id_differs_by_zone() {
         let id_a =
-            ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-a")
+            ReplacementReceipt::derive_receipt_id(
+                &test_slot_id(),
+                &test_slot_id(),
+                &test_slot_id(),
+                "old",
+                "new",
+                "translation_proof",
+                "content_hash_chain",
+                1000,
+                "zone-a"
+            )
                 .expect("serde deserialization should succeed");
         let id_b =
-            ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-b")
+            ReplacementReceipt::derive_receipt_id(
+                &test_slot_id(),
+                &test_slot_id(),
+                &test_slot_id(),
+                "old",
+                "new",
+                "translation_proof",
+                "content_hash_chain",
+                1000,
+                "zone-b"
+            )
                 .expect("serde deserialization should succeed");
         assert_ne!(id_a, id_b);
     }
@@ -2619,8 +2749,12 @@ mod tests {
         for _ in 0..3 {
             let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
                 slot_id: &test_slot_id(),
+                old_slot_id: &test_slot_id(),
+                new_slot_id: &test_slot_id(),
                 old_cell_digest: "old",
                 new_cell_digest: "new",
+                translation_validation_proof_ref: "test_proof_ref",
+                content_hash_chain_into_lineage: "test_hash_chain",
                 validation_artifacts: &artifacts,
                 rollback_token: "rb",
                 promotion_rationale: "advance",
@@ -2643,8 +2777,12 @@ mod tests {
         // Recording another receipt at Production stays at Production
         let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: "old",
             new_cell_digest: "new",
+            translation_validation_proof_ref: "test_proof_ref",
+            content_hash_chain_into_lineage: "test_hash_chain",
             validation_artifacts: &artifacts,
             rollback_token: "rb",
             promotion_rationale: "post-production",

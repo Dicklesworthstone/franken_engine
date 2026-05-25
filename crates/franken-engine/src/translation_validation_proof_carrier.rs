@@ -561,7 +561,7 @@ mod tests {
 
     #[test]
     fn test_slot_specification_creation() {
-        let slot_id = SlotId::from_str("test_slot").expect("valid slot ID");
+        let slot_id = SlotId::new("test_slot").expect("valid slot ID");
         let code = b"function test() { return 42; }";
 
         let spec = create_slot_specification(slot_id.clone(), code, "javascript");
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn test_validation_engine_simulate() {
         let engine = TranslationValidationEngine::default();
-        let slot_id = SlotId::from_str("test_slot").expect("valid slot ID");
+        let slot_id = SlotId::new("test_slot").expect("valid slot ID");
 
         let source_spec = create_slot_specification(slot_id.clone(), b"old code", "javascript");
         let target_spec = create_slot_specification(slot_id, b"new code", "javascript");
@@ -638,14 +638,14 @@ mod tests {
         };
 
         let proof = TranslationValidationProof {
-            proof_id: EngineObjectId::from_bytes(&[0u8; 32]).expect("valid ID"),
+            proof_id: EngineObjectId::from_definition(b"test-proof"),
             source_spec: create_slot_specification(
-                SlotId::from_str("source").expect("valid ID"),
+                SlotId::new("source").expect("valid ID"),
                 b"source code",
                 "javascript",
             ),
             target_spec: create_slot_specification(
-                SlotId::from_str("target").expect("valid ID"),
+                SlotId::new("target").expect("valid ID"),
                 b"target code",
                 "javascript",
             ),

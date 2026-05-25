@@ -1,13 +1,13 @@
-#![forbid(unsafe_code)]
-
-#[global_allocator]
-static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
 //! Real-runtime hot path performance benchmarks.
 //!
 //! These workloads intentionally exercise shipped FrankenEngine structures.
 //! They are not claim-bearing external parity evidence, but they do provide
 //! non-mock targets for local optimization and smoke validation.
+
+#![forbid(unsafe_code)]
+
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::hint::black_box;

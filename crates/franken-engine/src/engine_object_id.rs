@@ -1958,7 +1958,7 @@ mod tests {
             let id = EngineObjectId(bytes);
             let hex = id.to_hex();
             let back = EngineObjectId::from_hex(&hex).unwrap();
-            prop_assert_eq!(id, back);
+            prop_assert_eq!(id.clone(), back);
             // Also: Display must yield the same string as to_hex.
             prop_assert_eq!(format!("{id}"), hex);
         }

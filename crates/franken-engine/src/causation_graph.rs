@@ -224,9 +224,14 @@ impl CausationEdge {
         let target_id = target_id.into();
 
         // Compute content hash of the edge
-        let edge_data = format!("{}->{};factor={};magnitude={};time={}",
-            source_id, target_id, influenced_factor,
-            influence_magnitude_millionths, established_at_ns);
+        let edge_data = format!(
+            "{}->{};factor={};magnitude={};time={}",
+            source_id,
+            target_id,
+            influenced_factor,
+            influence_magnitude_millionths,
+            established_at_ns
+        );
         let edge_hash = ContentHash::compute(edge_data.as_bytes());
 
         Self {
@@ -375,9 +380,14 @@ impl CausationGraph {
         for (key, value) in &causal_set.minimization_metadata {
             graph.metadata.insert(key.clone(), value.clone());
         }
-        graph.metadata.insert("causal_set_id".to_string(), causal_set.causal_set_id.clone());
-        graph.metadata.insert("total_evidence_considered".to_string(),
-            causal_set.total_evidence_atoms_considered.to_string());
+        graph.metadata.insert(
+            "causal_set_id".to_string(),
+            causal_set.causal_set_id.clone(),
+        );
+        graph.metadata.insert(
+            "total_evidence_considered".to_string(),
+            causal_set.total_evidence_atoms_considered.to_string(),
+        );
 
         Ok(graph)
     }
@@ -406,12 +416,16 @@ impl CausationGraph {
 
     /// Get edges pointing to a specific node.
     pub fn incoming_edges(&self, node_id: &str) -> impl Iterator<Item = &CausationEdge> {
-        self.edges.iter().filter(move |edge| edge.target_id == node_id)
+        self.edges
+            .iter()
+            .filter(move |edge| edge.target_id == node_id)
     }
 
     /// Get edges originating from a specific node.
     pub fn outgoing_edges(&self, node_id: &str) -> impl Iterator<Item = &CausationEdge> {
-        self.edges.iter().filter(move |edge| edge.source_id == node_id)
+        self.edges
+            .iter()
+            .filter(move |edge| edge.source_id == node_id)
     }
 
     /// Perform topological sort of the graph nodes.
@@ -470,7 +484,8 @@ impl CausationGraph {
 
     /// Sort nodes by timestamp (temporal ordering).
     pub fn temporal_sort(&self) -> Vec<String> {
-        let mut nodes: Vec<(String, u64)> = self.nodes
+        let mut nodes: Vec<(String, u64)> = self
+            .nodes
             .iter()
             .map(|(id, node)| (id.clone(), node.timestamp_ns()))
             .collect();
@@ -611,9 +626,9 @@ impl GraphSignature {
             ..graph.clone()
         };
 
-        let serialized = serde_json::to_vec(&graph_without_sig)
-            .map_err(|e| GraphError::SerializationError {
-                message: e.to_string()
+        let serialized =
+            serde_json::to_vec(&graph_without_sig).map_err(|e| GraphError::SerializationError {
+                message: e.to_string(),
             })?;
 
         let content_hash = ContentHash::compute(&serialized);
@@ -639,17 +654,18 @@ impl GraphSignature {
             ..graph.clone()
         };
 
-        let serialized = serde_json::to_vec(&graph_without_sig)
-            .map_err(|e| GraphError::SerializationError {
-                message: e.to_string()
+        let serialized =
+            serde_json::to_vec(&graph_without_sig).map_err(|e| GraphError::SerializationError {
+                message: e.to_string(),
             })?;
 
         let computed_content_hash = ContentHash::compute(&serialized);
-        let computed_authenticity_hash = AuthenticityHash::compute_keyed(&serialized, verification_key);
+        let computed_authenticity_hash =
+            AuthenticityHash::compute_keyed(&serialized, verification_key);
 
         // Verify both hashes match
-        Ok(computed_content_hash == self.content_hash &&
-           computed_authenticity_hash == self.authenticity_hash)
+        Ok(computed_content_hash == self.content_hash
+            && computed_authenticity_hash == self.authenticity_hash)
     }
 }
 
@@ -692,7 +708,11 @@ impl fmt::Display for GraphError {
                 write!(f, "Cycle detected in graph")
             }
             Self::InvalidSchemaVersion { expected, got } => {
-                write!(f, "Invalid schema version: expected {}, got {}", expected, got)
+                write!(
+                    f,
+                    "Invalid schema version: expected {}, got {}",
+                    expected, got
+                )
             }
             Self::SerializationError { message } => {
                 write!(f, "Serialization error: {}", message)
@@ -824,16 +844,31 @@ mod tests {
 
         // Add three nodes
         let node1 = GraphNode::Decision(DecisionNode::new(
-            "decision-1", "type1", 1000, SecurityEpoch::from_raw(1),
-            ContentHash::compute(b"outcome1"), "maker1", "outcome1"
+            "decision-1",
+            "type1",
+            1000,
+            SecurityEpoch::from_raw(1),
+            ContentHash::compute(b"outcome1"),
+            "maker1",
+            "outcome1",
         ));
         let node2 = GraphNode::Decision(DecisionNode::new(
-            "decision-2", "type2", 2000, SecurityEpoch::from_raw(1),
-            ContentHash::compute(b"outcome2"), "maker2", "outcome2"
+            "decision-2",
+            "type2",
+            2000,
+            SecurityEpoch::from_raw(1),
+            ContentHash::compute(b"outcome2"),
+            "maker2",
+            "outcome2",
         ));
         let node3 = GraphNode::Decision(DecisionNode::new(
-            "decision-3", "type3", 3000, SecurityEpoch::from_raw(1),
-            ContentHash::compute(b"outcome3"), "maker3", "outcome3"
+            "decision-3",
+            "type3",
+            3000,
+            SecurityEpoch::from_raw(1),
+            ContentHash::compute(b"outcome3"),
+            "maker3",
+            "outcome3",
         ));
 
         graph.add_node(node1).unwrap();
@@ -841,9 +876,27 @@ mod tests {
         graph.add_node(node3).unwrap();
 
         // Add edges to form a potential cycle: 1->2->3->1
-        let edge1 = CausationEdge::new("decision-1", "decision-2", DecisionFactor::TieBreaking, 100_000, 1500);
-        let edge2 = CausationEdge::new("decision-2", "decision-3", DecisionFactor::TieBreaking, 100_000, 2500);
-        let edge3 = CausationEdge::new("decision-3", "decision-1", DecisionFactor::TieBreaking, 100_000, 3500); // This should fail
+        let edge1 = CausationEdge::new(
+            "decision-1",
+            "decision-2",
+            DecisionFactor::TieBreaking,
+            100_000,
+            1500,
+        );
+        let edge2 = CausationEdge::new(
+            "decision-2",
+            "decision-3",
+            DecisionFactor::TieBreaking,
+            100_000,
+            2500,
+        );
+        let edge3 = CausationEdge::new(
+            "decision-3",
+            "decision-1",
+            DecisionFactor::TieBreaking,
+            100_000,
+            3500,
+        ); // This should fail
 
         graph.add_edge(edge1).unwrap();
         graph.add_edge(edge2).unwrap();
@@ -858,24 +911,54 @@ mod tests {
 
         // Create a simple DAG: A -> B -> C
         let node_a = GraphNode::EvidenceAtom(EvidenceAtomNode::new(
-            "A", "type", 1000, SecurityEpoch::from_raw(1),
-            ContentHash::compute(b"A"), "source"
+            "A",
+            "type",
+            1000,
+            SecurityEpoch::from_raw(1),
+            ContentHash::compute(b"A"),
+            "source",
         ));
         let node_b = GraphNode::Decision(DecisionNode::new(
-            "B", "type", 2000, SecurityEpoch::from_raw(1),
-            ContentHash::compute(b"B"), "maker", "outcome"
+            "B",
+            "type",
+            2000,
+            SecurityEpoch::from_raw(1),
+            ContentHash::compute(b"B"),
+            "maker",
+            "outcome",
         ));
         let node_c = GraphNode::Decision(DecisionNode::new(
-            "C", "type", 3000, SecurityEpoch::from_raw(1),
-            ContentHash::compute(b"C"), "maker", "outcome"
+            "C",
+            "type",
+            3000,
+            SecurityEpoch::from_raw(1),
+            ContentHash::compute(b"C"),
+            "maker",
+            "outcome",
         ));
 
         graph.add_node(node_a).unwrap();
         graph.add_node(node_b).unwrap();
         graph.add_node(node_c).unwrap();
 
-        graph.add_edge(CausationEdge::new("A", "B", DecisionFactor::PosteriorProbability, 100_000, 1500)).unwrap();
-        graph.add_edge(CausationEdge::new("B", "C", DecisionFactor::ActionFiltering, 200_000, 2500)).unwrap();
+        graph
+            .add_edge(CausationEdge::new(
+                "A",
+                "B",
+                DecisionFactor::PosteriorProbability,
+                100_000,
+                1500,
+            ))
+            .unwrap();
+        graph
+            .add_edge(CausationEdge::new(
+                "B",
+                "C",
+                DecisionFactor::ActionFiltering,
+                200_000,
+                2500,
+            ))
+            .unwrap();
 
         let topo_order = graph.topological_sort().unwrap();
 
@@ -893,16 +976,28 @@ mod tests {
         let mut graph = CausationGraph::new("test-graph", SecurityEpoch::from_raw(1));
 
         let node1 = GraphNode::EvidenceAtom(EvidenceAtomNode::new(
-            "latest", "type", 3000, SecurityEpoch::from_raw(1),
-            ContentHash::compute(b"latest"), "source"
+            "latest",
+            "type",
+            3000,
+            SecurityEpoch::from_raw(1),
+            ContentHash::compute(b"latest"),
+            "source",
         ));
         let node2 = GraphNode::EvidenceAtom(EvidenceAtomNode::new(
-            "earliest", "type", 1000, SecurityEpoch::from_raw(1),
-            ContentHash::compute(b"earliest"), "source"
+            "earliest",
+            "type",
+            1000,
+            SecurityEpoch::from_raw(1),
+            ContentHash::compute(b"earliest"),
+            "source",
         ));
         let node3 = GraphNode::EvidenceAtom(EvidenceAtomNode::new(
-            "middle", "type", 2000, SecurityEpoch::from_raw(1),
-            ContentHash::compute(b"middle"), "source"
+            "middle",
+            "type",
+            2000,
+            SecurityEpoch::from_raw(1),
+            ContentHash::compute(b"middle"),
+            "source",
         ));
 
         graph.add_node(node1).unwrap();
@@ -937,7 +1032,10 @@ mod tests {
 
         // Invalid schema version should fail
         graph.schema_version = "invalid-version".to_string();
-        assert!(matches!(graph.validate(), Err(GraphError::InvalidSchemaVersion { .. })));
+        assert!(matches!(
+            graph.validate(),
+            Err(GraphError::InvalidSchemaVersion { .. })
+        ));
     }
 
     #[test]
@@ -1010,18 +1108,32 @@ mod tests {
             .with_metadata("sensor_type", "temperature")
             .with_metadata("location", "server_room");
 
-        assert_eq!(evidence_node.metadata.get("sensor_type"), Some(&"temperature".to_string()));
-        assert_eq!(evidence_node.metadata.get("location"), Some(&"server_room".to_string()));
+        assert_eq!(
+            evidence_node.metadata.get("sensor_type"),
+            Some(&"temperature".to_string())
+        );
+        assert_eq!(
+            evidence_node.metadata.get("location"),
+            Some(&"server_room".to_string())
+        );
 
         let edge = CausationEdge::new(
-            "evidence-1", "decision-1", DecisionFactor::PosteriorProbability, 100_000, 1500
-        ).with_metadata("confidence", "high");
+            "evidence-1",
+            "decision-1",
+            DecisionFactor::PosteriorProbability,
+            100_000,
+            1500,
+        )
+        .with_metadata("confidence", "high");
 
         assert_eq!(edge.metadata.get("confidence"), Some(&"high".to_string()));
 
         let graph = CausationGraph::new("test-graph", SecurityEpoch::from_raw(1))
             .with_metadata("analysis_type", "forensic");
 
-        assert_eq!(graph.metadata.get("analysis_type"), Some(&"forensic".to_string()));
+        assert_eq!(
+            graph.metadata.get("analysis_type"),
+            Some(&"forensic".to_string())
+        );
     }
 }

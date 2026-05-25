@@ -5,8 +5,8 @@
 //! operators in realistic scenarios.
 
 use frankenengine_engine::attack_grammar_synthesizer::{
-    AttackGrammarSynthesizer, AttackStrategy, ExploitSeverity, ExploitTarget,
-    MutationOperator, SynthesisConfig,
+    AttackGrammarSynthesizer, AttackStrategy, ExploitSeverity, ExploitTarget, MutationOperator,
+    SynthesisConfig,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use std::collections::BTreeSet;
@@ -32,7 +32,8 @@ fn synthesize_complete_exploit_suite() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(1_500_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(1_500_000_000)
         .expect("should synthesize exploit suite");
 
     assert!(!candidates.is_empty());
@@ -82,11 +83,13 @@ fn dom_injection_exploit_generation() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(2_000_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(2_000_000_000)
         .expect("should synthesize DOM injection exploits");
 
     // Verify DOM injection specifics.
-    let dom_candidates: Vec<_> = candidates.iter()
+    let dom_candidates: Vec<_> = candidates
+        .iter()
         .filter(|c| c.manifest.strategy == AttackStrategy::DomInjection)
         .collect();
 
@@ -94,16 +97,29 @@ fn dom_injection_exploit_generation() {
 
     for candidate in &dom_candidates {
         assert_eq!(candidate.manifest.target, ExploitTarget::DomTree);
-        assert!(candidate.javascript_code.contains("innerHTML") ||
-                candidate.javascript_code.contains("DOM"));
-        assert!(candidate.manifest.detection_patterns
-                .iter().any(|p| p.contains("innerHTML") || p.contains("script")));
-        assert!(candidate.manifest.mitigations
-                .iter().any(|m| m.contains("CSP") || m.contains("sanitization")));
+        assert!(
+            candidate.javascript_code.contains("innerHTML")
+                || candidate.javascript_code.contains("DOM")
+        );
+        assert!(
+            candidate
+                .manifest
+                .detection_patterns
+                .iter()
+                .any(|p| p.contains("innerHTML") || p.contains("script"))
+        );
+        assert!(
+            candidate
+                .manifest
+                .mitigations
+                .iter()
+                .any(|m| m.contains("CSP") || m.contains("sanitization"))
+        );
     }
 
     // Verify mutations are present.
-    let mutated_candidates: Vec<_> = candidates.iter()
+    let mutated_candidates: Vec<_> = candidates
+        .iter()
         .filter(|c| c.manifest.description.contains("mutated with"))
         .collect();
     assert!(!mutated_candidates.is_empty());
@@ -125,17 +141,23 @@ fn prototype_pollution_exploit_critical_severity() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(2_500_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(2_500_000_000)
         .expect("should synthesize prototype pollution exploits");
 
     assert!(!candidates.is_empty());
 
     for candidate in &candidates {
-        assert_eq!(candidate.manifest.strategy, AttackStrategy::PrototypePollution);
+        assert_eq!(
+            candidate.manifest.strategy,
+            AttackStrategy::PrototypePollution
+        );
         assert_eq!(candidate.manifest.severity, ExploitSeverity::Critical);
         assert_eq!(candidate.manifest.target, ExploitTarget::GlobalNamespace);
-        assert!(candidate.javascript_code.contains("__proto__") ||
-                candidate.javascript_code.contains("prototype"));
+        assert!(
+            candidate.javascript_code.contains("__proto__")
+                || candidate.javascript_code.contains("prototype")
+        );
     }
 }
 
@@ -155,10 +177,12 @@ fn event_hijacking_race_conditions() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(3_000_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(3_000_000_000)
         .expect("should synthesize event hijacking exploits");
 
-    let hijacking_candidates: Vec<_> = candidates.iter()
+    let hijacking_candidates: Vec<_> = candidates
+        .iter()
         .filter(|c| c.manifest.strategy == AttackStrategy::EventHijacking)
         .collect();
 
@@ -166,10 +190,17 @@ fn event_hijacking_race_conditions() {
 
     for candidate in &hijacking_candidates {
         assert_eq!(candidate.manifest.target, ExploitTarget::EventSystem);
-        assert!(candidate.javascript_code.contains("addEventListener") ||
-                candidate.javascript_code.contains("event"));
-        assert!(candidate.manifest.detection_patterns
-                .iter().any(|p| p.contains("event") || p.contains("privilege")));
+        assert!(
+            candidate.javascript_code.contains("addEventListener")
+                || candidate.javascript_code.contains("event")
+        );
+        assert!(
+            candidate
+                .manifest
+                .detection_patterns
+                .iter()
+                .any(|p| p.contains("event") || p.contains("privilege"))
+        );
     }
 }
 
@@ -189,10 +220,12 @@ fn resource_exhaustion_memory_bombs() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(3_500_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(3_500_000_000)
         .expect("should synthesize resource exhaustion exploits");
 
-    let exhaustion_candidates: Vec<_> = candidates.iter()
+    let exhaustion_candidates: Vec<_> = candidates
+        .iter()
         .filter(|c| c.manifest.strategy == AttackStrategy::ResourceExhaustion)
         .collect();
 
@@ -200,11 +233,18 @@ fn resource_exhaustion_memory_bombs() {
 
     for candidate in &exhaustion_candidates {
         assert_eq!(candidate.manifest.target, ExploitTarget::MemorySubsystem);
-        assert!(candidate.javascript_code.contains("Array") ||
-                candidate.javascript_code.contains("memory") ||
-                candidate.javascript_code.contains("allocation"));
-        assert!(candidate.manifest.expected_outcomes
-                .iter().any(|o| o.contains("memory") || o.contains("crash")));
+        assert!(
+            candidate.javascript_code.contains("Array")
+                || candidate.javascript_code.contains("memory")
+                || candidate.javascript_code.contains("allocation")
+        );
+        assert!(
+            candidate
+                .manifest
+                .expected_outcomes
+                .iter()
+                .any(|o| o.contains("memory") || o.contains("crash"))
+        );
     }
 }
 
@@ -224,10 +264,12 @@ fn logic_bomb_time_based_triggers() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(4_000_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(4_000_000_000)
         .expect("should synthesize logic bomb exploits");
 
-    let bomb_candidates: Vec<_> = candidates.iter()
+    let bomb_candidates: Vec<_> = candidates
+        .iter()
         .filter(|c| c.manifest.strategy == AttackStrategy::LogicBomb)
         .collect();
 
@@ -235,11 +277,18 @@ fn logic_bomb_time_based_triggers() {
 
     for candidate in &bomb_candidates {
         assert_eq!(candidate.manifest.target, ExploitTarget::RuntimeEnvironment);
-        assert!(candidate.javascript_code.contains("Date") ||
-                candidate.javascript_code.contains("time") ||
-                candidate.javascript_code.contains("trigger"));
-        assert!(candidate.manifest.detection_patterns
-                .iter().any(|p| p.contains("date") || p.contains("trigger")));
+        assert!(
+            candidate.javascript_code.contains("Date")
+                || candidate.javascript_code.contains("time")
+                || candidate.javascript_code.contains("trigger")
+        );
+        assert!(
+            candidate
+                .manifest
+                .detection_patterns
+                .iter()
+                .any(|p| p.contains("date") || p.contains("trigger"))
+        );
     }
 }
 
@@ -259,10 +308,12 @@ fn supply_chain_package_interception() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(4_500_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(4_500_000_000)
         .expect("should synthesize supply chain exploits");
 
-    let supply_candidates: Vec<_> = candidates.iter()
+    let supply_candidates: Vec<_> = candidates
+        .iter()
         .filter(|c| c.manifest.strategy == AttackStrategy::SupplyChain)
         .collect();
 
@@ -270,11 +321,18 @@ fn supply_chain_package_interception() {
 
     for candidate in &supply_candidates {
         assert_eq!(candidate.manifest.target, ExploitTarget::Dependencies);
-        assert!(candidate.javascript_code.contains("require") ||
-                candidate.javascript_code.contains("import") ||
-                candidate.javascript_code.contains("package"));
-        assert!(candidate.manifest.mitigations
-                .iter().any(|m| m.contains("integrity") || m.contains("dependency")));
+        assert!(
+            candidate.javascript_code.contains("require")
+                || candidate.javascript_code.contains("import")
+                || candidate.javascript_code.contains("package")
+        );
+        assert!(
+            candidate
+                .manifest
+                .mitigations
+                .iter()
+                .any(|m| m.contains("integrity") || m.contains("dependency"))
+        );
     }
 }
 
@@ -294,11 +352,13 @@ fn payload_encoding_mutations() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(5_000_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(5_000_000_000)
         .expect("should synthesize exploits with mutations");
 
     // Find payload encoding mutations.
-    let encoded_candidates: Vec<_> = candidates.iter()
+    let encoded_candidates: Vec<_> = candidates
+        .iter()
         .filter(|c| c.javascript_code.contains("atob"))
         .collect();
 
@@ -326,11 +386,13 @@ fn obfuscation_mutations() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(5_500_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(5_500_000_000)
         .expect("should synthesize exploits with obfuscation");
 
     // Find obfuscated candidates.
-    let obfuscated_candidates: Vec<_> = candidates.iter()
+    let obfuscated_candidates: Vec<_> = candidates
+        .iter()
         .filter(|c| c.javascript_code.contains("Obfuscated version"))
         .collect();
 
@@ -358,20 +420,25 @@ fn target_mutation_changes_selectors() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(6_000_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(6_000_000_000)
         .expect("should synthesize exploits with target mutations");
 
     // Find target mutations.
-    let target_mutated: Vec<_> = candidates.iter()
-        .filter(|c| c.javascript_code.contains("div, span, p") ||
-                    c.javascript_code.contains("mousedown"))
+    let target_mutated: Vec<_> = candidates
+        .iter()
+        .filter(|c| {
+            c.javascript_code.contains("div, span, p") || c.javascript_code.contains("mousedown")
+        })
         .collect();
 
     assert!(!target_mutated.is_empty());
 
     for candidate in &target_mutated {
-        assert!(candidate.manifest.description.contains("target-mutation") ||
-                candidate.js_filename.contains("target_mutation"));
+        assert!(
+            candidate.manifest.description.contains("target-mutation")
+                || candidate.js_filename.contains("target_mutation")
+        );
     }
 }
 
@@ -391,20 +458,25 @@ fn timing_mutations_add_delays() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(6_500_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(6_500_000_000)
         .expect("should synthesize exploits with timing mutations");
 
     // Find timing mutations.
-    let timing_mutated: Vec<_> = candidates.iter()
-        .filter(|c| c.javascript_code.contains("Math.random()") &&
-                    c.javascript_code.contains("setTimeout"))
+    let timing_mutated: Vec<_> = candidates
+        .iter()
+        .filter(|c| {
+            c.javascript_code.contains("Math.random()") && c.javascript_code.contains("setTimeout")
+        })
         .collect();
 
     assert!(!timing_mutated.is_empty());
 
     for candidate in &timing_mutated {
-        assert!(candidate.manifest.description.contains("timing-mutation") ||
-                candidate.js_filename.contains("timing_mutation"));
+        assert!(
+            candidate.manifest.description.contains("timing-mutation")
+                || candidate.js_filename.contains("timing_mutation")
+        );
     }
 }
 
@@ -424,20 +496,25 @@ fn context_mutations_change_execution_wrapper() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(7_000_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(7_000_000_000)
         .expect("should synthesize exploits with context mutations");
 
     // Find context mutations.
-    let context_mutated: Vec<_> = candidates.iter()
-        .filter(|c| c.javascript_code.contains("typeof window") &&
-                    c.javascript_code.contains("global"))
+    let context_mutated: Vec<_> = candidates
+        .iter()
+        .filter(|c| {
+            c.javascript_code.contains("typeof window") && c.javascript_code.contains("global")
+        })
         .collect();
 
     assert!(!context_mutated.is_empty());
 
     for candidate in &context_mutated {
-        assert!(candidate.manifest.description.contains("context-mutation") ||
-                candidate.js_filename.contains("context_mutation"));
+        assert!(
+            candidate.manifest.description.contains("context-mutation")
+                || candidate.js_filename.contains("context_mutation")
+        );
     }
 }
 
@@ -458,7 +535,8 @@ fn severity_threshold_filtering() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(7_500_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(7_500_000_000)
         .expect("should synthesize exploits with threshold filtering");
 
     // All candidates should meet the severity threshold.
@@ -467,12 +545,14 @@ fn severity_threshold_filtering() {
     }
 
     // DOM injection should be included (high severity).
-    let dom_present = candidates.iter()
+    let dom_present = candidates
+        .iter()
         .any(|c| c.manifest.strategy == AttackStrategy::DomInjection);
     assert!(dom_present);
 
     // Resource exhaustion should be filtered out (medium severity).
-    let resource_present = candidates.iter()
+    let resource_present = candidates
+        .iter()
         .any(|c| c.manifest.strategy == AttackStrategy::ResourceExhaustion);
     assert!(!resource_present);
 }
@@ -495,9 +575,11 @@ fn exploit_ids_are_deterministic() {
     let mut synth1 = AttackGrammarSynthesizer::new(config.clone());
     let mut synth2 = AttackGrammarSynthesizer::new(config);
 
-    let candidates1 = synth1.synthesize_exploits(8_000_000_000)
+    let candidates1 = synth1
+        .synthesize_exploits(8_000_000_000)
         .expect("should synthesize exploits");
-    let candidates2 = synth2.synthesize_exploits(8_000_000_000)
+    let candidates2 = synth2
+        .synthesize_exploits(8_000_000_000)
         .expect("should synthesize exploits");
 
     assert_eq!(candidates1.len(), candidates2.len());
@@ -528,7 +610,8 @@ fn generation_count_tracking() {
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
     assert_eq!(synthesizer.generation_count(), 0);
 
-    let candidates = synthesizer.synthesize_exploits(8_500_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(8_500_000_000)
         .expect("should synthesize exploits");
 
     assert_eq!(synthesizer.generation_count(), candidates.len() as u64);
@@ -551,14 +634,20 @@ fn manifest_file_naming_consistency() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(9_000_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(9_000_000_000)
         .expect("should synthesize exploits");
 
     for candidate in &candidates {
         // JS filename should match manifest filename pattern.
-        let js_base = candidate.js_filename.strip_suffix(".js").expect("should have .js suffix");
-        let manifest_base = candidate.manifest_filename
-            .strip_suffix(".manifest.json").expect("should have .manifest.json suffix");
+        let js_base = candidate
+            .js_filename
+            .strip_suffix(".js")
+            .expect("should have .js suffix");
+        let manifest_base = candidate
+            .manifest_filename
+            .strip_suffix(".manifest.json")
+            .expect("should have .manifest.json suffix");
 
         assert_eq!(js_base, manifest_base);
 
@@ -585,7 +674,8 @@ fn all_mutation_operators_covered() {
     };
 
     let mut synthesizer = AttackGrammarSynthesizer::new(config);
-    let candidates = synthesizer.synthesize_exploits(9_500_000_000)
+    let candidates = synthesizer
+        .synthesize_exploits(9_500_000_000)
         .expect("should synthesize exploits");
 
     let mutation_operators = [
@@ -597,7 +687,8 @@ fn all_mutation_operators_covered() {
 
     // Verify all mutation operators are represented.
     for operator in &mutation_operators {
-        let operator_present = candidates.iter()
+        let operator_present = candidates
+            .iter()
             .any(|c| c.manifest.description.contains(operator));
         assert!(operator_present, "mutation operator {} not found", operator);
     }

@@ -6,12 +6,11 @@
 #![forbid(unsafe_code)]
 
 use frankenengine_engine::change_point_detector::{
-    ChangePointDetector, CompositeAlternative, ChangePointVerdict,
+    ChangePointDetector, ChangePointVerdict, CompositeAlternative,
 };
 use frankenengine_engine::detection_delay_bound_proof::{
-    AverageRunLengthAnalysis, DelayBoundConfiguration, WorstCaseDelayBound,
-    DelayBoundError, ArlComputationStatus, DelayBoundMethod,
-    ProofMethod, VerificationStatus,
+    ArlComputationStatus, AverageRunLengthAnalysis, DelayBoundConfiguration, DelayBoundError,
+    DelayBoundMethod, ProofMethod, VerificationStatus, WorstCaseDelayBound,
 };
 use frankenengine_engine::proof_obligations::ObligationCategory;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -29,20 +28,21 @@ fn test_arl_analysis_integration_with_detector() {
     };
 
     let config = DelayBoundConfiguration::default();
-    let arl_analysis = AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
+    let arl_analysis =
+        AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
 
     // Create a detector with the same parameters
-    let mut detector = ChangePointDetector::new_with_default_threshold(
-        "test_detector",
-        alternative,
-        epoch,
-    );
+    let mut detector =
+        ChangePointDetector::new_with_default_threshold("test_detector", alternative, epoch);
 
     // Verify ARL analysis is reasonable
     assert!(arl_analysis.arl_null_millionths > 10 * MILLION); // Should be >> 10
     assert!(arl_analysis.arl_alternative_millionths > 0);
     assert!(arl_analysis.arl_alternative_millionths < arl_analysis.arl_null_millionths);
-    assert!(matches!(arl_analysis.computation_status, ArlComputationStatus::Converged { .. }));
+    assert!(matches!(
+        arl_analysis.computation_status,
+        ArlComputationStatus::Converged { .. }
+    ));
 
     // Test that false alarm rate is reasonable
     assert!(arl_analysis.false_alarm_rate_millionths > 0);
@@ -64,49 +64,72 @@ fn test_worst_case_delay_bound_normal_alternative() {
         mean_range_millionths: (MILLION, 3 * MILLION), // Large shift for better detection
     };
 
-    let arl_analysis = AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
+    let arl_analysis =
+        AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
     let delay_bound = WorstCaseDelayBound::compute(config, alternative, &arl_analysis).unwrap();
 
     // Verify bound properties
     assert!(delay_bound.delay_bound_millionths > 0);
     assert!(delay_bound.delay_bound_millionths < 1000 * MILLION); // Should be reasonable
     assert_eq!(delay_bound.confidence_millionths, 950_000);
-    assert!(matches!(delay_bound.computation_method, DelayBoundMethod::LordenExact));
+    assert!(matches!(
+        delay_bound.computation_method,
+        DelayBoundMethod::LordenExact
+    ));
 
     // Verify proof obligations
     assert_eq!(delay_bound.proof_obligations.len(), 3);
 
     // Check liveness obligation
-    let liveness_obligation = delay_bound.proof_obligations.iter()
+    let liveness_obligation = delay_bound
+        .proof_obligations
+        .iter()
         .find(|o| o.category == ObligationCategory::Liveness)
         .expect("Should have liveness obligation");
-    assert_eq!(liveness_obligation.verification_status, VerificationStatus::Verified);
-    assert!(matches!(liveness_obligation.proof_method, ProofMethod::AnalyticBound));
+    assert_eq!(
+        liveness_obligation.verification_status,
+        VerificationStatus::Verified
+    );
+    assert!(matches!(
+        liveness_obligation.proof_method,
+        ProofMethod::AnalyticBound
+    ));
 
     // Check safety obligation (false alarm control)
-    let safety_obligation = delay_bound.proof_obligations.iter()
+    let safety_obligation = delay_bound
+        .proof_obligations
+        .iter()
         .find(|o| o.category == ObligationCategory::Safety)
         .expect("Should have safety obligation");
-    assert_eq!(safety_obligation.verification_status, VerificationStatus::Verified);
+    assert_eq!(
+        safety_obligation.verification_status,
+        VerificationStatus::Verified
+    );
 }
 
 #[test]
 fn test_exponential_alternative_delay_bound() {
     let config = DelayBoundConfiguration::default();
     let alternative = CompositeAlternative::ExponentialRateShift {
-        pre_change_rate_millionths: MILLION, // λ = 1.0
+        pre_change_rate_millionths: MILLION,               // λ = 1.0
         rate_range_millionths: (2 * MILLION, 4 * MILLION), // λ ∈ [2.0, 4.0]
     };
 
-    let arl_analysis = AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
+    let arl_analysis =
+        AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
     let delay_bound = WorstCaseDelayBound::compute(config, alternative, &arl_analysis).unwrap();
 
     // For exponential alternatives, should use Wald approximation
-    assert!(matches!(delay_bound.computation_method, DelayBoundMethod::WaldApproximation));
+    assert!(matches!(
+        delay_bound.computation_method,
+        DelayBoundMethod::WaldApproximation
+    ));
     assert!(delay_bound.delay_bound_millionths > 0);
 
     // Verify all obligations are present
-    let obligation_categories: Vec<_> = delay_bound.proof_obligations.iter()
+    let obligation_categories: Vec<_> = delay_bound
+        .proof_obligations
+        .iter()
         .map(|o| o.category)
         .collect();
     assert!(obligation_categories.contains(&ObligationCategory::Liveness));
@@ -124,12 +147,14 @@ fn test_bernoulli_alternative_with_high_confidence() {
     };
 
     let alternative = CompositeAlternative::BernoulliProbabilityShift {
-        pre_change_prob_millionths: 100_000, // p = 0.1
+        pre_change_prob_millionths: 100_000,       // p = 0.1
         prob_range_millionths: (600_000, 900_000), // p ∈ [0.6, 0.9]
     };
 
-    let arl_analysis = AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
-    let delay_bound = WorstCaseDelayBound::compute(config.clone(), alternative, &arl_analysis).unwrap();
+    let arl_analysis =
+        AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
+    let delay_bound =
+        WorstCaseDelayBound::compute(config.clone(), alternative, &arl_analysis).unwrap();
 
     // High confidence should result in larger bounds
     assert_eq!(delay_bound.confidence_millionths, 990_000);
@@ -185,15 +210,22 @@ fn test_mathematical_properties_of_bounds() {
         mean_range_millionths: (MILLION, 2 * MILLION),
     };
 
-    let high_arl = AverageRunLengthAnalysis::compute(high_threshold_config.clone(), alternative.clone()).unwrap();
-    let low_arl = AverageRunLengthAnalysis::compute(low_threshold_config.clone(), alternative.clone()).unwrap();
+    let high_arl =
+        AverageRunLengthAnalysis::compute(high_threshold_config.clone(), alternative.clone())
+            .unwrap();
+    let low_arl =
+        AverageRunLengthAnalysis::compute(low_threshold_config.clone(), alternative.clone())
+            .unwrap();
 
     // Higher threshold should give longer ARL under null (lower false alarm rate)
     assert!(high_arl.arl_null_millionths > low_arl.arl_null_millionths);
     assert!(high_arl.false_alarm_rate_millionths < low_arl.false_alarm_rate_millionths);
 
-    let high_bound = WorstCaseDelayBound::compute(high_threshold_config, alternative.clone(), &high_arl).unwrap();
-    let low_bound = WorstCaseDelayBound::compute(low_threshold_config, alternative, &low_arl).unwrap();
+    let high_bound =
+        WorstCaseDelayBound::compute(high_threshold_config, alternative.clone(), &high_arl)
+            .unwrap();
+    let low_bound =
+        WorstCaseDelayBound::compute(low_threshold_config, alternative, &low_arl).unwrap();
 
     // Higher threshold should generally give longer detection delay bounds
     assert!(high_bound.delay_bound_millionths > low_bound.delay_bound_millionths);
@@ -208,7 +240,8 @@ fn test_proof_obligations_completeness() {
         mean_range_millionths: (2 * MILLION, 3 * MILLION),
     };
 
-    let arl_analysis = AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
+    let arl_analysis =
+        AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
     let delay_bound = WorstCaseDelayBound::compute(config, alternative, &arl_analysis).unwrap();
 
     // Verify all required obligation categories are present
@@ -268,7 +301,10 @@ fn test_composite_alternative_likelihood_ratios() {
         let null_lr = alt.mean_log_likelihood_ratio_under_null();
         let alt_lr = alt.mean_log_likelihood_ratio_under_alternative();
         let separation = alt_lr - null_lr;
-        assert!(separation > 50_000, "Should have good separation for detectability");
+        assert!(
+            separation > 50_000,
+            "Should have good separation for detectability"
+        );
     }
 }
 
@@ -331,7 +367,10 @@ fn test_delay_bound_trade_offs() {
     for alt in alternatives {
         if let Ok(arl) = AverageRunLengthAnalysis::compute(config.clone(), alt.clone()) {
             if let Ok(bound) = WorstCaseDelayBound::compute(config.clone(), alt, &arl) {
-                results.push((arl.false_alarm_rate_millionths, bound.delay_bound_millionths));
+                results.push((
+                    arl.false_alarm_rate_millionths,
+                    bound.delay_bound_millionths,
+                ));
             }
         }
     }

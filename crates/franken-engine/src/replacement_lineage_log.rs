@@ -2430,6 +2430,10 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             zone: "test-zone".to_string(),
             signature_bundle: SignatureBundle::new(1),
+            old_slot_id: SlotId::new("slot_old").expect("valid slot id"),
+            new_slot_id: SlotId::new("slot_new").expect("valid slot id"),
+            translation_validation_proof_ref: "test-proof".to_string(),
+            content_hash_chain_into_lineage: "test-chain".to_string(),
         }
     }
 

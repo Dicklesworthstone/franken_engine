@@ -30,9 +30,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::causation_graph_schema::{
-    CausationGraph, CausationNode, CausationEdge, InfluenceWeight, NodeId, EdgeId
+    CausationEdge, CausationGraph, CausationNode, EdgeId, InfluenceWeight, NodeId,
 };
-use crate::hash_tiers::{ContentHash, AuthenticityHash};
+use crate::hash_tiers::{AuthenticityHash, ContentHash};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -243,7 +243,10 @@ impl PersistenceComputer {
     }
 
     /// Compute persistence diagram from a causation graph.
-    pub fn compute_diagram(&self, graph: &CausationGraph) -> Result<PersistenceDiagram, PersistenceError> {
+    pub fn compute_diagram(
+        &self,
+        graph: &CausationGraph,
+    ) -> Result<PersistenceDiagram, PersistenceError> {
         let start_time = std::time::Instant::now();
 
         // Build filtration from the causation graph
@@ -276,7 +279,10 @@ impl PersistenceComputer {
             bars: filtered_bars,
             source_graph_hash: graph.metadata.graph_hash.clone(),
             content_hash,
-            authenticity_hash: AuthenticityHash::compute_keyed(b"persistence_key", content_hash.as_bytes()),
+            authenticity_hash: AuthenticityHash::compute_keyed(
+                b"persistence_key",
+                content_hash.as_bytes(),
+            ),
             computation_metadata: metadata,
         };
 
@@ -306,48 +312,61 @@ impl PersistenceComputer {
     }
 
     /// Compute filter value for a node.
-    fn compute_node_filter_value(&self, node: &CausationNode, _graph: &CausationGraph) -> Result<FilterValue, PersistenceError> {
+    fn compute_node_filter_value(
+        &self,
+        node: &CausationNode,
+        _graph: &CausationGraph,
+    ) -> Result<FilterValue, PersistenceError> {
         match self.config.filter_type {
             FilterType::InfluenceWeight => {
                 // For nodes, use a base filter value
                 Ok(FilterValue::from_millionths(0))
-            },
+            }
             FilterType::Temporal => {
                 // Use normalized timestamp
                 let normalized_time = (node.timestamp_ns / 1_000_000) % 1_000_000; // Convert to milliseconds mod 1 second
                 Ok(FilterValue::from_millionths(normalized_time as u32))
-            },
+            }
             FilterType::GraphDistance => {
                 // Use node degree as proxy for importance
                 Ok(FilterValue::from_millionths(10_000)) // Default value
-            },
+            }
             FilterType::Combined => {
                 // Combine multiple criteria
                 Ok(FilterValue::from_millionths(50_000))
-            },
+            }
         }
     }
 
     /// Compute filter value for an edge.
-    fn compute_edge_filter_value(&self, edge: &CausationEdge, _graph: &CausationGraph) -> Result<FilterValue, PersistenceError> {
+    fn compute_edge_filter_value(
+        &self,
+        edge: &CausationEdge,
+        _graph: &CausationGraph,
+    ) -> Result<FilterValue, PersistenceError> {
         match self.config.filter_type {
             FilterType::InfluenceWeight => {
                 // Use the inverse of influence weight (higher influence = earlier in filtration)
-                let inverted = InfluenceWeight::MAX.millionths.saturating_sub(edge.weight.millionths);
+                let inverted = InfluenceWeight::MAX
+                    .millionths
+                    .saturating_sub(edge.weight.millionths);
                 Ok(FilterValue::from_millionths(inverted))
-            },
+            }
             FilterType::Temporal => {
                 let normalized_time = (edge.timestamp_ns / 1_000_000) % 1_000_000;
                 Ok(FilterValue::from_millionths(normalized_time as u32))
-            },
+            }
             FilterType::GraphDistance | FilterType::Combined => {
                 Ok(FilterValue::from_millionths(edge.weight.millionths))
-            },
+            }
         }
     }
 
     /// Compute persistence bars using the reduction algorithm.
-    fn compute_persistence_bars(&self, filtration: &Filtration) -> Result<Vec<PersistenceBar>, PersistenceError> {
+    fn compute_persistence_bars(
+        &self,
+        filtration: &Filtration,
+    ) -> Result<Vec<PersistenceBar>, PersistenceError> {
         let mut bars = Vec::new();
         let mut union_find = UnionFind::new();
 
@@ -369,8 +388,14 @@ impl PersistenceComputer {
                         feature_weight: InfluenceWeight::from_millionths(100_000), // Default weight
                     };
                     bars.push(bar);
-                },
-                Simplex::Edge { id: _, source, target, filter_value, weight } => {
+                }
+                Simplex::Edge {
+                    id: _,
+                    source,
+                    target,
+                    filter_value,
+                    weight,
+                } => {
                     let root_source = union_find.find(*source);
                     let root_target = union_find.find(*target);
 
@@ -406,7 +431,10 @@ impl PersistenceComputer {
     }
 
     /// Filter bars by persistence threshold.
-    fn filter_bars(&self, mut bars: Vec<PersistenceBar>) -> Result<Vec<PersistenceBar>, PersistenceError> {
+    fn filter_bars(
+        &self,
+        mut bars: Vec<PersistenceBar>,
+    ) -> Result<Vec<PersistenceBar>, PersistenceError> {
         bars.retain(|bar| {
             match bar.persistence() {
                 Some(persistence) => persistence >= self.config.persistence_threshold,
@@ -416,7 +444,8 @@ impl PersistenceComputer {
 
         // Sort bars for deterministic output
         bars.sort_by(|a, b| {
-            a.birth.cmp(&b.birth)
+            a.birth
+                .cmp(&b.birth)
                 .then_with(|| a.death.cmp(&b.death))
                 .then_with(|| a.dimension.cmp(&b.dimension))
         });
@@ -434,7 +463,11 @@ impl PersistenceComputer {
     }
 
     /// Compute content hash for the persistence diagram.
-    fn compute_diagram_hash(&self, bars: &[PersistenceBar], metadata: &ComputationMetadata) -> Result<ContentHash, PersistenceError> {
+    fn compute_diagram_hash(
+        &self,
+        bars: &[PersistenceBar],
+        metadata: &ComputationMetadata,
+    ) -> Result<ContentHash, PersistenceError> {
         // Serialize the bars and metadata for hashing
         let mut hash_data = Vec::new();
 
@@ -497,13 +530,27 @@ impl Filtration {
     }
 
     /// Add an edge to the filtration.
-    fn add_edge(&mut self, id: EdgeId, source: NodeId, target: NodeId, filter_value: FilterValue, weight: InfluenceWeight) {
-        self.simplices.push(Simplex::Edge { id, source, target, filter_value, weight });
+    fn add_edge(
+        &mut self,
+        id: EdgeId,
+        source: NodeId,
+        target: NodeId,
+        filter_value: FilterValue,
+        weight: InfluenceWeight,
+    ) {
+        self.simplices.push(Simplex::Edge {
+            id,
+            source,
+            target,
+            filter_value,
+            weight,
+        });
     }
 
     /// Sort simplices by filter value.
     fn sort(&mut self) {
-        self.simplices.sort_by(|a, b| a.filter_value().cmp(&b.filter_value()));
+        self.simplices
+            .sort_by(|a, b| a.filter_value().cmp(&b.filter_value()));
     }
 
     /// Get the range of filter values.
@@ -512,8 +559,18 @@ impl Filtration {
             return (FilterValue::ZERO, FilterValue::ZERO);
         }
 
-        let min = self.simplices.iter().map(|s| s.filter_value()).min().unwrap_or(FilterValue::ZERO);
-        let max = self.simplices.iter().map(|s| s.filter_value()).max().unwrap_or(FilterValue::ZERO);
+        let min = self
+            .simplices
+            .iter()
+            .map(|s| s.filter_value())
+            .min()
+            .unwrap_or(FilterValue::ZERO);
+        let max = self
+            .simplices
+            .iter()
+            .map(|s| s.filter_value())
+            .max()
+            .unwrap_or(FilterValue::ZERO);
         (min, max)
     }
 }
@@ -676,7 +733,9 @@ pub fn wasserstein_distance(
     p: u8,
 ) -> Result<WassersteinDistance, PersistenceError> {
     if p == 0 {
-        return Err(PersistenceError::InvalidConfig("Wasserstein order p must be >= 1".to_string()));
+        return Err(PersistenceError::InvalidConfig(
+            "Wasserstein order p must be >= 1".to_string(),
+        ));
     }
 
     // Extract bars and separate by dimension
@@ -711,7 +770,7 @@ pub fn wasserstein_distance(
     };
 
     Ok(WassersteinDistance::from_millionths(
-        final_distance_millionths.min(u32::MAX as u64) as u32
+        final_distance_millionths.min(u32::MAX as u64) as u32,
     ))
 }
 
@@ -750,14 +809,20 @@ fn extract_bars_by_dimension(bars: &[PersistenceBar]) -> BTreeMap<u8, Vec<&Persi
     let mut by_dimension = BTreeMap::new();
 
     for bar in bars {
-        by_dimension.entry(bar.dimension).or_insert_with(Vec::new).push(bar);
+        by_dimension
+            .entry(bar.dimension)
+            .or_insert_with(Vec::new)
+            .push(bar);
     }
 
     by_dimension
 }
 
 /// Compute sum of all persistence values (for empty diagram comparison).
-fn sum_total_persistence(bars: &[&PersistenceBar], p: u8) -> Result<WassersteinDistance, PersistenceError> {
+fn sum_total_persistence(
+    bars: &[&PersistenceBar],
+    p: u8,
+) -> Result<WassersteinDistance, PersistenceError> {
     let mut total_millionths: u64 = 0;
 
     for bar in bars {
@@ -784,18 +849,23 @@ fn sum_total_persistence(bars: &[&PersistenceBar], p: u8) -> Result<WassersteinD
     };
 
     Ok(WassersteinDistance::from_millionths(
-        final_value.min(u32::MAX as u64) as u32
+        final_value.min(u32::MAX as u64) as u32,
     ))
 }
 
 /// Convert persistence bars to 2D points (birth, death) for matching.
 fn bars_to_points(bars: &[&PersistenceBar]) -> Vec<WassersteinPoint> {
-    bars.iter().map(|bar| {
-        let birth = bar.birth.millionths as f64 / 1_000_000.0;
-        let death = bar.death.map(|d| d.millionths as f64 / 1_000_000.0).unwrap_or(birth + 1.0); // Infinite bars
+    bars.iter()
+        .map(|bar| {
+            let birth = bar.birth.millionths as f64 / 1_000_000.0;
+            let death = bar
+                .death
+                .map(|d| d.millionths as f64 / 1_000_000.0)
+                .unwrap_or(birth + 1.0); // Infinite bars
 
-        WassersteinPoint { birth, death }
-    }).collect()
+            WassersteinPoint { birth, death }
+        })
+        .collect()
 }
 
 /// Compute optimal matching cost between two sets of points.
@@ -826,10 +896,16 @@ fn exact_matching_cost(
 
     // Add diagonal points to balance the sets
     while balanced1.len() < n {
-        balanced1.push(WassersteinPoint { birth: 0.5, death: 0.5 }); // Diagonal point
+        balanced1.push(WassersteinPoint {
+            birth: 0.5,
+            death: 0.5,
+        }); // Diagonal point
     }
     while balanced2.len() < n {
-        balanced2.push(WassersteinPoint { birth: 0.5, death: 0.5 }); // Diagonal point
+        balanced2.push(WassersteinPoint {
+            birth: 0.5,
+            death: 0.5,
+        }); // Diagonal point
     }
 
     // Compute all pairwise distances
@@ -902,9 +978,13 @@ fn greedy_assignment(costs: &[f64], n: usize) -> Result<u32, PersistenceError> {
         let mut best_assignment = None;
 
         for i in 0..n {
-            if used_rows[i] { continue; }
+            if used_rows[i] {
+                continue;
+            }
             for j in 0..n {
-                if used_cols[j] { continue; }
+                if used_cols[j] {
+                    continue;
+                }
                 let cost = costs[i * n + j];
                 if cost < min_cost {
                     min_cost = cost;
@@ -940,8 +1020,12 @@ fn point_distance(p1: &WassersteinPoint, p2: &WassersteinPoint, p: u8) -> f64 {
 
 /// Compute integer power of u64 with overflow protection.
 fn power_u64(base: u64, exp: u32) -> u64 {
-    if exp == 0 { return 1; }
-    if exp == 1 { return base; }
+    if exp == 0 {
+        return 1;
+    }
+    if exp == 1 {
+        return base;
+    }
 
     let mut result = base;
     for _ in 1..exp {
@@ -956,8 +1040,12 @@ fn power_u64(base: u64, exp: u32) -> u64 {
 
 /// Compute integer nth root of u64 with approximation.
 fn nth_root_u64(value: u64, n: u32) -> u64 {
-    if n == 1 { return value; }
-    if value == 0 { return 0; }
+    if n == 1 {
+        return value;
+    }
+    if value == 0 {
+        return 0;
+    }
 
     // Use binary search to find the nth root
     let mut low = 0u64;
@@ -970,7 +1058,9 @@ fn nth_root_u64(value: u64, n: u32) -> u64 {
             std::cmp::Ordering::Equal => return mid,
             std::cmp::Ordering::Less => low = mid + 1,
             std::cmp::Ordering::Greater => {
-                if mid == 0 { break; }
+                if mid == 0 {
+                    break;
+                }
                 high = mid - 1;
             }
         }
@@ -1307,8 +1397,14 @@ mod tests {
 
     #[test]
     fn test_point_distance_calculations() {
-        let p1 = WassersteinPoint { birth: 0.1, death: 0.3 };
-        let p2 = WassersteinPoint { birth: 0.2, death: 0.4 };
+        let p1 = WassersteinPoint {
+            birth: 0.1,
+            death: 0.3,
+        };
+        let p2 = WassersteinPoint {
+            birth: 0.2,
+            death: 0.4,
+        };
 
         let l1_dist = point_distance(&p1, &p2, 1);
         let l2_dist = point_distance(&p1, &p2, 2);
@@ -1319,20 +1415,19 @@ mod tests {
 
     #[test]
     fn test_bars_to_points_conversion() {
-        let bars = vec![
-            &PersistenceBar {
-                birth: FilterValue::from_millionths(100_000), // 0.1
-                death: Some(FilterValue::from_millionths(300_000)), // 0.3
-                dimension: 0,
-                representative: FeatureRepresentative::Component {
-                    root_node: NodeId(1),
-                    nodes: vec![NodeId(1)],
-                },
-                feature_weight: InfluenceWeight::from_millionths(200_000),
-            }
-        ];
+        let bars = vec![PersistenceBar {
+            birth: FilterValue::from_millionths(100_000), // 0.1
+            death: Some(FilterValue::from_millionths(300_000)), // 0.3
+            dimension: 0,
+            representative: FeatureRepresentative::Component {
+                root_node: NodeId(1),
+                nodes: vec![NodeId(1)],
+            },
+            feature_weight: InfluenceWeight::from_millionths(200_000),
+        }];
 
-        let points = bars_to_points(&bars);
+        let bar_refs: Vec<&PersistenceBar> = bars.iter().collect();
+        let points = bars_to_points(&bar_refs);
         assert_eq!(points.len(), 1);
         assert!((points[0].birth - 0.1).abs() < 1e-10);
         assert!((points[0].death - 0.3).abs() < 1e-10);
@@ -1414,7 +1509,7 @@ mod tests {
     #[test]
     fn test_sum_total_persistence() {
         let bars = vec![
-            &PersistenceBar {
+            PersistenceBar {
                 birth: FilterValue::from_millionths(100_000),
                 death: Some(FilterValue::from_millionths(300_000)), // Persistence = 200_000
                 dimension: 0,
@@ -1424,7 +1519,7 @@ mod tests {
                 },
                 feature_weight: InfluenceWeight::from_millionths(200_000),
             },
-            &PersistenceBar {
+            PersistenceBar {
                 birth: FilterValue::from_millionths(200_000),
                 death: Some(FilterValue::from_millionths(500_000)), // Persistence = 300_000
                 dimension: 0,
@@ -1436,30 +1531,30 @@ mod tests {
             },
         ];
 
-        let total_l1 = sum_total_persistence(&bars, 1).unwrap();
+        let bar_refs: Vec<&PersistenceBar> = bars.iter().collect();
+        let total_l1 = sum_total_persistence(&bar_refs, 1).unwrap();
         assert_eq!(total_l1.millionths, 500_000); // 200_000 + 300_000
 
-        let total_l2 = sum_total_persistence(&bars, 2).unwrap();
+        let total_l2 = sum_total_persistence(&bar_refs, 2).unwrap();
         // sqrt(200_000^2 + 300_000^2) = sqrt(130_000_000_000) ≈ 360_555
         assert!(total_l2.millionths > 350_000 && total_l2.millionths < 370_000);
     }
 
     #[test]
     fn test_infinite_bars_handling() {
-        let bars = vec![
-            &PersistenceBar {
-                birth: FilterValue::from_millionths(100_000),
-                death: None, // Infinite bar
-                dimension: 1,
-                representative: FeatureRepresentative::Cycle {
-                    edges: vec![EdgeId(1)],
-                    cycle_weight: InfluenceWeight::from_millionths(800_000),
-                },
-                feature_weight: InfluenceWeight::from_millionths(800_000),
-            }
-        ];
+        let bars = vec![PersistenceBar {
+            birth: FilterValue::from_millionths(100_000),
+            death: None, // Infinite bar
+            dimension: 1,
+            representative: FeatureRepresentative::Cycle {
+                edges: vec![EdgeId(1)],
+                cycle_weight: InfluenceWeight::from_millionths(800_000),
+            },
+            feature_weight: InfluenceWeight::from_millionths(800_000),
+        }];
 
-        let total = sum_total_persistence(&bars, 2).unwrap();
+        let bar_refs: Vec<&PersistenceBar> = bars.iter().collect();
+        let total = sum_total_persistence(&bar_refs, 2).unwrap();
         assert_eq!(total.millionths, 1_000_000); // Infinite bars contribute 1.0
     }
 
@@ -1504,7 +1599,10 @@ mod tests {
                     counts.insert(1, 1);
                     counts
                 },
-                filter_range: (FilterValue::from_millionths(100_000), FilterValue::from_millionths(500_000)),
+                filter_range: (
+                    FilterValue::from_millionths(100_000),
+                    FilterValue::from_millionths(500_000),
+                ),
             },
         }
     }
@@ -1512,18 +1610,16 @@ mod tests {
     fn create_different_persistence_diagram() -> PersistenceDiagram {
         PersistenceDiagram {
             schema_version: PERSISTENCE_DIAGRAM_SCHEMA_VERSION.to_string(),
-            bars: vec![
-                PersistenceBar {
-                    birth: FilterValue::from_millionths(150_000),
-                    death: Some(FilterValue::from_millionths(400_000)),
-                    dimension: 0,
-                    representative: FeatureRepresentative::Component {
-                        root_node: NodeId(2),
-                        nodes: vec![NodeId(2), NodeId(3)],
-                    },
-                    feature_weight: InfluenceWeight::from_millionths(250_000),
+            bars: vec![PersistenceBar {
+                birth: FilterValue::from_millionths(150_000),
+                death: Some(FilterValue::from_millionths(400_000)),
+                dimension: 0,
+                representative: FeatureRepresentative::Component {
+                    root_node: NodeId(2),
+                    nodes: vec![NodeId(2), NodeId(3)],
                 },
-            ],
+                feature_weight: InfluenceWeight::from_millionths(250_000),
+            }],
             source_graph_hash: ContentHash::compute(b"different_graph"),
             content_hash: ContentHash::compute(b"different_diagram"),
             authenticity_hash: AuthenticityHash::compute_keyed(b"test_key", b"different_data"),
@@ -1537,7 +1633,10 @@ mod tests {
                     counts.insert(0, 1);
                     counts
                 },
-                filter_range: (FilterValue::from_millionths(150_000), FilterValue::from_millionths(400_000)),
+                filter_range: (
+                    FilterValue::from_millionths(150_000),
+                    FilterValue::from_millionths(400_000),
+                ),
             },
         }
     }
@@ -1581,7 +1680,10 @@ mod tests {
                     counts.insert(1, 1);
                     counts
                 },
-                filter_range: (FilterValue::from_millionths(250_000), FilterValue::from_millionths(600_000)),
+                filter_range: (
+                    FilterValue::from_millionths(250_000),
+                    FilterValue::from_millionths(600_000),
+                ),
             },
         }
     }

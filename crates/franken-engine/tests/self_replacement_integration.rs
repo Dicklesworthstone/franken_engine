@@ -596,15 +596,19 @@ fn receipt_create_unsigned() {
     let arts = test_validation_artifacts();
     let receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id: &test_slot_id(),
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
         old_cell_digest: "old-digest-001",
         new_cell_digest: "new-digest-001",
+        translation_validation_proof_ref: "proof-ref-001",
+        content_hash_chain_into_lineage: "hash-chain-001",
         validation_artifacts: &arts,
         rollback_token: "rollback-token-001",
         promotion_rationale: "Performance improved by 20%",
         timestamp_ns: 1_000_000_000,
-        epoch: test_epoch(),
-        zone: "zone-a",
-        required_signatures: 2,
+        epoch: SecurityEpoch::from_raw(1),
+        zone: "test-zone",
+        required_signatures: 1,
     })
     .unwrap();
 
@@ -618,16 +622,16 @@ fn receipt_create_unsigned() {
 #[test]
 fn receipt_id_deterministic() {
     let slot_id = test_slot_id();
-    let id1 = ReplacementReceipt::derive_receipt_id(&slot_id, "old", "new", 1000, "z").unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&slot_id, "old", "new", 1000, "z").unwrap();
+    let id1 = ReplacementReceipt::derive_receipt_id(&slot_id, &slot_id, &slot_id, "old", "new", "proof-ref", "hash-chain", 1000, "z").unwrap();
+    let id2 = ReplacementReceipt::derive_receipt_id(&slot_id, &slot_id, &slot_id, "old", "new", "proof-ref", "hash-chain", 1000, "z").unwrap();
     assert_eq!(id1, id2);
 }
 
 #[test]
 fn receipt_id_varies_by_digest() {
     let slot_id = test_slot_id();
-    let id1 = ReplacementReceipt::derive_receipt_id(&slot_id, "old-a", "new", 1000, "z").unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&slot_id, "old-b", "new", 1000, "z").unwrap();
+    let id1 = ReplacementReceipt::derive_receipt_id(&slot_id, &slot_id, &slot_id, "old-a", "new", "proof-ref", "hash-chain", 1000, "z").unwrap();
+    let id2 = ReplacementReceipt::derive_receipt_id(&slot_id, &slot_id, &slot_id, "old-b", "new", "proof-ref", "hash-chain", 1000, "z").unwrap();
     assert_ne!(id1, id2);
 }
 
@@ -636,14 +640,18 @@ fn receipt_add_and_verify_signatures() {
     let arts = test_validation_artifacts();
     let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id: &test_slot_id(),
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
         old_cell_digest: "old",
         new_cell_digest: "new",
+        translation_validation_proof_ref: "proof-ref",
+        content_hash_chain_into_lineage: "hash-chain",
         validation_artifacts: &arts,
         rollback_token: "rollback",
         promotion_rationale: "Better",
-        timestamp_ns: 2_000_000_000,
-        epoch: test_epoch(),
-        zone: "zone-a",
+        timestamp_ns: 1_000_000_000,
+        epoch: SecurityEpoch::from_raw(1),
+        zone: "test-zone",
         required_signatures: 2,
     })
     .unwrap();
@@ -662,14 +670,18 @@ fn receipt_insufficient_signatures() {
     let arts = test_validation_artifacts();
     let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id: &test_slot_id(),
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
         old_cell_digest: "old",
         new_cell_digest: "new",
+        translation_validation_proof_ref: "proof-ref",
+        content_hash_chain_into_lineage: "hash-chain",
         validation_artifacts: &arts,
         rollback_token: "rollback",
         promotion_rationale: "Testing",
-        timestamp_ns: 3_000_000_000,
-        epoch: test_epoch(),
-        zone: "zone-a",
+        timestamp_ns: 1_000_000_000,
+        epoch: SecurityEpoch::from_raw(1),
+        zone: "test-zone",
         required_signatures: 2,
     })
     .unwrap();
@@ -691,15 +703,19 @@ fn receipt_insufficient_signatures() {
 fn receipt_empty_validation_artifacts_rejected() {
     let result = ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id: &test_slot_id(),
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
         old_cell_digest: "old",
         new_cell_digest: "new",
+        translation_validation_proof_ref: "proof-ref",
+        content_hash_chain_into_lineage: "hash-chain",
         validation_artifacts: &[],
         rollback_token: "rollback",
         promotion_rationale: "No artifacts",
-        timestamp_ns: 4_000_000_000,
-        epoch: test_epoch(),
-        zone: "zone-a",
-        required_signatures: 1,
+        timestamp_ns: 1_000_000_000,
+        epoch: SecurityEpoch::from_raw(1),
+        zone: "test-zone",
+        required_signatures: 2,
     });
     match result {
         Err(SelfReplacementError::EmptyValidationArtifacts) => {}
@@ -713,15 +729,19 @@ fn receipt_all_validations_passed_false_when_one_fails() {
     arts[2].passed = false; // Performance benchmark fails
     let receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id: &test_slot_id(),
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
         old_cell_digest: "old",
         new_cell_digest: "new",
+        translation_validation_proof_ref: "proof-ref",
+        content_hash_chain_into_lineage: "hash-chain",
         validation_artifacts: &arts,
         rollback_token: "rollback",
         promotion_rationale: "Partial",
-        timestamp_ns: 5_000_000_000,
-        epoch: test_epoch(),
-        zone: "zone-a",
-        required_signatures: 1,
+        timestamp_ns: 1_000_000_000,
+        epoch: SecurityEpoch::from_raw(1),
+        zone: "test-zone",
+        required_signatures: 2,
     })
     .unwrap();
     assert!(!receipt.all_validations_passed());
@@ -732,15 +752,19 @@ fn receipt_serde_round_trip() {
     let arts = test_validation_artifacts();
     let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id: &test_slot_id(),
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
         old_cell_digest: "old",
         new_cell_digest: "new",
+        translation_validation_proof_ref: "proof-ref",
+        content_hash_chain_into_lineage: "hash-chain",
         validation_artifacts: &arts,
         rollback_token: "rollback",
         promotion_rationale: "Serde test",
-        timestamp_ns: 6_000_000_000,
-        epoch: test_epoch(),
-        zone: "zone-a",
-        required_signatures: 1,
+        timestamp_ns: 1_000_000_000,
+        epoch: SecurityEpoch::from_raw(1),
+        zone: "test-zone",
+        required_signatures: 2,
     })
     .unwrap();
     receipt
@@ -954,15 +978,19 @@ fn lifecycle_record_receipt_advances_stage() {
     let arts = test_validation_artifacts();
     let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id: &test_slot_id(),
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
         old_cell_digest: "old",
         new_cell_digest: "new",
+        translation_validation_proof_ref: "proof-ref",
+        content_hash_chain_into_lineage: "hash-chain",
         validation_artifacts: &arts,
         rollback_token: "rollback",
         promotion_rationale: "Stage advance",
-        timestamp_ns: 21_000_000_000,
-        epoch: test_epoch(),
-        zone: "zone-a",
-        required_signatures: 1,
+        timestamp_ns: 1_000_000_000,
+        epoch: SecurityEpoch::from_raw(1),
+        zone: "test-zone",
+        required_signatures: 2,
     })
     .unwrap();
     receipt
@@ -1061,15 +1089,19 @@ fn full_lifecycle_to_production() {
         // Record a receipt to advance stage
         let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot_id(),
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
             old_cell_digest: &format!("old-{i}"),
             new_cell_digest: &format!("new-{i}"),
+            translation_validation_proof_ref: "proof-ref",
+            content_hash_chain_into_lineage: "hash-chain",
             validation_artifacts: &arts,
             rollback_token: &format!("rollback-{i}"),
             promotion_rationale: &format!("Stage {i} advance"),
-            timestamp_ns: (31 + i as u64) * 1_000_000_000,
-            epoch: test_epoch(),
-            zone: "zone-a",
-            required_signatures: 1,
+            timestamp_ns: 1_000_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+            zone: "test-zone",
+            required_signatures: 2,
         })
         .unwrap();
         receipt

@@ -75,7 +75,7 @@ fn create_test_receipt() -> ReceiptRecord {
 /// Helper to create a test TEE quote generator.
 fn create_test_generator() -> TeeQuoteGenerator {
     let config = TeeQuoteConfig::default();
-    let signing_key = SigningKey::generate();
+    let signing_key = franken_engine::signature_preimage::generate_keypair().0;
     TeeQuoteGenerator::new(config, signing_key)
 }
 
@@ -85,8 +85,10 @@ fn create_test_generator() -> TeeQuoteGenerator {
 
 #[test]
 fn test_tee_capability_detection_not_available() {
-    std::env::remove_var("FRANKEN_TEE_ENABLED");
-    std::env::remove_var("FRANKEN_TEE_ERROR");
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+        std::env::remove_var("FRANKEN_TEE_ERROR");
+    }
 
     let generator = create_test_generator();
     let capability = generator.detect_tee_capability();
@@ -96,8 +98,10 @@ fn test_tee_capability_detection_not_available() {
 
 #[test]
 fn test_tee_capability_detection_available() {
-    std::env::set_var("FRANKEN_TEE_ENABLED", "true");
-    std::env::remove_var("FRANKEN_TEE_ERROR");
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+        std::env::remove_var("FRANKEN_TEE_ERROR");
+    }
 
     let generator = create_test_generator();
     let capability = generator.detect_tee_capability();
@@ -109,20 +113,26 @@ fn test_tee_capability_detection_available() {
         }
     );
 
-    std::env::remove_var("FRANKEN_TEE_ENABLED");
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
 }
 
 #[test]
 fn test_tee_capability_detection_error() {
-    std::env::remove_var("FRANKEN_TEE_ENABLED");
-    std::env::set_var("FRANKEN_TEE_ERROR", "Hardware malfunction");
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+        std::env::set_var("FRANKEN_TEE_ERROR", "Hardware malfunction");
+    }
 
     let generator = create_test_generator();
     let capability = generator.detect_tee_capability();
 
     assert!(matches!(capability, TeeCapability::Error { .. }));
 
-    std::env::remove_var("FRANKEN_TEE_ERROR");
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ERROR");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +345,7 @@ fn test_receipt_serialization_with_tee_binding() {
 #[test]
 fn test_attestation_binding_validation_success() {
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::default_for_testing();
+    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
 
     let now = chrono::Utc::now();
     let binding = TeeAttestationBinding {
@@ -361,7 +371,7 @@ fn test_attestation_binding_validation_success() {
 #[test]
 fn test_attestation_binding_validation_expired() {
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::default_for_testing();
+    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
 
     let now = chrono::Utc::now();
     let binding = TeeAttestationBinding {
@@ -388,7 +398,7 @@ fn test_attestation_binding_validation_expired() {
 #[test]
 fn test_attestation_binding_validation_not_yet_valid() {
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::default_for_testing();
+    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
 
     let now = chrono::Utc::now();
     let binding = TeeAttestationBinding {
@@ -415,7 +425,7 @@ fn test_attestation_binding_validation_not_yet_valid() {
 #[test]
 fn test_attestation_binding_validation_unsupported_platform() {
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::default_for_testing();
+    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
 
     let now = chrono::Utc::now();
     let binding = TeeAttestationBinding {
@@ -448,7 +458,7 @@ fn test_end_to_end_tee_workflow() {
     std::env::set_var("FRANKEN_TEE_ENABLED", "true");
 
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::default_for_testing();
+    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
 
     // Step 1: Generate decision data
     let decision_data = b"end-to-end test decision data";
@@ -580,12 +590,14 @@ fn test_tee_quote_config_customization() {
         quote_timeout: Duration::from_secs(30),
     };
 
-    let signing_key = SigningKey::generate();
+    let signing_key = franken_engine::signature_preimage::generate_keypair().0;
     let generator = TeeQuoteGenerator::new(custom_config, signing_key);
 
     // Verify the configuration is applied
     // (This would be more testable with accessor methods on TeeQuoteGenerator)
-    std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+    }
     let result = generator.generate_quote(b"config test", "config_nonce");
 
     match result {

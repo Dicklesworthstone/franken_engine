@@ -65,8 +65,12 @@ fn test_receipt(slot_name: &str, old: &str, new: &str, ts: u64) -> ReplacementRe
         receipt_id,
         schema_version: SchemaVersion::V1,
         slot_id,
+        old_slot_id: slot_id.clone(),
+        new_slot_id: slot_id.clone(),
         old_cell_digest: old.to_string(),
         new_cell_digest: new.to_string(),
+        translation_validation_proof_ref: "test-proof-ref".to_string(),
+        content_hash_chain_into_lineage: "test-hash-chain".to_string(),
         validation_artifacts: vec![ValidationArtifactRef {
             kind: ValidationArtifactKind::EquivalenceResult,
             artifact_digest: "deadbeef".to_string(),

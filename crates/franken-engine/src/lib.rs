@@ -1,4 +1,7 @@
-#![forbid(unsafe_code)]
+// Production builds forbid unsafe entirely. Tests may use `unsafe` only for
+// edition-2024 `std::env::set_var`/`remove_var` (process-env setup), which is
+// localized to test helpers; shipped code remains unsafe-free.
+#![cfg_attr(not(test), forbid(unsafe_code))]
 
 extern crate self as frankenengine_engine;
 

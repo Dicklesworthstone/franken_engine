@@ -1886,7 +1886,7 @@ mod tests {
             required_caps: EffectCapabilities::none(),
         };
 
-        let result = stack.handle_effecteffect.expect("Effect should be handled");
+        let result = stack.handle_effect(&effect).expect("Effect should be handled");
         let output: String = result.downcast().expect("Result should be String");
         assert_eq!(output, "handled by test_handler");
     }
@@ -1901,7 +1901,7 @@ mod tests {
             required_caps: EffectCapabilities::none(),
         };
 
-        let result = stack.handle_effecteffect;
+        let result = stack.handle_effect(&effect);
         assert!(matches!(result, Err(EffectError::Unhandled { .. })));
     }
 
@@ -1915,7 +1915,7 @@ mod tests {
             required_caps: EffectCapabilities::runtime([RuntimeCapability::VmDispatch]),
         };
 
-        let result = stack.handle_effecteffect;
+        let result = stack.handle_effect(&effect);
         assert!(matches!(result, Err(EffectError::CapabilityDenied { .. })));
     }
 
@@ -1958,7 +1958,7 @@ mod tests {
             required_caps: EffectCapabilities::none(),
         };
 
-        let result = stack.handle_effecteffect;
+        let result = stack.handle_effect(&effect);
         assert!(matches!(result, Err(EffectError::StackOverflow)));
     }
 
@@ -1969,10 +1969,10 @@ mod tests {
             args: vec!["Hello".to_string(), "World".to_string()],
         };
 
-        assert_eq!(effect.effect_name(), "console:info");
-        assert_eq!(effect.required_capabilities(), EffectCapabilities::none());
+        assert_eq!(Effect::effect_name(&effect), "console:info");
+        assert_eq!(Effect::required_capabilities(&effect), EffectCapabilities::none());
 
-        let params = effect.parameters();
+        let params = Effect::parameters(&effect);
         let (level, args) = params
             .downcast_ref::<(ConsoleLevel, Vec<String>)>()
             .unwrap();
@@ -1987,15 +1987,14 @@ mod tests {
             range: Some((0, 100)),
         };
 
-        assert_eq!(effect.effect_name(), "fs:read");
+        assert_eq!(Effect::effect_name(&effect), "fs:read");
         assert!(
-            effect
-                .required_capabilities()
+            Effect::required_capabilities(&effect)
                 .custom_caps
                 .contains("fs:read")
         );
 
-        let params = effect.parameters();
+        let params = Effect::parameters(&effect);
         let (path, range) = params
             .downcast_ref::<(String, Option<(u64, u64)>)>()
             .unwrap();
@@ -2011,15 +2010,14 @@ mod tests {
             timeout_ms: Some(5000),
         };
 
-        assert_eq!(effect.effect_name(), "net:connect");
+        assert_eq!(Effect::effect_name(&effect), "net:connect");
         assert!(
-            effect
-                .required_capabilities()
+            Effect::required_capabilities(&effect)
                 .runtime_caps
                 .contains(&RuntimeCapability::NetworkEgress)
         );
 
-        let params = effect.parameters();
+        let params = Effect::parameters(&effect);
         let (host, port, timeout) = params.downcast_ref::<(String, u16, Option<u64>)>().unwrap();
         assert_eq!(*host, "example.com");
         assert_eq!(*port, 80);
@@ -2036,15 +2034,14 @@ mod tests {
             context: context.clone(),
         };
 
-        assert_eq!(effect.effect_name(), "policy:request");
+        assert_eq!(Effect::effect_name(&effect), "policy:request");
         assert!(
-            effect
-                .required_capabilities()
+            Effect::required_capabilities(&effect)
                 .runtime_caps
                 .contains(&RuntimeCapability::PolicyRead)
         );
 
-        let params = effect.parameters();
+        let params = Effect::parameters(&effect);
         let (query, ctx) = params
             .downcast_ref::<(String, BTreeMap<String, String>)>()
             .unwrap();
@@ -2064,8 +2061,8 @@ mod tests {
             args: vec!["Error message".to_string()],
         };
 
-        let result = handler.handleeffect.unwrap().unwrap();
-        let output: () = result.downcast().unwrap();
+        let result = handler.handle(&effect).unwrap();
+        let output: () = result.unwrap().downcast().unwrap();
         assert_eq!(output, ());
 
         // Check that output was recorded
@@ -2149,17 +2146,17 @@ mod tests {
         let timeout_effect = TimerEffect {
             operation: TimerOperation::SetTimeout { delay_ms: 1000 },
         };
-        assert_eq!(timeout_effect.effect_name(), "timer:setTimeout");
+        assert_eq!(Effect::effect_name(&timeout_effect), "timer:setTimeout");
 
         let interval_effect = TimerEffect {
             operation: TimerOperation::SetInterval { interval_ms: 500 },
         };
-        assert_eq!(interval_effect.effect_name(), "timer:setInterval");
+        assert_eq!(Effect::effect_name(&interval_effect), "timer:setInterval");
 
         let clear_effect = TimerEffect {
             operation: TimerOperation::ClearTimeout { timer_id: 42 },
         };
-        assert_eq!(clear_effect.effect_name(), "timer:clearTimeout");
+        assert_eq!(Effect::effect_name(&clear_effect), "timer:clearTimeout");
     }
 
     #[test]
@@ -2167,7 +2164,7 @@ mod tests {
         let create_effect = PromiseEffect {
             operation: PromiseOperation::Create,
         };
-        assert_eq!(create_effect.effect_name(), "promise:create");
+        assert_eq!(Effect::effect_name(&create_effect), "promise:create");
 
         let resolve_effect = PromiseEffect {
             operation: PromiseOperation::Resolve {
@@ -2175,14 +2172,14 @@ mod tests {
                 value: BuiltinValue::Str("success".to_string()),
             },
         };
-        assert_eq!(resolve_effect.effect_name(), "promise:resolve");
+        assert_eq!(Effect::effect_name(&resolve_effect), "promise:resolve");
 
         let all_effect = PromiseEffect {
             operation: PromiseOperation::All {
                 promises: vec![1, 2, 3],
             },
         };
-        assert_eq!(all_effect.effect_name(), "promise:all");
+        assert_eq!(Effect::effect_name(&all_effect), "promise:all");
     }
 
     #[test]
@@ -2193,19 +2190,19 @@ mod tests {
                 radix: Some(10),
             },
         };
-        assert_eq!(parse_int_effect.effect_name(), "number:parseInt");
+        assert_eq!(Effect::effect_name(&parse_int_effect), "number:parseInt");
 
         let parse_float_effect = NumberEffect {
             operation: NumberOperation::ParseFloat {
                 value: "3.14".to_string(),
             },
         };
-        assert_eq!(parse_float_effect.effect_name(), "number:parseFloat");
+        assert_eq!(Effect::effect_name(&parse_float_effect), "number:parseFloat");
 
         let is_nan_effect = NumberEffect {
             operation: NumberOperation::IsNaN { value: f64::NAN },
         };
-        assert_eq!(is_nan_effect.effect_name(), "number:isNaN");
+        assert_eq!(Effect::effect_name(&is_nan_effect), "number:isNaN");
     }
 
     #[test]
@@ -2218,15 +2215,14 @@ mod tests {
             ],
         };
 
-        assert_eq!(effect.effect_name(), "builtin:call");
+        assert_eq!(Effect::effect_name(&effect), "builtin:call");
         assert!(
-            effect
-                .required_capabilities()
+            Effect::required_capabilities(&effect)
                 .runtime_caps
                 .contains(&RuntimeCapability::VmDispatch)
         );
 
-        let params = effect.parameters();
+        let params = Effect::parameters(&effect);
         let (name, args) = params
             .downcast_ref::<(String, Vec<BuiltinValue>)>()
             .unwrap();
@@ -2241,14 +2237,14 @@ mod tests {
                 specifier: "./module.js".to_string(),
             },
         };
-        assert_eq!(require_effect.effect_name(), "module:require");
+        assert_eq!(Effect::effect_name(&require_effect), "module:require");
 
         let import_effect = ModuleEffect {
             operation: ModuleOperation::Import {
                 specifier: "https://example.com/module.js".to_string(),
             },
         };
-        assert_eq!(import_effect.effect_name(), "module:import");
+        assert_eq!(Effect::effect_name(&import_effect), "module:import");
 
         let export_effect = ModuleEffect {
             operation: ModuleOperation::Export {
@@ -2256,7 +2252,7 @@ mod tests {
                 value: BuiltinValue::Str("exported value".to_string()),
             },
         };
-        assert_eq!(export_effect.effect_name(), "module:export");
+        assert_eq!(Effect::effect_name(&export_effect), "module:export");
     }
 
     #[test]

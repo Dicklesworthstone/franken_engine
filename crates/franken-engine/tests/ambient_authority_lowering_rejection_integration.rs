@@ -13,7 +13,7 @@ use frankenengine_engine::{
     ast::Expression,
     effect_set::EffectKind,
     lowering_pipeline::{LoweringPipelineError, lower_ir0_to_ir1},
-    parser::parse_module,
+    parser_api_stability::parse_module,
 };
 
 /// Test that red team scenarios are rejected with AmbientAuthorityViolation during lowering

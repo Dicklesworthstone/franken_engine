@@ -1001,7 +1001,13 @@ mod integration_tests {
             "decision-test-1",
             SecurityEpoch::from_raw(1),
             1000000,
-            vec![sample_dependency()],
+            vec![CausalDependency::new(
+                "evidence-123",
+                "sensor_reading",
+                DecisionFactor::PosteriorProbability,
+                750_000,
+                ContentHash::compute(b"test evidence data"),
+            )],
             5,
         );
 
@@ -1071,7 +1077,13 @@ mod integration_tests {
             "enrich-decision",
             SecurityEpoch::from_raw(1),
             1000000,
-            vec![sample_dependency()],
+            vec![CausalDependency::new(
+                "evidence-123",
+                "sensor_reading",
+                DecisionFactor::PosteriorProbability,
+                750_000,
+                ContentHash::compute(b"test evidence data"),
+            )],
             3,
         );
 

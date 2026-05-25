@@ -1037,7 +1037,7 @@ impl HasErrorCode for GuardrailError {
             | GuardrailError::InvalidObservation { .. }
             | GuardrailError::ResetUnauthorized { .. }
             | GuardrailError::NotTriggered { .. }
-            | GuardrailError::EValueOverflow { .. } => FrankenErrorCode::EprocessGuardrailError,
+            | GuardrailError::MartingaleError { .. } => FrankenErrorCode::EprocessGuardrailError,
         }
     }
 }

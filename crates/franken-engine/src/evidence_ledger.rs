@@ -3790,8 +3790,8 @@ mod tests {
         let a = default_evidence_signing_key();
         let b = default_evidence_signing_key();
         assert_eq!(
-            a.to_bytes(),
-            b.to_bytes(),
+            a.as_bytes(),
+            b.as_bytes(),
             "cached SigningKey must return byte-identical bytes across calls"
         );
     }
@@ -3802,14 +3802,14 @@ mod tests {
         let eager = SigningKey::from_bytes(DEFAULT_EVIDENCE_SIGNING_KEY_BYTES)
             .expect("const bytes are non-zero");
         assert_eq!(
-            cached.to_bytes(),
-            eager.to_bytes(),
+            cached.as_bytes(),
+            eager.as_bytes(),
             "cache must return byte-identical key to the eager construction"
         );
         // Also verify the verifying key matches.
         assert_eq!(
-            cached.verification_key().to_bytes(),
-            eager.verification_key().to_bytes(),
+            cached.verification_key().as_bytes(),
+            eager.verification_key().as_bytes(),
             "derived VerifyingKey must also match"
         );
     }
@@ -3843,7 +3843,7 @@ mod tests {
             handles.push(thread::spawn(move || {
                 b.wait();
                 // All threads race here. LazyLock must ensure exactly one init.
-                default_evidence_signing_key().to_bytes()
+                *default_evidence_signing_key().as_bytes()
             }));
         }
         let mut bytes_set = std::collections::BTreeSet::new();
@@ -3882,7 +3882,7 @@ mod tests {
         // execution) and hard-coded into the test for future regression
         // detection. Update the literal only if the canonical preimage
         // shape changes — which is itself a separate signed-decision.
-        let observed_sig_hex = hex::encode(cached_entry.envelope().signature.to_bytes());
+        let observed_sig_hex = hex::encode(cached_entry.signed_envelope.as_ref().unwrap().signature.to_bytes());
         let snapshot_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/golden/evidence_h1_fixed_signature.hex");
         if std::env::var("BLESS_GOLDEN").is_ok() {

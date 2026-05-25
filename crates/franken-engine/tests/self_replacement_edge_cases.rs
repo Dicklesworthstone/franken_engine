@@ -134,6 +134,10 @@ fn create_valid_receipt(slot_id: &SlotId, ts: u64, required_sigs: u32) -> Replac
         epoch: SecurityEpoch::from_raw(1),
         zone: "test-zone",
         required_signatures: required_sigs,
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
+        translation_validation_proof_ref: "proof_ref",
+        content_hash_chain_into_lineage: "hash_chain",
     })
     .unwrap()
 }
@@ -365,6 +369,10 @@ fn receipt_all_validations_mixed_results() {
         epoch: SecurityEpoch::from_raw(1),
         zone: "zone",
         required_signatures: 1,
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
+        translation_validation_proof_ref: "proof_ref",
+        content_hash_chain_into_lineage: "hash_chain",
     })
     .unwrap();
     assert!(!receipt.all_validations_passed());
@@ -372,18 +380,58 @@ fn receipt_all_validations_mixed_results() {
 
 #[test]
 fn receipt_id_differs_by_zone() {
-    let id1 = ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-a")
+    let id1 = ReplacementReceipt::derive_receipt_id(
+        &test_slot_id(),
+        &test_slot_id(),
+        &test_slot_id(),
+        "old",
+        "new",
+        "translation_proof",
+        "content_hash_chain",
+        1000,
+        "zone-a"
+    )
         .unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone-b")
+    let id2 = ReplacementReceipt::derive_receipt_id(
+        &test_slot_id(),
+        &test_slot_id(),
+        &test_slot_id(),
+        "old",
+        "new",
+        "translation_proof",
+        "content_hash_chain",
+        1000,
+        "zone-b"
+    )
         .unwrap();
     assert_ne!(id1, id2);
 }
 
 #[test]
 fn receipt_id_differs_by_new_digest() {
-    let id1 = ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new-a", 1000, "zone")
+    let id1 = ReplacementReceipt::derive_receipt_id(
+        &test_slot_id(),
+        &test_slot_id(),
+        &test_slot_id(),
+        "old",
+        "new-a",
+        "translation_proof",
+        "content_hash_chain",
+        1000,
+        "zone"
+    )
         .unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new-b", 1000, "zone")
+    let id2 = ReplacementReceipt::derive_receipt_id(
+        &test_slot_id(),
+        &test_slot_id(),
+        &test_slot_id(),
+        "old",
+        "new-b",
+        "translation_proof",
+        "content_hash_chain",
+        1000,
+        "zone"
+    )
         .unwrap();
     assert_ne!(id1, id2);
 }
@@ -888,6 +936,10 @@ fn receipt_empty_validation_artifacts_is_rejected() {
         epoch: SecurityEpoch::from_raw(1),
         zone: "zone",
         required_signatures: 1,
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
+        translation_validation_proof_ref: "proof_ref",
+        content_hash_chain_into_lineage: "hash_chain",
     });
     assert!(
         result.is_err(),
@@ -999,6 +1051,10 @@ fn lifecycle_production_stays_at_production() {
             epoch: SecurityEpoch::from_raw(1),
             zone: "test-zone",
             required_signatures: 1,
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
+            translation_validation_proof_ref: "proof_ref",
+            content_hash_chain_into_lineage: "hash_chain",
         })
         .unwrap();
         receipt.add_signature(&test_signing_key(), "gate").unwrap();
@@ -1018,6 +1074,10 @@ fn lifecycle_production_stays_at_production() {
         epoch: SecurityEpoch::from_raw(1),
         zone: "test-zone",
         required_signatures: 1,
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
+        translation_validation_proof_ref: "proof_ref",
+        content_hash_chain_into_lineage: "hash_chain",
     })
     .unwrap();
     r4.add_signature(&test_signing_key(), "gate").unwrap();
@@ -1135,6 +1195,10 @@ fn full_lifecycle_manifest_to_production() {
             epoch: SecurityEpoch::from_raw(1),
             zone: "test-zone",
             required_signatures: 2,
+            old_slot_id: &test_slot_id(),
+            new_slot_id: &test_slot_id(),
+            translation_validation_proof_ref: "proof_ref",
+            content_hash_chain_into_lineage: "hash_chain",
         })
         .unwrap();
         receipt.add_signature(&sk1, "gate-runner").unwrap();
@@ -1177,10 +1241,30 @@ fn deterministic_id_derivation_all_artifact_types() {
     }
     // Receipt IDs
     for _ in 0..50 {
-        let id = ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone")
+        let id = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old",
+            "new",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone"
+        )
             .unwrap();
         let id2 =
-            ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone")
+            ReplacementReceipt::derive_receipt_id(
+                &test_slot_id(),
+                &test_slot_id(),
+                &test_slot_id(),
+                "old",
+                "new",
+                "translation_proof",
+                "content_hash_chain",
+                1000,
+                "zone"
+            )
                 .unwrap();
         assert_eq!(id, id2);
     }
@@ -1207,7 +1291,17 @@ fn all_artifact_ids_from_different_types_are_distinct() {
     )
     .unwrap();
     let receipt_id =
-        ReplacementReceipt::derive_receipt_id(&test_slot_id(), "old", "new", 1000, "zone").unwrap();
+        ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old",
+            "new",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone"
+        ).unwrap();
     let decision_id =
         PromotionDecision::derive_decision_id(&test_slot_id(), "candidate", 1000, "zone").unwrap();
 

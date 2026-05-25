@@ -13,7 +13,7 @@ use frankenengine_engine::quarantine_deescalation::{
     ReAdmissionReceipt,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
+use frankenengine_engine::signature_preimage::{generate_keypair, SigningKey, VerificationKey};
 use frankenengine_engine::tee_attestation_policy::{
     AttestationQuote, MeasurementAlgorithm, MeasurementDigest, RevocationProbeStatus, TeePlatform,
 };
@@ -21,7 +21,7 @@ use frankenengine_engine::tee_attestation_policy::{
 use std::collections::BTreeMap;
 
 fn make_test_keys() -> (SigningKey, VerificationKey) {
-    let signing_key = SigningKey::generate();
+    let signing_key = generate_keypair().0;
     let verification_key = signing_key.verification_key();
     (signing_key, verification_key)
 }
@@ -50,7 +50,7 @@ fn test_end_to_end_readmission_workflow() {
     let epoch = SecurityEpoch::from_raw(100);
 
     // Simulate original quarantine scenario.
-    let original_quarantine_id = EngineObjectId::new();
+    let original_quarantine_id = EngineObjectId::default();
     let quarantine_reason = QuarantineReason::PolicyViolation {
         policy_id: "memory-limit-v2".to_string(),
         violation_details: "Exceeded 2GB allocation limit for 30+ seconds".to_string(),
@@ -129,7 +129,7 @@ fn test_evidence_chain_continuity() {
 
         let decision = ReAdmissionDecision::new(
             epoch,
-            EngineObjectId::new(),
+            EngineObjectId::default(),
             quarantine_reason,
             3600 * (i as u64 + 1), // Increasing quarantine time
             format!("operator-{}", i),
@@ -182,7 +182,7 @@ fn test_evidence_chain_continuity() {
 fn test_deterministic_decision_replay() {
     let (operator_key, _) = make_test_keys();
     let epoch = SecurityEpoch::from_raw(300);
-    let original_quarantine_id = EngineObjectId::new();
+    let original_quarantine_id = EngineObjectId::default();
 
     let quarantine_reason = QuarantineReason::ResourceExhaustion {
         resource_type: "cpu-cycles".to_string(),
@@ -203,7 +203,7 @@ fn test_deterministic_decision_replay() {
     // Create the same decision twice with identical parameters.
     let decision1 = ReAdmissionDecision::new(
         epoch,
-        original_quarantine_id,
+        original_quarantine_id.clone(),
         quarantine_reason.clone(),
         14400, // 4 hours
         "operator-resource-team".to_string(),
@@ -266,7 +266,7 @@ fn test_tee_attestation_integration() {
 
     let decision_with_tee = ReAdmissionDecision::new(
         epoch,
-        EngineObjectId::new(),
+        EngineObjectId::default(),
         QuarantineReason::OperatorInitiated {
             operator_id: "incident-response-team".to_string(),
             reason: "Precautionary isolation during security audit".to_string(),
@@ -290,7 +290,7 @@ fn test_tee_attestation_integration() {
 
     let decision_without_tee = ReAdmissionDecision::new(
         epoch,
-        EngineObjectId::new(),
+        EngineObjectId::default(),
         QuarantineReason::OperatorInitiated {
             operator_id: "incident-response-team".to_string(),
             reason: "Precautionary isolation during security audit".to_string(),
@@ -378,7 +378,7 @@ fn test_fallback_path_scenarios() {
     for (fallback_path, description) in test_cases {
         let decision = ReAdmissionDecision::new(
             epoch,
-            EngineObjectId::new(),
+            EngineObjectId::default(),
             QuarantineReason::CascadeProtection {
                 failed_component: "network-proxy".to_string(),
                 dependency_chain: vec!["proxy".to_string(), "auth-service".to_string()],
@@ -437,7 +437,7 @@ fn test_quarantine_reason_types() {
     for (i, quarantine_reason) in quarantine_reasons.into_iter().enumerate() {
         let decision = ReAdmissionDecision::new(
             epoch,
-            EngineObjectId::new(),
+            EngineObjectId::default(),
             quarantine_reason,
             3600 * (i as u64 + 1), // Varying quarantine times
             format!("operator-test-{}", i),
@@ -469,7 +469,7 @@ fn test_content_hash_stability() {
 
     let decision = ReAdmissionDecision::new(
         epoch,
-        EngineObjectId::new(),
+        EngineObjectId::default(),
         QuarantineReason::PolicyViolation {
             policy_id: "test-policy".to_string(),
             violation_details: "test violation".to_string(),
@@ -517,7 +517,7 @@ fn test_signature_tampering_detection() {
 
     let mut decision = ReAdmissionDecision::new(
         SecurityEpoch::from_raw(800),
-        EngineObjectId::new(),
+        EngineObjectId::default(),
         QuarantineReason::PolicyViolation {
             policy_id: "tamper-test".to_string(),
             violation_details: "test".to_string(),
@@ -566,7 +566,7 @@ fn test_error_handling() {
     // Test with extreme confidence values.
     let decision_high_confidence = ReAdmissionDecision::new(
         epoch,
-        EngineObjectId::new(),
+        EngineObjectId::default(),
         QuarantineReason::PolicyViolation {
             policy_id: "test".to_string(),
             violation_details: "test".to_string(),

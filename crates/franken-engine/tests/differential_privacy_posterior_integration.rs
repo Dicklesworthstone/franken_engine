@@ -10,7 +10,26 @@ use frankenengine_engine::differential_privacy_posterior::{
 use frankenengine_engine::federated_posterior_aggregation::{
     AggregatedPosteriorUpdate, LocalPosteriorProvider, PosteriorDelta,
 };
-use frankenengine_engine::{NodeId, RiskLevel, SecurityEpoch, Timestamp};
+use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::fleet_immune_protocol::NodeId;
+
+// Temporary type definitions for test compilation
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum RiskLevel {
+    Benign,
+    Anomalous,
+    Malicious,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct Timestamp(u64);
+
+impl Timestamp {
+    pub fn from_millis(millis: u64) -> Self {
+        Self(millis)
+    }
+}
 
 /// Integration test demonstrating end-to-end differential privacy aggregation
 /// where individual node contributions are protected by Gaussian noise

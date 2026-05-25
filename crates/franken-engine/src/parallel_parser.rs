@@ -599,7 +599,7 @@ fn compute_chunk_hash(chunk: &ChunkResult) -> ContentHash {
     encoder.encode_u32(chunk.chunk_index);
     encoder.encode_u64(chunk.chunk_start);
     encoder.encode_u64(chunk.chunk_end);
-    encoder.encode_u32(chunk.token_count);
+    encoder.encode_u32(chunk.token_count.try_into().unwrap_or(u32::MAX));
     for token in &chunk.tokens {
         encoder.encode_u8(token_kind_code(token.kind));
         encoder.encode_u64(token.start);
@@ -625,7 +625,7 @@ fn compute_merge_witness_hash(
     encoder.encode_u64(total_tokens);
     encoder.encode_u32(ordered_chunks.len() as u32);
     for chunk in ordered_chunks {
-        encoder.encode_u64(chunk.chunk_index);
+        encoder.encode_u64(chunk.chunk_index as u64);
         let chunk_hash = compute_chunk_hash(chunk);
         encoder.encode_fixed(&chunk_hash); // ContentHash: 32 bytes, no length prefix
     }

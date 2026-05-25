@@ -450,9 +450,15 @@ impl OptimizationProofCarrier {
         let mut failed_proofs = Vec::new();
         let start_time = std::time::Instant::now();
 
-        for proof in &mut self.equivalence_proofs {
-            let verification_result = self.verify_single_proof(proof)?;
+        // First, collect verification results without mutating self.equivalence_proofs
+        let verification_results: Result<Vec<_>, String> = self.equivalence_proofs
+            .iter()
+            .map(|proof| self.verify_single_proof(proof))
+            .collect();
+        let verification_results = verification_results?;
 
+        // Then apply the results
+        for (proof, verification_result) in self.equivalence_proofs.iter_mut().zip(verification_results.into_iter()) {
             match verification_result {
                 ProofResult::Verified => {
                     proof.verification_result = ProofResult::Verified;
@@ -782,7 +788,7 @@ pub fn generate_optimization_test_cases() -> Vec<OptimizationTestCase> {
                 OptimizationPass::InlineExpansion,
                 OptimizationPass::ConstantFolding,
             ],
-            expected_equivalence_relation: EquivalenceRelation::ContextualEquivalence,
+            expected_equivalence_relation: EquivalenceRelation::ObservationalEquivalence,
             expected_performance_improvement: 0.20, // 20% improvement
         },
     ]

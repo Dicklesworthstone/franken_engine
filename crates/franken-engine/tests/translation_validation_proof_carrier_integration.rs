@@ -8,8 +8,9 @@ use frankenengine_engine::{
     security_epoch::SecurityEpoch,
     self_replacement::{
         CreateReceiptInput, ReplacementReceipt, SchemaVersion, SignatureBundle,
-        ValidationArtifactRef, ValidationStatus,
+        ValidationArtifactRef, ValidationArtifactKind,
     },
+    proof_ingestion::ProofValidationStatus,
     signature_preimage::{Signature, SigningKey},
     slot_registry::SlotId,
     translation_validation_proof_carrier::{
@@ -26,20 +27,15 @@ fn create_test_signing_key() -> SigningKey {
 
 /// Create a test signature bundle.
 fn create_test_signature_bundle() -> SignatureBundle {
-    let signature = Signature::from_bytes(&[0u8; 64]).expect("valid test signature");
-    SignatureBundle {
-        signatures: vec![signature],
-        required_threshold: 1,
-        signer_identities: vec!["test_signer".to_string()],
-    }
+    SignatureBundle::new(1)
 }
 
 #[test]
 fn test_translation_validation_engine_basic() {
     let engine = TranslationValidationEngine::default();
 
-    let source_slot = SlotId::from_str("parser_v1").expect("valid slot ID");
-    let target_slot = SlotId::from_str("parser_v2").expect("valid slot ID");
+    let source_slot = SlotId::new("parser_v1").expect("valid slot ID");
+    let target_slot = SlotId::new("parser_v2").expect("valid slot ID");
 
     let source_spec = create_slot_specification(
         source_slot,
@@ -71,7 +67,7 @@ fn test_translation_validation_engine_basic() {
 
 #[test]
 fn test_slot_specification_creation() {
-    let slot_id = SlotId::from_str("test_parser").expect("valid slot ID");
+    let slot_id = SlotId::new("test_parser").expect("valid slot ID");
     let code = b"function identity(x) { return x; }";
 
     let spec = create_slot_specification(slot_id.clone(), code, "javascript");
@@ -91,8 +87,8 @@ fn test_proof_generation_with_different_code() {
     let old_code = b"function add(a, b) { return a + b; }";
     let new_code = b"function add(a, b) { return (a | 0) + (b | 0); }"; // Optimized version
 
-    let old_slot = SlotId::from_str("math_v1").expect("valid slot ID");
-    let new_slot = SlotId::from_str("math_v2").expect("valid slot ID");
+    let old_slot = SlotId::new("math_v1").expect("valid slot ID");
+    let new_slot = SlotId::new("math_v2").expect("valid slot ID");
 
     let proof_ref =
         validate_promotion_and_get_proof_ref(old_slot, new_slot, old_code, new_code, "test_zone");
@@ -133,8 +129,8 @@ fn test_validation_result_types() {
 #[test]
 fn test_replacement_receipt_with_translation_validation() {
     // Create slot specifications
-    let old_slot = SlotId::from_str("legacy_parser").expect("valid slot ID");
-    let new_slot = SlotId::from_str("optimized_parser").expect("valid slot ID");
+    let old_slot = SlotId::new("legacy_parser").expect("valid slot ID");
+    let new_slot = SlotId::new("optimized_parser").expect("valid slot ID");
     let old_code = b"function parseData(input) { return JSON.parse(input); }";
     let new_code =
         b"function parseData(input) { try { return JSON.parse(input); } catch { return null; } }";
@@ -165,18 +161,16 @@ fn test_replacement_receipt_with_translation_validation() {
 
     let validation_artifacts = vec![
         ValidationArtifactRef {
-            artifact_id: "perf_benchmark_001".to_string(),
-            validation_type: "performance_regression".to_string(),
-            status: ValidationStatus::Approved,
-            evidence_digest: "perf_evidence_hash".to_string(),
-            validator_identity: "benchmark_runner".to_string(),
+            kind: ValidationArtifactKind::PerformanceBenchmark,
+            artifact_digest: "perf_evidence_hash".to_string(),
+            passed: true,
+            summary: "Performance benchmark completed successfully by benchmark_runner".to_string(),
         },
         ValidationArtifactRef {
-            artifact_id: "translation_validation_001".to_string(),
-            validation_type: "semantic_equivalence".to_string(),
-            status: ValidationStatus::Approved,
-            evidence_digest: proof_ref.clone(),
-            validator_identity: "g4_validation_engine".to_string(),
+            kind: ValidationArtifactKind::EquivalenceResult,
+            artifact_digest: proof_ref.clone(),
+            passed: true,
+            summary: "Semantic equivalence validated by g4_validation_engine".to_string(),
         },
     ];
 
@@ -206,15 +200,12 @@ fn test_replacement_receipt_with_translation_validation() {
     let translation_artifact = receipt
         .validation_artifacts
         .iter()
-        .find(|a| a.validation_type == "semantic_equivalence")
+        .find(|a| matches!(a.kind, ValidationArtifactKind::EquivalenceResult))
         .expect("Translation validation artifact should exist");
 
-    assert_eq!(translation_artifact.status, ValidationStatus::Approved);
-    assert_eq!(translation_artifact.evidence_digest, proof_ref);
-    assert_eq!(
-        translation_artifact.validator_identity,
-        "g4_validation_engine"
-    );
+    assert!(translation_artifact.passed);
+    assert_eq!(translation_artifact.artifact_digest, proof_ref);
+    assert!(translation_artifact.summary.contains("g4_validation_engine"));
 }
 
 #[test]
@@ -238,7 +229,7 @@ fn test_proof_id_determinism() {
 #[test]
 fn test_proof_summary_formatting() {
     let engine = TranslationValidationEngine::default();
-    let slot_id = SlotId::from_str("test_slot").expect("valid slot ID");
+    let slot_id = SlotId::new("test_slot").expect("valid slot ID");
 
     let source_spec = create_slot_specification(slot_id.clone(), b"let x = 1 + 2;", "javascript");
 
@@ -287,8 +278,8 @@ fn test_engine_configuration() {
 #[test]
 fn test_full_promotion_workflow() {
     // Step 1: Prepare slot promotion data
-    let old_slot = SlotId::from_str("json_parser_v1").expect("valid slot ID");
-    let new_slot = SlotId::from_str("json_parser_v2").expect("valid slot ID");
+    let old_slot = SlotId::new("json_parser_v1").expect("valid slot ID");
+    let new_slot = SlotId::new("json_parser_v2").expect("valid slot ID");
 
     let old_implementation = br#"
     function parseJson(input) {
@@ -333,18 +324,16 @@ fn test_full_promotion_workflow() {
 
     let validation_artifacts = vec![
         ValidationArtifactRef {
-            artifact_id: "security_review_001".to_string(),
-            validation_type: "security_audit".to_string(),
-            status: ValidationStatus::Approved,
-            evidence_digest: "security_audit_hash".to_string(),
-            validator_identity: "security_team".to_string(),
+            kind: ValidationArtifactKind::AdversarialSurvival,
+            artifact_digest: "security_audit_hash".to_string(),
+            passed: true,
+            summary: "Security audit completed successfully by security_team".to_string(),
         },
         ValidationArtifactRef {
-            artifact_id: "translation_validation_001".to_string(),
-            validation_type: "semantic_equivalence".to_string(),
-            status: ValidationStatus::Approved,
-            evidence_digest: proof_ref.clone(),
-            validator_identity: "g4_pilot_engine".to_string(),
+            kind: ValidationArtifactKind::EquivalenceResult,
+            artifact_digest: proof_ref.clone(),
+            passed: true,
+            summary: "Semantic equivalence validated by g4_pilot_engine".to_string(),
         },
     ];
 
@@ -376,11 +365,11 @@ fn test_full_promotion_workflow() {
     let translation_artifact = receipt
         .validation_artifacts
         .iter()
-        .find(|a| a.validation_type == "semantic_equivalence")
+        .find(|a| matches!(a.kind, ValidationArtifactKind::EquivalenceResult))
         .expect("Should have translation validation artifact");
 
-    assert_eq!(translation_artifact.status, ValidationStatus::Approved);
-    assert_eq!(translation_artifact.evidence_digest, proof_ref);
+    assert!(translation_artifact.passed);
+    assert_eq!(translation_artifact.artifact_digest, proof_ref);
 
     // Verify both security and translation validation are required
     assert_eq!(receipt.validation_artifacts.len(), 2);
@@ -388,12 +377,12 @@ fn test_full_promotion_workflow() {
         receipt
             .validation_artifacts
             .iter()
-            .any(|a| a.validation_type == "security_audit")
+            .any(|a| matches!(a.kind, ValidationArtifactKind::AdversarialSurvival))
     );
     assert!(
         receipt
             .validation_artifacts
             .iter()
-            .any(|a| a.validation_type == "semantic_equivalence")
+            .any(|a| matches!(a.kind, ValidationArtifactKind::EquivalenceResult))
     );
 }

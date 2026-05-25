@@ -38,16 +38,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::forensic_query_api::{
-    ForensicQueryEngine, ForensicQuery, ForensicQueryResult, QueryType, QueryTarget,
-    QueryParameters, CausalExplanationResult, InfluenceAnalysisResult,
-    CounterfactualAnalysisResult, QueryError, QueryStatus, CausalSubgraph,
-};
 use crate::causation_graph_schema::{
-    CausationGraph, CausationNode, CausationEdge, NodeId, EdgeId,
-    NodeType, DecisionOutcome, CausationType, InfluenceWeight,
+    CausationEdge, CausationGraph, CausationNode, CausationType, DecisionOutcome, EdgeId,
+    InfluenceWeight, NodeId, NodeType,
+};
+use crate::forensic_query_api::{
+    CausalExplanationResult, CausalSubgraph, CounterfactualAnalysisResult, ForensicQuery,
+    ForensicQueryEngine, ForensicQueryResult, InfluenceAnalysisResult, QueryError, QueryParameters,
+    QueryStatus, QueryTarget, QueryType,
 };
 use crate::minimal_causal_set_inference::DecisionFactor;
 
@@ -126,9 +127,14 @@ impl ForensicOperator {
     }
 
     /// Investigate a decision with comprehensive analysis.
-    pub fn investigate_decision(&mut self, decision_id: &str) -> Result<InvestigationReport, OperatorError> {
-        let start_time = SystemTime::now().duration_since(UNIX_EPOCH)
-            .unwrap_or_default().as_nanos() as u64;
+    pub fn investigate_decision(
+        &mut self,
+        decision_id: &str,
+    ) -> Result<InvestigationReport, OperatorError> {
+        let start_time = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64;
 
         // Step 1: Get causal explanation
         let explanation_query = ForensicQuery {
@@ -171,16 +177,22 @@ impl ForensicOperator {
         let influence_result = self.query_engine.execute_query(influence_query)?;
 
         // Extract results
-        let (causal_explanation, influence_analysis) = match (&explanation_result.result, &influence_result.result) {
-            (
-                crate::forensic_query_api::QueryResult::CausalExplanation(exp),
-                crate::forensic_query_api::QueryResult::InfluenceAnalysis(inf)
-            ) => (exp.clone(), inf.clone()),
-            _ => return Err(OperatorError::QueryFailed("Failed to get causal explanation or influence analysis".to_string())),
-        };
+        let (causal_explanation, influence_analysis) =
+            match (&explanation_result.result, &influence_result.result) {
+                (
+                    crate::forensic_query_api::QueryResult::CausalExplanation(exp),
+                    crate::forensic_query_api::QueryResult::InfluenceAnalysis(inf),
+                ) => (exp.clone(), inf.clone()),
+                _ => {
+                    return Err(OperatorError::QueryFailed(
+                        "Failed to get causal explanation or influence analysis".to_string(),
+                    ));
+                }
+            };
 
         // Generate human-readable interpretation
-        let interpretation = self.interpret_causation_data(&causal_explanation, &influence_analysis)?;
+        let interpretation =
+            self.interpret_causation_data(&causal_explanation, &influence_analysis)?;
 
         // Create frankentui visualization if enabled
         let frankentui_data = if self.config.enable_frankentui {
@@ -190,7 +202,8 @@ impl ForensicOperator {
         };
 
         // Generate operator recommendations
-        let recommendations = self.generate_recommendations(&causal_explanation, &influence_analysis)?;
+        let recommendations =
+            self.generate_recommendations(&causal_explanation, &influence_analysis)?;
 
         Ok(InvestigationReport {
             decision_id: decision_id.to_string(),
@@ -205,7 +218,10 @@ impl ForensicOperator {
     }
 
     /// Read and interpret a causation subgraph for operators.
-    pub fn read_causation_subgraph(&self, subgraph: &CausalSubgraph) -> Result<SubgraphReading, OperatorError> {
+    pub fn read_causation_subgraph(
+        &self,
+        subgraph: &CausalSubgraph,
+    ) -> Result<SubgraphReading, OperatorError> {
         let mut reading = SubgraphReading {
             summary: CausalSummaryText::default(),
             evidence_factors: Vec::new(),
@@ -221,13 +237,26 @@ impl ForensicOperator {
 
         for (node_id, node) in &subgraph.nodes {
             match &node.node_type {
-                NodeType::EvidenceAtom { dependency, confidence_millionths, .. } => {
+                NodeType::EvidenceAtom {
+                    dependency,
+                    confidence_millionths,
+                    ..
+                } => {
                     evidence_nodes.push((*node_id, dependency.clone(), *confidence_millionths));
                 }
-                NodeType::Decision { decision_id, factor, outcome, .. } => {
+                NodeType::Decision {
+                    decision_id,
+                    factor,
+                    outcome,
+                    ..
+                } => {
                     decision_nodes.push((*node_id, decision_id.clone(), *factor, *outcome));
                 }
-                NodeType::AggregateInfluence { total_weight, method, .. } => {
+                NodeType::AggregateInfluence {
+                    total_weight,
+                    method,
+                    ..
+                } => {
                     aggregate_nodes.push((*node_id, *total_weight, *method));
                 }
             }
@@ -237,24 +266,29 @@ impl ForensicOperator {
         reading.summary = CausalSummaryText {
             total_evidence_count: evidence_nodes.len(),
             total_decision_count: decision_nodes.len(),
-            strongest_influence: subgraph.edges.values()
+            strongest_influence: subgraph
+                .edges
+                .values()
                 .map(|edge| edge.weight)
                 .max()
                 .unwrap_or(InfluenceWeight::ZERO),
-            primary_causation_types: self.analyze_causation_types(&subgraph.edges.values().collect()),
+            primary_causation_types: self
+                .analyze_causation_types(&subgraph.edges.values().collect()),
             confidence_assessment: self.assess_overall_confidence(&evidence_nodes),
         };
 
         // Process evidence factors
         for (node_id, dependency, confidence) in evidence_nodes {
-            let influence_level = self.categorize_influence_level(dependency.influence_millionths);
+            let influence_level =
+                self.categorize_influence_level(dependency.influence_magnitude_millionths as u32);
+            let description = self.describe_evidence_impact(&dependency);
 
             reading.evidence_factors.push(EvidenceFactor {
                 node_id,
-                evidence_id: dependency.atom_id,
+                evidence_id: dependency.evidence_atom_id,
                 influence_level,
                 confidence_level: self.categorize_confidence_level(confidence),
-                description: self.describe_evidence_impact(&dependency),
+                description,
             });
         }
 
@@ -271,56 +305,88 @@ impl ForensicOperator {
     }
 
     /// Format causation subgraph for frankentui visualization.
-    pub fn format_for_frankentui(&self, subgraph: &CausalSubgraph) -> Result<FrankentuiData, OperatorError> {
+    pub fn format_for_frankentui(
+        &self,
+        subgraph: &CausalSubgraph,
+    ) -> Result<FrankentuiData, OperatorError> {
         let mut nodes = Vec::new();
         let mut edges = Vec::new();
 
         // Convert nodes to frankentui format
         for (node_id, node) in &subgraph.nodes {
             let ui_node = match &node.node_type {
-                NodeType::EvidenceAtom { dependency, confidence_millionths, .. } => {
-                    FrankentuiNode {
-                        id: node_id.0.to_string(),
-                        label: dependency.atom_id.clone(),
-                        node_type: "evidence".to_string(),
-                        color: self.color_for_confidence(*confidence_millionths),
-                        size: self.size_for_influence(dependency.influence_millionths),
-                        tooltip: format!("Evidence: {} (confidence: {:.1}%)",
-                                       dependency.atom_id, *confidence_millionths as f64 / 10_000.0),
-                        metadata: BTreeMap::from([
-                            ("influence".to_string(), format!("{:.3}", dependency.influence_millionths as f64 / 1_000_000.0)),
-                            ("confidence".to_string(), format!("{:.1}%", *confidence_millionths as f64 / 10_000.0)),
-                        ]),
-                    }
-                }
-                NodeType::Decision { decision_id, factor, outcome, .. } => {
-                    FrankentuiNode {
-                        id: node_id.0.to_string(),
-                        label: format!("Decision: {}", decision_id),
-                        node_type: "decision".to_string(),
-                        color: self.color_for_outcome(*outcome),
-                        size: "large".to_string(),
-                        tooltip: format!("Decision: {} -> {:?} (factor: {:?})", decision_id, outcome, factor),
-                        metadata: BTreeMap::from([
-                            ("outcome".to_string(), format!("{:?}", outcome)),
-                            ("factor".to_string(), format!("{:?}", factor)),
-                        ]),
-                    }
-                }
-                NodeType::AggregateInfluence { total_weight, method, .. } => {
-                    FrankentuiNode {
-                        id: node_id.0.to_string(),
-                        label: format!("Aggregate ({:?})", method),
-                        node_type: "aggregate".to_string(),
-                        color: "orange".to_string(),
-                        size: self.size_for_influence(total_weight.millionths),
-                        tooltip: format!("Aggregate influence: {:.3} via {:?}", total_weight.to_f64(), method),
-                        metadata: BTreeMap::from([
-                            ("weight".to_string(), format!("{:.3}", total_weight.to_f64())),
-                            ("method".to_string(), format!("{:?}", method)),
-                        ]),
-                    }
-                }
+                NodeType::EvidenceAtom {
+                    dependency,
+                    confidence_millionths,
+                    ..
+                } => FrankentuiNode {
+                    id: node_id.0.to_string(),
+                    label: dependency.evidence_atom_id.clone(),
+                    node_type: "evidence".to_string(),
+                    color: self.color_for_confidence(*confidence_millionths),
+                    size: self.size_for_influence(dependency.influence_magnitude_millionths as u32),
+                    tooltip: format!(
+                        "Evidence: {} (confidence: {:.1}%)",
+                        dependency.evidence_atom_id,
+                        *confidence_millionths as f64 / 10_000.0
+                    ),
+                    metadata: BTreeMap::from([
+                        (
+                            "influence".to_string(),
+                            format!(
+                                "{:.3}",
+                                dependency.influence_magnitude_millionths as f64 / 1_000_000.0
+                            ),
+                        ),
+                        (
+                            "confidence".to_string(),
+                            format!("{:.1}%", *confidence_millionths as f64 / 10_000.0),
+                        ),
+                    ]),
+                },
+                NodeType::Decision {
+                    decision_id,
+                    factor,
+                    outcome,
+                    ..
+                } => FrankentuiNode {
+                    id: node_id.0.to_string(),
+                    label: format!("Decision: {}", decision_id),
+                    node_type: "decision".to_string(),
+                    color: self.color_for_outcome(*outcome),
+                    size: "large".to_string(),
+                    tooltip: format!(
+                        "Decision: {} -> {:?} (factor: {:?})",
+                        decision_id, outcome, factor
+                    ),
+                    metadata: BTreeMap::from([
+                        ("outcome".to_string(), format!("{:?}", outcome)),
+                        ("factor".to_string(), format!("{:?}", factor)),
+                    ]),
+                },
+                NodeType::AggregateInfluence {
+                    total_weight,
+                    method,
+                    ..
+                } => FrankentuiNode {
+                    id: node_id.0.to_string(),
+                    label: format!("Aggregate ({:?})", method),
+                    node_type: "aggregate".to_string(),
+                    color: "orange".to_string(),
+                    size: self.size_for_influence(total_weight.millionths),
+                    tooltip: format!(
+                        "Aggregate influence: {:.3} via {:?}",
+                        total_weight.to_f64(),
+                        method
+                    ),
+                    metadata: BTreeMap::from([
+                        (
+                            "weight".to_string(),
+                            format!("{:.3}", total_weight.to_f64()),
+                        ),
+                        ("method".to_string(), format!("{:?}", method)),
+                    ]),
+                },
             };
             nodes.push(ui_node);
         }
@@ -334,7 +400,11 @@ impl ForensicOperator {
                 causation_type: format!("{:?}", edge.causation_type),
                 color: self.color_for_causation_type(edge.causation_type),
                 thickness: self.thickness_for_weight(edge.weight),
-                tooltip: format!("Causation: {:.3} ({:?})", edge.weight.to_f64(), edge.causation_type),
+                tooltip: format!(
+                    "Causation: {:.3} ({:?})",
+                    edge.weight.to_f64(),
+                    edge.causation_type
+                ),
             };
             edges.push(ui_edge);
         }
@@ -346,62 +416,120 @@ impl ForensicOperator {
             edges,
             layout_hints: FrankentuiLayoutHints {
                 algorithm: "hierarchical".to_string(),
-                root_nodes: subgraph.root_nodes.iter().map(|id| id.0.to_string()).collect(),
-                leaf_nodes: subgraph.leaf_nodes.iter().map(|id| id.0.to_string()).collect(),
+                root_nodes: subgraph
+                    .root_nodes
+                    .iter()
+                    .map(|id| id.0.to_string())
+                    .collect(),
+                leaf_nodes: subgraph
+                    .leaf_nodes
+                    .iter()
+                    .map(|id| id.0.to_string())
+                    .collect(),
             },
             metadata: BTreeMap::from([
                 ("total_nodes".to_string(), subgraph.nodes.len().to_string()),
                 ("total_edges".to_string(), subgraph.edges.len().to_string()),
-                ("total_influence".to_string(), format!("{:.3}", subgraph.total_influence.to_f64())),
+                (
+                    "total_influence".to_string(),
+                    format!("{:.3}", subgraph.total_influence.to_f64()),
+                ),
             ]),
         })
     }
 
     /// Generate investigation report for documentation.
-    pub fn generate_investigation_report(&mut self, decision_id: &str) -> Result<String, OperatorError> {
+    pub fn generate_investigation_report(
+        &mut self,
+        decision_id: &str,
+    ) -> Result<String, OperatorError> {
         let report = self.investigate_decision(decision_id)?;
 
         let mut output = String::new();
 
         // Header
-        output.push_str(&format!("# Forensic Investigation Report: {}\n\n", decision_id));
-        output.push_str(&format!("**Investigation Time**: {}\n",
-            chrono::DateTime::from_timestamp_nanos(report.investigation_timestamp_ns as i64)
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_else(|| "Unknown".to_string())));
+        output.push_str(&format!(
+            "# Forensic Investigation Report: {}\n\n",
+            decision_id
+        ));
+        let formatted_time = format!("Timestamp: {}", report.investigation_timestamp_ns);
+        output.push_str(&format!(
+            "**Investigation Time**: {}\n",
+            formatted_time
+        ));
 
         // Decision Summary
         output.push_str("\n## Decision Summary\n\n");
         output.push_str(&format!("**Decision ID**: {}\n", report.decision_id));
-        if let NodeType::Decision { outcome, factor, context_hash, .. } = &report.causal_explanation.decision_node.node_type {
+        if let NodeType::Decision {
+            outcome,
+            factor,
+            context_hash,
+            ..
+        } = &report.causal_explanation.decision_node.node_type
+        {
             output.push_str(&format!("**Outcome**: {:?}\n", outcome));
             output.push_str(&format!("**Primary Factor**: {:?}\n", factor));
         }
 
         // Causal Analysis
         output.push_str("\n## Causal Analysis\n\n");
-        output.push_str(&format!("**Evidence Count**: {}\n", report.causal_explanation.causal_summary.evidence_count));
-        output.push_str(&format!("**Activated Factors**: {}\n",
-            report.causal_explanation.causal_summary.activated_factors.len()));
-        output.push_str(&format!("**Strongest Influence**: {:.3}\n",
-            report.causal_explanation.causal_summary.strongest_influence.to_f64()));
-        output.push_str(&format!("**Explanation**: {}\n",
-            report.causal_explanation.causal_summary.explanation));
+        output.push_str(&format!(
+            "**Evidence Count**: {}\n",
+            report.causal_explanation.causal_summary.evidence_count
+        ));
+        output.push_str(&format!(
+            "**Activated Factors**: {}\n",
+            report
+                .causal_explanation
+                .causal_summary
+                .activated_factors
+                .len()
+        ));
+        output.push_str(&format!(
+            "**Strongest Influence**: {:.3}\n",
+            report
+                .causal_explanation
+                .causal_summary
+                .strongest_influence
+                .to_f64()
+        ));
+        output.push_str(&format!(
+            "**Explanation**: {}\n",
+            report.causal_explanation.causal_summary.explanation
+        ));
 
         // Interpretation
         output.push_str("\n## Operator Interpretation\n\n");
-        output.push_str(&format!("**Risk Level**: {:?}\n", report.interpretation.risk_level));
-        output.push_str(&format!("**Confidence**: {:?}\n", report.interpretation.confidence_level));
-        output.push_str(&format!("**Primary Concerns**: {}\n", report.interpretation.primary_concerns.join(", ")));
+        output.push_str(&format!(
+            "**Risk Level**: {:?}\n",
+            report.interpretation.risk_level
+        ));
+        output.push_str(&format!(
+            "**Confidence**: {:?}\n",
+            report.interpretation.confidence_level
+        ));
+        output.push_str(&format!(
+            "**Primary Concerns**: {}\n",
+            report.interpretation.primary_concerns.join(", ")
+        ));
 
         if !report.interpretation.narrative.is_empty() {
-            output.push_str(&format!("\n**Narrative**:\n{}\n", report.interpretation.narrative));
+            output.push_str(&format!(
+                "\n**Narrative**:\n{}\n",
+                report.interpretation.narrative
+            ));
         }
 
         // Recommendations
         output.push_str("\n## Recommendations\n\n");
         for (i, rec) in report.recommendations.iter().enumerate() {
-            output.push_str(&format!("{}. **{}**: {}\n", i + 1, rec.category, rec.description));
+            output.push_str(&format!(
+                "{}. **{}**: {}\n",
+                i + 1,
+                rec.category,
+                rec.description
+            ));
             if !rec.action_items.is_empty() {
                 for item in &rec.action_items {
                     output.push_str(&format!("   - {}\n", item));
@@ -412,11 +540,18 @@ impl ForensicOperator {
         // Technical Details (if verbose)
         if self.config.verbosity_level >= 2 {
             output.push_str("\n## Technical Details\n\n");
-            output.push_str(&format!("**Subgraph Size**: {} nodes, {} edges\n",
+            output.push_str(&format!(
+                "**Subgraph Size**: {} nodes, {} edges\n",
                 report.causal_explanation.causal_subgraph.nodes.len(),
-                report.causal_explanation.causal_subgraph.edges.len()));
-            output.push_str(&format!("**Query Execution Time**: {}μs\n",
-                report.causal_explanation.causal_summary.aggregate_confidence_millionths));
+                report.causal_explanation.causal_subgraph.edges.len()
+            ));
+            output.push_str(&format!(
+                "**Query Execution Time**: {}μs\n",
+                report
+                    .causal_explanation
+                    .causal_summary
+                    .aggregate_confidence_millionths
+            ));
         }
 
         Ok(output)
@@ -424,7 +559,11 @@ impl ForensicOperator {
 
     // Helper methods for analysis
 
-    fn interpret_causation_data(&self, explanation: &CausalExplanationResult, influence: &InfluenceAnalysisResult) -> Result<CausationInterpretation, OperatorError> {
+    fn interpret_causation_data(
+        &self,
+        explanation: &CausalExplanationResult,
+        influence: &InfluenceAnalysisResult,
+    ) -> Result<CausationInterpretation, OperatorError> {
         // Assess risk level based on decision outcome and influence strength
         let risk_level = match &explanation.decision_node.node_type {
             NodeType::Decision { outcome, .. } => match outcome {
@@ -437,9 +576,13 @@ impl ForensicOperator {
         };
 
         // Assess confidence based on evidence strength
-        let confidence_level = if explanation.causal_summary.strongest_influence.millionths >= CRITICAL_INFLUENCE_THRESHOLD {
+        let confidence_level = if explanation.causal_summary.strongest_influence.millionths
+            >= CRITICAL_INFLUENCE_THRESHOLD
+        {
             ConfidenceLevel::High
-        } else if explanation.causal_summary.strongest_influence.millionths >= HIGH_INFLUENCE_THRESHOLD {
+        } else if explanation.causal_summary.strongest_influence.millionths
+            >= HIGH_INFLUENCE_THRESHOLD
+        {
             ConfidenceLevel::Medium
         } else {
             ConfidenceLevel::Low
@@ -454,7 +597,8 @@ impl ForensicOperator {
             primary_concerns.push("Decision based on single evidence source".to_string());
         }
 
-        if explanation.causal_summary.strongest_influence.millionths < DEFAULT_CONFIDENCE_THRESHOLD {
+        if explanation.causal_summary.strongest_influence.millionths < DEFAULT_CONFIDENCE_THRESHOLD
+        {
             primary_concerns.push("Weak evidence influence detected".to_string());
         }
 
@@ -469,7 +613,11 @@ impl ForensicOperator {
             explanation.causal_summary.evidence_count,
             explanation.causal_summary.strongest_influence.to_f64(),
             explanation.causal_summary.activated_factors.len(),
-            if explanation.causal_summary.activated_factors.len() > 2 { "complex multi-factor analysis" } else { "straightforward evaluation" }
+            if explanation.causal_summary.activated_factors.len() > 2 {
+                "complex multi-factor analysis"
+            } else {
+                "straightforward evaluation"
+            }
         );
 
         Ok(CausationInterpretation {
@@ -481,7 +629,11 @@ impl ForensicOperator {
         })
     }
 
-    fn generate_recommendations(&self, explanation: &CausalExplanationResult, influence: &InfluenceAnalysisResult) -> Result<Vec<OperatorRecommendation>, OperatorError> {
+    fn generate_recommendations(
+        &self,
+        explanation: &CausalExplanationResult,
+        influence: &InfluenceAnalysisResult,
+    ) -> Result<Vec<OperatorRecommendation>, OperatorError> {
         let mut recommendations = Vec::new();
 
         // Evidence-based recommendations
@@ -498,7 +650,8 @@ impl ForensicOperator {
         }
 
         // Influence strength recommendations
-        if explanation.causal_summary.strongest_influence.millionths < DEFAULT_CONFIDENCE_THRESHOLD {
+        if explanation.causal_summary.strongest_influence.millionths < DEFAULT_CONFIDENCE_THRESHOLD
+        {
             recommendations.push(OperatorRecommendation {
                 category: "Decision Confidence".to_string(),
                 priority: RecommendationPriority::Medium,
@@ -517,7 +670,9 @@ impl ForensicOperator {
                     recommendations.push(OperatorRecommendation {
                         category: "Security Response".to_string(),
                         priority: RecommendationPriority::High,
-                        description: "High-impact security decision - ensure proper incident response".to_string(),
+                        description:
+                            "High-impact security decision - ensure proper incident response"
+                                .to_string(),
                         action_items: vec![
                             "Document incident details".to_string(),
                             "Consider escalation if pattern emerges".to_string(),
@@ -529,7 +684,8 @@ impl ForensicOperator {
                     recommendations.push(OperatorRecommendation {
                         category: "Authentication".to_string(),
                         priority: RecommendationPriority::Medium,
-                        description: "Authentication challenge triggered - monitor completion".to_string(),
+                        description: "Authentication challenge triggered - monitor completion"
+                            .to_string(),
                         action_items: vec![
                             "Track challenge completion rate".to_string(),
                             "Review authentication policies".to_string(),
@@ -618,14 +774,23 @@ impl ForensicOperator {
         types.into_iter().collect()
     }
 
-    fn assess_overall_confidence(&self, evidence_nodes: &[(NodeId, crate::minimal_causal_set_inference::CausalDependency, u32)]) -> ConfidenceLevel {
+    fn assess_overall_confidence(
+        &self,
+        evidence_nodes: &[(
+            NodeId,
+            crate::minimal_causal_set_inference::CausalDependency,
+            u32,
+        )],
+    ) -> ConfidenceLevel {
         if evidence_nodes.is_empty() {
             return ConfidenceLevel::Low;
         }
 
-        let avg_confidence = evidence_nodes.iter()
+        let avg_confidence = evidence_nodes
+            .iter()
             .map(|(_, _, conf)| *conf as u64)
-            .sum::<u64>() / evidence_nodes.len() as u64;
+            .sum::<u64>()
+            / evidence_nodes.len() as u64;
 
         if avg_confidence >= 800_000 {
             ConfidenceLevel::High
@@ -658,12 +823,23 @@ impl ForensicOperator {
         }
     }
 
-    fn describe_evidence_impact(&self, dependency: &crate::minimal_causal_set_inference::CausalDependency) -> String {
-        let influence_level = self.categorize_influence_level(dependency.influence_millionths);
-        format!("Evidence '{}' has {:?} impact on decision", dependency.atom_id, influence_level)
+    fn describe_evidence_impact(
+        &self,
+        dependency: &crate::minimal_causal_set_inference::CausalDependency,
+    ) -> String {
+        let influence_level =
+            self.categorize_influence_level(dependency.influence_magnitude_millionths as u32);
+        format!(
+            "Evidence '{}' has {:?} impact on decision",
+            dependency.evidence_atom_id, influence_level
+        )
     }
 
-    fn build_decision_chain(&self, subgraph: &CausalSubgraph, decision_nodes: &[(NodeId, String, DecisionFactor, DecisionOutcome)]) -> Result<Vec<DecisionStep>, OperatorError> {
+    fn build_decision_chain(
+        &self,
+        subgraph: &CausalSubgraph,
+        decision_nodes: &[(NodeId, String, DecisionFactor, DecisionOutcome)],
+    ) -> Result<Vec<DecisionStep>, OperatorError> {
         let mut chain = Vec::new();
 
         for (node_id, decision_id, factor, outcome) in decision_nodes {
@@ -679,7 +855,10 @@ impl ForensicOperator {
         Ok(chain)
     }
 
-    fn analyze_influence_breakdown(&self, subgraph: &CausalSubgraph) -> Result<BTreeMap<String, f64>, OperatorError> {
+    fn analyze_influence_breakdown(
+        &self,
+        subgraph: &CausalSubgraph,
+    ) -> Result<BTreeMap<String, f64>, OperatorError> {
         let mut breakdown = BTreeMap::new();
 
         for edge in subgraph.edges.values() {
@@ -690,7 +869,10 @@ impl ForensicOperator {
         Ok(breakdown)
     }
 
-    fn identify_critical_paths(&self, subgraph: &CausalSubgraph) -> Result<Vec<CriticalPath>, OperatorError> {
+    fn identify_critical_paths(
+        &self,
+        subgraph: &CausalSubgraph,
+    ) -> Result<Vec<CriticalPath>, OperatorError> {
         let mut paths = Vec::new();
 
         // Find paths with high cumulative influence
@@ -967,11 +1149,14 @@ pub enum InfluenceLevel {
 impl RiskLevel {
     /// Categorize risk level based on confidence score (in millionths).
     pub fn from_confidence(confidence: u64) -> Self {
-        if confidence >= 900_000 { // >= 0.90
+        if confidence >= 900_000 {
+            // >= 0.90
             RiskLevel::Low
-        } else if confidence >= 700_000 { // >= 0.70
+        } else if confidence >= 700_000 {
+            // >= 0.70
             RiskLevel::Medium
-        } else if confidence >= 400_000 { // >= 0.40
+        } else if confidence >= 400_000 {
+            // >= 0.40
             RiskLevel::High
         } else {
             RiskLevel::Critical
@@ -982,9 +1167,11 @@ impl RiskLevel {
 impl ConfidenceLevel {
     /// Categorize confidence level based on value (in millionths).
     pub fn from_value(value: u64) -> Self {
-        if value >= 800_000 { // >= 0.80
+        if value >= 800_000 {
+            // >= 0.80
             ConfidenceLevel::High
-        } else if value >= 600_000 { // >= 0.60
+        } else if value >= 600_000 {
+            // >= 0.60
             ConfidenceLevel::Medium
         } else {
             ConfidenceLevel::Low
@@ -995,11 +1182,14 @@ impl ConfidenceLevel {
 impl InfluenceLevel {
     /// Categorize influence level based on weight (in millionths).
     pub fn from_weight(weight: u64) -> Self {
-        if weight >= 800_000 { // >= 0.80
+        if weight >= 800_000 {
+            // >= 0.80
             InfluenceLevel::Critical
-        } else if weight >= 600_000 { // >= 0.60
+        } else if weight >= 600_000 {
+            // >= 0.60
             InfluenceLevel::High
-        } else if weight >= 400_000 { // >= 0.40
+        } else if weight >= 400_000 {
+            // >= 0.40
             InfluenceLevel::Medium
         } else {
             InfluenceLevel::Low
@@ -1046,7 +1236,9 @@ impl fmt::Display for OperatorError {
             OperatorError::QueryFailed(msg) => write!(f, "Query failed: {}", msg),
             OperatorError::InvalidConfig(msg) => write!(f, "Invalid configuration: {}", msg),
             OperatorError::FrankentuiError(msg) => write!(f, "frankentui error: {}", msg),
-            OperatorError::ReportGenerationError(msg) => write!(f, "Report generation error: {}", msg),
+            OperatorError::ReportGenerationError(msg) => {
+                write!(f, "Report generation error: {}", msg)
+            }
             OperatorError::QueryError(e) => write!(f, "Query error: {}", e),
         }
     }
@@ -1072,7 +1264,10 @@ mod tests {
     fn test_operator_config_default() {
         let config = OperatorConfig::default();
 
-        assert_eq!(config.min_influence_threshold.millionths, DEFAULT_INFLUENCE_THRESHOLD);
+        assert_eq!(
+            config.min_influence_threshold.millionths,
+            DEFAULT_INFLUENCE_THRESHOLD
+        );
         assert!(!config.include_weak_influences);
         assert_eq!(config.max_causal_depth, 10);
         assert!(config.enable_frankentui);
@@ -1098,10 +1293,22 @@ mod tests {
         let query_engine = ForensicQueryEngine::new(CausationGraph::new());
         let operator = ForensicOperator::with_config(query_engine, operator_config);
 
-        assert_eq!(operator.categorize_influence_level(50_000), InfluenceLevel::Low);
-        assert_eq!(operator.categorize_influence_level(200_000), InfluenceLevel::Medium);
-        assert_eq!(operator.categorize_influence_level(800_000), InfluenceLevel::High);
-        assert_eq!(operator.categorize_influence_level(950_000), InfluenceLevel::Critical);
+        assert_eq!(
+            operator.categorize_influence_level(50_000),
+            InfluenceLevel::Low
+        );
+        assert_eq!(
+            operator.categorize_influence_level(200_000),
+            InfluenceLevel::Medium
+        );
+        assert_eq!(
+            operator.categorize_influence_level(800_000),
+            InfluenceLevel::High
+        );
+        assert_eq!(
+            operator.categorize_influence_level(950_000),
+            InfluenceLevel::Critical
+        );
     }
 
     #[test]

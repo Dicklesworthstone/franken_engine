@@ -1216,6 +1216,9 @@ mod tests {
             summary: "all tests passed".to_string(),
         }];
 
+        let old_slot_id = SlotId::new("slot_old").expect("valid slot id");
+        let new_slot_id = SlotId::new("slot_new").expect("valid slot id");
+
         ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot(),
             old_cell_digest: "old-delegate-digest-aaa",
@@ -1227,6 +1230,10 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             zone: "test-zone",
             required_signatures: 0,
+            old_slot_id: &old_slot_id,
+            new_slot_id: &new_slot_id,
+            translation_validation_proof_ref: "",
+            content_hash_chain_into_lineage: "",
         })
         .expect("create receipt")
     }

@@ -70,6 +70,10 @@ fn make_receipt(old: &str, new: &str, ts_ns: u64) -> ReplacementReceipt {
         epoch: test_epoch(),
         zone: "zone-a",
         required_signatures: 1,
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
+        translation_validation_proof_ref: "proof_ref",
+        content_hash_chain_into_lineage: "hash_chain",
     })
     .unwrap();
     receipt
@@ -930,6 +934,10 @@ fn multiple_slots_tracked_independently() {
         epoch: test_epoch(),
         zone: "zone-a",
         required_signatures: 1,
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
+        translation_validation_proof_ref: "proof_ref",
+        content_hash_chain_into_lineage: "hash_chain",
     })
     .unwrap();
     r1.add_signature(&test_signing_key(), "gate").unwrap();
@@ -945,6 +953,10 @@ fn multiple_slots_tracked_independently() {
         epoch: test_epoch(),
         zone: "zone-a",
         required_signatures: 1,
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
+        translation_validation_proof_ref: "proof_ref",
+        content_hash_chain_into_lineage: "hash_chain",
     })
     .unwrap();
     r2.add_signature(&test_signing_key(), "gate").unwrap();
@@ -1399,6 +1411,10 @@ fn make_receipt_for_slot(slot_name: &str, old: &str, new: &str, ts_ns: u64) -> R
         epoch: test_epoch(),
         zone: "zone-a",
         required_signatures: 1,
+        old_slot_id: &test_slot_id(),
+        new_slot_id: &test_slot_id(),
+        translation_validation_proof_ref: "proof_ref",
+        content_hash_chain_into_lineage: "hash_chain",
     })
     .unwrap();
     receipt

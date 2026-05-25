@@ -104,7 +104,10 @@ pub enum ArlComputationStatus {
     /// Converged within tolerance.
     Converged { iterations: u32 },
     /// Reached maximum iterations without convergence.
-    MaxIterationsReached { iterations: u32, residual_millionths: i64 },
+    MaxIterationsReached {
+        iterations: u32,
+        residual_millionths: i64,
+    },
     /// Computation failed due to numerical issues.
     NumericalFailure { reason: String },
 }
@@ -120,18 +123,33 @@ impl AverageRunLengthAnalysis {
 
         // Use the worst status if either computation had issues
         let computation_status = match (status_null, status_alt) {
-            (ArlComputationStatus::Converged { iterations: i1 },
-             ArlComputationStatus::Converged { iterations: i2 }) => {
-                ArlComputationStatus::Converged { iterations: i1.max(i2) }
+            (
+                ArlComputationStatus::Converged { iterations: i1 },
+                ArlComputationStatus::Converged { iterations: i2 },
+            ) => ArlComputationStatus::Converged {
+                iterations: i1.max(i2),
             },
-            (ArlComputationStatus::MaxIterationsReached { iterations, residual_millionths }, _) |
-            (_, ArlComputationStatus::MaxIterationsReached { iterations, residual_millionths }) => {
-                ArlComputationStatus::MaxIterationsReached { iterations, residual_millionths }
+            (
+                ArlComputationStatus::MaxIterationsReached {
+                    iterations,
+                    residual_millionths,
+                },
+                _,
+            )
+            | (
+                _,
+                ArlComputationStatus::MaxIterationsReached {
+                    iterations,
+                    residual_millionths,
+                },
+            ) => ArlComputationStatus::MaxIterationsReached {
+                iterations,
+                residual_millionths,
             },
-            (ArlComputationStatus::NumericalFailure { reason }, _) |
-            (_, ArlComputationStatus::NumericalFailure { reason }) => {
+            (ArlComputationStatus::NumericalFailure { reason }, _)
+            | (_, ArlComputationStatus::NumericalFailure { reason }) => {
                 ArlComputationStatus::NumericalFailure { reason }
-            },
+            }
         };
 
         let false_alarm_rate = if arl_null > 0 {
@@ -176,7 +194,10 @@ impl AverageRunLengthAnalysis {
 
         // For this implementation, we'll use the approximation
         // A full implementation would use iterative integral equation solving
-        Ok((arl_approx, ArlComputationStatus::Converged { iterations: 1 }))
+        Ok((
+            arl_approx,
+            ArlComputationStatus::Converged { iterations: 1 },
+        ))
     }
 
     /// Compute ARL under alternative hypothesis.
@@ -298,13 +319,13 @@ impl WorstCaseDelayBound {
                 // For normal mean shift, use Lorden's result if parameters allow
                 let bound = Self::lorden_normal_bound(config, alternative, arl_analysis)?;
                 Ok((bound, DelayBoundMethod::LordenExact))
-            },
-            CompositeAlternative::ExponentialRateShift { .. } |
-            CompositeAlternative::BernoulliProbabilityShift { .. } => {
+            }
+            CompositeAlternative::ExponentialRateShift { .. }
+            | CompositeAlternative::BernoulliProbabilityShift { .. } => {
                 // For other alternatives, use Wald approximation
                 let bound = Self::wald_approximation_bound(config, arl_analysis)?;
                 Ok((bound, DelayBoundMethod::WaldApproximation))
-            },
+            }
         }
     }
 
@@ -314,14 +335,20 @@ impl WorstCaseDelayBound {
         alternative: &CompositeAlternative,
         arl_analysis: &AverageRunLengthAnalysis,
     ) -> Result<i64, DelayBoundError> {
-        if let CompositeAlternative::NormalMeanShift { variance_millionths_squared, mean_range_millionths, .. } = alternative {
+        if let CompositeAlternative::NormalMeanShift {
+            variance_millionths_squared,
+            mean_range_millionths,
+            ..
+        } = alternative
+        {
             // Lorden's bound depends on the signal-to-noise ratio
             let mean_shift = (mean_range_millionths.1 - mean_range_millionths.0).abs();
             let snr_millionths = (mean_shift * MILLION) / (*variance_millionths_squared).max(1);
 
             // Conservative bound: roughly 2 * log(ARL_null) / SNR²
             let log_arl_null = Self::log_millionths(arl_analysis.arl_null_millionths);
-            let bound = (2 * MILLION * log_arl_null) / ((snr_millionths * snr_millionths / MILLION).max(1));
+            let bound =
+                (2 * MILLION * log_arl_null) / ((snr_millionths * snr_millionths / MILLION).max(1));
 
             Ok(bound.max(1)) // At least 1 observation delay
         } else {
@@ -485,13 +512,9 @@ pub enum DelayBoundConstraint {
         confidence_millionths: i64,
     },
     /// False alarm rate constraint.
-    FalseAlarmRate {
-        max_rate_millionths: i64,
-    },
+    FalseAlarmRate { max_rate_millionths: i64 },
     /// Distribution separation constraint.
-    DistributionSeparation {
-        min_kl_divergence_millionths: i64,
-    },
+    DistributionSeparation { min_kl_divergence_millionths: i64 },
 }
 
 /// Method used to prove an obligation.
@@ -543,8 +566,15 @@ impl fmt::Display for DelayBoundError {
             Self::InvalidConfiguration { reason } => write!(f, "Invalid configuration: {}", reason),
             Self::InvalidAlternative => write!(f, "Invalid or unsupported alternative hypothesis"),
             Self::NumericalError { reason } => write!(f, "Numerical computation error: {}", reason),
-            Self::InsufficientData { required, available } => {
-                write!(f, "Insufficient data: need {} observations, have {}", required, available)
+            Self::InsufficientData {
+                required,
+                available,
+            } => {
+                write!(
+                    f,
+                    "Insufficient data: need {} observations, have {}",
+                    required, available
+                )
             }
         }
     }
@@ -563,26 +593,36 @@ impl CompositeAlternative {
             Self::NormalMeanShift { .. } => {
                 // Under null, mean log LR should be 0, but with estimation it's slightly negative
                 -10_000 // -0.01 on average
-            },
+            }
             Self::ExponentialRateShift { .. } => {
                 -5_000 // -0.005 on average
-            },
+            }
             Self::BernoulliProbabilityShift { .. } => {
                 -15_000 // -0.015 on average
-            },
+            }
         }
     }
 
     /// Mean log likelihood ratio under alternative hypothesis.
     pub fn mean_log_likelihood_ratio_under_alternative(&self) -> i64 {
         match self {
-            Self::NormalMeanShift { pre_change_mean_millionths, mean_range_millionths, variance_millionths_squared, .. } => {
+            Self::NormalMeanShift {
+                pre_change_mean_millionths,
+                mean_range_millionths,
+                variance_millionths_squared,
+                ..
+            } => {
                 // For mean shift, E[log LR | H1] ≈ (μ₁ - μ₀)²/(2σ²)
-                let mean_shift = ((mean_range_millionths.0 + mean_range_millionths.1) / 2) - pre_change_mean_millionths;
+                let mean_shift = ((mean_range_millionths.0 + mean_range_millionths.1) / 2)
+                    - pre_change_mean_millionths;
                 let shift_squared = (mean_shift * mean_shift) / MILLION;
                 (shift_squared * MILLION) / (2 * variance_millionths_squared)
-            },
-            Self::ExponentialRateShift { pre_change_rate_millionths, rate_range_millionths, .. } => {
+            }
+            Self::ExponentialRateShift {
+                pre_change_rate_millionths,
+                rate_range_millionths,
+                ..
+            } => {
                 // For exponential rate shift, approximate KL divergence
                 let new_rate = (rate_range_millionths.0 + rate_range_millionths.1) / 2;
                 let rate_ratio = (new_rate * MILLION) / pre_change_rate_millionths;
@@ -591,8 +631,12 @@ impl CompositeAlternative {
                 } else {
                     100_000 // 0.1 default
                 }
-            },
-            Self::BernoulliProbabilityShift { pre_change_prob_millionths, prob_range_millionths, .. } => {
+            }
+            Self::BernoulliProbabilityShift {
+                pre_change_prob_millionths,
+                prob_range_millionths,
+                ..
+            } => {
                 // For Bernoulli probability shift, KL divergence approximation
                 let new_prob = (prob_range_millionths.0 + prob_range_millionths.1) / 2;
                 let prob_diff = (new_prob - pre_change_prob_millionths).abs();
@@ -601,7 +645,7 @@ impl CompositeAlternative {
                 } else {
                     50_000 // 0.05 minimum
                 }
-            },
+            }
         }
     }
 }
@@ -625,7 +669,10 @@ mod tests {
         assert!(arl_analysis.arl_null_millionths > 0);
         assert!(arl_analysis.arl_alternative_millionths > 0);
         assert!(arl_analysis.arl_null_millionths > arl_analysis.arl_alternative_millionths);
-        assert!(matches!(arl_analysis.computation_status, ArlComputationStatus::Converged { .. }));
+        assert!(matches!(
+            arl_analysis.computation_status,
+            ArlComputationStatus::Converged { .. }
+        ));
     }
 
     #[test]
@@ -637,13 +684,20 @@ mod tests {
             mean_range_millionths: (MILLION, 2 * MILLION),
         };
 
-        let arl_analysis = AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
+        let arl_analysis =
+            AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
         let delay_bound = WorstCaseDelayBound::compute(config, alternative, &arl_analysis).unwrap();
 
         assert!(delay_bound.delay_bound_millionths > 0);
-        assert_eq!(delay_bound.confidence_millionths, DEFAULT_CONFIDENCE_MILLIONTHS);
+        assert_eq!(
+            delay_bound.confidence_millionths,
+            DEFAULT_CONFIDENCE_MILLIONTHS
+        );
         assert!(!delay_bound.proof_obligations.is_empty());
-        assert!(matches!(delay_bound.computation_method, DelayBoundMethod::LordenExact));
+        assert!(matches!(
+            delay_bound.computation_method,
+            DelayBoundMethod::LordenExact
+        ));
     }
 
     #[test]
@@ -674,16 +728,22 @@ mod tests {
             rate_range_millionths: (2 * MILLION, 3 * MILLION),
         };
 
-        let arl_analysis = AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
+        let arl_analysis =
+            AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
         let delay_bound = WorstCaseDelayBound::compute(config, alternative, &arl_analysis).unwrap();
 
         assert_eq!(delay_bound.proof_obligations.len(), 3);
 
-        let liveness_obligation = delay_bound.proof_obligations.iter()
+        let liveness_obligation = delay_bound
+            .proof_obligations
+            .iter()
             .find(|o| o.category == ObligationCategory::Liveness)
             .expect("Should have liveness obligation");
         assert_eq!(liveness_obligation.severity, ObligationSeverity::Error);
-        assert_eq!(liveness_obligation.verification_status, VerificationStatus::Verified);
+        assert_eq!(
+            liveness_obligation.verification_status,
+            VerificationStatus::Verified
+        );
     }
 
     #[test]
@@ -698,7 +758,7 @@ mod tests {
         let alt_lr = alternative.mean_log_likelihood_ratio_under_alternative();
 
         assert!(null_lr < 0); // Should be negative under null
-        assert!(alt_lr > 0);  // Should be positive under alternative
+        assert!(alt_lr > 0); // Should be positive under alternative
         assert!(alt_lr > -null_lr); // Should have clear separation
     }
 
@@ -716,10 +776,14 @@ mod tests {
             prob_range_millionths: (500_000, 900_000),
         };
 
-        let arl_analysis = AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
+        let arl_analysis =
+            AverageRunLengthAnalysis::compute(config.clone(), alternative.clone()).unwrap();
         let delay_bound = WorstCaseDelayBound::compute(config, alternative, &arl_analysis).unwrap();
 
         assert_eq!(delay_bound.confidence_millionths, 990_000);
-        assert!(matches!(delay_bound.computation_method, DelayBoundMethod::WaldApproximation));
+        assert!(matches!(
+            delay_bound.computation_method,
+            DelayBoundMethod::WaldApproximation
+        ));
     }
 }

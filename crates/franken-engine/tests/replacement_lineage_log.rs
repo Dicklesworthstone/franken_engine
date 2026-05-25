@@ -56,8 +56,12 @@ fn receipt(slot_name: &str, old: &str, new: &str, ts: u64) -> ReplacementReceipt
         receipt_id,
         schema_version: SchemaVersion::V1,
         slot_id: sid,
+        old_slot_id: sid,
+        new_slot_id: sid,
         old_cell_digest: old.to_string(),
         new_cell_digest: new.to_string(),
+        translation_validation_proof_ref: format!("proof-{old}-{new}"),
+        content_hash_chain_into_lineage: format!("chain-{slot_name}"),
         validation_artifacts: vec![ValidationArtifactRef {
             kind: ValidationArtifactKind::EquivalenceResult,
             artifact_digest: "itest-artifact".to_string(),
@@ -249,8 +253,12 @@ fn signed_replacement_receipt(
 ) -> ReplacementReceipt {
     let mut receipt = ReplacementReceipt::create_unsigned(CreateReceiptInput {
         slot_id,
+        old_slot_id: slot_id,
+        new_slot_id: slot_id,
         old_cell_digest,
         new_cell_digest,
+        translation_validation_proof_ref: "test-proof",
+        content_hash_chain_into_lineage: "test-chain",
         validation_artifacts,
         rollback_token: &format!("rollback-{old_cell_digest}"),
         promotion_rationale: "deterministic integration lifecycle validation",

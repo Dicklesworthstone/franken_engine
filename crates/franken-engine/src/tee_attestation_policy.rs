@@ -14,6 +14,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -612,9 +613,10 @@ impl TeeAttestationPolicy {
 
         Self {
             schema_version: 1,
-            freshness_window: FreshnessWindow {
-                standard_decision_window: Duration::from_secs(300).as_millis() as u64,
-                high_impact_decision_window: Duration::from_secs(60).as_millis() as u64,
+            policy_epoch: SecurityEpoch::from_raw(0),
+            freshness_window: AttestationFreshnessWindow {
+                standard_max_age_secs: Duration::from_secs(300).as_secs(),
+                high_impact_max_age_secs: Duration::from_secs(60).as_secs(),
             },
             approved_measurements,
             revocation_sources: vec![],
@@ -645,7 +647,7 @@ pub enum RevocationProbeStatus {
 }
 
 /// Input quote attributes evaluated by policy.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct AttestationQuote {
     pub platform: TeePlatform,
     pub measurement: MeasurementDigest,

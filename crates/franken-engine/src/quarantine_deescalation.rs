@@ -259,7 +259,7 @@ impl ReAdmissionDecision {
             ObjectDomain::PolicyObject,
             "readmission_decision",
             &schema_version,
-            &Self::compute_decision_content_hash(
+            Self::compute_decision_content_hash(
                 &original_quarantine_id,
                 &original_quarantine_reason,
                 time_in_quarantine_secs,
@@ -288,7 +288,7 @@ impl ReAdmissionDecision {
             posterior_confidence_millionths,
             fallback_path,
             metadata,
-            operator_signature: Signature::default(),
+            operator_signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
 
         // Sign the decision content.
@@ -307,13 +307,15 @@ impl ReAdmissionDecision {
         operator_key: &VerificationKey,
     ) -> Result<bool, ReAdmissionError> {
         let unsigned = Self {
-            operator_signature: Signature::default(),
+            operator_signature: Signature::from_bytes(SIGNATURE_SENTINEL),
             ..self.clone()
         };
 
-        verify_signature(&unsigned, &self.operator_signature, operator_key).map_err(|e| {
-            ReAdmissionError::Verification(format!("Signature verification failed: {}", e))
-        })
+        verify_signature(operator_key, &unsigned.preimage_bytes(), &self.operator_signature)
+            .map(|_| true)
+            .map_err(|e| {
+                ReAdmissionError::Verification(format!("Signature verification failed: {}", e))
+            })
     }
 
     /// Computes content hash for deterministic ID generation.
@@ -330,10 +332,7 @@ impl ReAdmissionDecision {
         let mut content = Vec::new();
 
         // Use FixedLayout encoding for fixed-size types
-        let id_start = content.len();
-        content.resize(id_start + EngineObjectId::LAYOUT_SIZE, 0);
-        original_quarantine_id
-            .encode_fixed(&mut content[id_start..id_start + EngineObjectId::LAYOUT_SIZE]);
+        content.extend_from_slice(original_quarantine_id.as_bytes());
 
         content
             .extend_from_slice(&serde_json::to_vec(original_quarantine_reason).unwrap_or_default());
@@ -388,7 +387,7 @@ impl ReAdmissionReceipt {
             ObjectDomain::EvidenceRecord,
             "readmission_receipt",
             &schema_version,
-            &decision.decision_id.as_bytes(),
+            &*decision.decision_id.as_bytes(),
         )
         .map_err(|e| {
             ReAdmissionError::IdGeneration(format!("Failed to derive receipt ID: {}", e))
@@ -407,7 +406,7 @@ impl ReAdmissionReceipt {
             prev_evidence_hash,
             content_hash,
             generated_at_secs,
-            system_signature: Signature::default(),
+            system_signature: Signature::from_bytes(SIGNATURE_SENTINEL),
         };
 
         // Sign the receipt.
@@ -424,11 +423,12 @@ impl ReAdmissionReceipt {
     pub fn verify(&self, system_key: &VerificationKey) -> Result<bool, ReAdmissionError> {
         // Verify system signature.
         let unsigned = Self {
-            system_signature: Signature::default(),
+            system_signature: Signature::from_bytes(SIGNATURE_SENTINEL),
             ..self.clone()
         };
 
-        let signature_valid = verify_signature(&unsigned, &self.system_signature, system_key)
+        let signature_valid = verify_signature(system_key, &unsigned.preimage_bytes(), &self.system_signature)
+            .map(|_| true)
             .map_err(|e| {
                 ReAdmissionError::Verification(format!(
                     "System signature verification failed: {}",
@@ -508,15 +508,114 @@ impl fmt::Display for ReAdmissionError {
 
 impl std::error::Error for ReAdmissionError {}
 
+// ---------------------------------------------------------------------------
+// SignaturePreimage implementations
+// ---------------------------------------------------------------------------
+
+use crate::deterministic_serde::{CanonicalValue, SchemaHash};
+use std::sync::LazyLock;
+
+fn readmission_decision_schema() -> &'static SchemaHash {
+    static HASH: LazyLock<SchemaHash> =
+        LazyLock::new(|| SchemaHash::from_definition(READMISSION_DECISION_SCHEMA_DEF));
+    &HASH
+}
+
+fn readmission_receipt_schema() -> &'static SchemaHash {
+    static HASH: LazyLock<SchemaHash> =
+        LazyLock::new(|| SchemaHash::from_definition(READMISSION_RECEIPT_SCHEMA_DEF));
+    &HASH
+}
+
+impl SignaturePreimage for ReAdmissionDecision {
+    fn signature_domain(&self) -> ObjectDomain {
+        ObjectDomain::EvidenceRecord
+    }
+
+    fn signature_schema(&self) -> &SchemaHash {
+        readmission_decision_schema()
+    }
+
+    fn unsigned_view(&self) -> CanonicalValue {
+        let mut map = BTreeMap::new();
+
+        map.insert("schema_version".to_string(), CanonicalValue::String(format!("{:?}", self.schema_version)));
+        map.insert("epoch".to_string(), CanonicalValue::U64(self.epoch.as_u64()));
+        map.insert("decision_id".to_string(), CanonicalValue::Bytes(self.decision_id.as_bytes().to_vec()));
+        map.insert("original_quarantine_id".to_string(), CanonicalValue::Bytes(self.original_quarantine_id.as_bytes().to_vec()));
+        map.insert("original_quarantine_reason".to_string(), CanonicalValue::String(format!("{:?}", self.original_quarantine_reason)));
+        map.insert("time_in_quarantine_secs".to_string(), CanonicalValue::U64(self.time_in_quarantine_secs));
+        map.insert("operator_id".to_string(), CanonicalValue::String(self.operator_id.clone()));
+        map.insert("tee_attestation".to_string(), CanonicalValue::String(format!("{:?}", self.tee_attestation)));
+        map.insert("posterior_confidence_millionths".to_string(), CanonicalValue::U64(self.posterior_confidence_millionths));
+        map.insert("fallback_path".to_string(), CanonicalValue::String(format!("{:?}", self.fallback_path)));
+
+        // Convert metadata map
+        let mut metadata_map = BTreeMap::new();
+        for (k, v) in &self.metadata {
+            metadata_map.insert(k.clone(), CanonicalValue::String(v.clone()));
+        }
+        map.insert("metadata".to_string(), CanonicalValue::Map(metadata_map));
+
+        // Set signature to sentinel
+        map.insert("operator_signature".to_string(), CanonicalValue::Bytes(SIGNATURE_SENTINEL.to_vec()));
+
+        CanonicalValue::Map(map)
+    }
+}
+
+impl SignaturePreimage for ReAdmissionReceipt {
+    fn signature_domain(&self) -> ObjectDomain {
+        ObjectDomain::EvidenceRecord
+    }
+
+    fn signature_schema(&self) -> &SchemaHash {
+        readmission_receipt_schema()
+    }
+
+    fn unsigned_view(&self) -> CanonicalValue {
+        let mut map = BTreeMap::new();
+
+        map.insert("receipt_id".to_string(), CanonicalValue::Bytes(self.receipt_id.as_bytes().to_vec()));
+        map.insert("decision_id".to_string(), CanonicalValue::Bytes(self.decision.decision_id.as_bytes().to_vec()));
+        map.insert("prev_evidence_hash".to_string(), CanonicalValue::Bytes(self.prev_evidence_hash.as_bytes().to_vec()));
+        map.insert("content_hash".to_string(), CanonicalValue::Bytes(self.content_hash.as_bytes().to_vec()));
+        map.insert("generated_at_secs".to_string(), CanonicalValue::U64(self.generated_at_secs));
+
+        // Set signature to sentinel
+        map.insert("system_signature".to_string(), CanonicalValue::Bytes(SIGNATURE_SENTINEL.to_vec()));
+
+        CanonicalValue::Map(map)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::signature_preimage::{SigningKey, VerificationKey};
 
     fn make_test_keys() -> (SigningKey, VerificationKey) {
-        let signing_key = SigningKey::generate();
-        let verification_key = signing_key.verification_key();
-        (signing_key, verification_key)
+        use crate::signature_preimage::generate_keypair;
+        generate_keypair()
+    }
+
+    fn make_test_attestation_quote() -> AttestationQuote {
+        use crate::tee_attestation_policy::{AttestationQuote, TeePlatform, MeasurementDigest, MeasurementAlgorithm, RevocationProbeStatus};
+        use std::collections::BTreeMap;
+
+        let mut rev = BTreeMap::new();
+        rev.insert("test_source".to_string(), RevocationProbeStatus::Unavailable);
+
+        AttestationQuote {
+            platform: TeePlatform::IntelSgx,
+            measurement: MeasurementDigest {
+                algorithm: MeasurementAlgorithm::Sha256,
+                digest_hex: "deadbeefcafebabe".repeat(4),
+            },
+            quote_age_secs: 30,
+            trust_root_id: "test-root".to_string(),
+            revocation_observations: rev,
+        }
     }
 
     fn make_test_quarantine_reason() -> QuarantineReason {
@@ -537,7 +636,7 @@ mod tests {
     fn test_readmission_decision_creation() {
         let (operator_key, operator_verification_key) = make_test_keys();
         let epoch = SecurityEpoch::from_raw(42);
-        let original_quarantine_id = EngineObjectId::new();
+        let original_quarantine_id = EngineObjectId::default();
         let quarantine_reason = make_test_quarantine_reason();
         let fallback_path = make_test_fallback_path();
         let metadata = BTreeMap::new();
@@ -548,7 +647,7 @@ mod tests {
             quarantine_reason,
             3600, // 1 hour in quarantine
             "operator-alice".to_string(),
-            AttestationStatus::Available,
+            AttestationStatus::Available { quote: make_test_attestation_quote() },
             800_000, // 80% confidence
             fallback_path,
             metadata,
@@ -578,11 +677,11 @@ mod tests {
         // Create a decision first.
         let decision = ReAdmissionDecision::new(
             epoch,
-            EngineObjectId::new(),
+            EngineObjectId::default(),
             make_test_quarantine_reason(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available,
+            AttestationStatus::Available { quote: make_test_attestation_quote() },
             800_000,
             make_test_fallback_path(),
             BTreeMap::new(),
@@ -622,11 +721,11 @@ mod tests {
         // Create first receipt.
         let decision1 = ReAdmissionDecision::new(
             epoch,
-            EngineObjectId::new(),
+            EngineObjectId::default(),
             make_test_quarantine_reason(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available,
+            AttestationStatus::Available { quote: make_test_attestation_quote() },
             800_000,
             make_test_fallback_path(),
             BTreeMap::new(),
@@ -646,7 +745,7 @@ mod tests {
         // Create second receipt linking to first.
         let decision2 = ReAdmissionDecision::new(
             epoch,
-            EngineObjectId::new(),
+            EngineObjectId::default(),
             QuarantineReason::SuspiciousBehavior {
                 pattern_id: "pattern-002".to_string(),
                 confidence_score: 750_000,
@@ -714,7 +813,7 @@ mod tests {
     fn test_decision_deterministic_id_generation() {
         let (operator_key, _) = make_test_keys();
         let epoch = SecurityEpoch::from_raw(42);
-        let original_quarantine_id = EngineObjectId::new();
+        let original_quarantine_id = EngineObjectId::default();
         let quarantine_reason = make_test_quarantine_reason();
         let fallback_path = make_test_fallback_path();
         let metadata = BTreeMap::new();
@@ -722,11 +821,11 @@ mod tests {
         // Create two identical decisions.
         let decision1 = ReAdmissionDecision::new(
             epoch,
-            original_quarantine_id,
+            original_quarantine_id.clone(),
             quarantine_reason.clone(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available,
+            AttestationStatus::Available { quote: make_test_attestation_quote() },
             800_000,
             fallback_path.clone(),
             metadata.clone(),
@@ -736,11 +835,11 @@ mod tests {
 
         let decision2 = ReAdmissionDecision::new(
             epoch,
-            original_quarantine_id,
-            quarantine_reason,
+            original_quarantine_id.clone(),
+            quarantine_reason.clone(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available,
+            AttestationStatus::Available { quote: make_test_attestation_quote() },
             800_000,
             fallback_path,
             metadata,
@@ -759,11 +858,11 @@ mod tests {
 
         let decision = ReAdmissionDecision::new(
             SecurityEpoch::from_raw(42),
-            EngineObjectId::new(),
+            EngineObjectId::default(),
             make_test_quarantine_reason(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available,
+            AttestationStatus::Available { quote: make_test_attestation_quote() },
             800_000,
             make_test_fallback_path(),
             BTreeMap::new(),
@@ -786,11 +885,11 @@ mod tests {
 
         let decision = ReAdmissionDecision::new(
             SecurityEpoch::from_raw(42),
-            EngineObjectId::new(),
+            EngineObjectId::default(),
             make_test_quarantine_reason(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available,
+            AttestationStatus::Available { quote: make_test_attestation_quote() },
             800_000,
             make_test_fallback_path(),
             BTreeMap::new(),

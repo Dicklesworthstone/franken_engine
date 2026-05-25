@@ -2431,7 +2431,8 @@ fn lower_statement_to_ir1_with_flow(
             // never allocated and never received any value (bd-hld87).
             let mut param_names: Vec<String> = Vec::with_capacity(func.params.len());
             // H6.1 audit: bounded by function parameter count
-            let mut destructure_params: Vec<(String, &BindingPattern)> = Vec::with_capacity(func.params.len());
+            let mut destructure_params: Vec<(String, &BindingPattern)> =
+                Vec::with_capacity(func.params.len());
             for (index, param) in func.params.iter().enumerate() {
                 match param.name() {
                     Some(name) => param_names.push(name.to_string()),
@@ -5408,31 +5409,31 @@ fn create_unified_authority_from_components(
     if let Some(_cap_str) = capability {
         // Parse common capability strings to CapabilityKind
         match _cap_str.as_str() {
-            "fs_read" => capability_set = capability_set.with_capability(CapabilityKind::FsRead),
-            "fs_write" => capability_set = capability_set.with_capability(CapabilityKind::FsWrite),
+            "fs_read" => { capability_set.insert(CapabilityKind::FsRead); },
+            "fs_write" => { capability_set.insert(CapabilityKind::FsWrite); },
             "net_connect" => {
-                capability_set = capability_set.with_capability(CapabilityKind::NetConnect)
+                capability_set.insert(CapabilityKind::NetConnect);
             }
             "net_listen" => {
-                capability_set = capability_set.with_capability(CapabilityKind::NetListen)
+                capability_set.insert(CapabilityKind::NetListen);
             }
             "proc_spawn" => {
-                capability_set = capability_set.with_capability(CapabilityKind::ProcSpawn)
+                capability_set.insert(CapabilityKind::ProcSpawn);
             }
-            "env_read" => capability_set = capability_set.with_capability(CapabilityKind::EnvRead),
+            "env_read" => { capability_set.insert(CapabilityKind::EnvRead); },
             "env_write" => {
-                capability_set = capability_set.with_capability(CapabilityKind::EnvWrite)
+                capability_set.insert(CapabilityKind::EnvWrite);
             }
             "policy_request" => {
-                capability_set = capability_set.with_capability(CapabilityKind::PolicyRequest)
+                capability_set.insert(CapabilityKind::PolicyRequest);
             }
-            "eval" => capability_set = capability_set.with_capability(CapabilityKind::Eval),
-            "global" => capability_set = capability_set.with_capability(CapabilityKind::Global),
+            "eval" => { capability_set.insert(CapabilityKind::Eval); },
+            "global" => { capability_set.insert(CapabilityKind::Global); },
             "clock_read" => {
-                capability_set = capability_set.with_capability(CapabilityKind::ClockRead)
+                capability_set.insert(CapabilityKind::ClockRead);
             }
             "random_read" => {
-                capability_set = capability_set.with_capability(CapabilityKind::RandomRead)
+                capability_set.insert(CapabilityKind::RandomRead);
             }
             _ => {
                 // Unknown capability string, leave empty for now

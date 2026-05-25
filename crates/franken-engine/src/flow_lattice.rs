@@ -3122,7 +3122,7 @@ mod tests {
 
     #[test]
     fn unified_authority_propagate_empty_returns_bottom() {
-        let lattice = Ir2FlowLattice::new();
+        let lattice = Ir2FlowLattice::new("test");
         let result = lattice.propagate_unified_authority(&[]);
         assert_eq!(result, AuthorityLattice::bottom());
     }
@@ -3130,7 +3130,7 @@ mod tests {
     #[test]
     fn unified_authority_propagate_single_returns_same() {
         use crate::unified_authority_algebra::CapabilityKind;
-        let lattice = Ir2FlowLattice::new();
+        let lattice = Ir2FlowLattice::new("test");
         let caps = CapabilitySet::from_iter([CapabilityKind::FsRead, CapabilityKind::NetConnect]);
         let budget = BudgetEnvelope::try_new(1000, 2000, 3000, 4000).unwrap();
         let authority = AuthorityLattice::new(LabelClass::Internal, caps, budget);
@@ -3142,7 +3142,7 @@ mod tests {
     #[test]
     fn unified_authority_propagate_joins_all_axes() {
         use crate::unified_authority_algebra::CapabilityKind;
-        let lattice = Ir2FlowLattice::new();
+        let lattice = Ir2FlowLattice::new("test");
 
         // Authority 1: Secret IFC, FsRead capability, budget (1000, 0, 0, 0)
         let caps1 = CapabilitySet::from_iter([CapabilityKind::FsRead]);
@@ -3170,7 +3170,7 @@ mod tests {
     #[test]
     fn unified_authority_assign_with_requirements() {
         use crate::unified_authority_algebra::CapabilityKind;
-        let lattice = Ir2FlowLattice::new();
+        let lattice = Ir2FlowLattice::new("test");
 
         let caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
         let budget = BudgetEnvelope::try_new(500, 1000, 1500, 2000).unwrap();
@@ -3186,7 +3186,7 @@ mod tests {
     #[test]
     fn unified_flow_check_all_axes_authorized() {
         use crate::unified_authority_algebra::CapabilityKind;
-        let lattice = Ir2FlowLattice::new();
+        let lattice = Ir2FlowLattice::new("test");
 
         // Source with Internal IFC, FsRead capability, budget (1000, 1000, 1000, 1000)
         let source_caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
@@ -3212,7 +3212,7 @@ mod tests {
     #[test]
     fn unified_flow_check_ifc_violation() {
         use crate::unified_authority_algebra::CapabilityKind;
-        let lattice = Ir2FlowLattice::new();
+        let lattice = Ir2FlowLattice::new("test");
 
         // Source with Secret IFC (high sensitivity)
         let source_caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
@@ -3237,7 +3237,7 @@ mod tests {
     #[test]
     fn unified_flow_check_capability_violation() {
         use crate::unified_authority_algebra::CapabilityKind;
-        let lattice = Ir2FlowLattice::new();
+        let lattice = Ir2FlowLattice::new("test");
 
         // Source with only FsRead capability
         let source_caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
@@ -3263,7 +3263,7 @@ mod tests {
     #[test]
     fn unified_flow_check_budget_violation() {
         use crate::unified_authority_algebra::CapabilityKind;
-        let lattice = Ir2FlowLattice::new();
+        let lattice = Ir2FlowLattice::new("test");
 
         // Source requires budget (1000, 1000, 1000, 1000)
         let source_caps = CapabilitySet::from_iter([CapabilityKind::FsRead]);
@@ -3289,7 +3289,7 @@ mod tests {
     #[test]
     fn unified_authority_preserves_existing_per_axis_semantics() {
         use crate::unified_authority_algebra::CapabilityKind;
-        let lattice = Ir2FlowLattice::new();
+        let lattice = Ir2FlowLattice::new("test");
 
         // Test that unified operations are consistent with per-axis operations
         let labels = [LabelClass::Public, LabelClass::Internal];

@@ -1310,7 +1310,7 @@ mod tests {
         };
         assert!(matches!(
             adapter.determine_action(&medium_risk),
-            HookAction::Challenge(_)
+            HookAction::Challenge
         ));
 
         // High risk → Sandbox

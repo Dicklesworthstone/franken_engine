@@ -638,7 +638,7 @@ mod tests {
             args: vec!["test".to_string(), "message".to_string()],
         };
 
-        assert!(handler.can_handle(effect.effect_name()));
+        assert!(handler.can_handle(Effect::effect_name(&effect)));
         let result = handler.handle(&effect);
         assert!(result.is_ok());
         assert!(result.unwrap().is_some());
@@ -652,7 +652,7 @@ mod tests {
             args: vec!["test".to_string()],
         };
 
-        assert!(handler.can_handle(effect.effect_name()));
+        assert!(handler.can_handle(Effect::effect_name(&effect)));
         let result = handler.handle(&effect);
         assert!(result.is_err());
         assert!(matches!(
@@ -669,7 +669,7 @@ mod tests {
             args: vec!["engine".to_string(), "test".to_string()],
         };
 
-        assert!(handler.can_handle(effect.effect_name()));
+        assert!(handler.can_handle(Effect::effect_name(&effect)));
         let result = handler.handle(&effect);
         assert!(result.is_ok());
         assert!(result.unwrap().is_some());
@@ -685,7 +685,7 @@ mod tests {
             body: None,
         };
 
-        assert!(!handler.can_handle(effect.effect_name()));
+        assert!(!handler.can_handle(Effect::effect_name(&effect)));
     }
 
     #[test]
@@ -703,14 +703,14 @@ mod tests {
     fn test_hostcall_tag_to_effect_conversion() {
         let effect =
             create_effect_from_hostcall_tag("console:log", &["hello".to_string()]).unwrap();
-        assert_eq!(effect.effect_name(), "hostcall:console");
+        assert_eq!(effect.as_ref().effect_name(), "hostcall:console");
 
         let effect = create_effect_from_hostcall_tag("fs:read", &["test.txt".to_string()]).unwrap();
-        assert_eq!(effect.effect_name(), "hostcall:fs:read");
+        assert_eq!(effect.as_ref().effect_name(), "hostcall:fs:read");
 
         let effect =
             create_effect_from_hostcall_tag("timer:setTimeout", &["1000".to_string()]).unwrap();
-        assert_eq!(effect.effect_name(), "hostcall:timer");
+        assert_eq!(effect.as_ref().effect_name(), "hostcall:timer");
     }
 
     #[test]

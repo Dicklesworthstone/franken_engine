@@ -380,10 +380,18 @@ impl PolicyTheoremEngine {
         let mut failed_verifications = Vec::new();
         let start_time = std::time::Instant::now();
 
-        for theorem in &mut self.theorems {
-            let verification_result = self.verify_single_theorem(theorem)?;
+        // First, collect verification results without mutating self.theorems
+        let verification_results: Result<Vec<_>, String> = self.theorems
+            .iter()
+            .map(|theorem| self.verify_single_theorem(theorem))
+            .collect();
+        let verification_results = verification_results?;
 
-            match verification_result.verification_status {
+        // Then apply the results
+        for (theorem, verification_result) in self.theorems.iter_mut().zip(verification_results.into_iter()) {
+            let status = verification_result.verification_status.clone();
+
+            match status {
                 VerificationStatus::Proven => {
                     theorem.verification_status = VerificationStatus::Proven;
                     theorem.proof_carrier = Some(format!(
@@ -398,8 +406,8 @@ impl PolicyTheoremEngine {
                     failed_verifications.push(theorem.theorem_id.clone());
                 }
                 _ => {
-                    theorem.verification_status = verification_result.verification_status;
-                    if verification_result.verification_status != VerificationStatus::Proven {
+                    theorem.verification_status = status.clone();
+                    if status != VerificationStatus::Proven {
                         failed_verifications.push(theorem.theorem_id.clone());
                     }
                 }

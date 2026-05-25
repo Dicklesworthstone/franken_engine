@@ -3065,7 +3065,7 @@ mod tests {
     }
 
     #[test]
-    fn create_batch_divergence_evidence() {
+    fn test_create_batch_divergence_evidence() {
         let divergences = vec![
             (
                 FrxDivergenceDetail {

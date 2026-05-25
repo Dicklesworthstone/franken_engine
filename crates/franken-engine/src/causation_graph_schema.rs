@@ -41,8 +41,7 @@ pub const CAUSATION_GRAPH_COMPONENT: &str = "causation_graph_schema";
 /// Policy ID binding for this module.
 pub const CAUSATION_GRAPH_POLICY_ID: &str = "FF-2";
 /// Domain separator for causation graph signatures.
-pub const CAUSATION_GRAPH_SIGNATURE_DOMAIN: &str =
-    "franken-engine.causation-graph.signature.v1";
+pub const CAUSATION_GRAPH_SIGNATURE_DOMAIN: &str = "franken-engine.causation-graph.signature.v1";
 
 // ---------------------------------------------------------------------------
 // Core Types
@@ -358,7 +357,10 @@ impl CausationGraph {
 
         self.edges.insert(edge_id, edge);
         self.adjacency.entry(source).or_default().push(edge_id);
-        self.reverse_adjacency.entry(target).or_default().push(edge_id);
+        self.reverse_adjacency
+            .entry(target)
+            .or_default()
+            .push(edge_id);
 
         self.metadata.edge_count += 1;
         self.metadata.modified_at_ns = std::time::SystemTime::now()
@@ -402,7 +404,11 @@ impl CausationGraph {
     }
 
     /// Get all nodes in the transitive closure of influences for a given node.
-    pub fn get_causal_chain(&self, node_id: NodeId, max_depth: usize) -> Result<Vec<NodeId>, GraphError> {
+    pub fn get_causal_chain(
+        &self,
+        node_id: NodeId,
+        max_depth: usize,
+    ) -> Result<Vec<NodeId>, GraphError> {
         let mut visited = std::collections::HashSet::new();
         let mut result = Vec::new();
         let mut queue = std::collections::VecDeque::new();
@@ -593,9 +599,11 @@ mod tests {
             id: NodeId(1),
             node_type: NodeType::EvidenceAtom {
                 dependency: CausalDependency {
-                    atom_id: "test-atom".to_string(),
-                    influence_millionths: 500_000,
-                    content_hash: ContentHash::compute(b"test"),
+                    evidence_atom_id: "test-atom".to_string(),
+                    evidence_type: "test_evidence".to_string(),
+                    influenced_factor: DecisionFactor::PosteriorProbability,
+                    influence_magnitude_millionths: 500_000,
+                    evidence_content_hash: ContentHash::compute(b"test"),
                 },
                 evidence_hash: ContentHash::compute(b"evidence"),
                 confidence_millionths: 900_000,
@@ -621,9 +629,11 @@ mod tests {
             id: NodeId(1),
             node_type: NodeType::EvidenceAtom {
                 dependency: CausalDependency {
-                    atom_id: "atom1".to_string(),
-                    influence_millionths: 500_000,
-                    content_hash: ContentHash::compute(b"test1"),
+                    evidence_atom_id: "atom1".to_string(),
+                    evidence_type: "test_evidence".to_string(),
+                    influenced_factor: DecisionFactor::PosteriorProbability,
+                    influence_magnitude_millionths: 500_000,
+                    evidence_content_hash: ContentHash::compute(b"test1"),
                 },
                 evidence_hash: ContentHash::compute(b"evidence1"),
                 confidence_millionths: 900_000,
@@ -678,15 +688,20 @@ mod tests {
                 id: NodeId(i),
                 node_type: NodeType::EvidenceAtom {
                     dependency: CausalDependency {
-                        atom_id: format!("atom{}", i),
-                        influence_millionths: 500_000,
-                        content_hash: ContentHash::compute(format!("test{}", i).as_bytes()),
+                        evidence_atom_id: format!("atom{}", i),
+                        evidence_type: "test_evidence".to_string(),
+                        influenced_factor: DecisionFactor::PosteriorProbability,
+                        influence_magnitude_millionths: 500_000,
+                        evidence_content_hash: ContentHash::compute(format!("test{}", i).as_bytes()),
                     },
                     evidence_hash: ContentHash::compute(format!("evidence{}", i).as_bytes()),
                     confidence_millionths: 900_000,
                 },
                 content_hash: ContentHash::compute(format!("node{}", i).as_bytes()),
-                authenticity_hash: AuthenticityHash::compute_keyed(format!("node{}", i).as_bytes(), b"key"),
+                authenticity_hash: AuthenticityHash::compute_keyed(
+                    format!("node{}", i).as_bytes(),
+                    b"key",
+                ),
                 timestamp_ns: i * 1000000,
                 metadata: BTreeMap::new(),
             };
@@ -755,15 +770,20 @@ mod tests {
                 id: NodeId(i),
                 node_type: NodeType::EvidenceAtom {
                     dependency: CausalDependency {
-                        atom_id: format!("atom{}", i),
-                        influence_millionths: 500_000,
-                        content_hash: ContentHash::compute(format!("test{}", i).as_bytes()),
+                        evidence_atom_id: format!("atom{}", i),
+                        evidence_type: "test_evidence".to_string(),
+                        influenced_factor: DecisionFactor::PosteriorProbability,
+                        influence_magnitude_millionths: 500_000,
+                        evidence_content_hash: ContentHash::compute(format!("test{}", i).as_bytes()),
                     },
                     evidence_hash: ContentHash::compute(format!("evidence{}", i).as_bytes()),
                     confidence_millionths: 900_000,
                 },
                 content_hash: ContentHash::compute(format!("node{}", i).as_bytes()),
-                authenticity_hash: AuthenticityHash::compute_keyed(format!("node{}", i).as_bytes(), b"key"),
+                authenticity_hash: AuthenticityHash::compute_keyed(
+                    format!("node{}", i).as_bytes(),
+                    b"key",
+                ),
                 timestamp_ns: i * 1000000,
                 metadata: BTreeMap::new(),
             };

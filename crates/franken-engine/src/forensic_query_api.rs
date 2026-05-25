@@ -28,8 +28,8 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::causation_graph_schema::{
-    CausationGraph, CausationNode, CausationEdge, NodeId, EdgeId, NodeType,
-    DecisionOutcome, CausationType, InfluenceWeight, GraphError
+    CausationEdge, CausationGraph, CausationNode, CausationType, DecisionOutcome, EdgeId,
+    GraphError, InfluenceWeight, NodeId, NodeType,
 };
 use crate::hash_tiers::ContentHash;
 use crate::minimal_causal_set_inference::DecisionFactor;
@@ -147,7 +147,7 @@ pub struct EvidenceModification {
 // ---------------------------------------------------------------------------
 
 /// Result of a forensic query operation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ForensicQueryResult {
     /// Query that produced this result.
     pub query: ForensicQuery,
@@ -174,7 +174,7 @@ pub enum QueryStatus {
 }
 
 /// Main result data from a forensic query.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum QueryResult {
     /// Causal explanation result.
@@ -203,7 +203,7 @@ pub struct CausalExplanationResult {
 }
 
 /// Result of influence analysis query.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InfluenceAnalysisResult {
     /// Evidence atoms ranked by influence strength.
     pub ranked_influences: Vec<InfluenceFactor>,
@@ -214,7 +214,7 @@ pub struct InfluenceAnalysisResult {
 }
 
 /// Result of counterfactual analysis query.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CounterfactualAnalysisResult {
     /// Original decision outcome.
     pub original_outcome: DecisionOutcome,
@@ -229,7 +229,7 @@ pub struct CounterfactualAnalysisResult {
 }
 
 /// Result of timeline reconstruction query.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimelineReconstructionResult {
     /// Events in chronological order.
     pub timeline_events: Vec<TimelineEvent>,
@@ -304,7 +304,7 @@ pub struct InfluenceFactor {
 }
 
 /// Network of influence relationships.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InfluenceNetwork {
     /// Adjacency matrix of influence relationships.
     pub adjacency: BTreeMap<NodeId, Vec<(NodeId, InfluenceWeight)>>,
@@ -331,7 +331,7 @@ pub enum InfluenceType {
 }
 
 /// Sensitivity analysis for counterfactual scenarios.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SensitivityAnalysis {
     /// How sensitive the outcome is to each evidence modification.
     pub sensitivity_scores: BTreeMap<String, f64>,
@@ -355,7 +355,7 @@ pub struct TimelineEvent {
 }
 
 /// Critical decision point in a timeline.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CriticalPoint {
     /// Timestamp of the critical point.
     pub timestamp_ns: u64,
@@ -468,7 +468,10 @@ impl ForensicQueryEngine {
     }
 
     /// Execute a forensic query against the causation graph.
-    pub fn execute_query(&mut self, query: ForensicQuery) -> Result<ForensicQueryResult, QueryError> {
+    pub fn execute_query(
+        &mut self,
+        query: ForensicQuery,
+    ) -> Result<ForensicQueryResult, QueryError> {
         let start_time = std::time::Instant::now();
 
         // Check cache if enabled
@@ -481,18 +484,34 @@ impl ForensicQueryEngine {
 
         // Execute the query based on its type
         let result = match &query.query_type {
-            QueryType::CausalExplanation { max_depth, include_weak_influences } => {
-                self.execute_causal_explanation(&query, *max_depth, *include_weak_influences)
-            }
-            QueryType::InfluenceAnalysis { min_influence_threshold, rank_by_strength } => {
+            QueryType::CausalExplanation {
+                max_depth,
+                include_weak_influences,
+            } => self.execute_causal_explanation(&query, *max_depth, *include_weak_influences),
+            QueryType::InfluenceAnalysis {
+                min_influence_threshold,
+                rank_by_strength,
+            } => {
                 self.execute_influence_analysis(&query, *min_influence_threshold, *rank_by_strength)
             }
-            QueryType::CounterfactualAnalysis { modified_evidence, recompute_downstream } => {
-                self.execute_counterfactual_analysis(&query, modified_evidence, *recompute_downstream)
-            }
-            QueryType::TimelineReconstruction { start_timestamp_ns, end_timestamp_ns, sort_by_causation } => {
-                self.execute_timeline_reconstruction(&query, *start_timestamp_ns, *end_timestamp_ns, *sort_by_causation)
-            }
+            QueryType::CounterfactualAnalysis {
+                modified_evidence,
+                recompute_downstream,
+            } => self.execute_counterfactual_analysis(
+                &query,
+                modified_evidence,
+                *recompute_downstream,
+            ),
+            QueryType::TimelineReconstruction {
+                start_timestamp_ns,
+                end_timestamp_ns,
+                sort_by_causation,
+            } => self.execute_timeline_reconstruction(
+                &query,
+                *start_timestamp_ns,
+                *end_timestamp_ns,
+                *sort_by_causation,
+            ),
         };
 
         let execution_time_us = start_time.elapsed().as_micros() as u64;
@@ -519,7 +538,7 @@ impl ForensicQueryEngine {
                     subgraph_size: 0,
                     warnings: vec![],
                 },
-            }
+            },
         };
 
         // Cache the result if enabled
@@ -534,7 +553,11 @@ impl ForensicQueryEngine {
     /// Find the decision node for a given decision ID.
     pub fn find_decision_node(&self, decision_id: &str) -> Result<NodeId, QueryError> {
         for (node_id, node) in &self.graph.nodes {
-            if let NodeType::Decision { decision_id: node_decision_id, .. } = &node.node_type {
+            if let NodeType::Decision {
+                decision_id: node_decision_id,
+                ..
+            } = &node.node_type
+            {
                 if node_decision_id == decision_id {
                     return Ok(*node_id);
                 }
@@ -544,7 +567,11 @@ impl ForensicQueryEngine {
     }
 
     /// Extract a causal subgraph for a given target node.
-    pub fn extract_causal_subgraph(&self, target_node: NodeId, max_depth: usize) -> Result<CausalSubgraph, QueryError> {
+    pub fn extract_causal_subgraph(
+        &self,
+        target_node: NodeId,
+        max_depth: usize,
+    ) -> Result<CausalSubgraph, QueryError> {
         let mut visited_nodes = BTreeSet::new();
         let mut visited_edges = BTreeSet::new();
         let mut queue = VecDeque::new();
@@ -625,14 +652,26 @@ impl ForensicQueryEngine {
     }
 
     /// Execute causal explanation query.
-    fn execute_causal_explanation(&self, query: &ForensicQuery, max_depth: usize, include_weak_influences: bool) -> Result<ForensicQueryResult, QueryError> {
+    fn execute_causal_explanation(
+        &self,
+        query: &ForensicQuery,
+        max_depth: usize,
+        include_weak_influences: bool,
+    ) -> Result<ForensicQueryResult, QueryError> {
         let target_node_id = match &query.target {
             QueryTarget::Decision(decision_id) => self.find_decision_node(decision_id)?,
             QueryTarget::Node(node_id) => *node_id,
-            _ => return Err(QueryError::InvalidTarget("Causal explanation requires decision or node target".to_string())),
+            _ => {
+                return Err(QueryError::InvalidTarget(
+                    "Causal explanation requires decision or node target".to_string(),
+                ));
+            }
         };
 
-        let decision_node = self.graph.nodes.get(&target_node_id)
+        let decision_node = self
+            .graph
+            .nodes
+            .get(&target_node_id)
             .ok_or_else(|| QueryError::NodeNotFound(target_node_id))?
             .clone();
 
@@ -643,7 +682,8 @@ impl ForensicQueryEngine {
         let causal_summary = self.generate_causal_summary(&causal_subgraph, &decision_node)?;
 
         // Generate alternative paths
-        let alternative_paths = self.generate_alternative_paths(&causal_subgraph, &decision_node)?;
+        let alternative_paths =
+            self.generate_alternative_paths(&causal_subgraph, &decision_node)?;
 
         let result = CausalExplanationResult {
             decision_node,
@@ -652,22 +692,31 @@ impl ForensicQueryEngine {
             alternative_paths,
         };
 
+        // Calculate metadata before moving result
+        let nodes_examined = result.causal_subgraph.nodes.len() as u32;
+        let edges_traversed = result.causal_subgraph.edges.len() as u32;
+
         Ok(ForensicQueryResult {
             query: query.clone(),
             status: QueryStatus::Success,
             result: QueryResult::CausalExplanation(result),
             metadata: QueryMetadata {
                 execution_time_us: 0, // Will be filled by caller
-                nodes_examined: result.causal_subgraph.nodes.len() as u32,
-                edges_traversed: result.causal_subgraph.edges.len() as u32,
-                subgraph_size: result.causal_subgraph.nodes.len() as u32,
+                nodes_examined,
+                edges_traversed,
+                subgraph_size: nodes_examined,
                 warnings: vec![],
             },
         })
     }
 
     /// Execute influence analysis query.
-    fn execute_influence_analysis(&self, query: &ForensicQuery, min_threshold: InfluenceWeight, rank_by_strength: bool) -> Result<ForensicQueryResult, QueryError> {
+    fn execute_influence_analysis(
+        &self,
+        query: &ForensicQuery,
+        min_threshold: InfluenceWeight,
+        rank_by_strength: bool,
+    ) -> Result<ForensicQueryResult, QueryError> {
         // Implementation placeholder - would analyze influence patterns
         // This is a simplified version for the working implementation
 
@@ -700,7 +749,12 @@ impl ForensicQueryEngine {
     }
 
     /// Execute counterfactual analysis query.
-    fn execute_counterfactual_analysis(&self, query: &ForensicQuery, modified_evidence: &[EvidenceModification], recompute_downstream: bool) -> Result<ForensicQueryResult, QueryError> {
+    fn execute_counterfactual_analysis(
+        &self,
+        query: &ForensicQuery,
+        modified_evidence: &[EvidenceModification],
+        recompute_downstream: bool,
+    ) -> Result<ForensicQueryResult, QueryError> {
         // Implementation placeholder - would perform what-if analysis
         // This is a simplified version for the working implementation
 
@@ -737,7 +791,13 @@ impl ForensicQueryEngine {
     }
 
     /// Execute timeline reconstruction query.
-    fn execute_timeline_reconstruction(&self, query: &ForensicQuery, start_timestamp: u64, end_timestamp: u64, sort_by_causation: bool) -> Result<ForensicQueryResult, QueryError> {
+    fn execute_timeline_reconstruction(
+        &self,
+        query: &ForensicQuery,
+        start_timestamp: u64,
+        end_timestamp: u64,
+        sort_by_causation: bool,
+    ) -> Result<ForensicQueryResult, QueryError> {
         // Implementation placeholder - would reconstruct event timeline
         // This is a simplified version for the working implementation
 
@@ -762,7 +822,11 @@ impl ForensicQueryEngine {
     }
 
     /// Generate causal summary for a subgraph.
-    fn generate_causal_summary(&self, subgraph: &CausalSubgraph, decision_node: &CausationNode) -> Result<CausalSummary, QueryError> {
+    fn generate_causal_summary(
+        &self,
+        subgraph: &CausalSubgraph,
+        decision_node: &CausationNode,
+    ) -> Result<CausalSummary, QueryError> {
         let mut primary_evidence = Vec::new();
         let mut activated_factors = Vec::new();
         let mut evidence_count = 0;
@@ -808,7 +872,11 @@ impl ForensicQueryEngine {
     }
 
     /// Generate alternative paths for counterfactual analysis.
-    fn generate_alternative_paths(&self, subgraph: &CausalSubgraph, decision_node: &CausationNode) -> Result<Vec<AlternativePath>, QueryError> {
+    fn generate_alternative_paths(
+        &self,
+        subgraph: &CausalSubgraph,
+        decision_node: &CausationNode,
+    ) -> Result<Vec<AlternativePath>, QueryError> {
         // Implementation placeholder - would generate what-if scenarios
         Ok(vec![])
     }
@@ -823,7 +891,13 @@ impl ForensicQueryEngine {
         hash_data.extend_from_slice(serde_json::to_string(&query.target)?.as_bytes());
 
         let hash = ContentHash::compute(&hash_data);
-        Ok(format!("query-{}", hash.as_bytes().iter().map(|b| format!("{:02x}", b)).collect::<String>()))
+        Ok(format!(
+            "query-{}",
+            hash.as_bytes()
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>()
+        ))
     }
 }
 
@@ -885,7 +959,9 @@ impl From<serde_json::Error> for QueryError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::causation_graph_schema::{CausationGraph, CausationNode, CausationEdge, NodeId, EdgeId};
+    use crate::causation_graph_schema::{
+        CausationEdge, CausationGraph, CausationNode, EdgeId, NodeId,
+    };
     use crate::hash_tiers::{AuthenticityHash, ContentHash};
     use crate::minimal_causal_set_inference::{CausalDependency, DecisionFactor};
 
@@ -897,9 +973,11 @@ mod tests {
             id: NodeId(1),
             node_type: NodeType::EvidenceAtom {
                 dependency: CausalDependency {
-                    atom_id: "test-evidence".to_string(),
-                    influence_millionths: 700_000,
-                    content_hash: ContentHash::compute(b"evidence-data"),
+                    evidence_atom_id: "test-evidence".to_string(),
+                    evidence_type: "test_evidence".to_string(),
+                    influenced_factor: DecisionFactor::PosteriorProbability,
+                    influence_magnitude_millionths: 700_000,
+                    evidence_content_hash: ContentHash::compute(b"evidence-data"),
                 },
                 evidence_hash: ContentHash::compute(b"evidence"),
                 confidence_millionths: 900_000,

@@ -640,6 +640,45 @@ fn conformance_source_catch_binding_can_be_captured_by_closure_after_unwinding()
 }
 
 #[test]
+fn conformance_source_catch_binding_returned_closure_captures_exception() {
+    // bd-cixqu.8.2 [H.2], exact bead phrasing: `catch (e) { return () => e; }`.
+    // A closure *returned* from a catch handler must close over the exception
+    // binding so the captured value survives both unwinding and the function
+    // return.  This complements the assignment-form test above (`reader = () => e`).
+    let source = r#"
+        function makeReader() {
+            try {
+                throw 7;
+            } catch (e) {
+                return () => e;
+            }
+        }
+        let reader = makeReader();
+        reader();
+    "#;
+
+    let ir3 = lower_source_to_ir3(source);
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::EnterCatch { .. })),
+        "returned-closure capture source must lower to EnterCatch"
+    );
+    assert!(
+        ir3.instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::CreateClosure { .. })),
+        "returned-closure capture source must materialize a CreateClosure"
+    );
+
+    assert_eq!(
+        eval_source(source),
+        "7",
+        "closure returned from catch must capture the exception binding `e`"
+    );
+}
+
+#[test]
 fn conformance_source_catch_binding_inside_finally_must_not_escape_unwinder() {
     // Edge case: catch-binding inside finally MUST NOT escape the unwinder.
     // Pattern: try { throw e } catch (e) { } finally { try { } catch (e2) { /* uses outer e? must not */ } }

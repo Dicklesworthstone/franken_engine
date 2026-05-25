@@ -1126,6 +1126,7 @@ pub struct RuntimeDecisionCore {
     /// Fallback event sequence counter.
     pub fallback_seq: u64,
     /// Causal tracker for minimal-set inference (FF.1).
+    #[serde(skip)]
     causal_tracker: Option<CausalTracker>,
     /// Computed causal sets for recent decisions.
     pub causal_sets: Vec<MinimalCausalSet>,

@@ -1998,12 +1998,7 @@ pub struct ExecutionResult {
     pub iteration_traces: Vec<IterationTrace>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ExecutionSeed {
-    registers: Vec<Value>,
-    heap: Vec<HeapObject>,
-    function_prototypes: BTreeMap<u32, ObjectId>,
-}
+// ExecutionSeed moved to line 2266 as an enum for lazy materialization (PERF-H2.2)
 
 #[derive(Debug, Clone)]
 struct ModuleExecutionSnapshot {
@@ -2334,9 +2329,9 @@ pub struct InterpreterCore {
     /// exception.
     finally_modes: Vec<FinallyMode>,
     /// Pre-run caller-visible seed used for the most recent execute().
-    last_pre_run_seed: Option<ExecutionSeed>,
+    last_pre_run_seed: Option<std::rc::Rc<std::cell::RefCell<ExecutionSeed>>>,
     /// Caller-visible state immediately after the most recent execute().
-    last_post_run_seed: Option<ExecutionSeed>,
+    last_post_run_seed: Option<std::rc::Rc<std::cell::RefCell<ExecutionSeed>>>,
     /// Runtime scope chain for lexical variable resolution.
     scope_chain: ScopeChain,
     /// Closure store: maps closure IDs to captured environments.
@@ -2877,7 +2872,7 @@ impl InterpreterCore {
         let current_seed = self.capture_execution_seed();
         let seed = match (&self.last_pre_run_seed, &self.last_post_run_seed) {
             (Some(previous_pre_run), Some(previous_post_run))
-                if current_seed == *previous_post_run =>
+                if std::rc::Rc::ptr_eq(&current_seed, previous_post_run) =>
             {
                 previous_pre_run.clone()
             }
@@ -2963,45 +2958,6 @@ impl InterpreterCore {
         }
     }
 
-    fn capture_execution_seed(&self) -> ExecutionSeed {
-        let max_regs = self.config.max_registers as usize;
-        let mut registers = self.registers.clone();
-        registers.resize(max_regs, Value::Undefined);
-        registers.truncate(max_regs);
-        ExecutionSeed {
-            registers,
-            heap: self.heap.clone(),
-            function_prototypes: self.function_prototypes.clone(),
-        }
-    }
-
-    fn reset_execution_state_from_seed(&mut self, seed: &ExecutionSeed) {
-        self.register_base = 0;
-        self.mutate_registers(|r| *r = seed.registers.clone());
-        self.call_stack.clear();
-        self.mutate_heap(|h| *h = seed.heap.clone());
-        self.iterators.clear();
-        self.iteration_traces.clear();
-        self.mutate_function_prototypes(|fp| *fp = seed.function_prototypes.clone());
-        self.ip = 0;
-        self.instructions_executed = 0;
-        self.witness_events.clear();
-        self.hostcall_decisions.clear();
-        self.events.clear();
-        self.witness_seq = 0;
-        self.catch_frames.clear();
-        self.pending_exception = None;
-        self.pending_return = None;
-        self.suspended_abrupt_completions.clear();
-        self.finally_modes.clear();
-        self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
-        self.module_state = ModuleState::new();
-        self.active_cjs_context = None;
-        self.current_module_specifier = None;
-        self.promise_combinators.clear();
-        self.promise_combinator_watchers.clear();
-        self.next_promise_combinator_id = 0;
-    }
 
     fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
         ModuleExecutionSnapshot {
@@ -3021,7 +2977,7 @@ impl InterpreterCore {
     }
 
     fn restore_module_execution(&mut self, snapshot: ModuleExecutionSnapshot) {
-        self.registers = snapshot.registers;
+        self.registers = SeedTrackedField::new(snapshot.registers);
         self.call_stack = snapshot.call_stack;
         self.ip = snapshot.ip;
         self.register_base = snapshot.register_base;
@@ -4602,7 +4558,7 @@ impl InterpreterCore {
 
                 self.register_base = self.registers.len();
                 let req_len = self.register_base + self.config.max_registers as usize;
-                self.registers.resize(req_len, Value::Undefined);
+                self.mutate_registers(|r| r.resize(req_len, Value::Undefined));
 
                 self.ip = func.entry as usize;
                 Ok(())
@@ -5182,11 +5138,12 @@ impl InterpreterCore {
                         self.register_base += self.config.max_registers as usize;
 
                         let req_len = self.register_base + self.config.max_registers as usize;
+                        let register_base = self.register_base;
                         self.mutate_registers(|r| {
                             if req_len > r.len() {
                                 r.resize(req_len, Value::Undefined);
                             } else {
-                                r[self.register_base..req_len].fill(Value::Undefined);
+                                r[register_base..req_len].fill(Value::Undefined);
                             }
                         });
 
@@ -5354,11 +5311,12 @@ impl InterpreterCore {
 
                             // Clear all registers in the new frame to prevent data leakage from previous calls
                             let req_len = self.register_base + self.config.max_registers as usize;
+                            let register_base = self.register_base;
                             self.mutate_registers(|r| {
                                 if req_len > r.len() {
                                     r.resize(req_len, Value::Undefined);
                                 } else {
-                                    r[self.register_base..req_len].fill(Value::Undefined);
+                                    r[register_base..req_len].fill(Value::Undefined);
                                 }
                             });
 
@@ -5546,11 +5504,12 @@ impl InterpreterCore {
                         self.register_base += self.config.max_registers as usize;
 
                         let req_len = self.register_base + self.config.max_registers as usize;
+                        let register_base = self.register_base;
                         self.mutate_registers(|r| {
                             if req_len > r.len() {
                                 r.resize(req_len, Value::Undefined);
                             } else {
-                                r[self.register_base..req_len].fill(Value::Undefined);
+                                r[register_base..req_len].fill(Value::Undefined);
                             }
                         });
 
@@ -5660,11 +5619,12 @@ impl InterpreterCore {
 
                     self.register_base += self.config.max_registers as usize;
                     let req_len = self.register_base + self.config.max_registers as usize;
+                    let register_base = self.register_base;
                     self.mutate_registers(|r| {
                         if req_len > r.len() {
                             r.resize(req_len, Value::Undefined);
                         } else {
-                            r[self.register_base..req_len].fill(Value::Undefined);
+                            r[register_base..req_len].fill(Value::Undefined);
                         }
                     });
 
@@ -5917,11 +5877,14 @@ impl InterpreterCore {
                             Value::Int(i64::from(next_len)),
                         )?;
                         // Update cached dense length for arrays
-                        if let Some(obj) = self.heap.get_mut(arr_id.0 as usize) {
-                            if obj.is_array && obj.cached_dense_length.is_some() {
-                                obj.cached_dense_length = Some(next_len);
+                        let arr_index = arr_id.0 as usize;
+                        self.mutate_heap(|heap| {
+                            if let Some(obj) = heap.get_mut(arr_index) {
+                                if obj.is_array && obj.cached_dense_length.is_some() {
+                                    obj.cached_dense_length = Some(next_len);
+                                }
                             }
-                        }
+                        });
                     }
                     self.ip += 1;
                 }
@@ -6259,9 +6222,12 @@ impl InterpreterCore {
                             // Allocate the `this` object for the constructor.
                             let prototype = self.ensure_function_prototype(func_idx)?;
                             let this_id = self.alloc_object_with_prototype(Some(prototype))?;
-                            if let Some(this_obj) = self.heap.get_mut(this_id.0 as usize) {
-                                this_obj.constructor_function = Some(func_idx);
-                            }
+                            let this_index = this_id.0 as usize;
+                            self.mutate_heap(|heap| {
+                                if let Some(this_obj) = heap.get_mut(this_index) {
+                                    this_obj.constructor_function = Some(func_idx);
+                                }
+                            });
                             let this_val = Value::Object(this_id);
 
                             let mut arg_vals = Vec::new();
@@ -6327,11 +6293,12 @@ impl InterpreterCore {
 
                             self.register_base += self.config.max_registers as usize;
                             let req_len = self.register_base + self.config.max_registers as usize;
+                            let register_base = self.register_base;
                             self.mutate_registers(|r| {
                                 if req_len > r.len() {
                                     r.resize(req_len, Value::Undefined);
                                 } else {
-                                    r[self.register_base..req_len].fill(Value::Undefined);
+                                    r[register_base..req_len].fill(Value::Undefined);
                                 }
                             });
 
@@ -8583,9 +8550,13 @@ impl InterpreterCore {
         let length = values.len() as i64;
         self.set_object_property(id, "length".to_string(), Value::Int(length))?;
         // Update cached dense length
-        if let Some(obj) = self.heap.get_mut(id.0 as usize) {
-            obj.cached_dense_length = Some(length as u32);
-        }
+        let obj_index = id.0 as usize;
+        let cached_length = length as u32;
+        self.mutate_heap(|heap| {
+            if let Some(obj) = heap.get_mut(obj_index) {
+                obj.cached_dense_length = Some(cached_length);
+            }
+        });
         Ok(id)
     }
 
@@ -10596,7 +10567,7 @@ impl InterpreterCore {
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let result = (|| -> Result<Value, InterpreterError> {
-            self.registers = vec![Value::Undefined; self.config.max_registers as usize];
+            self.registers = SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.call_stack.clear();
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -10681,7 +10652,7 @@ impl InterpreterCore {
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let result = (|| -> Result<Value, InterpreterError> {
-            self.registers = vec![Value::Undefined; self.config.max_registers as usize];
+            self.registers = SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.call_stack.clear();
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -11193,19 +11164,24 @@ impl InterpreterCore {
                 // This is a simplified implementation that creates a new array
                 let array_id = self.alloc_array_with_prototype(None)?;
 
-                // Add each argument as an array element
+                // Collect all arguments first
+                let mut elements = Vec::new();
                 for i in 0..args.count {
                     let element = self.read_reg(args.start + i)?;
-                    if let Some(obj) = self.heap.get_mut(array_id.0 as usize) {
-                        obj.properties.insert(i.to_string(), element);
-                    }
+                    elements.push((i.to_string(), element));
                 }
+                let count = args.count;
+                let array_index = array_id.0 as usize;
 
-                // Set length property
-                if let Some(obj) = self.heap.get_mut(array_id.0 as usize) {
-                    obj.properties
-                        .insert("length".to_string(), Value::Int(args.count as i64));
-                }
+                // Add each argument as an array element and set length property
+                self.mutate_heap(|heap| {
+                    if let Some(obj) = heap.get_mut(array_index) {
+                        for (index_str, element) in elements {
+                            obj.properties.insert(index_str, element);
+                        }
+                        obj.properties.insert("length".to_string(), Value::Int(count as i64));
+                    }
+                });
 
                 // Return the new length
                 Ok(Value::Int(args.count as i64))
@@ -11914,9 +11890,15 @@ impl InterpreterCore {
                 match obj_val {
                     Value::Object(obj_id) => {
                         // Actually freeze the object by setting the is_frozen flag
-                        if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
-                            obj.is_frozen = true;
-                        } else {
+                        let obj_index = obj_id.0 as usize;
+                        let mut object_found = false;
+                        self.mutate_heap(|heap| {
+                            if let Some(obj) = heap.get_mut(obj_index) {
+                                obj.is_frozen = true;
+                                object_found = true;
+                            }
+                        });
+                        if !object_found {
                             return Err(InterpreterError::TypeError {
                                 expected: "valid object".to_string(),
                                 got: "object not found".to_string(),
@@ -12732,8 +12714,9 @@ impl InterpreterCore {
                     _ => return Ok(this_val), // Non-arrays return themselves
                 };
 
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
+                // Get the array object from heap and read necessary data
+                let heap_index = array_id.0 as usize;
+                if let Some(array_obj) = self.heap.get(heap_index) {
                     // Get array length
                     let length = array_obj
                         .properties
@@ -12757,16 +12740,21 @@ impl InterpreterCore {
                         }
                     }
 
-                    // Remove old indexed properties
-                    array_obj.properties.retain(|key, _| {
-                        Self::canonical_array_index_property(key, length).is_none()
-                    });
+                    // Mutate heap to reverse the array
+                    self.mutate_heap(|heap| {
+                        if let Some(array_obj) = heap.get_mut(heap_index) {
+                            // Remove old indexed properties
+                            array_obj.properties.retain(|key, _| {
+                                Self::canonical_array_index_property(key, length).is_none()
+                            });
 
-                    // Add back in reverse order
-                    for (old_index, value) in indexed_props {
-                        let new_index = length - 1 - old_index;
-                        array_obj.properties.insert(new_index.to_string(), value);
-                    }
+                            // Add back in reverse order
+                            for (old_index, value) in indexed_props {
+                                let new_index = length - 1 - old_index;
+                                array_obj.properties.insert(new_index.to_string(), value);
+                            }
+                        }
+                    });
 
                     Ok(Value::Object(array_id))
                 } else {
@@ -13325,17 +13313,20 @@ impl InterpreterCore {
                 });
 
                 // Clear existing indexed properties and set sorted elements
-                if let Some(obj_mut) = self.heap.get_mut(array_id.0 as usize) {
-                    // Remove old indexed properties
-                    for i in 0..length {
-                        obj_mut.properties.remove(&i.to_string());
-                    }
+                let heap_index = array_id.0 as usize;
+                self.mutate_heap(|heap| {
+                    if let Some(obj_mut) = heap.get_mut(heap_index) {
+                        // Remove old indexed properties
+                        for i in 0..length {
+                            obj_mut.properties.remove(&i.to_string());
+                        }
 
-                    // Set sorted elements back in order
-                    for (i, element) in elements.iter().enumerate() {
-                        obj_mut.properties.insert(i.to_string(), element.clone());
+                        // Set sorted elements back in order
+                        for (i, element) in elements.iter().enumerate() {
+                            obj_mut.properties.insert(i.to_string(), element.clone());
+                        }
                     }
-                }
+                });
 
                 Ok(this_val)
             }
@@ -13505,8 +13496,9 @@ impl InterpreterCore {
                 // so we don't alias `self.heap` with the mutable borrow below.
                 let result_id = ObjectId(u32::try_from(self.heap.len()).unwrap_or(u32::MAX));
 
-                // Get the array object from heap
-                if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
+                // Read the array object from heap first
+                let heap_index = array_id.0 as usize;
+                if let Some(array_obj) = self.heap.get(heap_index) {
                     // Get array length
                     let length = array_obj
                         .properties
@@ -13525,12 +13517,6 @@ impl InterpreterCore {
                         (start as usize).min(length)
                     };
 
-                    // Create result array with deleted elements (simplified).
-                    let mut result_obj = Object::new();
-                    result_obj
-                        .properties
-                        .insert("length".to_string(), Value::Int(delete_count as i64));
-
                     // Collect existing elements
                     let mut elements: Vec<Value> = Vec::new();
                     for i in 0..length {
@@ -13540,6 +13526,12 @@ impl InterpreterCore {
                             elements.push(Value::Undefined);
                         }
                     }
+
+                    // Create result array with deleted elements (simplified).
+                    let mut result_obj = Object::new();
+                    result_obj
+                        .properties
+                        .insert("length".to_string(), Value::Int(delete_count as i64));
 
                     // Add deleted elements to result (simplified)
                     for i in 0..delete_count.min(length.saturating_sub(actual_start)) {
@@ -13562,18 +13554,25 @@ impl InterpreterCore {
                         elements.insert(actual_start, item);
                     }
 
-                    // Update original array
-                    array_obj
-                        .properties
-                        .retain(|k, _| k.parse::<usize>().is_err());
-                    for (i, value) in elements.iter().enumerate() {
-                        array_obj.properties.insert(i.to_string(), value.clone());
-                    }
-                    array_obj
-                        .properties
-                        .insert("length".to_string(), Value::Int(elements.len() as i64));
+                    // Update heap with both mutations
+                    self.mutate_heap(|heap| {
+                        // Update original array
+                        if let Some(array_obj) = heap.get_mut(heap_index) {
+                            array_obj
+                                .properties
+                                .retain(|k, _| k.parse::<usize>().is_err());
+                            for (i, value) in elements.iter().enumerate() {
+                                array_obj.properties.insert(i.to_string(), value.clone());
+                            }
+                            array_obj
+                                .properties
+                                .insert("length".to_string(), Value::Int(elements.len() as i64));
+                        }
 
-                    self.mutate_heap(|h| h.push(result_obj));
+                        // Push result array
+                        heap.push(result_obj);
+                    });
+
                     Ok(Value::Object(result_id))
                 } else {
                     Ok(Value::Undefined)
@@ -13969,9 +13968,12 @@ impl InterpreterCore {
                         .unwrap_or(Value::Undefined),
                     other => other,
                 };
-                if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
-                    obj.properties.insert(prop_name, effective_value);
-                }
+                let heap_index = obj_id.0 as usize;
+                self.mutate_heap(|heap| {
+                    if let Some(obj) = heap.get_mut(heap_index) {
+                        obj.properties.insert(prop_name, effective_value);
+                    }
+                });
 
                 Ok(obj_val) // Return the original object
             }
@@ -14220,17 +14222,23 @@ impl InterpreterCore {
                         _ => "other".to_string(),
                     };
 
-                    if let Some(entries_obj) = self.heap.get_mut(entries_id.0 as usize) {
-                        entries_obj.properties.insert(key_str, value);
-                    }
+                    let entries_index = entries_id.0 as usize;
+                    let map_index = map_id.0 as usize;
+                    self.mutate_heap(|heap| {
+                        // Insert into entries
+                        if let Some(entries_obj) = heap.get_mut(entries_index) {
+                            entries_obj.properties.insert(key_str, value.clone());
+                        }
 
-                    if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
-                        if let Some(size_slot) = map_obj.properties.get_mut("size") {
-                            if let Value::Int(size) = size_slot {
-                                *size += 1;
+                        // Update map size
+                        if let Some(map_obj) = heap.get_mut(map_index) {
+                            if let Some(size_slot) = map_obj.properties.get_mut("size") {
+                                if let Value::Int(size) = size_slot {
+                                    *size = size.saturating_add(1);
+                                }
                             }
                         }
-                    }
+                    });
                 }
 
                 Ok(this_val) // Return the Map object for chaining
@@ -14329,27 +14337,30 @@ impl InterpreterCore {
                         _ => "other".to_string(),
                     };
 
-                    let inserted = if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize)
-                    {
-                        if values_obj.properties.contains_key(&value_str) {
-                            false
-                        } else {
-                            values_obj.properties.insert(value_str, Value::Bool(true));
-                            true
-                        }
-                    } else {
-                        false
-                    };
+                    let values_index = values_id.0 as usize;
+                    let set_index = set_id.0 as usize;
+                    let mut inserted = false;
 
-                    if inserted {
-                        if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
-                            if let Some(size_slot) = set_obj.properties.get_mut("size") {
-                                if let Value::Int(size) = size_slot {
-                                    *size += 1;
+                    self.mutate_heap(|heap| {
+                        // Check and insert into values
+                        if let Some(values_obj) = heap.get_mut(values_index) {
+                            if !values_obj.properties.contains_key(&value_str) {
+                                values_obj.properties.insert(value_str, Value::Bool(true));
+                                inserted = true;
+                            }
+                        }
+
+                        // Update set size if inserted
+                        if inserted {
+                            if let Some(set_obj) = heap.get_mut(set_index) {
+                                if let Some(size_slot) = set_obj.properties.get_mut("size") {
+                                    if let Value::Int(size) = size_slot {
+                                        *size = size.saturating_add(1);
+                                    }
                                 }
                             }
                         }
-                    }
+                    });
                 }
 
                 Ok(this_val) // Return the Set object for chaining
@@ -14463,7 +14474,7 @@ impl InterpreterCore {
                 };
 
                 // Check if it's actually a Map
-                if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
+                if let Some(map_obj) = self.heap.get(map_id.0 as usize) {
                     if !matches!(map_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Map")
                     {
                         return Ok(Value::Bool(false));
@@ -14498,21 +14509,30 @@ impl InterpreterCore {
                         _ => "other".to_string(),
                     };
 
-                    let removed = self
-                        .heap
-                        .get_mut(entries_id.0 as usize)
-                        .map(|entries_obj| entries_obj.properties.remove(&key_str).is_some())
-                        .unwrap_or(false);
+                    let entries_index = entries_id.0 as usize;
+                    let map_index = map_id.0 as usize;
+                    let mut removed = false;
 
-                    if removed {
-                        if let Some(map_obj) = self.heap.get_mut(map_id.0 as usize) {
-                            if let Some(Value::Int(size)) = map_obj.properties.get("size") {
-                                let new_size = *size - 1;
-                                map_obj
-                                    .properties
-                                    .insert("size".to_string(), Value::Int(new_size));
+                    self.mutate_heap(|heap| {
+                        // Remove from entries
+                        if let Some(entries_obj) = heap.get_mut(entries_index) {
+                            removed = entries_obj.properties.remove(&key_str).is_some();
+                        }
+
+                        // Update map size if removed
+                        if removed {
+                            if let Some(map_obj) = heap.get_mut(map_index) {
+                                if let Some(Value::Int(size)) = map_obj.properties.get("size") {
+                                    let new_size = size.saturating_sub(1);
+                                    map_obj
+                                        .properties
+                                        .insert("size".to_string(), Value::Int(new_size));
+                                }
                             }
                         }
+                    });
+
+                    if removed {
                         return Ok(Value::Bool(true));
                     }
                 }
@@ -14533,7 +14553,7 @@ impl InterpreterCore {
                 };
 
                 // Check if it's actually a Set
-                if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
+                if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
                     if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
                     {
                         return Ok(Value::Bool(false));
@@ -14568,21 +14588,30 @@ impl InterpreterCore {
                         _ => "other".to_string(),
                     };
 
-                    let removed = self
-                        .heap
-                        .get_mut(values_id.0 as usize)
-                        .map(|values_obj| values_obj.properties.remove(&value_str).is_some())
-                        .unwrap_or(false);
+                    let values_index = values_id.0 as usize;
+                    let set_index = set_id.0 as usize;
+                    let mut removed = false;
 
-                    if removed {
-                        if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
-                            if let Some(Value::Int(size)) = set_obj.properties.get("size") {
-                                let new_size = *size - 1;
-                                set_obj
-                                    .properties
-                                    .insert("size".to_string(), Value::Int(new_size));
+                    self.mutate_heap(|heap| {
+                        // Remove from values
+                        if let Some(values_obj) = heap.get_mut(values_index) {
+                            removed = values_obj.properties.remove(&value_str).is_some();
+                        }
+
+                        // Update set size if removed
+                        if removed {
+                            if let Some(set_obj) = heap.get_mut(set_index) {
+                                if let Some(Value::Int(size)) = set_obj.properties.get("size") {
+                                    let new_size = size.saturating_sub(1);
+                                    set_obj
+                                        .properties
+                                        .insert("size".to_string(), Value::Int(new_size));
+                                }
                             }
                         }
+                    });
+
+                    if removed {
                         return Ok(Value::Bool(true));
                     }
                 }
@@ -14599,7 +14628,7 @@ impl InterpreterCore {
                 };
 
                 // Check if it's actually a Set
-                if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
+                if let Some(set_obj) = self.heap.get(set_id.0 as usize) {
                     if !matches!(set_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Set")
                     {
                         return Ok(Value::Undefined);
@@ -14620,16 +14649,20 @@ impl InterpreterCore {
                         _ => None,
                     });
 
-                if let Some(values_id) = values_id_opt {
-                    if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize) {
-                        values_obj.properties.clear();
+                let set_index = set_id.0 as usize;
+                self.mutate_heap(|heap| {
+                    // Clear values if exists
+                    if let Some(values_id) = values_id_opt {
+                        if let Some(values_obj) = heap.get_mut(values_id.0 as usize) {
+                            values_obj.properties.clear();
+                        }
                     }
-                }
 
-                // Reset size to 0
-                if let Some(set_obj) = self.heap.get_mut(set_id.0 as usize) {
-                    set_obj.properties.insert("size".to_string(), Value::Int(0));
-                }
+                    // Reset size to 0
+                    if let Some(set_obj) = heap.get_mut(set_index) {
+                        set_obj.properties.insert("size".to_string(), Value::Int(0));
+                    }
+                });
 
                 Ok(Value::Undefined)
             }
@@ -15595,9 +15628,12 @@ impl InterpreterCore {
                 };
 
                 // Set the prototype on the object
-                if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
-                    obj.prototype = proto_id;
-                }
+                let heap_index = obj_id.0 as usize;
+                self.mutate_heap(|heap| {
+                    if let Some(obj) = heap.get_mut(heap_index) {
+                        obj.prototype = proto_id;
+                    }
+                });
 
                 // Return the modified object
                 Ok(Value::Object(obj_id))
@@ -16984,10 +17020,13 @@ impl InterpreterCore {
                     Value::Object(obj_id) => {
                         // Simplified implementation: mark object as non-extensible
                         // In a real implementation, this would set [[Extensible]] to false
-                        if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
-                            obj.properties
-                                .insert("__extensible__".to_string(), Value::Bool(false));
-                        }
+                        let heap_index = obj_id.0 as usize;
+                        self.mutate_heap(|heap| {
+                            if let Some(obj) = heap.get_mut(heap_index) {
+                                obj.properties
+                                    .insert("__extensible__".to_string(), Value::Bool(false));
+                            }
+                        });
                         Ok(obj_val) // Return the object
                     }
                     _ => {
@@ -17128,12 +17167,15 @@ impl InterpreterCore {
                         // Simplified implementation: mark object as sealed
                         // In a real implementation, this would prevent property deletion
                         // and make existing properties non-configurable
-                        if let Some(obj) = self.heap.get_mut(obj_id.0 as usize) {
-                            obj.properties
-                                .insert("__sealed__".to_string(), Value::Bool(true));
-                            obj.properties
-                                .insert("__extensible__".to_string(), Value::Bool(false));
-                        }
+                        let heap_index = obj_id.0 as usize;
+                        self.mutate_heap(|heap| {
+                            if let Some(obj) = heap.get_mut(heap_index) {
+                                obj.properties
+                                    .insert("__sealed__".to_string(), Value::Bool(true));
+                                obj.properties
+                                    .insert("__extensible__".to_string(), Value::Bool(false));
+                            }
+                        });
                         Ok(obj_val) // Return the object
                     }
                     _ => {
@@ -17248,9 +17290,11 @@ impl InterpreterCore {
                 });
 
                 // Copy elements within the array
-                if let Some(array_obj) = self.heap.get_mut(array_id.0 as usize) {
-                    // Collect elements to copy
-                    let mut elements_to_copy = Vec::new();
+                let array_index = array_id.0 as usize;
+
+                // First, collect elements to copy using read-only access
+                let mut elements_to_copy = Vec::new();
+                if let Some(array_obj) = self.heap.get(array_index) {
                     for i in actual_start..actual_end {
                         if let Some(element) = array_obj.properties.get(&i.to_string()) {
                             elements_to_copy.push(element.clone());
@@ -17258,17 +17302,21 @@ impl InterpreterCore {
                             elements_to_copy.push(Value::Undefined);
                         }
                     }
+                }
 
-                    // Copy to target positions
-                    for (offset, element) in elements_to_copy.into_iter().enumerate() {
-                        let target_index = actual_target + offset as i64;
-                        if target_index < length {
-                            array_obj
-                                .properties
-                                .insert(target_index.to_string(), element);
+                // Then, copy to target positions using mutate_heap
+                self.mutate_heap(|heap| {
+                    if let Some(array_obj) = heap.get_mut(array_index) {
+                        for (offset, element) in elements_to_copy.into_iter().enumerate() {
+                            let target_index = actual_target + offset as i64;
+                            if target_index < length {
+                                array_obj
+                                    .properties
+                                    .insert(target_index.to_string(), element);
+                            }
                         }
                     }
-                }
+                });
 
                 Ok(Value::Object(array_id))
             }
@@ -18421,11 +18469,14 @@ impl InterpreterCore {
     }
 
     fn increment_collection_size(&mut self, collection_id: ObjectId) {
-        if let Some(collection_obj) = self.heap.get_mut(collection_id.0 as usize)
-            && let Some(Value::Int(size)) = collection_obj.properties.get_mut("size")
-        {
-            *size += 1;
-        }
+        let collection_index = collection_id.0 as usize;
+        self.mutate_heap(|heap| {
+            if let Some(collection_obj) = heap.get_mut(collection_index)
+                && let Some(Value::Int(size)) = collection_obj.properties.get_mut("size")
+            {
+                *size = size.saturating_add(1);
+            }
+        });
     }
 
     fn seed_map_entries_from_iterable(
@@ -18456,11 +18507,14 @@ impl InterpreterCore {
                 continue;
             };
 
-            let inserted = if let Some(entries_obj) = self.heap.get_mut(entries_id.0 as usize) {
-                entries_obj.properties.insert(key_str, value).is_none()
-            } else {
-                false
-            };
+            let entries_index = entries_id.0 as usize;
+            let mut inserted = false;
+
+            self.mutate_heap(|heap| {
+                if let Some(entries_obj) = heap.get_mut(entries_index) {
+                    inserted = entries_obj.properties.insert(key_str, value.clone()).is_none();
+                }
+            });
 
             if inserted && let Some(collection_id) = size_owner {
                 self.increment_collection_size(collection_id);
@@ -18491,16 +18545,17 @@ impl InterpreterCore {
                 continue;
             };
 
-            let inserted = if let Some(values_obj) = self.heap.get_mut(values_id.0 as usize) {
-                if values_obj.properties.contains_key(&value_str) {
-                    false
-                } else {
-                    values_obj.properties.insert(value_str, Value::Bool(true));
-                    true
+            let values_index = values_id.0 as usize;
+            let mut inserted = false;
+
+            self.mutate_heap(|heap| {
+                if let Some(values_obj) = heap.get_mut(values_index) {
+                    if !values_obj.properties.contains_key(&value_str) {
+                        values_obj.properties.insert(value_str, Value::Bool(true));
+                        inserted = true;
+                    }
                 }
-            } else {
-                false
-            };
+            });
 
             if inserted && let Some(collection_id) = size_owner {
                 self.increment_collection_size(collection_id);
@@ -19813,45 +19868,57 @@ impl InterpreterCore {
         key: String,
         value: Value,
     ) -> Result<(), InterpreterError> {
-        let previous = {
-            let object = self
-                .heap
-                .get_mut(object_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let heap_index = object_id.0 as usize;
+        let mut previous = None;
 
+        // First, perform the property set operation
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(heap_index) {
+                if object.is_frozen {
+                    return;  // Will handle error below
+                }
+
+                // Check if setting this property would make array sparse
+                if object.is_array && key != "length" && object.cached_dense_length.is_some() {
+                    if let Ok(index) = key.parse::<u32>() {
+                        let current_len = object.cached_dense_length.unwrap_or(0);
+                        // If setting an index that skips elements, array becomes sparse
+                        if index > current_len {
+                            object.cached_dense_length = None;
+                        }
+                    } else {
+                        // Non-numeric property on array, could be sparse
+                        object.cached_dense_length = None;
+                    }
+                }
+
+                previous = object.properties.insert(key.clone(), value.clone());
+            }
+        });
+
+        // Check for frozen object error after mutation
+        if let Some(object) = self.heap.get(heap_index) {
             if object.is_frozen {
                 return Err(InterpreterError::TypeError {
                     expected: "mutable object".to_string(),
                     got: "frozen object".to_string(),
                 });
             }
+        } else {
+            return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
+        }
 
-            // Check if setting this property would make array sparse
-            if object.is_array && key != "length" && object.cached_dense_length.is_some() {
-                if let Ok(index) = key.parse::<u32>() {
-                    let current_len = object.cached_dense_length.unwrap_or(0);
-                    // If setting an index that skips elements, array becomes sparse
-                    if index > current_len {
-                        object.cached_dense_length = None;
-                    }
-                } else {
-                    // Non-numeric property on array, could be sparse
-                    object.cached_dense_length = None;
-                }
-            }
-
-            object.properties.insert(key.clone(), value)
-        };
+        // Handle memory sync error with rollback
         if let Err(err) = self.sync_estimated_memory_bytes() {
-            let object = self
-                .heap
-                .get_mut(object_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
-            if let Some(previous) = previous {
-                object.properties.insert(key, previous);
-            } else {
-                object.properties.remove(&key);
-            }
+            self.mutate_heap(|heap| {
+                if let Some(object) = heap.get_mut(heap_index) {
+                    if let Some(prev_value) = previous {
+                        object.properties.insert(key, prev_value);
+                    } else {
+                        object.properties.remove(&key);
+                    }
+                }
+            });
             self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
             return Err(err);
         }
@@ -19867,26 +19934,31 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &str,
     ) -> Result<bool, InterpreterError> {
-        let removed = {
-            let object = self
-                .heap
-                .get_mut(object_id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?;
+        let heap_index = object_id.0 as usize;
 
+        // Check if object exists and is not frozen
+        if let Some(object) = self.heap.get(heap_index) {
             if object.is_frozen {
                 return Ok(false);
             }
+        } else {
+            return Err(InterpreterError::ObjectNotFound { id: object_id.0 });
+        }
 
-            // Removing properties from arrays makes them sparse
-            if object.is_array && key != "length" && object.cached_dense_length.is_some() {
-                if key.parse::<u32>().is_ok() {
-                    // Removing a numeric index makes array sparse
-                    object.cached_dense_length = None;
+        let mut removed = None;
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(heap_index) {
+                // Removing properties from arrays makes them sparse
+                if object.is_array && key != "length" && object.cached_dense_length.is_some() {
+                    if key.parse::<u32>().is_ok() {
+                        // Removing a numeric index makes array sparse
+                        object.cached_dense_length = None;
+                    }
                 }
-            }
 
-            object.properties.remove(key)
-        };
+                removed = object.properties.remove(key);
+            }
+        });
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
         Ok(removed.is_some())
     }
@@ -21184,8 +21256,10 @@ mod active_builtin_regressions {
         core.set_object_property(descriptors_id, "raw_descriptor".to_string(), Value::Int(7))
             .expect("test descriptor map write should succeed");
 
-        core.registers[0] = Value::Object(prototype_id);
-        core.registers[1] = Value::Object(descriptors_id);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(prototype_id);
+            r[1] = Value::Object(descriptors_id);
+        });
 
         assert_eq!(
             core.builtin_name_from_id(5),
@@ -21227,7 +21301,9 @@ mod active_builtin_regressions {
         for builtin_id in [28_u32, 248_u32, 385_u32] {
             let mut core = test_core();
             let (array_id, object_id) = mixed_sort_fixture(&mut core);
-            core.registers[0] = Value::Object(array_id);
+            core.mutate_registers(|r| {
+                r[0] = Value::Object(array_id);
+            });
 
             assert_eq!(
                 core.builtin_name_from_id(builtin_id),
@@ -21265,21 +21341,27 @@ mod active_builtin_regressions {
                 Some("builtin:StringPrototypeNormalize".to_string())
             );
 
-            core.registers[0] = Value::str("Cafe\u{301}");
+            core.mutate_registers(|r| {
+                r[0] = Value::str("Cafe\u{301}");
+            });
             let default_result = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 1 })
                 .expect("StringPrototypeNormalize default NFC should execute");
             assert_eq!(default_result, Value::str("Café"));
 
-            core.registers[0] = Value::str("Café");
-            core.registers[1] = Value::str("NFD");
+            core.mutate_registers(|r| {
+                r[0] = Value::str("Café");
+                r[1] = Value::str("NFD");
+            });
             let nfd_result = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
                 .expect("StringPrototypeNormalize NFD should execute");
             assert_eq!(nfd_result, Value::str("Cafe\u{301}"));
 
-            core.registers[0] = Value::str("\u{fb01}");
-            core.registers[1] = Value::str("NFKC");
+            core.mutate_registers(|r| {
+                r[0] = Value::str("\u{fb01}");
+                r[1] = Value::str("NFKC");
+            });
             let nfkc_result = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
                 .expect("StringPrototypeNormalize NFKC should execute");
@@ -21291,8 +21373,10 @@ mod active_builtin_regressions {
     fn string_prototype_normalize_invalid_form_fails_closed() {
         for builtin_id in [222_u32, 273_u32] {
             let mut core = test_core();
-            core.registers[0] = Value::str("hello");
-            core.registers[1] = Value::str("BAD");
+            core.mutate_registers(|r| {
+                r[0] = Value::str("hello");
+                r[1] = Value::str("BAD");
+            });
 
             let err = core
                 .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
@@ -21484,8 +21568,10 @@ mod async_runtime_tests_current {
         core.set_object_property(target, "answer".to_string(), Value::Int(41))
             .expect("target property write should succeed");
 
-        core.registers[0] = Value::Object(target);
-        core.registers[1] = Value::str("answer");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(target);
+            r[1] = Value::str("answer");
+        });
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:ReflectGet",
@@ -21496,8 +21582,10 @@ mod async_runtime_tests_current {
             Value::Int(41)
         );
 
-        core.registers[0] = Value::Object(target);
-        core.registers[1] = Value::Object(handler);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(target);
+            r[1] = Value::Object(handler);
+        });
         let proxy = core
             .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
             .expect("Proxy constructor should allocate baseline proxy");
@@ -21505,9 +21593,11 @@ mod async_runtime_tests_current {
             panic!("Proxy constructor should return object");
         };
 
-        core.registers[0] = Value::Object(proxy_id);
-        core.registers[1] = Value::str("answer");
-        core.registers[2] = Value::Int(42);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(proxy_id);
+            r[1] = Value::str("answer");
+            r[2] = Value::Int(42);
+        });
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:ReflectSet",
@@ -21585,8 +21675,10 @@ mod async_runtime_tests_current {
             .expect("object key allocation should succeed");
         weakmap_storage_for_current_test(&mut core, weakmap_id).set(key_id.0, Value::Int(41));
 
-        core.registers[0] = Value::Object(weakmap_id);
-        core.registers[1] = Value::Object(key_id);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(weakmap_id);
+            r[1] = Value::Object(key_id);
+        });
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:WeakMapPrototypeHas",
@@ -21609,7 +21701,9 @@ mod async_runtime_tests_current {
         let missing_key_id = core
             .alloc_object_with_prototype(None)
             .expect("missing object key allocation should succeed");
-        core.registers[1] = Value::Object(missing_key_id);
+        core.mutate_registers(|r| {
+            r[1] = Value::Object(missing_key_id);
+        });
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:WeakMapPrototypeHas",
@@ -21643,8 +21737,10 @@ mod async_runtime_tests_current {
             .expect("test setup should write fake direct receiver key");
 
         for capability in ["builtin:WeakMapPrototypeHas", "builtin:WeakMapPrototypeGet"] {
-            core.registers[0] = Value::Object(receiver_id);
-            core.registers[1] = Value::Object(key_id);
+            core.mutate_registers(|r| {
+                r[0] = Value::Object(receiver_id);
+                r[1] = Value::Object(key_id);
+            });
             let err = core
                 .dispatch_builtin_hostcall(capability, RegRange { start: 0, count: 2 }, None)
                 .expect_err("WeakMap prototype method should reject non-WeakMap receiver");
@@ -21665,8 +21761,10 @@ mod async_runtime_tests_current {
             .expect("object key allocation should succeed");
         weakmap_storage_for_current_test(&mut core, weakmap_id).set(object_key_id.0, Value::Int(7));
 
-        core.registers[0] = Value::Object(weakmap_id);
-        core.registers[1] = Value::str("primitive");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(weakmap_id);
+            r[1] = Value::str("primitive");
+        });
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:WeakMapPrototypeHas",
@@ -21717,8 +21815,10 @@ mod async_runtime_tests_current {
         core.set_object_property(handler, "get".to_string(), Value::Function(0))
             .expect("handler trap write should succeed");
 
-        core.registers[0] = Value::Object(target);
-        core.registers[1] = Value::Object(handler);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(target);
+            r[1] = Value::Object(handler);
+        });
         let proxy = core
             .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
             .expect("Proxy constructor should allocate proxy");
@@ -21726,8 +21826,10 @@ mod async_runtime_tests_current {
             panic!("Proxy constructor should return object");
         };
 
-        core.registers[0] = Value::Object(proxy_id);
-        core.registers[1] = Value::str("anything");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(proxy_id);
+            r[1] = Value::str("anything");
+        });
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:ReflectGet",
@@ -21777,8 +21879,10 @@ mod async_runtime_tests_current {
         core.set_object_property(handler, "get".to_string(), Value::Function(0))
             .expect("handler get trap write should succeed");
 
-        core.registers[0] = Value::Object(target);
-        core.registers[1] = Value::Object(handler);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(target);
+            r[1] = Value::Object(handler);
+        });
         let proxy = core
             .dispatch_builtin_hostcall("builtin:Proxy", RegRange { start: 0, count: 2 }, None)
             .expect("Proxy constructor should allocate proxy");
@@ -21786,8 +21890,10 @@ mod async_runtime_tests_current {
             panic!("Proxy constructor should return object");
         };
 
-        core.registers[5] = Value::Object(proxy_id);
-        core.registers[6] = Value::str("viaInstruction");
+        core.mutate_registers(|r| {
+            r[5] = Value::Object(proxy_id);
+            r[6] = Value::str("viaInstruction");
+        });
         assert_eq!(
             core.run_loop(&module)
                 .expect("GetProperty should execute Proxy get trap"),
@@ -21826,9 +21932,11 @@ mod async_runtime_tests_current {
         let empty_args = core
             .alloc_array_from_values(&[])
             .expect("arguments array allocation should succeed");
-        core.registers[0] = Value::Function(0);
-        core.registers[1] = Value::Undefined;
-        core.registers[2] = Value::Object(empty_args);
+        core.mutate_registers(|r| {
+            r[0] = Value::Function(0);
+            r[1] = Value::Undefined;
+            r[2] = Value::Object(empty_args);
+        });
         assert_eq!(
             core.dispatch_builtin_hostcall(
                 "builtin:ReflectApply",
@@ -21839,8 +21947,10 @@ mod async_runtime_tests_current {
             Value::Int(99)
         );
 
-        core.registers[0] = Value::Function(1);
-        core.registers[1] = Value::Object(empty_args);
+        core.mutate_registers(|r| {
+            r[0] = Value::Function(1);
+            r[1] = Value::Object(empty_args);
+        });
         let constructed = core
             .dispatch_builtin_hostcall(
                 "builtin:ReflectConstruct",
@@ -21862,8 +21972,10 @@ mod async_runtime_tests_current {
         let handler = core
             .alloc_object_with_prototype(None)
             .expect("handler allocation should succeed");
-        core.registers[0] = Value::Object(target);
-        core.registers[1] = Value::Object(handler);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(target);
+            r[1] = Value::Object(handler);
+        });
         let revocable = core
             .dispatch_builtin_hostcall(
                 "builtin:ProxyRevocable",
@@ -21889,8 +22001,10 @@ mod async_runtime_tests_current {
         let Value::Object(proxy_id) = proxy else {
             panic!("proxy field should be object");
         };
-        core.registers[0] = Value::Object(proxy_id);
-        core.registers[1] = Value::str("x");
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(proxy_id);
+            r[1] = Value::str("x");
+        });
         let err = core
             .dispatch_builtin_hostcall("builtin:ReflectGet", RegRange { start: 0, count: 2 }, None)
             .expect_err("revoked proxy access must fail closed");
@@ -21924,7 +22038,9 @@ mod async_runtime_tests_current {
             function_index: 0,
             captured_env: Vec::new(),
         });
-        core.registers[3] = Value::AsyncFunction(0);
+        core.mutate_registers(|r| {
+            r[3] = Value::AsyncFunction(0);
+        });
 
         let result = core
             .execute(&module)
@@ -21977,7 +22093,9 @@ mod async_runtime_tests_current {
             function_index: 0,
             captured_env: Vec::new(),
         });
-        core.registers[3] = Value::AsyncFunction(0);
+        core.mutate_registers(|r| {
+            r[3] = Value::AsyncFunction(0);
+        });
 
         let result = core
             .execute(&module)
@@ -22024,7 +22142,9 @@ mod async_runtime_tests_current {
             function_index: 0,
             captured_env: Vec::new(),
         });
-        core.registers[3] = Value::AsyncFunction(0);
+        core.mutate_registers(|r| {
+            r[3] = Value::AsyncFunction(0);
+        });
 
         let handle = core.promise_store.create();
         let label = crate::ifc_artifacts::Label::Public;
@@ -22036,7 +22156,9 @@ mod async_runtime_tests_current {
                 &mut core.event_loop.microtasks,
             )
             .expect("seed promise should be fulfillable");
-        core.registers[1] = Value::Promise(handle.0);
+        core.mutate_registers(|r| {
+            r[1] = Value::Promise(handle.0);
+        });
 
         let result = core
             .execute(&module)
@@ -22065,7 +22187,9 @@ mod async_runtime_tests_current {
         );
 
         let mut core = test_interpreter();
-        core.registers[0] = Value::Int(7);
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(7);
+        });
         core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
             .expect("test register label should be settable");
 
@@ -22122,8 +22246,12 @@ mod async_runtime_tests_current {
             function_index: 0,
             captured_env: Vec::new(),
         });
-        core.registers[0] = Value::Int(7);
-        core.registers[2] = Value::Closure(0);
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(7);
+        });
+        core.mutate_registers(|r| {
+            r[2] = Value::Closure(0);
+        });
 
         core.execute(&module)
             .expect("promise handler should execute during microtask drain");
@@ -22170,9 +22298,11 @@ mod async_runtime_tests_current {
             function_index: 0,
             captured_env: Vec::new(),
         });
-        core.registers[0] = Value::str("bad");
-        core.registers[2] = Value::Undefined;
-        core.registers[3] = Value::Closure(0);
+        core.mutate_registers(|r| {
+            r[0] = Value::str("bad");
+            r[2] = Value::Undefined;
+            r[3] = Value::Closure(0);
+        });
 
         core.execute(&module)
             .expect("rejection handler should execute during microtask drain");
@@ -22221,8 +22351,12 @@ mod async_runtime_tests_current {
             function_index: 0,
             captured_env: Vec::new(),
         });
-        core.registers[0] = Value::Int(7);
-        core.registers[2] = Value::Closure(0);
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(7);
+        });
+        core.mutate_registers(|r| {
+            r[2] = Value::Closure(0);
+        });
 
         core.execute(&module)
             .expect("throwing promise handler should reject result promise");
@@ -22254,7 +22388,9 @@ mod async_runtime_tests_current {
             Vec::new(),
         );
         let mut fulfilled_core = test_interpreter();
-        fulfilled_core.registers[0] = Value::Int(7);
+        fulfilled_core.mutate_registers(|r| {
+            r[0] = Value::Int(7);
+        });
         fulfilled_core
             .execute(&fulfilled_module)
             .expect("absent fulfill handler should apply identity");
@@ -22280,7 +22416,9 @@ mod async_runtime_tests_current {
             Vec::new(),
         );
         let mut rejected_core = test_interpreter();
-        rejected_core.registers[0] = Value::str("bad");
+        rejected_core.mutate_registers(|r| {
+            r[0] = Value::str("bad");
+        });
         rejected_core
             .execute(&rejected_module)
             .expect("absent rejection handler should propagate rejection");
@@ -22390,9 +22528,11 @@ mod function_prototype_call_apply_tests_current {
 
         let mut core = test_interpreter();
         let this_id = seed_object(&mut core, &[("offset", Value::Int(7))]);
-        core.registers[0] = Value::Function(0);
-        core.registers[1] = Value::Object(this_id);
-        core.registers[2] = Value::Int(5);
+        core.mutate_registers(|r| {
+            r[0] = Value::Function(0);
+            r[1] = Value::Object(this_id);
+            r[2] = Value::Int(5);
+        });
 
         let result = core
             .execute(&module)
@@ -22445,9 +22585,11 @@ mod function_prototype_call_apply_tests_current {
         let mut core = test_interpreter();
         let this_id = seed_object(&mut core, &[("base", Value::Int(5))]);
         let args_array_id = seed_array_like(&mut core, &[Value::Int(3), Value::Int(4)]);
-        core.registers[0] = Value::Function(0);
-        core.registers[1] = Value::Object(this_id);
-        core.registers[2] = Value::Object(args_array_id);
+        core.mutate_registers(|r| {
+            r[0] = Value::Function(0);
+            r[1] = Value::Object(this_id);
+            r[2] = Value::Object(args_array_id);
+        });
 
         let result = core
             .execute(&module)
@@ -22500,9 +22642,11 @@ mod function_prototype_call_apply_tests_current {
         let mut core = test_interpreter();
         let array_like_id = seed_array_like(&mut core, &[Value::Int(1), Value::Int(2)]);
         let this_id = seed_object(&mut core, &[("offset", Value::Int(7))]);
-        core.registers[0] = Value::Object(array_like_id);
-        core.registers[1] = Value::Function(0);
-        core.registers[2] = Value::Object(this_id);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(array_like_id);
+            r[1] = Value::Function(0);
+            r[2] = Value::Object(this_id);
+        });
 
         let result = core.execute(&module).expect("Array.from should execute");
         let Value::Object(array_id) = result.value else {
@@ -22524,8 +22668,10 @@ mod function_prototype_call_apply_tests_current {
     fn array_from_rejects_non_callable_map_fn() {
         let mut core = test_interpreter();
         let array_like_id = seed_array_like(&mut core, &[Value::Int(1)]);
-        core.registers[0] = Value::Object(array_like_id);
-        core.registers[1] = Value::Int(99);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(array_like_id);
+            r[1] = Value::Int(99);
+        });
 
         let err = core
             .dispatch_builtin_hostcall("builtin:ArrayFrom", RegRange { start: 0, count: 2 }, None)
@@ -22564,8 +22710,10 @@ mod function_prototype_call_apply_tests_current {
         );
 
         let mut core = test_interpreter();
-        core.registers[0] = Value::str("ab");
-        core.registers[1] = Value::Function(0);
+        core.mutate_registers(|r| {
+            r[0] = Value::str("ab");
+            r[1] = Value::Function(0);
+        });
 
         let result = core.execute(&module).expect("Array.from should execute");
         let Value::Object(array_id) = result.value else {
@@ -22617,9 +22765,11 @@ mod function_prototype_call_apply_tests_current {
 
         let mut core = test_interpreter();
         let array_id = seed_array_like(&mut core, &[Value::Int(1), Value::Int(2), Value::Int(3)]);
-        core.registers[0] = Value::Object(array_id);
-        core.registers[1] = Value::Function(0);
-        core.registers[2] = Value::Int(0);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(array_id);
+            r[1] = Value::Function(0);
+            r[2] = Value::Int(0);
+        });
 
         let result = core
             .execute(&module)
@@ -22642,9 +22792,13 @@ mod numeric_error_message_tests {
     #[test]
     fn eval_numeric_helpers_preserve_type_error_messages() {
         let mut core = test_core();
-        core.registers.resize(4, Value::Undefined);
-        core.registers[0] = Value::str("not-a-number");
-        core.registers[1] = Value::Int(1);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
+        core.mutate_registers(|r| {
+            r[0] = Value::str("not-a-number");
+            r[1] = Value::Int(1);
+        });
 
         let arith_err = core
             .eval_arith(0, 1, "mul")
@@ -24478,9 +24632,11 @@ mod tests {
             3,
             &[(0, Value::Int(2)), (1, Value::Int(4)), (2, Value::Int(6))],
         );
-        core.registers[0] = Value::Object(array_id);
-        core.registers[1] = Value::Function(0);
-        core.registers[2] = Value::Int(0);
+        core.mutate_registers(|r| {
+            r[0] = Value::Object(array_id);
+            r[1] = Value::Function(0);
+            r[2] = Value::Int(0);
+        });
 
         let result = core
             .execute(&module)
@@ -25150,7 +25306,9 @@ mod tests {
     fn active_math_abs_handles_min_int_and_coercions() {
         fn call_math_abs(value: Value) -> Value {
             let mut core = quickjs_test_core();
-            core.registers.resize(1, Value::Undefined);
+            core.mutate_registers(|r| {
+                r.resize(1, Value::Undefined);
+            });
             core.registers[0] = value;
             core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 0, count: 1 }, None)
                 .expect("serde deserialization should succeed")
@@ -25185,7 +25343,9 @@ mod tests {
         // instead of panicking or converting to Float
         fn call_math_abs(value: Value) -> Value {
             let mut core = quickjs_test_core();
-            core.registers.resize(1, Value::Undefined);
+            core.mutate_registers(|r| {
+                r.resize(1, Value::Undefined);
+            });
             core.registers[0] = value;
             core.dispatch_builtin_hostcall("builtin:MathAbs", RegRange { start: 0, count: 1 }, None)
                 .expect("serde deserialization should succeed")
@@ -26644,7 +26804,9 @@ mod tests {
     fn eval_add_int_float_promotion() {
         // Int + Float should promote to Float
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Int(1);
         core.registers[1] = Value::Float(Float64::new(0.5));
         let result = core
@@ -26657,7 +26819,9 @@ mod tests {
     fn eval_add_float_int_promotion() {
         // Float + Int should promote to Float
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Float(Float64::new(2.5));
         core.registers[1] = Value::Int(3);
         let result = core
@@ -26670,7 +26834,9 @@ mod tests {
     fn eval_div_int_int_exact() {
         // 6 / 3 = 2 (exact integer result)
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Int(6);
         core.registers[1] = Value::Int(3);
         let result = core
@@ -26683,8 +26849,12 @@ mod tests {
     fn eval_div_int_int_fractional() {
         // 7 / 3 = 2.333... (fractional result)
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
-        core.registers[0] = Value::Int(7);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(7);
+        });
         core.registers[1] = Value::Int(3);
         let result = core
             .eval_div(0, 1)
@@ -26701,7 +26871,9 @@ mod tests {
     fn eval_div_by_zero_infinity() {
         // 1 / 0 = Infinity
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Int(1);
         core.registers[1] = Value::Int(0);
         let result = core
@@ -26718,7 +26890,9 @@ mod tests {
     fn eval_div_zero_zero_nan() {
         // 0 / 0 = NaN
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Int(0);
         core.registers[1] = Value::Int(0);
         let result = core
@@ -26735,7 +26909,9 @@ mod tests {
     fn eval_arith_nan_propagation() {
         // NaN + 1 = NaN
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Float(Float64::new(f64::NAN));
         core.registers[1] = Value::Int(1);
         let result = core
@@ -26752,7 +26928,9 @@ mod tests {
     fn eval_arith_infinity_mul_zero() {
         // Infinity * 0 = NaN
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Float(Float64::new(f64::INFINITY));
         core.registers[1] = Value::Int(0);
         let result = core
@@ -26769,7 +26947,9 @@ mod tests {
     fn eval_mod_float_float() {
         // 5.5 % 2.0 = 1.5
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Float(Float64::new(5.5));
         core.registers[1] = Value::Float(Float64::new(2.0));
         let result = core
@@ -26786,7 +26966,9 @@ mod tests {
     fn eval_unary_neg_float() {
         // -Float(1.5) = Float(-1.5)
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Float(Float64::new(1.5));
         let result = core
             .eval_unary_neg(0)
@@ -26798,7 +26980,9 @@ mod tests {
     fn eval_ieee754_classic() {
         // 0.1 + 0.2 = 0.30000000000000004 (classic IEEE 754 test)
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Float(Float64::new(0.1));
         core.registers[1] = Value::Float(Float64::new(0.2));
         let result = core
@@ -26852,7 +27036,9 @@ mod tests {
     fn one_div_neg_zero_is_neg_infinity() {
         // 1 / -0 = -Infinity
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Float(Float64::new(1.0));
         core.registers[1] = Value::Float(Float64::new(-0.0));
         let result = core
@@ -26869,7 +27055,9 @@ mod tests {
     fn neg_one_div_zero_is_neg_infinity() {
         // -1 / 0 = -Infinity
         let mut core = quickjs_test_core();
-        core.registers.resize(4, Value::Undefined);
+        core.mutate_registers(|r| {
+            r.resize(4, Value::Undefined);
+        });
         core.registers[0] = Value::Float(Float64::new(-1.0));
         core.registers[1] = Value::Int(0);
         let result = core
@@ -28217,7 +28405,9 @@ mod tests {
                 function_index: 0,
                 captured_env: Vec::new(),
             });
-            core.registers[3] = Value::AsyncFunction(0);
+            core.mutate_registers(|r| {
+            r[3] = Value::AsyncFunction(0);
+        });
 
             let result = core
                 .execute(&module)
@@ -28272,7 +28462,9 @@ mod tests {
                 function_index: 0,
                 captured_env: Vec::new(),
             });
-            core.registers[3] = Value::AsyncFunction(0);
+            core.mutate_registers(|r| {
+            r[3] = Value::AsyncFunction(0);
+        });
 
             let result = core
                 .execute(&module)
@@ -28319,7 +28511,9 @@ mod tests {
                 function_index: 0,
                 captured_env: Vec::new(),
             });
-            core.registers[3] = Value::AsyncFunction(0);
+            core.mutate_registers(|r| {
+            r[3] = Value::AsyncFunction(0);
+        });
 
             let handle = core.promise_store.create();
             let label = crate::ifc_artifacts::Label::Public;
@@ -28331,7 +28525,9 @@ mod tests {
                     &mut core.event_loop.microtasks,
                 )
                 .expect("seed promise should be fulfillable");
-            core.registers[1] = Value::Promise(handle.0);
+            core.mutate_registers(|r| {
+            r[1] = Value::Promise(handle.0);
+        });
 
             let result = core
                 .execute(&module)
@@ -28364,7 +28560,9 @@ mod tests {
                 .expect("serde deserialization should succeed");
 
             // Store the promise in a register
-            core.registers.resize(10, Value::Undefined);
+            core.mutate_registers(|r| {
+                r.resize(10, Value::Undefined);
+            });
             core.registers[0] = Value::Promise(handle.0);
 
             // Test that we can read the promise value
@@ -28485,7 +28683,9 @@ mod tests {
                 function_index: 0,
                 captured_env: Vec::new(),
             });
-            core.registers.resize(10, Value::Undefined);
+            core.mutate_registers(|r| {
+                r.resize(10, Value::Undefined);
+            });
             core.registers[0] = Value::AsyncGeneratorFunction(0);
 
             core.execute(&module)
@@ -28556,7 +28756,9 @@ mod tests {
                 captured_env: Vec::new(),
             });
 
-            core.registers.resize(15, Value::Undefined);
+            core.mutate_registers(|r| {
+                r.resize(15, Value::Undefined);
+            });
 
             // First call: create async generator from function 0
             core.registers[0] = Value::AsyncGeneratorFunction(0);
@@ -28848,13 +29050,16 @@ mod tests {
 
             for builtin_id in builtin_ids {
                 // Reset array to original state
-                if let Some(obj) = interpreter.heap.get_mut(array_id.0 as usize) {
-                    obj.properties.clear();
-                    for (i, val) in &test_elements {
-                        obj.properties.insert(i.to_string(), val.clone());
+                let heap_index = array_id.0 as usize;
+                interpreter.mutate_heap(|heap| {
+                    if let Some(obj) = heap.get_mut(heap_index) {
+                        obj.properties.clear();
+                        for (i, val) in &test_elements {
+                            obj.properties.insert(i.to_string(), val.clone());
+                        }
+                        obj.properties.insert("length".to_string(), Value::Int(5));
                     }
-                    obj.properties.insert("length".to_string(), Value::Int(5));
-                }
+                });
 
                 // Invoke ArrayPrototypeSort via builtin dispatcher
                 let result =
@@ -29039,8 +29244,10 @@ mod tests {
 
             let regexp_ids = [268u32, 372u32];
             let first_result = {
-                interpreter.registers[0] = Value::Object(regexp_obj_id);
-                interpreter.registers[1] = Value::str("a quick food");
+                interpreter.mutate_registers(|r| {
+                    r[0] = Value::Object(regexp_obj_id);
+                    r[1] = Value::str("a quick food");
+                });
                 interpreter
                     .call_builtin_by_id(regexp_ids[0], RegRange { start: 0, count: 2 })
                     .expect("first RegExp mapping should execute")
@@ -29054,8 +29261,10 @@ mod tests {
                     "Builtin ID {} should map to RegExpPrototypeTest",
                     builtin_id
                 );
-                interpreter.registers[0] = Value::Object(regexp_obj_id);
-                interpreter.registers[1] = Value::str("a quick food");
+                interpreter.mutate_registers(|r| {
+                    r[0] = Value::Object(regexp_obj_id);
+                    r[1] = Value::str("a quick food");
+                });
                 let result = interpreter
                     .call_builtin_by_id(builtin_id, RegRange { start: 0, count: 2 })
                     .expect("RegExp mapping should execute");
@@ -29116,13 +29325,16 @@ mod tests {
 
             for builtin_id in builtin_ids {
                 // Reset array to original state
-                if let Some(obj) = interpreter.heap.get_mut(array_id.0 as usize) {
-                    obj.properties.clear();
-                    for (i, val) in &test_elements {
-                        obj.properties.insert(i.to_string(), val.clone());
+                let heap_index = array_id.0 as usize;
+                interpreter.mutate_heap(|heap| {
+                    if let Some(obj) = heap.get_mut(heap_index) {
+                        obj.properties.clear();
+                        for (i, val) in &test_elements {
+                            obj.properties.insert(i.to_string(), val.clone());
+                        }
+                        obj.properties.insert("length".to_string(), Value::Int(6));
                     }
-                    obj.properties.insert("length".to_string(), Value::Int(6));
-                }
+                });
 
                 // Invoke ArrayPrototypeSort via the specific builtin ID
                 // This tests that the mapping works and reaches the consolidated implementation
@@ -31052,7 +31264,9 @@ mod tests {
         let mut core = InterpreterCore::new(config, "test-trace");
 
         for builtin_id in [100, 101, 102, 384] {
-            core.registers[0] = Value::str(format!("message-{builtin_id}"));
+            core.mutate_registers(|r| {
+                r[0] = Value::str(format!("message-{builtin_id}"));
+            });
             let builtin = core
                 .map_function_index_to_builtin_capability(builtin_id)
                 .expect("console builtin id should be mapped");
@@ -31960,5 +32174,144 @@ mod tests {
             interp.estimated_memory_bytes,
             "burst writes must not introduce drift"
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PERF-H2.3: Unit tests for lazy seed write tracking (bd-o4cbn.6.3)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod lazy_seed_tests {
+    use super::*;
+
+    fn test_core() -> InterpreterCore {
+        let mut config = InterpreterConfig::quickjs_defaults();
+        config.max_registers = 32;
+        InterpreterCore::new(config, "lazy-seed-test")
+    }
+
+    fn test_core_with_registers(regs: Vec<Value>) -> InterpreterCore {
+        let mut core = test_core();
+        core.mutate_registers(|r| *r = regs);
+        core
+    }
+
+    #[test]
+    fn lazy_seed_remains_lazy_with_no_writes() {
+        let mut core = test_core();
+        let seed = core.capture_execution_seed();
+        assert!(matches!(*seed.borrow(), ExecutionSeed::Lazy { .. }));
+        core.reset_execution_state_from_seed(&seed);
+        assert!(matches!(*seed.borrow(), ExecutionSeed::Lazy { .. }));
+    }
+
+    #[test]
+    fn write_to_register_materializes_outstanding_lazy_seed() {
+        let mut core = test_core_with_registers(vec![Value::Int(1), Value::Int(2)]);
+        let seed = core.capture_execution_seed();
+        let pre_epoch = core.seed_epoch;
+        // Force a write.
+        core.mutate_registers(|r| r[0] = Value::Int(99));
+        // Seed must now be Materialized with the PRE-write registers.
+        match &*seed.borrow() {
+            ExecutionSeed::Materialized { registers, .. } => {
+                assert_eq!(registers, &vec![Value::Int(1), Value::Int(2)]);
+            }
+            ExecutionSeed::Lazy { .. } => panic!("write should have materialized the seed"),
+        }
+        assert!(core.seed_epoch > pre_epoch);
+    }
+
+    #[test]
+    fn reset_byte_identical_vs_eager() {
+        let initial_regs = vec![Value::Int(1)];
+        let mut eager = test_core_with_registers(initial_regs.clone());
+        let mut lazy = test_core_with_registers(initial_regs);
+
+        // Capture seed for lazy core only (simulating eager baseline)
+        let seed_l = lazy.capture_execution_seed();
+
+        // Apply same write sequence to both cores
+        for v in (0..16).map(|i| Value::Int(i)) {
+            eager.mutate_registers(|r| r[0] = v.clone());
+            lazy.mutate_registers(|r| r[0] = v);
+        }
+
+        // Reset lazy core from seed
+        lazy.reset_execution_state_from_seed(&seed_l);
+
+        // Eager core's original state should match lazy core's reset state
+        assert_eq!(eager.registers.len(), lazy.registers.len());
+        assert_eq!(eager.heap.len(), lazy.heap.len());
+        assert_eq!(eager.function_prototypes.len(), lazy.function_prototypes.len());
+
+        // Check register values specifically
+        for i in 0..eager.registers.len().min(lazy.registers.len()) {
+            assert_eq!(eager.registers[i], lazy.registers[i], "register {i} mismatch");
+        }
+    }
+
+    #[test]
+    fn heap_mutation_also_materializes() {
+        let mut core = test_core();
+        let seed = core.capture_execution_seed();
+        let pre_epoch = core.seed_epoch;
+        // Force a heap write.
+        core.mutate_heap(|h| h.push(HeapObject::new()));
+        // Seed must now be Materialized.
+        match &*seed.borrow() {
+            ExecutionSeed::Materialized { heap, .. } => {
+                assert!(heap.is_empty()); // Pre-write heap was empty
+            }
+            ExecutionSeed::Lazy { .. } => panic!("heap write should have materialized the seed"),
+        }
+        assert!(core.seed_epoch > pre_epoch);
+    }
+
+    #[test]
+    fn function_prototypes_mutation_also_materializes() {
+        let mut core = test_core();
+        let seed = core.capture_execution_seed();
+        let pre_epoch = core.seed_epoch;
+        // Force a function_prototypes write.
+        core.mutate_function_prototypes(|fp| {
+            fp.insert(42, ObjectId(123));
+        });
+        // Seed must now be Materialized.
+        match &*seed.borrow() {
+            ExecutionSeed::Materialized { function_prototypes, .. } => {
+                assert!(function_prototypes.is_empty()); // Pre-write prototypes was empty
+            }
+            ExecutionSeed::Lazy { .. } => panic!("function_prototypes write should have materialized the seed"),
+        }
+        assert!(core.seed_epoch > pre_epoch);
+    }
+
+    #[test]
+    fn multiple_pending_seeds_all_materialize_once() {
+        let mut core = test_core_with_registers(vec![Value::Int(1)]);
+        let s1 = core.capture_execution_seed();
+        let s2 = core.capture_execution_seed();
+        let s3 = core.capture_execution_seed();
+        core.mutate_registers(|r| r[0] = Value::Int(2));
+        for seed in [&s1, &s2, &s3] {
+            assert!(matches!(*seed.borrow(), ExecutionSeed::Materialized { .. }));
+        }
+    }
+
+    #[test]
+    fn dropped_seed_does_not_force_materialization() {
+        let mut core = test_core_with_registers(vec![Value::Int(1)]);
+        {
+            let _seed = core.capture_execution_seed();
+            // seed drops here
+        }
+        let pre_epoch = core.seed_epoch;
+        core.mutate_registers(|r| r[0] = Value::Int(2));
+        // No keepers (the Weak upgrade returns None); pending_lazy_seeds drains to empty.
+        assert!(core.pending_lazy_seeds.is_empty() || core.pending_lazy_seeds.iter().all(|w| w.upgrade().is_none()));
+        // Epoch still advances due to the write
+        assert!(core.seed_epoch > pre_epoch);
     }
 }

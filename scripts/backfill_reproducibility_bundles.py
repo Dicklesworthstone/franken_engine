@@ -38,6 +38,12 @@ OBSERVED_CLAIMS = [
         "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration"
     },
     {
+        "claim_id": "FE-CLAIM-004",
+        "claim_scope": "security",
+        "original_artifact_path": "scripts/run_rgc_signed_decision_receipt.sh",
+        "verification_command": "./scripts/run_rgc_signed_decision_receipt.sh ci"
+    },
+    {
         "claim_id": "FE-CLAIM-007",
         "claim_scope": "operations",
         "original_artifact_path": "scripts/e2e/readme_cli_workflow_smoke.sh",

@@ -61,24 +61,23 @@
       "verification_command": "rch exec -- env CARGO_TARGET_DIR=/tmp/rch_target_<agent> CARGO_INCREMENTAL=0 RUSTFLAGS=\"-C linker=cc\" cargo test -p frankenengine-engine --test deterministic_replay_integration --test counterfactual_replay_engine_integration"
     },
     {
-      "actual_wording_state": "hypothesis",
-      "allowed_state": "hypothesis",
-      "artifact_path": null,
+      "actual_wording_state": "observed",
+      "allowed_state": "observed",
+      "artifact_path": "artifacts/reproducibility_bundles/FE-CLAIM-004",
       "claim_id": "FE-CLAIM-004",
       "claim_scope": "security",
       "claim_text": "Signed decision receipts with transparency-log proofs and optional TEE attestation bindings.",
-      "decision": "downgrade_until_live_proof",
-      "downgrade_text": "Hypothesis: cryptographic governance may include transparency-log proofs and optional TEE bindings after proof artifacts land.",
-      "freshness_days": null,
+      "decision": "allow_observed",
+      "freshness_days": 1,
       "owning_bead": "bd-1qkrc",
-      "reason": "Receipt support is real, but transparency-log and TEE bindings need separate live proof handles.",
+      "reason": "Signed-decision-receipt surface is live in tree across A.1 receipt-only proof handle, A.2 transparency log + MMR inclusion/consistency proofs, and A.3 TEE attestation policy with live-quote binding; cross-referenced and content-addressed by scripts/run_rgc_signed_decision_receipt.sh ci (bd-cixqu.1.4) with a reproducibility bundle.",
       "source_path": "README.md",
       "source_span": {
         "end_line": 139,
         "must_contain": "transparency-log + TEE attestation",
         "start_line": 139
       },
-      "verification_command": "TBD: split receipt-signing, transparency-log, and TEE proof commands before release"
+      "verification_command": "./scripts/run_rgc_signed_decision_receipt.sh ci"
     },
     {
       "actual_wording_state": "observed",

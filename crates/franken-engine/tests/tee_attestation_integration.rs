@@ -16,8 +16,13 @@ use frankenengine_engine::evidence_contract::{
     ReceiptRecord, SignatureAlgorithm, SignatureBundle, TeeAttestationBinding,
     VerificationMetadata,
 };
+use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::signature_preimage::SigningKey;
-use frankenengine_engine::tee_attestation_policy::{TeeAttestationPolicy, TeePlatform};
+use frankenengine_engine::tee_attestation_policy::{
+    AttestationFreshnessWindow, MeasurementAlgorithm, MeasurementDigest, PlatformTrustRoot,
+    RevocationFallback, RevocationSource, RevocationSourceType, TeeAttestationPolicy, TeePlatform,
+    TrustRootPinning, TrustRootSource,
+};
 use frankenengine_engine::tee_live_quote::{
     SafeModeAttestationRecord, TeeCapability, TeeQuoteConfig, TeeQuoteError, TeeQuoteGenerator,
     TeeQuoteResult,
@@ -87,6 +92,70 @@ fn create_test_generator() -> TeeQuoteGenerator {
     let config = TeeQuoteConfig::default();
     let signing_key = frankenengine_engine::signature_preimage::generate_keypair().0;
     TeeQuoteGenerator::new(config, signing_key)
+}
+
+/// Build a fully-valid `TeeAttestationPolicy` for the binding/policy tests.
+///
+/// The earlier inline fixture
+/// (`{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}`)
+/// predated the strict `TeeAttestationPolicy::validate()` schema, so
+/// `from_json(..).unwrap()` panicked (missing `schema_version`, then
+/// `EmptyRevocationSources` / `MissingTrustRoots`) and left five tests latently
+/// RED — the repo green gate is compile-only and never runs this integration
+/// binary (bd-uafwy).
+///
+/// `validate_attestation_binding` only inspects the binding's platform string and
+/// validity window, never the policy body, so any policy that satisfies
+/// `validate()` reproduces the intended per-test outcomes. Built programmatically
+/// (not as a hand-maintained JSON blob) and self-checked here so a future schema
+/// tightening fails loudly at this one site instead of as an opaque `.unwrap()`
+/// panic inside every test.
+fn valid_attestation_policy() -> TeeAttestationPolicy {
+    let mut approved_measurements = BTreeMap::new();
+    let mut platform_trust_roots = Vec::new();
+    for platform in TeePlatform::ALL {
+        approved_measurements.insert(
+            platform,
+            vec![MeasurementDigest {
+                algorithm: MeasurementAlgorithm::Sha256,
+                digest_hex: "ab".repeat(32), // 32 bytes => 64 lowercase hex chars
+            }],
+        );
+        // One pinned, currently-active trust root per platform. `validate()` only
+        // needs `trust_anchor_pem` to be non-empty; the cryptographic anchor
+        // decode is exercised by the quote-signature tests, not here.
+        platform_trust_roots.push(PlatformTrustRoot {
+            root_id: format!("root-{}", platform.canonical_tag()),
+            platform,
+            trust_anchor_pem: "fixture-trust-anchor".to_string(),
+            valid_from_epoch: SecurityEpoch::from_raw(0),
+            valid_until_epoch: None,
+            pinning: TrustRootPinning::Pinned,
+            source: TrustRootSource::Policy,
+        });
+    }
+
+    let policy = TeeAttestationPolicy {
+        schema_version: 1,
+        policy_epoch: SecurityEpoch::from_raw(1),
+        approved_measurements,
+        freshness_window: AttestationFreshnessWindow {
+            standard_max_age_secs: 300,
+            high_impact_max_age_secs: 60,
+        },
+        revocation_sources: vec![RevocationSource {
+            source_id: "internal-ledger".to_string(),
+            source_type: RevocationSourceType::InternalLedger,
+            endpoint: "sqlite://revocations".to_string(),
+            on_unavailable: RevocationFallback::FailClosed,
+        }],
+        platform_trust_roots,
+    };
+
+    policy
+        .validate()
+        .expect("integration-test attestation policy must satisfy TeeAttestationPolicy::validate()");
+    policy
 }
 
 // ---------------------------------------------------------------------------
@@ -376,7 +445,7 @@ fn test_receipt_serialization_with_tee_binding() {
 #[test]
 fn test_attestation_binding_validation_success() {
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
+    let policy = valid_attestation_policy();
 
     let now = chrono::Utc::now();
     let binding = TeeAttestationBinding {
@@ -402,7 +471,7 @@ fn test_attestation_binding_validation_success() {
 #[test]
 fn test_attestation_binding_validation_expired() {
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
+    let policy = valid_attestation_policy();
 
     let now = chrono::Utc::now();
     let binding = TeeAttestationBinding {
@@ -429,7 +498,7 @@ fn test_attestation_binding_validation_expired() {
 #[test]
 fn test_attestation_binding_validation_not_yet_valid() {
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
+    let policy = valid_attestation_policy();
 
     let now = chrono::Utc::now();
     let binding = TeeAttestationBinding {
@@ -456,7 +525,7 @@ fn test_attestation_binding_validation_not_yet_valid() {
 #[test]
 fn test_attestation_binding_validation_unsupported_platform() {
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
+    let policy = valid_attestation_policy();
 
     let now = chrono::Utc::now();
     let binding = TeeAttestationBinding {
@@ -490,7 +559,7 @@ fn test_end_to_end_tee_workflow() {
     unsafe { std::env::set_var("FRANKEN_TEE_ENABLED", "true"); }
 
     let generator = create_test_generator();
-    let policy = TeeAttestationPolicy::from_json(r#"{"approved_measurements":{},"revocation_sources":[],"platform_trust_roots":[]}"#).unwrap();
+    let policy = valid_attestation_policy();
 
     // Step 1: Generate decision data
     let decision_data = b"end-to-end test decision data";

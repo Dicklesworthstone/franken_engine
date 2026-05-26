@@ -713,6 +713,7 @@ impl TeeAttestationPolicy {
         use std::collections::BTreeMap;
 
         let mut approved_measurements = BTreeMap::new();
+        let mut platform_trust_roots = Vec::new();
         for platform in TeePlatform::ALL {
             approved_measurements.insert(
                 platform,
@@ -721,6 +722,19 @@ impl TeeAttestationPolicy {
                     digest_hex: "deadbeefcafebabe".repeat(4), // 32 bytes for SHA256
                 }],
             );
+            // `validate()` requires every platform to carry at least one pinned
+            // trust root that is active at the policy epoch. `trust_anchor_pem`
+            // only has to be non-empty for structural validation; cryptographic
+            // anchor decoding is covered by the dedicated quote-signature tests.
+            platform_trust_roots.push(PlatformTrustRoot {
+                root_id: format!("test-root-{}", platform.canonical_tag()),
+                platform,
+                trust_anchor_pem: "test-trust-anchor".to_string(),
+                valid_from_epoch: SecurityEpoch::from_raw(0),
+                valid_until_epoch: None,
+                pinning: TrustRootPinning::Pinned,
+                source: TrustRootSource::Policy,
+            });
         }
 
         Self {
@@ -731,8 +745,15 @@ impl TeeAttestationPolicy {
                 high_impact_max_age_secs: Duration::from_secs(60).as_secs(),
             },
             approved_measurements,
-            revocation_sources: vec![],
-            platform_trust_roots: vec![],
+            // At least one fail-closed revocation source is mandatory: without a
+            // `FailClosed` source `validate()` returns `RevocationFallbackBypass`.
+            revocation_sources: vec![RevocationSource {
+                source_id: "test-internal-ledger".to_string(),
+                source_type: RevocationSourceType::InternalLedger,
+                endpoint: "sqlite://test-revocations".to_string(),
+                on_unavailable: RevocationFallback::FailClosed,
+            }],
+            platform_trust_roots,
         }
     }
 }
@@ -1891,6 +1912,22 @@ impl MockTeeProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_for_testing_passes_validation() {
+        // `default_for_testing`'s doc-comment promises a "minimal valid policy
+        // that passes validation". It previously shipped empty
+        // `revocation_sources`/`platform_trust_roots`, so `validate()` actually
+        // rejected it (RevocationFallbackBypass / MissingTrustRoots) — the doc
+        // lied. Lock the contract so the helper can never silently drift out of
+        // sync with the strict `validate()` invariants again (bd-uafwy).
+        let policy = TeeAttestationPolicy::default_for_testing();
+        assert!(
+            policy.validate().is_ok(),
+            "default_for_testing() must satisfy validate(): {:?}",
+            policy.validate()
+        );
+    }
 
     fn digest_hex(byte: u8, bytes: usize) -> String {
         let mut out = String::with_capacity(bytes * 2);

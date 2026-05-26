@@ -1,3 +1,7 @@
+// Fixtures below exist solely to exercise the `Deterministic` derive macro; the
+// test asserts they derive and compile, so their fields/variants are never read.
+#![allow(dead_code)]
+
 use franken_engine_deterministic_derive::Deterministic;
 use franken_engine_deterministic_trait::Deterministic;
 

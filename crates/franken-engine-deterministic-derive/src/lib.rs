@@ -82,9 +82,15 @@ fn expand_deterministic(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
         }
     }
 
-    // Generate the implementation
+    // Generate the implementation. Propagate the type's own generics (with their
+    // bounds and where-clause) so the marker impl is valid for generic types,
+    // e.g. `impl<T: Deterministic> Deterministic for GenericStruct<T> {}`. For a
+    // non-generic type `split_for_impl` yields empty fragments, leaving the
+    // emitted impl byte-identical to the prior `impl ... for #name {}`.
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
     let expanded = quote! {
-        impl ::franken_engine_deterministic_trait::Deterministic for #name {}
+        impl #impl_generics ::franken_engine_deterministic_trait::Deterministic
+            for #name #ty_generics #where_clause {}
     };
 
     Ok(expanded)

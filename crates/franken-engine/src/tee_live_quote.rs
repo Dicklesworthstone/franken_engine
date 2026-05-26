@@ -370,14 +370,22 @@ mod tests {
     use super::*;
     use crate::tee_attestation_policy::TeePlatform;
 
+    // The FRANKEN_TEE_* env vars that `detect_tee_capability` reads are
+    // process-global, but `cargo test` runs tests in parallel threads sharing
+    // one process. Tests that mutate those vars therefore race unless they are
+    // serialized; each such test holds this mutex for its whole body
+    // (bd-g63gw). Poison is recovered (a panicking test must not wedge the
+    // rest) via `into_inner`.
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     // edition-2024: env mutators are `unsafe`; confined to these test helpers.
     fn set_test_env(key: &str, val: &str) {
         // SAFETY: single-threaded test setup mutating process env for capability detection.
-        unsafe { set_test_env(key, val) };
+        unsafe { std::env::set_var(key, val) };
     }
     fn remove_test_env(key: &str) {
         // SAFETY: single-threaded test teardown removing a process env var.
-        unsafe { remove_test_env(key) };
+        unsafe { std::env::remove_var(key) };
     }
 
     fn test_config() -> TeeQuoteConfig {
@@ -399,6 +407,7 @@ mod tests {
 
     #[test]
     fn detect_tee_capability_not_available() {
+        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         remove_test_env("FRANKEN_TEE_ENABLED");
         remove_test_env("FRANKEN_TEE_ERROR");
 
@@ -409,6 +418,7 @@ mod tests {
 
     #[test]
     fn detect_tee_capability_available() {
+        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         set_test_env("FRANKEN_TEE_ENABLED", "true");
         remove_test_env("FRANKEN_TEE_ERROR");
 
@@ -426,6 +436,7 @@ mod tests {
 
     #[test]
     fn detect_tee_capability_error() {
+        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         remove_test_env("FRANKEN_TEE_ENABLED");
         set_test_env("FRANKEN_TEE_ERROR", "Hardware malfunction");
 
@@ -438,6 +449,7 @@ mod tests {
 
     #[test]
     fn generate_quote_tee_available() {
+        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         set_test_env("FRANKEN_TEE_ENABLED", "true");
         remove_test_env("FRANKEN_TEE_QUOTE_FAIL");
 
@@ -453,6 +465,7 @@ mod tests {
 
     #[test]
     fn generate_quote_safe_mode_fallback() {
+        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         remove_test_env("FRANKEN_TEE_ENABLED");
         remove_test_env("FRANKEN_TEE_ERROR");
 
@@ -466,6 +479,7 @@ mod tests {
 
     #[test]
     fn generate_quote_failure() {
+        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         set_test_env("FRANKEN_TEE_ENABLED", "true");
         set_test_env("FRANKEN_TEE_QUOTE_FAIL", "1");
 

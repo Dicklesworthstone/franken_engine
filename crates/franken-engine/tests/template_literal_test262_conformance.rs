@@ -442,3 +442,34 @@ fn template_literal_test262_conformance_integration() {
         pass_rate_percent
     );
 }
+
+/// template-literal test262 case ids the engine is currently allowed to diverge
+/// on (bd-bg9l1.13). Empty = every catalogued case must pass (the engine
+/// currently passes all of them). This exact-set drift detector complements the
+/// coarse ≥95% pass-rate floor above: that floor silently tolerates a small
+/// fraction of failures, whereas this gate names every permitted gap and fails
+/// fast on any drift in either direction.
+const KNOWN_TEMPLATE_LITERAL_GAPS: &[&str] = &[];
+
+#[test]
+fn template_literal_full_matrix_matches_known_gap_set() {
+    let report = TemplateLiteralConformanceHarness::run_conformance_tests();
+    let mut observed_detail: Vec<(String, String)> = Vec::new();
+    for (id, result) in &report.test_results {
+        match result {
+            TemplateLiteralResult::Pass => {}
+            other => observed_detail.push((id.clone(), format!("{other:?}"))),
+        }
+    }
+    let observed: std::collections::BTreeSet<&str> =
+        observed_detail.iter().map(|(id, _)| id.as_str()).collect();
+    let expected: std::collections::BTreeSet<&str> =
+        KNOWN_TEMPLATE_LITERAL_GAPS.iter().copied().collect();
+    assert_eq!(
+        observed, expected,
+        "template-literal gap set drifted from KNOWN_TEMPLATE_LITERAL_GAPS \
+         (bd-bg9l1.13). If a gap closed, remove it from the constant. If a new \
+         gap opened, file or extend a follow-up bead before silencing it. \
+         Observed gaps with detail:\n{observed_detail:#?}"
+    );
+}

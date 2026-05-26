@@ -503,6 +503,26 @@ impl ArrowFunctionReport {
 mod tests {
     use super::*;
 
+    /// Arrow-function test262 case ids the engine currently FAILS (bd-bg9l1.13).
+    /// Freezing the exact divergence set turns the prior `pass_rate <= 100%`
+    /// tautology — which a total regression would have survived — into a real
+    /// gate: a newly failing id fails fast, and a fixed id also fails (forcing
+    /// this list to be pruned). These are genuine ES2020 arrow-function
+    /// conformance gaps surfaced by the audit; closing them is tracked under the
+    /// bd-bg9l1 epic. The harness was passing green at only ~60% pass rate.
+    const KNOWN_ARROW_FUNCTION_GAPS: &[&str] = &[
+        "ES2020-13.3.3-array-destructuring",
+        "ES2020-13.3.3-object-destructuring",
+        "ES2020-14.1.19-default-params",
+        "ES2020-14.1.19-default-params-override",
+        "ES2020-14.1.20-rest-params",
+        "ES2020-14.2.1-syntax-error-duplicate-params",
+        "ES2020-14.2.16-arrow-in-method",
+        "ES2020-14.2.16-lexical-this",
+        "ES2020-14.7-async-arrow",
+        "ES2020-14.7-async-arrow-params",
+    ];
+
     #[test]
     fn arrow_function_harness_creates_comprehensive_suite() {
         let harness = ArrowFunctionHarness::new();
@@ -530,7 +550,36 @@ mod tests {
 
         assert_eq!(report.security_epoch, epoch);
         assert!(!report.test_results.is_empty());
-        assert!(report.statistics.pass_rate_millionths <= 1_000_000);
+
+        // Real correctness gate (bd-bg9l1.13): the engine may diverge only on
+        // ids catalogued in KNOWN_ARROW_FUNCTION_GAPS. Drift in either
+        // direction fails, unlike the prior `pass_rate <= 1_000_000` tautology.
+        let mut observed_detail: Vec<(String, String)> = Vec::new();
+        for (id, result) in &report.test_results {
+            match result {
+                ArrowFunctionResult::Pass => {}
+                ArrowFunctionResult::Fail { reason } => {
+                    observed_detail.push((id.clone(), format!("fail: {reason}")))
+                }
+                ArrowFunctionResult::Error { error } => {
+                    observed_detail.push((id.clone(), format!("error: {error}")))
+                }
+                ArrowFunctionResult::Skip { reason } => {
+                    observed_detail.push((id.clone(), format!("skip: {reason}")))
+                }
+            }
+        }
+        let observed: std::collections::BTreeSet<&str> =
+            observed_detail.iter().map(|(id, _)| id.as_str()).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            KNOWN_ARROW_FUNCTION_GAPS.iter().copied().collect();
+        assert_eq!(
+            observed, expected,
+            "arrow-function gap set drifted from KNOWN_ARROW_FUNCTION_GAPS \
+             (bd-bg9l1.13). If a gap closed, remove it from the constant. If a \
+             new gap opened, file or extend a follow-up bead before silencing \
+             it. Observed gaps with detail:\n{observed_detail:#?}"
+        );
     }
 
     #[test]

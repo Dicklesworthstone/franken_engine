@@ -369,6 +369,49 @@ mod tests {
         assert!(report.statistics.total_tests > 0);
     }
 
+    /// strict-mode test262 case ids the engine currently mis-handles
+    /// (bd-bg9l1.13). A pass is `CorrectRejection` (the harness classifies every
+    /// correctly-accepted and correctly-rejected case as such); `FalseAcceptance`
+    /// / `IncorrectBehavior` / `ExecutionError` are gaps. Before this gate the
+    /// only assertions here were `!test_results.is_empty()` and `total_tests > 0`,
+    /// so a regression turning every case into a false-acceptance stayed green.
+    /// These are genuine strict-mode enforcement gaps (octal literals, `delete`
+    /// of identifiers, duplicate params, undeclared assignment) surfaced by the
+    /// audit; closing them is tracked under the bd-bg9l1 epic.
+    const KNOWN_STRICT_MODE_GAPS: &[&str] = &[
+        "ES2020-11.8.3-octal-literal-function-strict",
+        "ES2020-11.8.3-octal-literal-global-strict",
+        "ES2020-12.5.4.2-delete-identifier-function-strict",
+        "ES2020-12.5.4.2-delete-identifier-global-strict",
+        "ES2020-14.1.2-duplicate-param-function-strict",
+        "ES2020-14.1.2-duplicate-param-global-strict",
+        "ES2020-8.1.1.2.1-undeclared-assignment-function-strict",
+        "ES2020-8.1.1.2.1-undeclared-assignment-global-strict",
+    ];
+
+    #[test]
+    fn strict_mode_full_matrix_matches_known_gap_set() {
+        let report = StrictModeConformanceHarness::run_conformance_suite();
+        let mut observed_detail: Vec<(String, String)> = Vec::new();
+        for (id, result) in &report.test_results {
+            match result {
+                StrictModeResult::CorrectRejection => {}
+                other => observed_detail.push((id.clone(), format!("{other:?}"))),
+            }
+        }
+        let observed: std::collections::BTreeSet<&str> =
+            observed_detail.iter().map(|(id, _)| id.as_str()).collect();
+        let expected: std::collections::BTreeSet<&str> =
+            KNOWN_STRICT_MODE_GAPS.iter().copied().collect();
+        assert_eq!(
+            observed, expected,
+            "strict-mode gap set drifted from KNOWN_STRICT_MODE_GAPS \
+             (bd-bg9l1.13). If a gap closed, remove it from the constant. If a \
+             new gap opened, file or extend a follow-up bead before silencing \
+             it. Observed gaps with detail:\n{observed_detail:#?}"
+        );
+    }
+
     #[test]
     fn test_cases_have_valid_categories() {
         let test_cases = StrictModeConformanceHarness::test_cases();

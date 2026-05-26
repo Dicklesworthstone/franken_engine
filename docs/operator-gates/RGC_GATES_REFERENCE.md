@@ -3127,6 +3127,54 @@ G.2..G.8 currently emit no live proof artifacts (the claims remain
 the recheck mechanism end-to-end against a fixture bundle (intact → pass,
 tampered → fail, missing → fail) without an engine build.
 
+## FE-CLAIM-016..021 Matrix-Promotion Umbrella Gate (G.10)
+
+`bd-cixqu.7.13` is the single fail-closed checkpoint that decides — and
+enforces — whether the six theorem-backed-compiler claims
+(`FE-CLAIM-016`..`FE-CLAIM-021`) may sit at `observed` in the claim-to-proof
+matrix. They promote **simultaneously** or not at all. It sits on top of the G.9
+proof-recheck gate, adding the matrix cross-check and reality-check teeth.
+
+```bash
+# evaluate the live tree and emit a decision artifact
+./scripts/run_fe_claim_016_021_promotion_gate.sh ci
+
+# prove every decision path (no cargo, no engine build)
+./scripts/run_fe_claim_016_021_promotion_gate.sh selftest
+
+# validate an emitted decision artifact
+./scripts/run_fe_claim_016_021_promotion_gate.sh verify <artifact.json>
+
+# full smoke: check + selftest + live consistency
+./scripts/e2e/fe_claim_016_021_promotion_gate_smoke.sh run
+```
+
+For each claim the gate rechecks the live theorem proof
+(`artifacts/rgc_theorem_backed_compiler_inputs/<FE-CLAIM-NNN>.proof.json`, the
+same artifact G.9 consumes): presence, schema, `verdict == "proven"`,
+content-hash integrity, and freshness (≤ 30 days). It **additionally rejects
+fixture / simulated proofs** — a proof whose `source_module` is a fixture marker
+or whose body carries a simulation fragment (`simulate` / `placeholder` /
+`MockCertificate` / `hot_paths_simulation` / `selftest-fixture`) is not a real
+machine-checked theorem and counts as not-proven. A claim is promotable iff its
+recheck passes.
+
+**Verdict.** The aggregate decision is `PROMOTE_ALL_TO_OBSERVED` iff all six
+claims carry a real proven non-fixture proof; otherwise `STAY_HYPOTHESIS`. The
+gate is bidirectional: it fails closed (exit 1) when the matrix **over-claims**
+(`allowed_state == observed` without a real proof) with stable codes
+`FeClaim016_021PromotionError::ObservedWithoutProvenTheorem` /
+`…::ObservedWithFixtureProof`; **under-claiming** (a real proof exists but the
+matrix still reads `hypothesis`) is surfaced as an advisory, not a failure.
+
+**Current decision: `STAY_HYPOTHESIS`.** G.2..G.8 emit no live proof artifacts,
+and a ground-truth check shows 018/019/020/021 are backed only by simulated
+verification, 016's Lean proofs are not wired to the gate, and 017 emits no
+proof — so the six rows honestly remain `hypothesis` and the gate exits 0
+because the matrix is consistent with the (absent) proof evidence. See
+`docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md` for the per-claim
+reality assessment and the path to promotion (G.13 / bd-cixqu.7.16).
+
 ## Proof Bundle Export (Y.1)
 
 `bd-cixqu.25.1` packages a **third-party-verifiable proof bundle** alongside the

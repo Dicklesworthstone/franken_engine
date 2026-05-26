@@ -5,6 +5,24 @@
 //! DecisionComparison, PolicyComparisonReport, ReplayComparisonResult,
 //! Recommendation, ReplayEngineError, ReplayEngineConfig,
 //! CounterfactualReplayEngine (compare, replay_count), and serde round-trips.
+//!
+//! ## Why the recorded outcomes are not hand-picked numbers
+//!
+//! The engine reports each decision's recorded `outcome_millionths` verbatim in
+//! the original column and re-scores substituted actions through its own
+//! outcome model. If the recorded outcomes were author-chosen magic numbers the
+//! comparisons would degenerate into arithmetic over those numbers — a bug in
+//! how a real execution turns an action/loss into an outcome would be invisible.
+//!
+//! To give the comparisons teeth, every recorded `outcome_millionths` here is
+//! produced by the engine's **real** outcome model
+//! ([`estimate_lane_outcome_millionths`]) applied to that decision's chosen
+//! action and loss matrix — the exact function
+//! `CounterfactualReplayEngine::compute_counterfactual` uses to score
+//! substituted actions. The ground-truth totals are recomputed independently
+//! in-test through that same model (not read back from the report), so the
+//! original-column and forced-action counterfactual assertions verify a genuine
+//! model output rather than an echoed integer.
 
 #![allow(
     clippy::field_reassign_with_default,
@@ -34,7 +52,7 @@ use frankenengine_engine::counterfactual_replay_engine::{
     DecisionComparison, FLEET_COUNTERFACTUAL_SCHEMA_VERSION, FleetCounterfactualReport,
     PolicyComparisonReport, REPLAY_ENGINE_SCHEMA_VERSION, Recommendation, ReplayComparisonResult,
     ReplayEngineConfig, ReplayEngineError, ReplayScope, SUBSTITUTED_POLICY_SNAPSHOT_SCHEMA_VERSION,
-    SubstitutedPolicySnapshot,
+    SubstitutedPolicySnapshot, estimate_lane_outcome_millionths,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::runtime_decision_theory::LaneAction;
@@ -50,10 +68,40 @@ fn test_epoch() -> SecurityEpoch {
     SecurityEpoch::from_raw(1)
 }
 
-fn make_decision(index: u64, action: &str, outcome: i64) -> DecisionSnapshot {
+/// The risk threshold recorded for every decision in this suite. Shared with
+/// the in-test ground-truth recomputation so the expected outcomes are scored
+/// against the exact threshold the engine sees.
+const RECORDED_THRESHOLD: i64 = 500_000;
+
+/// Build a decision's per-action loss matrix from a recorded native-lane loss.
+/// The wasm lane is twice as costly, so `native` is the loss-minimizing action
+/// and the matrix max-loss is `2 * native_loss`. Distinct `native_loss` values
+/// therefore yield distinct model outcomes, keeping the per-decision sums
+/// non-degenerate.
+fn loss_matrix_for(native_loss: i64) -> BTreeMap<String, i64> {
     let mut loss_matrix = BTreeMap::new();
-    loss_matrix.insert("native".to_string(), 100_000);
-    loss_matrix.insert("wasm".to_string(), 200_000);
+    loss_matrix.insert("native".to_string(), native_loss);
+    loss_matrix.insert("wasm".to_string(), native_loss * 2);
+    loss_matrix
+}
+
+/// The outcome the engine's **real** outcome model assigns to `action` for a
+/// decision recorded with `native_loss`. This is the same function
+/// `CounterfactualReplayEngine::compute_counterfactual` uses to score
+/// substituted actions, so seeding recorded outcomes from it makes the recorded
+/// trace a model-consistent ground truth rather than a hand-picked number.
+fn recorded_outcome(action: &str, native_loss: i64) -> i64 {
+    estimate_lane_outcome_millionths(action, &loss_matrix_for(native_loss), RECORDED_THRESHOLD)
+}
+
+/// A recorded decision whose `outcome_millionths` is produced by the engine's
+/// real outcome model applied to its chosen `action` and `native_loss` — never
+/// a hand-set magic number. A bug in how the model turns an action/loss into an
+/// outcome is therefore observable in the original column the engine reports.
+fn make_decision(index: u64, action: &str, native_loss: i64) -> DecisionSnapshot {
+    let loss_matrix = loss_matrix_for(native_loss);
+    let outcome_millionths =
+        estimate_lane_outcome_millionths(action, &loss_matrix, RECORDED_THRESHOLD);
 
     DecisionSnapshot {
         decision_index: index,
@@ -63,11 +111,11 @@ fn make_decision(index: u64, action: &str, outcome: i64) -> DecisionSnapshot {
         policy_version: 1,
         epoch: test_epoch(),
         tick: 100 + index,
-        threshold_millionths: 500_000,
+        threshold_millionths: RECORDED_THRESHOLD,
         loss_matrix,
         evidence_hashes: vec![ContentHash::compute(b"evidence")],
         chosen_action: action.to_string(),
-        outcome_millionths: outcome,
+        outcome_millionths,
         extension_id: "ext-1".to_string(),
         nondeterminism_range: (0, 0),
     }
@@ -135,12 +183,20 @@ fn default_engine() -> CounterfactualReplayEngine {
     CounterfactualReplayEngine::new(ReplayEngineConfig::default())
 }
 
+/// The (chosen-action, native-loss) spec for the decisions in `simple_trace`.
+/// Shared so the model-ground-truth tests can recompute the expected outcomes
+/// from the exact same inputs the trace was built from.
+const SIMPLE_TRACE_SPEC: &[(&str, i64)] =
+    &[("native", 800_000), ("wasm", 600_000), ("native", 900_000)];
+
 fn simple_trace() -> TraceRecord {
-    make_trace(vec![
-        make_decision(0, "native", 800_000),
-        make_decision(1, "wasm", 600_000),
-        make_decision(2, "native", 900_000),
-    ])
+    make_trace(
+        SIMPLE_TRACE_SPEC
+            .iter()
+            .enumerate()
+            .map(|(index, (action, native_loss))| make_decision(index as u64, action, *native_loss))
+            .collect(),
+    )
 }
 
 fn unique_fleet_dir(label: &str) -> PathBuf {
@@ -151,12 +207,12 @@ fn unique_fleet_dir(label: &str) -> PathBuf {
     ))
 }
 
-fn make_node_trace(node_id: &str, trace_id: &str, outcomes: &[i64]) -> TraceRecord {
-    let decisions: Vec<DecisionSnapshot> = outcomes
+fn make_node_trace(node_id: &str, trace_id: &str, native_losses: &[i64]) -> TraceRecord {
+    let decisions: Vec<DecisionSnapshot> = native_losses
         .iter()
         .enumerate()
-        .map(|(index, outcome)| {
-            let mut decision = make_decision(index as u64, "native", *outcome);
+        .map(|(index, native_loss)| {
+            let mut decision = make_decision(index as u64, "native", *native_loss);
             decision.trace_id = trace_id.to_string();
             decision.decision_id = format!("{trace_id}-decision-{index}");
             decision
@@ -246,7 +302,13 @@ fn substituted_policy_snapshot_load_from_file_drives_fleet_replay() {
     fs::create_dir_all(&root).unwrap();
     let trace = make_node_trace("node-load", "trace-load-1", &[820_000, 610_000]);
     write_trace(&root, "node-load/trace-load-1.json", &trace);
-    let policy_path = root.join("substituted-policy.json");
+    // The policy snapshot must live OUTSIDE the scanned fleet root:
+    // `compare_fleet_trace_dir` recursively decodes every `*.json` under `root`
+    // as a `TraceRecord`, so a policy file inside it would be (mis)read as a
+    // malformed trace and fail the whole replay with `FleetTraceDecode`.
+    let policy_dir = unique_fleet_dir("policy-load-replay-snapshot");
+    fs::create_dir_all(&policy_dir).unwrap();
+    let policy_path = policy_dir.join("substituted-policy.json");
     fs::write(
         &policy_path,
         serde_json::to_vec(&substituted_policy_snapshot(default_scope())).unwrap(),
@@ -1256,4 +1318,110 @@ fn global_assumptions_non_empty() {
         assert!(!a.assumption_id.is_empty());
         assert!(!a.description.is_empty());
     }
+}
+
+// ===========================================================================
+// 25. Outcome ground truth — the recorded and counterfactual columns are real
+//     model outputs, not echoed magic numbers (bd-bg9l1.4)
+// ===========================================================================
+
+#[test]
+fn original_total_is_real_model_ground_truth() {
+    // The engine reports the recorded `outcome_millionths` verbatim in the
+    // original column. Because those outcomes are produced by the engine's real
+    // outcome model, the reported total must equal an independent in-test
+    // recomputation through that same model. If the recorded outcomes were
+    // arbitrary hand-set numbers this would only prove "the engine echoes what I
+    // wrote"; tying both sides to the model gives it teeth — a regression in how
+    // an action/loss becomes an outcome is now observable here.
+    let mut engine = default_engine();
+    let trace = simple_trace();
+    let policies = vec![make_alternate_policy("alt", "d")];
+    let result = engine
+        .compare(&[trace], &policies, &default_scope(), None)
+        .unwrap();
+    let report = &result.policy_reports[0];
+
+    let expected: i64 = SIMPLE_TRACE_SPEC
+        .iter()
+        .map(|(action, native_loss)| recorded_outcome(action, *native_loss))
+        .sum();
+    assert_eq!(
+        report.total_original_outcome_millionths, expected,
+        "the reported original total must equal the real model's score for the recorded decisions"
+    );
+
+    // Teeth: the outcomes are genuinely loss-sensitive, not a constant. Every
+    // chosen action carries loss, so the recorded total is strictly below the
+    // zero-loss ceiling the model assigns the (unpriced) fallback action. A
+    // model that ignored loss (returned a constant) would collapse these and
+    // fail here.
+    let zero_loss_ceiling: i64 = SIMPLE_TRACE_SPEC
+        .iter()
+        .map(|(_, native_loss)| {
+            estimate_lane_outcome_millionths(
+                &LaneAction::FallbackSafe.to_string(),
+                &loss_matrix_for(*native_loss),
+                RECORDED_THRESHOLD,
+            )
+        })
+        .sum();
+    assert!(
+        expected < zero_loss_ceiling,
+        "loss must move the outcome: recorded={expected}, zero-loss ceiling={zero_loss_ceiling}"
+    );
+}
+
+#[test]
+fn fallback_override_total_is_real_model_score() {
+    // A forced-`FallbackSafe` policy makes the engine re-score every decision on
+    // the substituted action through the **real** model. With `fallback_safe`
+    // absent from each decision's loss matrix the model prices it at the
+    // zero-loss ceiling, so the counterfactual total must equal the exact model
+    // score for the forced action — not merely "some different number". This
+    // proves the engine runs the genuine model on the substituted action rather
+    // than fabricating a delta over the recorded numbers.
+    let mut engine = default_engine();
+    let trace = simple_trace();
+    let policies = vec![make_override_policy("force-safe", LaneAction::FallbackSafe)];
+    let result = engine
+        .compare(&[trace], &policies, &default_scope(), None)
+        .unwrap();
+    let report = &result.policy_reports[0];
+
+    let forced = LaneAction::FallbackSafe.to_string();
+    let expected_cf: i64 = SIMPLE_TRACE_SPEC
+        .iter()
+        .map(|(_, native_loss)| {
+            estimate_lane_outcome_millionths(
+                &forced,
+                &loss_matrix_for(*native_loss),
+                RECORDED_THRESHOLD,
+            )
+        })
+        .sum();
+    let expected_original: i64 = SIMPLE_TRACE_SPEC
+        .iter()
+        .map(|(action, native_loss)| recorded_outcome(action, *native_loss))
+        .sum();
+
+    assert_eq!(
+        report.total_counterfactual_outcome_millionths, expected_cf,
+        "the counterfactual total must equal the real model's score for the forced fallback action"
+    );
+    assert_eq!(
+        report.total_original_outcome_millionths, expected_original,
+        "the original column must remain the model-derived recorded ground truth"
+    );
+    assert_eq!(
+        report.net_improvement_millionths,
+        expected_cf - expected_original,
+        "net improvement must be the exact model-computed delta, not a fabricated one"
+    );
+    // Teeth: the perturbation genuinely moved the outcome (the engine is not a
+    // no-op echoing the recorded column).
+    assert_ne!(
+        report.total_original_outcome_millionths, report.total_counterfactual_outcome_millionths,
+        "forcing the fallback action must move the outcome away from the recorded one"
+    );
 }

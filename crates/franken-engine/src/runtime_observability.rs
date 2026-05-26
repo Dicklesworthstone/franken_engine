@@ -19,13 +19,22 @@
 //!   denial, so `capability_denial_total` and the structured security log
 //!   reflect actual runtime denials (exposed via
 //!   `InterpreterCore::security_metrics` / `security_observability`).
-//! - **authentication failures, replay drops, checkpoint violations,
-//!   revocation checks, cross-zone references** — NOT YET WIRED. These
-//!   `record_*` methods are presently invoked only from this module's tests.
-//!   Their real failure sites (signature/attestation verification, the replay
-//!   engine, checkpoint enforcement, revocation freshness checks, cross-zone
-//!   reference decisions) must still be wired before the counters reflect
-//!   production events. Tracked as follow-up to `bd-unc29`.
+//! - **authentication failures** — WIRED. The Merkle-signed evidence-envelope
+//!   verification path in `session_signing_batch` exposes
+//!   `MerkleSignedEnvelope::verify_observed` / `verify_with_key_observed`, which
+//!   call [`RuntimeSecurityObservability::record_auth_failure`] on every real
+//!   verification failure (signature, root, inclusion-proof, or key mismatch),
+//!   classified fail-closed as [`AuthFailureType::SignatureInvalid`]. Tracked
+//!   under `bd-x92qq` (follow-up to `bd-unc29`).
+//! - **replay drops, checkpoint violations, revocation checks, cross-zone
+//!   references** — NOT YET WIRED. These `record_*` methods are presently
+//!   invoked only from this module's tests. Their real failure sites (an
+//!   anti-replay session-sequence guard — note `ReplayDropReason` is
+//!   `{DuplicateSeq, StaleSeq, CrossSession}`, i.e. message-sequence dedup, not
+//!   `deterministic_replay::ReplayEngine` divergence — checkpoint enforcement,
+//!   revocation freshness checks, and cross-zone reference decisions) must
+//!   still be wired before the counters reflect production events. Tracked as
+//!   `bd-x92qq` (follow-up to `bd-unc29`).
 //!
 //! Note: capability denials also remain observable through the interpreter's
 //! `WitnessEventKind::CapabilityChecked` witness stream; this surface adds the

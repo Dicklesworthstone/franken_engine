@@ -37,6 +37,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::evidence_ledger::EvidenceEntry;
 use crate::hash_tiers::ContentHash;
+use crate::runtime_observability::{
+    AuthFailureType, RuntimeSecurityObservability, SecurityEventContext,
+};
 use crate::signature_preimage::{
     Signature, SignatureError, SigningKey, VerificationKey, sign_preimage, verify_signature,
 };
@@ -148,13 +151,21 @@ impl fmt::Display for BatchError {
             }
             BatchError::Signing(e) => write!(f, "merkle root signing failed: {e}"),
             BatchError::LeafIndexOutOfRange { index, tree_size } => {
-                write!(f, "leaf index {index} out of range for tree size {tree_size}")
+                write!(
+                    f,
+                    "leaf index {index} out of range for tree size {tree_size}"
+                )
             }
             BatchError::RootMismatch => {
-                write!(f, "inclusion proof did not reconstruct the signed merkle root")
+                write!(
+                    f,
+                    "inclusion proof did not reconstruct the signed merkle root"
+                )
             }
             BatchError::SignatureInvalid(e) => write!(f, "root signature verification failed: {e}"),
-            BatchError::KeyMismatch => write!(f, "envelope producer key did not match expected key"),
+            BatchError::KeyMismatch => {
+                write!(f, "envelope producer key did not match expected key")
+            }
         }
     }
 }
@@ -405,8 +416,12 @@ impl MerkleSignedEnvelope {
             &self.merkle_root,
             self.timestamp_ns,
         );
-        verify_signature(&self.verification_key, preimage.as_bytes(), &self.root_signature)
-            .map_err(BatchError::SignatureInvalid)
+        verify_signature(
+            &self.verification_key,
+            preimage.as_bytes(),
+            &self.root_signature,
+        )
+        .map_err(BatchError::SignatureInvalid)
     }
 
     /// As [`verify`](Self::verify), but also pin the producer key to an expected
@@ -416,6 +431,89 @@ impl MerkleSignedEnvelope {
             return Err(BatchError::KeyMismatch);
         }
         self.verify()
+    }
+
+    /// Observability-aware variant of [`verify`](Self::verify).
+    ///
+    /// Behaviour and return value are identical to `verify()`; this is the real
+    /// failure site for the mandatory `auth_failure_total` runtime-security
+    /// counter (bd-x92qq, follow-up to bd-unc29). On any verification failure it
+    /// records a structured auth-failure event into `observability` (incrementing
+    /// `auth_failure_total{failure_type=...}`) using a deterministic
+    /// [`SecurityEventContext`] derived from the envelope's signed-root fields.
+    /// Every envelope-verification failure is a failure to authenticate the
+    /// single shared root signature, so it classifies as
+    /// [`AuthFailureType::SignatureInvalid`]; see [`auth_failure_type_for`].
+    pub fn verify_observed(
+        &self,
+        observability: &mut RuntimeSecurityObservability,
+    ) -> Result<(), BatchError> {
+        let result = self.verify();
+        if let Err(ref err) = result {
+            observability.record_auth_failure(
+                self.auth_event_context(),
+                auth_failure_type_for(err),
+                None,
+                None,
+            );
+        }
+        result
+    }
+
+    /// Observability-aware variant of [`verify_with_key`](Self::verify_with_key).
+    ///
+    /// As [`verify_observed`](Self::verify_observed), but also pins the producer
+    /// key. A key mismatch is itself an authentication failure (the envelope is
+    /// not authentic under the expected identity) and is recorded.
+    pub fn verify_with_key_observed(
+        &self,
+        expected: &VerificationKey,
+        observability: &mut RuntimeSecurityObservability,
+    ) -> Result<(), BatchError> {
+        let result = self.verify_with_key(expected);
+        if let Err(ref err) = result {
+            observability.record_auth_failure(
+                self.auth_event_context(),
+                auth_failure_type_for(err),
+                None,
+                None,
+            );
+        }
+        result
+    }
+
+    /// Deterministic security-event context for this envelope's verification,
+    /// derived purely from the signed-root fields so replays produce identical
+    /// events. No secret material is included.
+    fn auth_event_context(&self) -> SecurityEventContext {
+        SecurityEventContext {
+            timestamp_ns: self.timestamp_ns,
+            trace_id: format!("batch-{:032x}", self.batch_id.as_u128()),
+            principal_id: self.producer_id.clone(),
+            decision_id: self.merkle_root.to_hex(),
+            policy_id: "session_signing_root_verify".to_string(),
+            zone_id: "evidence_signing".to_string(),
+            component: "session_signing_batch".to_string(),
+        }
+    }
+}
+
+/// Classify an envelope-verification [`BatchError`] into the runtime-security
+/// auth-failure taxonomy. Every verification failure means the envelope did not
+/// authenticate against its single shared ed25519 root signature — whether the
+/// inclusion proof, the re-derived root, the key, or the signature itself fails
+/// — so all map (fail-closed) to [`AuthFailureType::SignatureInvalid`]. The
+/// taxonomy has no finer-grained envelope-structure class, and conflating a
+/// structural failure into a weaker bucket would under-report tampering.
+fn auth_failure_type_for(err: &BatchError) -> AuthFailureType {
+    match err {
+        BatchError::SignatureInvalid(_)
+        | BatchError::RootMismatch
+        | BatchError::LeafIndexOutOfRange { .. }
+        | BatchError::KeyMismatch
+        | BatchError::EmptyBatch
+        | BatchError::CanonicalizationFailed { .. }
+        | BatchError::Signing(_) => AuthFailureType::SignatureInvalid,
     }
 }
 
@@ -611,8 +709,13 @@ mod tests {
         let envs = batch_of(2).finalize().expect("finalize");
         let right = test_key(0x11).verification_key();
         let wrong = test_key(0x33).verification_key();
-        envs[0].verify_with_key(&right).expect("matching key verifies");
-        assert_eq!(envs[0].verify_with_key(&wrong), Err(BatchError::KeyMismatch));
+        envs[0]
+            .verify_with_key(&right)
+            .expect("matching key verifies");
+        assert_eq!(
+            envs[0].verify_with_key(&wrong),
+            Err(BatchError::KeyMismatch)
+        );
     }
 
     #[test]
@@ -626,6 +729,111 @@ mod tests {
                 tree_size: 2
             })
         );
+    }
+
+    // --- bd-x92qq: auth_failure_total wired into the envelope verify path ---
+
+    #[test]
+    fn verify_observed_passes_through_success_without_recording() {
+        let envs = batch_of(3).finalize().expect("finalize");
+        let mut obs = RuntimeSecurityObservability::new();
+        // A genuinely valid envelope: same return value as verify(), and no
+        // false-positive auth-failure event is recorded.
+        envs[0]
+            .verify_observed(&mut obs)
+            .expect("valid envelope verifies");
+        // The counter map is pre-seeded with a zero entry for every
+        // AuthFailureType, so assert nothing was *counted* (the totals stay 0)
+        // and that no structured security event was emitted.
+        assert_eq!(
+            obs.metrics().auth_failure_total.values().sum::<u64>(),
+            0,
+            "no auth failure should be recorded for a passing verification"
+        );
+        assert!(obs.logs().is_empty());
+    }
+
+    #[test]
+    fn verify_observed_records_auth_failure_on_invalid_signature() {
+        let mut envs = batch_of(3).finalize().expect("finalize");
+        // Swap to a different valid key: the shared root signature was made by
+        // 0x11, so verification under 0x22 fails with SignatureInvalid.
+        envs[0].verification_key = test_key(0x22).verification_key();
+
+        let mut obs = RuntimeSecurityObservability::new();
+        match envs[0].verify_observed(&mut obs) {
+            Err(BatchError::SignatureInvalid(_)) => {}
+            other => panic!("expected SignatureInvalid, got {other:?}"),
+        }
+
+        // Counter incremented at the real failure site.
+        assert_eq!(
+            obs.metrics()
+                .auth_failure_total
+                .get(&AuthFailureType::SignatureInvalid)
+                .copied(),
+            Some(1)
+        );
+        // A single, fully-formed structured event with a deterministic context.
+        let logs = obs.logs();
+        assert_eq!(logs.len(), 1);
+        let ev = &logs[0];
+        assert!(ev.required_fields_present(), "context must fill all fields");
+        assert_eq!(ev.event_type, "auth_failure");
+        assert_eq!(ev.component, "session_signing_batch");
+        assert_eq!(ev.principal_id, "producer-1");
+        assert_eq!(
+            ev.metadata.get("failure_type").map(String::as_str),
+            Some("signature_invalid")
+        );
+    }
+
+    #[test]
+    fn verify_observed_records_structural_failures_fail_closed() {
+        // A tampered entry breaks the root reconstruction (RootMismatch). It is
+        // still an authentication failure of the signed root, so it must be
+        // recorded — not silently swallowed.
+        let mut envs = batch_of(5).finalize().expect("finalize");
+        envs[2].entry.policy_id.push_str("-tampered");
+
+        let mut obs = RuntimeSecurityObservability::new();
+        assert_eq!(
+            envs[2].verify_observed(&mut obs),
+            Err(BatchError::RootMismatch)
+        );
+        assert_eq!(
+            obs.metrics()
+                .auth_failure_total
+                .get(&AuthFailureType::SignatureInvalid)
+                .copied(),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn verify_with_key_observed_records_key_mismatch() {
+        let envs = batch_of(2).finalize().expect("finalize");
+        let wrong = test_key(0x33).verification_key();
+
+        let mut obs = RuntimeSecurityObservability::new();
+        assert_eq!(
+            envs[0].verify_with_key_observed(&wrong, &mut obs),
+            Err(BatchError::KeyMismatch)
+        );
+        assert_eq!(
+            obs.metrics()
+                .auth_failure_total
+                .get(&AuthFailureType::SignatureInvalid)
+                .copied(),
+            Some(1)
+        );
+        // The pinned-key happy path verifies and records nothing.
+        let right = test_key(0x11).verification_key();
+        let mut obs_ok = RuntimeSecurityObservability::new();
+        envs[0]
+            .verify_with_key_observed(&right, &mut obs_ok)
+            .expect("matching key verifies");
+        assert!(obs_ok.logs().is_empty());
     }
 
     #[test]

@@ -240,6 +240,57 @@ problem entirely because there is exactly one buffer and recursion only appends.
 - Recursion-safety property stated explicitly (§4, and the "Reality check"). ✅
 - No code change in this bead (implementation is `bd-o4cbn.5.3`). ✅
 
+## EngineObjectId hex zero-alloc rewrite (H3)
+
+The H3 pass (`bd-o4cbn.2`) replaced `EngineObjectId::to_hex`'s per-byte
+`format!("{byte:02x}")` loop with `hex::encode` (a static-LUT encoder, ~10×
+faster on that path). In the pass1 profile this was hotspot rank 5
+(`flat_iterator_protocol_trace.txt`: < 1 % of total cycles but **> 50 % of the
+`iterator_protocol_trace` local self-time**), so the win concentrates almost
+entirely in that sub-bench. The rewrite is output-equivalent — hex bytes are
+byte-identical to the prior loop (pinned by the H3.3 equivalence + property
+tests, `cargo test --lib engine_object_id`).
+
+### Verification (two reproducible gates)
+
+- **E2E smoke** — `scripts/perf/run_perf_h3_smoke.sh` (PERF-H3.5,
+  `bd-o4cbn.2.5`) runs the `engine_object_id` lib tests, builds the `hot_paths`
+  bench with the canonical pass1 flags, and runs `iterator_protocol_trace` under
+  a short Criterion budget asserting mean ≤ 3 µs. A `--self-check` mode validates
+  the pipeline without a build (CI-able on a contended tree); `--quick` runs the
+  unit test only.
+- **Statistical gate** — `scripts/perf/h3_bench_validate.sh` (PERF-H3.4,
+  `bd-o4cbn.2.4`) runs the full `real_runtime_hot_paths` Criterion group, diffs
+  every sub-bench against the frozen `pass1` baseline, and enforces the H3.4 gate
+  (iterator_protocol_trace mean ≤ 3 µs, drop ≥ 50 %, 95 % CI non-overlapping,
+  CV ≤ 10 %, no NEW > 5 % regression), emitting an H1.4-schema evidence bundle.
+
+### Measured result
+
+`real_runtime_hot_paths` Criterion group, HEAD `f8ccefa9` vs the frozen `pass1`
+baseline (`tests/artifacts/perf/20260520T214829Z-prof-pass1`), verdict run-id
+`20260526T052849Z`:
+
+| sub-bench | pass1 (ns) | current (ns) | Δ% |
+|---|---:|---:|---:|
+| iterator_protocol_trace *(H3 target)* | 6098.0 | 1417.3 | **−76.76** |
+| transport_certificate_serialization | 6674.7 | 2989.7 | −55.21 |
+| baseline_interpreter_eval | 494406.8 | 312147.1 | −36.86 |
+| evidence_ledger_bundle | 225145.0 | 146128.7 | −35.10 |
+| lowering_pipeline_ir3 | 87916.5 | 66969.7 | −23.83 |
+| scheduler_queue_commit | 58223.3 | 44658.8 | −23.30 |
+| parser_arena_materialization | 31354.0 | 24810.7 | −20.87 |
+| baseline_value_string_clone | 245111.9 | 275630.1 | **+12.45** |
+
+**H3.4 gate verdict: PASS.** `iterator_protocol_trace` drops **−76.76 %**
+(6098.0 → 1417.3 ns; well under the 3 µs budget), CV 0.75 %, and its 95 % CI
+[1415.6, 1419.6] does not overlap pass1's [6084.2, 6115.0]. The drop is
+cumulative vs `pass1` (every merged optimisation), but H3 is the dominant driver
+for this sub-bench per the hotspot analysis above. The lone cross-bench
+exceedance, `baseline_value_string_clone` +12.45 %, is the pre-existing
+regression tracked in `bd-o4cbn.15` (H3 touched no string-clone path); it is
+reported but excluded from the H3-specific gate.
+
 ## Hot-path capacity-hint sweep (H6)
 
 The H6 pass (`bd-o4cbn.4`) pre-sizes the backing allocation of hot-path

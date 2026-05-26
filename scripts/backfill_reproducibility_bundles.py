@@ -78,6 +78,15 @@ OBSERVED_CLAIMS = [
         "claim_scope": "ifc",
         "original_artifact_path": "scripts/e2e/live_ifc_declassification_smoke.sh",
         "verification_command": "./scripts/e2e/live_ifc_declassification_smoke.sh"
+    },
+    {
+        # bd-c1nbg: FE-CLAIM-023 was observed in the matrix but absent here, so
+        # the standard generator never produced its manifest.json/env.json and
+        # the claim-to-proof gate derived freshness=999 (stale -> exit 1).
+        "claim_id": "FE-CLAIM-023",
+        "claim_scope": "reproducibility",
+        "original_artifact_path": "scripts/run_rgc_cross_platform_matrix_gate.sh",
+        "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
     }
 ]
 

@@ -449,9 +449,9 @@
       "reason": "Cross-platform matrix gate validates deterministic execution across Linux, macOS, and Windows platforms with content hash verification.",
       "source_path": "README.md",
       "source_span": {
-        "end_line": 1677,
+        "end_line": 1679,
         "must_contain": "Cross-platform matrix",
-        "start_line": 1677
+        "start_line": 1679
       },
       "verification_command": "./scripts/run_rgc_cross_platform_matrix_gate.sh ci"
     },

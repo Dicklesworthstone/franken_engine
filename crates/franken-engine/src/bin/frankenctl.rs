@@ -26,6 +26,9 @@ use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngi
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
 };
+use frankenengine_engine::fleet_trace_total_order::{
+    FleetTraceNode, flatten_to_events, merge_fleet_traces, node_id_from_session,
+};
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::lowering_pipeline::{
@@ -4674,27 +4677,73 @@ fn append_benchmark_bundle_check(
     });
 }
 
+/// Load one per-node fleet trace, validate it for replay, and derive its
+/// `NodeId` (trace `session_id`, falling back to the file stem when the
+/// session id is blank). Helper for the `--fleet-trace` merge path.
+fn load_fleet_node(path: &std::path::Path) -> Result<FleetTraceNode, String> {
+    let node_trace = load_json_file::<NondeterminismTrace>(path)?;
+    node_trace.validate_for_replay().map_err(|error| {
+        format!(
+            "fleet trace validation failed for {}: {error}",
+            path.display()
+        )
+    })?;
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("fleet-node");
+    let node_id = node_id_from_session(&node_trace.session_id, stem).map_err(|error| {
+        format!(
+            "fleet replay: invalid node id for {}: {error}",
+            path.display()
+        )
+    })?;
+    Ok(FleetTraceNode::new(node_id, node_trace))
+}
+
 fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     let mut trace = load_json_file::<NondeterminismTrace>(&args.trace)?;
     trace
         .validate_for_replay()
         .map_err(|error| format!("replay failed before sequence 0: {error}"))?;
 
-    // If fleet trace is provided, merge it with the main trace
+    // If a fleet trace is provided, stitch every per-node trace into ONE
+    // globally-consistent replay order via the Lamport total-order merger
+    // (DD.1/DD.2), rather than a node-blind per-node-`sequence` sort. The
+    // primary `--trace` is the anchor node; `--fleet-trace` may point at a
+    // directory of per-node traces (one file == one node) or a single
+    // additional per-node trace file. See bd-cixqu.30.4 (DD.4).
     if let Some(fleet_trace_path) = &args.fleet_trace {
-        let fleet_trace = load_json_file::<NondeterminismTrace>(fleet_trace_path)?;
-        fleet_trace
-            .validate_for_replay()
-            .map_err(|error| format!("fleet trace validation failed: {error}"))?;
+        let mut nodes: Vec<FleetTraceNode> = Vec::new();
 
-        // Simple merge by sequence number (timestamp-based ordering)
-        let mut merged_events = trace.events.clone();
-        merged_events.extend(fleet_trace.events);
+        let anchor_id = node_id_from_session(&trace.session_id, "anchor")
+            .map_err(|error| format!("fleet replay: invalid anchor node id: {error}"))?;
+        nodes.push(FleetTraceNode::new(anchor_id, trace.clone()));
 
-        // Sort by sequence number for deterministic ordering
-        merged_events.sort_by_key(|event| event.sequence);
+        if fleet_trace_path.is_dir() {
+            // Directory of per-node traces: enumerate `*.json` files in a
+            // deterministic (filename-sorted) order; node id == file stem.
+            let mut node_files: Vec<PathBuf> = std::fs::read_dir(fleet_trace_path)
+                .map_err(|error| {
+                    format!(
+                        "fleet replay: cannot read directory {}: {error}",
+                        fleet_trace_path.display()
+                    )
+                })?
+                .filter_map(|entry| entry.ok().map(|e| e.path()))
+                .filter(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
+                .collect();
+            node_files.sort();
 
-        trace.events = merged_events;
+            for path in node_files {
+                nodes.push(load_fleet_node(&path)?);
+            }
+        } else {
+            nodes.push(load_fleet_node(fleet_trace_path)?);
+        }
+
+        let ordered = merge_fleet_traces(&nodes);
+        trace.events = flatten_to_events(ordered);
     }
     let (trace_id, decision_id, policy_id) = cli_replay_ids(&trace.session_id, args.mode);
     let session_id = trace.session_id.clone();
@@ -6343,6 +6392,14 @@ fn replay_run_usage() -> String {
         "replay run usage:",
         "  frankenctl replay run --trace <trace.json> [--compare-trace <trace.json>]",
         "      [--mode strict|best-effort|validate] [--out <report.json>]",
+        "      [--fleet-trace <dir|trace.json>]",
+        "",
+        "notes:",
+        "  --fleet-trace stitches per-node traces into one globally-consistent",
+        "  replay order using a Lamport total-order merge (clock asc, node id,",
+        "  payload hash). Pass a directory of per-node traces (one file == one",
+        "  node) or a single additional per-node trace file; --trace is the",
+        "  anchor node.",
     ]
     .join("\n")
 }

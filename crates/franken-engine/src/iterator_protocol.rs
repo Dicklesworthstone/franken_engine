@@ -659,21 +659,26 @@ pub fn collect_spread_values(trace: &IterationTrace) -> Vec<IteratorValue> {
 
 /// Human-readable summary of an iteration trace.
 pub fn render_iteration_summary(trace: &IterationTrace) -> String {
-    let mut lines = vec![
-        format!("schema_version: {}", trace.schema_version),
-        format!("trace_id: {}", trace.trace_id),
-        format!("record_id: {}", trace.record_id),
-        format!("kind: {}", trace.kind),
-        format!("events: {}", trace.events.len()),
-        format!("values_produced: {}", trace.values_produced),
-        format!("completed: {}", trace.completed),
-    ];
-
+    // Seven fixed lines, plus an optional `abrupt_completions` line. Counting
+    // abrupt completions first lets the backing Vec be sized to its exact final
+    // length (7 or 8), avoiding the 7->8 reallocation that the prior `vec![..7..]`
+    // + conditional `push` incurred on the abrupt-completion path (PERF-H6,
+    // bd-o4cbn.4). The capacity hint is pure metadata: the rendered lines and
+    // their order are unchanged.
     let abrupt_count = trace
         .events
         .iter()
         .filter(|e| !matches!(e.completion, IterationCompletion::Normal))
         .count();
+
+    let mut lines = Vec::with_capacity(7 + usize::from(abrupt_count > 0));
+    lines.push(format!("schema_version: {}", trace.schema_version));
+    lines.push(format!("trace_id: {}", trace.trace_id));
+    lines.push(format!("record_id: {}", trace.record_id));
+    lines.push(format!("kind: {}", trace.kind));
+    lines.push(format!("events: {}", trace.events.len()));
+    lines.push(format!("values_produced: {}", trace.values_produced));
+    lines.push(format!("completed: {}", trace.completed));
     if abrupt_count > 0 {
         lines.push(format!("abrupt_completions: {abrupt_count}"));
     }

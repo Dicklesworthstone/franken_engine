@@ -16,6 +16,9 @@
 //!   * `deterministic_sim_scheduler::SimReplayLog::new` — `entries` Vec (cap 128)
 //!   * `evidence_ledger::EvidenceEntryBuilder::new` — candidates/constraints/witnesses
 //!   * `lowering_pipeline::lower_ir0_to_ir3` — destructure_params/body_bindings Vecs
+//!   * `iterator_protocol::render_iteration_summary` — `lines` Vec (cap 7 or 8;
+//!     bd-o4cbn.4 follow-up: the audit's iterator-path string-builder that
+//!     previously regrew 7->8 on the abrupt-completion branch)
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::deterministic_sim_scheduler::{
@@ -27,8 +30,9 @@ use frankenengine_engine::evidence_ledger::{
 };
 use frankenengine_engine::ir_contract::Ir0Module;
 use frankenengine_engine::iterator_protocol::{
-    CloseReason, IterationKind, IterationOperation, IterationTrace, IteratorResult,
-    IteratorSymbolKind, IteratorValue, make_close_event, make_get_iterator_event, make_next_event,
+    CloseReason, IterationErrorKind, IterationKind, IterationOperation, IterationTrace,
+    IteratorResult, IteratorSymbolKind, IteratorValue, make_abrupt_event, make_close_event,
+    make_get_iterator_event, make_next_event, render_iteration_summary,
 };
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
@@ -277,4 +281,96 @@ fn lowering_destructure_and_body_bindings_are_deterministic() {
             );
         }
     }
+}
+
+/// `render_iteration_summary` builds a `lines` Vec sized to its exact final
+/// length (7 fixed lines, or 8 when there is at least one abrupt completion).
+/// The capacity hint must not change the rendered text: the line set and order
+/// must be identical to the pre-hint behaviour, and the optional
+/// `abrupt_completions` line must remain the trailing line when present.
+#[test]
+fn render_iteration_summary_lines_preserve_count_order_and_content() {
+    let trace_id = test_id("trace-sum");
+    let record_id = test_id("record-sum");
+    let iterable_ref = test_id("iterable-sum");
+    let mut trace = IterationTrace::new(trace_id, record_id.clone(), IterationKind::ForOf);
+    trace.record_event(make_get_iterator_event(
+        record_id.clone(),
+        0,
+        IteratorSymbolKind::Iterator,
+        iterable_ref,
+    ));
+    trace.record_event(make_next_event(
+        record_id.clone(),
+        1,
+        IteratorResult::value(IteratorValue::Integer(7)),
+    ));
+
+    // All-normal completions: exactly the seven fixed lines, in documented order.
+    let summary = render_iteration_summary(&trace);
+    let normal_lines: Vec<&str> = summary.lines().collect();
+    assert_eq!(normal_lines.len(), 7, "seven fixed lines, no abrupt line");
+    let normal_keys: Vec<&str> = normal_lines
+        .iter()
+        .map(|l| l.split(':').next().unwrap())
+        .collect();
+    assert_eq!(
+        normal_keys,
+        vec![
+            "schema_version",
+            "trace_id",
+            "record_id",
+            "kind",
+            "events",
+            "values_produced",
+            "completed",
+        ]
+    );
+
+    // An abrupt completion makes the final length 8 (the `with_capacity(8)`
+    // path). The capacity hint must not reorder or drop any line: the first
+    // seven lines are byte-identical to the all-normal render, and the eighth
+    // is the trailing `abrupt_completions` line.
+    trace.record_event(make_abrupt_event(
+        record_id,
+        2,
+        IterationOperation::IteratorNext {
+            result: IteratorResult::done(),
+        },
+        IterationErrorKind::UserException,
+    ));
+    let summary_abrupt = render_iteration_summary(&trace);
+    let abrupt_lines: Vec<&str> = summary_abrupt.lines().collect();
+    assert_eq!(abrupt_lines.len(), 8, "seven fixed lines + one abrupt line");
+
+    // Key order is the documented sequence with the abrupt line appended last.
+    let abrupt_keys: Vec<&str> = abrupt_lines
+        .iter()
+        .map(|l| l.split(':').next().unwrap())
+        .collect();
+    assert_eq!(
+        abrupt_keys,
+        vec![
+            "schema_version",
+            "trace_id",
+            "record_id",
+            "kind",
+            "events",
+            "values_produced",
+            "completed",
+            "abrupt_completions",
+        ]
+    );
+
+    // The id/kind header lines (indices 0..4) do not depend on recorded events,
+    // so they are byte-identical to the all-normal render — proving the capacity
+    // hint did not perturb content. (`events` and `completed` legitimately
+    // change because a third event was recorded; `values_produced` stays 1
+    // because the abrupt Next result is `done`.)
+    assert_eq!(&abrupt_lines[..4], &normal_lines[..4]);
+    assert_eq!(abrupt_lines[5], "values_produced: 1");
+    assert_eq!(
+        abrupt_lines[7], "abrupt_completions: 1",
+        "the trailing line reports exactly one abrupt completion"
+    );
 }

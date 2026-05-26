@@ -1208,13 +1208,26 @@ fn diagnostic_severity_noninterference_is_critical() {
         version: 1,
         nodes: vec![PolicyIrNode {
             node_id: "node-shared".to_string(),
-            grants: vec![AuthorityGrant {
-                subject: "shared-subject".to_string(),
-                capability: cap,
-                conditions: BTreeSet::new(),
-                scope: "default".to_string(),
-                lifetime_epochs: 10,
-            }],
+            // The same subject is granted authority in BOTH claimed-disjoint
+            // domains (scope == domain name). non_interference_pass keys
+            // domains off grant.scope, so this is a genuine overlap that MUST
+            // be flagged as a non-interference violation.
+            grants: vec![
+                AuthorityGrant {
+                    subject: "shared-subject".to_string(),
+                    capability: cap.clone(),
+                    conditions: BTreeSet::new(),
+                    scope: "domain-a".to_string(),
+                    lifetime_epochs: 10,
+                },
+                AuthorityGrant {
+                    subject: "shared-subject".to_string(),
+                    capability: cap,
+                    conditions: BTreeSet::new(),
+                    scope: "domain-b".to_string(),
+                    lifetime_epochs: 10,
+                },
+            ],
             merge_op: MergeOperator::Union,
             property_claims: claims,
             constraints: vec![Constraint::NonInterferenceClaim {
@@ -1230,9 +1243,20 @@ fn diagnostic_severity_noninterference_is_critical() {
     };
 
     let result = compiler.compile(&policy).unwrap();
-    if result.counterexamples.is_empty() {
-        return; // Skip if compiler doesn't detect this
-    }
+    // Fail-closed: a known non-interference-violating policy MUST yield a
+    // non-interference counterexample. Previously this skipped (`return`) when
+    // the set was empty, so a regression that stopped detecting the IFC
+    // violation would have passed silently green. Assert the violation IS
+    // produced, and that it is specifically the non-interference property.
+    assert!(
+        result
+            .counterexamples
+            .iter()
+            .any(|c| c.property == FormalProperty::NonInterference),
+        "compiler must detect the non-interference violation (shared-subject \
+         spans claimed-disjoint domain-a and domain-b); got counterexamples: {:?}",
+        result.counterexamples
+    );
 
     let mut synth = CounterexampleSynthesizer::new(test_config());
     synth.synthesize(&result, 1000).unwrap();

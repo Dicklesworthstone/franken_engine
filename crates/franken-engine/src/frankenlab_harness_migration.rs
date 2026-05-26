@@ -552,7 +552,7 @@ impl HarnessMigrationRegistry {
         let evidence_linked_scenarios = self.scenarios.iter().filter(|s| s.evidence_linked).count();
 
         let input_bytes = serde_json::to_vec(&(&self.scenarios, &self.containment_tests))
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let content_hash = ContentHash::compute(&input_bytes);
 
         HarnessMigrationReport {
@@ -903,7 +903,7 @@ mod tests {
         let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         let startup = reg
             .scenario(LifecycleScenarioId::Startup)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(startup.scenario_id, LifecycleScenarioId::Startup);
         assert_eq!(startup.local_harness, "frankenlab_extension_lifecycle");
     }
@@ -913,7 +913,7 @@ mod tests {
         let reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         let test = reg
             .containment_test(ContainmentTestKind::BudgetEnforcement)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(test.kind, ContainmentTestKind::BudgetEnforcement);
     }
 
@@ -924,7 +924,7 @@ mod tests {
         assert_eq!(
             *counts
                 .get("local_only")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             10
         );
     }
@@ -941,13 +941,13 @@ mod tests {
         let mut reg = HarnessMigrationRegistry::with_default_scenarios(test_epoch());
         // Migrate 3 of 10 scenarios
         reg.scenario_mut(LifecycleScenarioId::Startup)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .mark_migrated("upstream");
         reg.scenario_mut(LifecycleScenarioId::NormalShutdown)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .mark_migrated("upstream");
         reg.scenario_mut(LifecycleScenarioId::ForcedCancel)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .mark_verified();
 
         assert_eq!(reg.scenario_migration_progress_millionths(), 300_000);
@@ -982,7 +982,7 @@ mod tests {
         // Migrate all scenarios
         for scenario_id in LifecycleScenarioId::ALL {
             reg.scenario_mut(scenario_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .mark_verified();
         }
 
@@ -990,7 +990,7 @@ mod tests {
         for kind in ContainmentTestKind::ALL {
             let test = reg
                 .containment_test_mut(kind)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             test.status = MigrationStatus::Verified;
             test.upstream_test_count = test.local_test_count;
         }

@@ -325,7 +325,7 @@ mod tests {
             report
                 .instruction_stats
                 .get("LoadInt")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .count,
             2
         );
@@ -333,7 +333,7 @@ mod tests {
             report
                 .instruction_stats
                 .get("Add")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .count,
             1
         );

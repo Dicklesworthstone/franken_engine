@@ -1106,7 +1106,7 @@ mod tests {
             &test_schema_id(),
             tag.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     fn make_storage() -> InMemoryStorageAdapter {
@@ -1151,12 +1151,12 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let fetched = index
             .get_receipt(&rec.receipt_id, "t2")
-            .expect("serde deserialization should succeed");
-        assert_eq!(fetched.expect("serde deserialization should succeed"), rec);
+            .expect("operation should succeed for valid inputs");
+        assert_eq!(fetched.expect("operation should succeed for valid inputs"), rec);
     }
 
     #[test]
@@ -1166,7 +1166,7 @@ mod tests {
         assert!(
             index
                 .get_receipt(&id, "t1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
     }
@@ -1177,7 +1177,7 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = index.insert_receipt(&rec, "t2").unwrap_err();
         match err {
             SpecializationIndexError::DuplicateReceipt { .. } => {}
@@ -1266,17 +1266,17 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(
             index
                 .delete_receipt(&rec.receipt_id, "t2")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
         assert!(
             index
                 .get_receipt(&rec.receipt_id, "t3")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
     }
@@ -1288,7 +1288,7 @@ mod tests {
         assert!(
             !index
                 .delete_receipt(&id, "t1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1301,17 +1301,17 @@ mod tests {
         let mut index = make_index();
         index
             .insert_receipt(&make_record("r1", 1), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&make_record("r2", 2), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&make_record("r3", 1), "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let all = index
             .query_receipts(None, "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(all.len(), 3);
     }
 
@@ -1320,27 +1320,27 @@ mod tests {
         let mut index = make_index();
         index
             .insert_receipt(&make_record("r1", 1), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&make_record("r2", 2), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&make_record("r3", 1), "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let epoch1 = index
             .query_receipts(Some(SecurityEpoch::from_raw(1)), "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(epoch1.len(), 2);
 
         let epoch2 = index
             .query_receipts(Some(SecurityEpoch::from_raw(2)), "t5")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(epoch2.len(), 1);
 
         let epoch3 = index
             .query_receipts(Some(SecurityEpoch::from_raw(99)), "t6")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(epoch3.is_empty());
     }
 
@@ -1354,14 +1354,14 @@ mod tests {
 
         index
             .insert_receipt(&active_rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&inactive_rec, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let active = index
             .query_active_receipts("t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].receipt_id, active_rec.receipt_id);
     }
@@ -1433,17 +1433,17 @@ mod tests {
 
         index
             .insert_receipt(&r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&r2, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&r3, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let found = index
             .find_by_proof(&proof_id, "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(found.len(), 2);
     }
 
@@ -1452,12 +1452,12 @@ mod tests {
         let mut index = make_index();
         index
             .insert_receipt(&make_record("r1", 1), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let phantom = make_id("phantom-proof");
         let found = index
             .find_by_proof(&phantom, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(found.is_empty());
     }
 
@@ -1471,16 +1471,16 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let bm = make_benchmark("bm-1", "r1");
         index
             .insert_benchmark(&bm, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let benchmarks = index
             .find_benchmarks_by_receipt(&rec.receipt_id, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(benchmarks.len(), 1);
         assert_eq!(benchmarks[0].benchmark_id, "bm-1");
         assert_eq!(benchmarks[0].latency_reduction_millionths, 200_000);
@@ -1492,7 +1492,7 @@ mod tests {
         let bm = make_benchmark("bm-1", "r1");
         index
             .insert_benchmark(&bm, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = index.insert_benchmark(&bm, "t2").unwrap_err();
         match err {
             SpecializationIndexError::DuplicateBenchmark { .. } => {}
@@ -1506,18 +1506,18 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r1"), "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let benchmarks = index
             .find_benchmarks_by_receipt(&rec.receipt_id, "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(benchmarks.len(), 2);
     }
 
@@ -1527,12 +1527,12 @@ mod tests {
         let bm = make_benchmark("bm-1", "r1");
         index
             .insert_benchmark(&bm, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let other_id = make_id("r2");
         let benchmarks = index
             .find_benchmarks_by_receipt(&other_id, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(benchmarks.is_empty());
     }
 
@@ -1546,7 +1546,7 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let entry = InvalidationEntry {
             receipt_id: rec.receipt_id.clone(),
@@ -1559,13 +1559,13 @@ mod tests {
         };
         index
             .record_invalidation(&entry, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Receipt should now be inactive
         let fetched = index
             .get_receipt(&rec.receipt_id, "t3")
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert!(!fetched.active);
     }
 
@@ -1576,10 +1576,10 @@ mod tests {
         let r2 = make_record("r2", 1);
         index
             .insert_receipt(&r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&r2, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let e1 = InvalidationEntry {
             receipt_id: r1.receipt_id.clone(),
@@ -1599,28 +1599,28 @@ mod tests {
         };
         index
             .record_invalidation(&e1, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .record_invalidation(&e2, "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // All invalidations
         let all = index
             .query_invalidations(None, None, "t5")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(all.len(), 2);
 
         // Window [2000, 6000]
         let windowed = index
             .query_invalidations(Some(2000), Some(6000), "t6")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(windowed.len(), 1);
         assert_eq!(windowed[0].receipt_id, r2.receipt_id);
 
         // Window [0, 1000]
         let early = index
             .query_invalidations(Some(0), Some(1000), "t7")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(early.len(), 1);
         assert_eq!(early[0].receipt_id, r1.receipt_id);
     }
@@ -1650,7 +1650,7 @@ mod tests {
             let rec = make_record(&format!("inv-{i}"), 1);
             index
                 .insert_receipt(&rec, "t1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let entry = InvalidationEntry {
                 receipt_id: rec.receipt_id.clone(),
                 reason,
@@ -1659,12 +1659,12 @@ mod tests {
             };
             index
                 .record_invalidation(&entry, "t2")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let all = index
             .query_invalidations(None, None, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(all.len(), 4);
     }
 
@@ -1677,11 +1677,11 @@ mod tests {
         let mut index = make_index();
         index
             .insert_receipt(&make_record("r1", 1), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let chain = index
             .build_audit_chain("t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.len(), 1);
         assert!(chain[0].benchmark_id.is_none());
         assert!(chain[0].latency_reduction_millionths.is_none());
@@ -1693,14 +1693,14 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let chain = index
             .build_audit_chain("t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.len(), 1);
         assert_eq!(chain[0].benchmark_id.as_deref(), Some("bm-1"));
         assert_eq!(chain[0].latency_reduction_millionths, Some(200_000));
@@ -1714,17 +1714,17 @@ mod tests {
         rec.proof_types = vec![ProofType::CapabilityWitness, ProofType::FlowProof];
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r1"), "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let chain = index
             .build_audit_chain("t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 2 proofs * 2 benchmarks = 4 entries
         assert_eq!(chain.len(), 4);
     }
@@ -1734,21 +1734,21 @@ mod tests {
         let mut index = make_index();
         index
             .insert_receipt(&make_record("r1", 1), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&make_record("r2", 1), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r2"), "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = index
             .reverse_audit_from_benchmark("bm-1", "t5")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].receipt_id, make_id("r1"));
     }
@@ -1771,17 +1771,17 @@ mod tests {
 
         index
             .insert_receipt(&r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&r2, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&r3, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary = index
             .extension_summary("ext-A", "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.total_specializations, 2);
         assert_eq!(summary.active_specializations, 1);
         assert_eq!(summary.invalidated_specializations, 1);
@@ -1793,7 +1793,7 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut bm1 = make_benchmark("bm-1", "r1");
         bm1.latency_reduction_millionths = 100_000;
@@ -1802,14 +1802,14 @@ mod tests {
 
         index
             .insert_benchmark(&bm1, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&bm2, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary = index
             .extension_summary("ext-1", "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.total_benchmarks, 2);
         assert_eq!(summary.avg_latency_reduction_millionths, 200_000);
     }
@@ -1819,7 +1819,7 @@ mod tests {
         let mut index = make_index();
         let summary = index
             .extension_summary("nonexistent", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.total_specializations, 0);
         assert_eq!(summary.active_specializations, 0);
         assert_eq!(summary.total_benchmarks, 0);
@@ -1836,7 +1836,7 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index.insert_receipt(&rec, "t2").unwrap_err(); // duplicate
 
         assert_eq!(index.events().len(), 2);
@@ -1858,7 +1858,7 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "trace-42")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = &index.events()[0];
         assert_eq!(event.trace_id, "trace-42");
@@ -1961,23 +1961,23 @@ mod tests {
         let r2 = make_record("r2", 1);
         index
             .insert_receipt(&r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&r2, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 2. Add benchmarks
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r2"), "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 3. Build audit chain (should have 2 entries)
         let chain = index
             .build_audit_chain("t5")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.len(), 2);
         assert!(chain.iter().all(|e| e.benchmark_id.is_some()));
 
@@ -1993,26 +1993,26 @@ mod tests {
         };
         index
             .record_invalidation(&inv, "t6")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 5. Verify r1 is inactive
         let fetched = index
             .get_receipt(&r1.receipt_id, "t7")
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert!(!fetched.active);
 
         // 6. Active query should only return r2
         let active = index
             .query_active_receipts("t8")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(active.len(), 1);
         assert_eq!(active[0].receipt_id, r2.receipt_id);
 
         // 7. Summary
         let summary = index
             .extension_summary("ext-1", "t9")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.total_specializations, 2);
         assert_eq!(summary.active_specializations, 1);
         assert_eq!(summary.invalidated_specializations, 1);
@@ -2070,11 +2070,11 @@ mod tests {
             let rec = make_record("r1", 1);
             index
                 .insert_receipt(&rec, "t1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             index
                 .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-                .expect("serde deserialization should succeed");
-            serde_json::to_string(index.events()).expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs");
+            serde_json::to_string(index.events()).expect("serialization should succeed")
         };
         assert_eq!(run(), run());
     }
@@ -2170,7 +2170,7 @@ mod tests {
         let mut index = make_index();
         let result = index
             .get_receipt(&make_id("nonexistent"), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none());
     }
 
@@ -2179,7 +2179,7 @@ mod tests {
         let mut index = make_index();
         let active = index
             .query_active_receipts("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(active.is_empty());
     }
 
@@ -2190,7 +2190,7 @@ mod tests {
         // insert_benchmark does not require the receipt to exist beforehand
         index
             .insert_benchmark(&bm, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2198,7 +2198,7 @@ mod tests {
         let mut index = make_index();
         let chain = index
             .build_audit_chain("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(chain.is_empty());
     }
 
@@ -2208,7 +2208,7 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let inv = InvalidationEntry {
             receipt_id: make_id("r1"),
@@ -2221,16 +2221,16 @@ mod tests {
         };
         index
             .record_invalidation(&inv, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Second invalidation should succeed without error
         index
             .record_invalidation(&inv, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let fetched = index
             .get_receipt(&rec.receipt_id, "t4")
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert!(!fetched.active);
     }
 
@@ -2240,17 +2240,17 @@ mod tests {
         let r1 = make_record("r1", 1);
         index
             .insert_receipt(&r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut bm = make_benchmark("bm-1", "r1");
         bm.latency_reduction_millionths = 200_000;
         index
             .insert_benchmark(&bm, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary = index
             .extension_summary("ext-1", "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.total_benchmarks, 1);
         assert_eq!(summary.avg_latency_reduction_millionths, 200_000);
     }
@@ -2279,11 +2279,11 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // No benchmark inserted — chain entry should have benchmark_id=None
         let chain = index
             .build_audit_chain("t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.len(), 1);
         assert!(chain[0].benchmark_id.is_none());
         assert!(chain[0].latency_reduction_millionths.is_none());
@@ -2296,20 +2296,20 @@ mod tests {
         let r2 = make_record("r2", 1);
         index
             .insert_receipt(&r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&r2, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-2", "r2"), "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = index
             .reverse_audit_from_benchmark("bm-1", "t5")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].receipt_id, r1.receipt_id);
     }
@@ -2320,14 +2320,14 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = index
             .reverse_audit_from_benchmark("bm-nonexistent", "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_empty());
     }
 
@@ -2337,7 +2337,7 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let inv = InvalidationEntry {
             receipt_id: make_id("r1"),
@@ -2350,11 +2350,11 @@ mod tests {
         };
         index
             .record_invalidation(&inv, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = index
             .query_invalidations(None, None, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].receipt_id, make_id("r1"));
     }
@@ -2366,7 +2366,7 @@ mod tests {
             let rec = make_record(&format!("r{i}"), 1);
             index
                 .insert_receipt(&rec, &format!("t-ins-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let inv = InvalidationEntry {
                 receipt_id: make_id(&format!("r{i}")),
                 reason: InvalidationReason::ManualRevocation {
@@ -2377,13 +2377,13 @@ mod tests {
             };
             index
                 .record_invalidation(&inv, &format!("t-inv-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // Only entries in [2000, 3000]
         let results = index
             .query_invalidations(Some(2000), Some(3000), "t-q")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 2);
     }
 
@@ -2393,7 +2393,7 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = index.insert_receipt(&rec, "t2").unwrap_err();
         let msg = err.to_string();
         assert!(
@@ -2408,7 +2408,7 @@ mod tests {
         let bm = make_benchmark("bm-1", "r1");
         index
             .insert_benchmark(&bm, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = index.insert_benchmark(&bm, "t2").unwrap_err();
         let msg = err.to_string();
         assert!(!msg.is_empty());
@@ -2421,11 +2421,11 @@ mod tests {
             let rec = make_record(&format!("r-{i}"), 1);
             index
                 .insert_receipt(&rec, &format!("t-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let active = index
             .query_active_receipts("t-q")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(active.len(), 20);
     }
 
@@ -2465,13 +2465,13 @@ mod tests {
         let rec = make_record("r1", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&make_benchmark("bm-1", "r1"), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = index
             .build_audit_chain("t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // insert_receipt + insert_benchmark + build_audit_chain = at least 3 events
         assert!(
             index.events().len() >= 3,
@@ -2487,10 +2487,10 @@ mod tests {
         let r2 = make_record("r2", 1);
         index
             .insert_receipt(&r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&r2, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut bm1 = make_benchmark("bm-1", "r1");
         bm1.latency_reduction_millionths = 100_000;
@@ -2498,14 +2498,14 @@ mod tests {
         bm2.latency_reduction_millionths = 300_000;
         index
             .insert_benchmark(&bm1, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_benchmark(&bm2, "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary = index
             .extension_summary("ext-1", "t5")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.total_benchmarks, 2);
         assert_eq!(summary.avg_latency_reduction_millionths, 200_000);
     }
@@ -2646,11 +2646,11 @@ mod tests {
             rec.optimization_class = *class;
             index
                 .insert_receipt(&rec, &format!("t-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let all = index
             .query_receipts(None, "t-q")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(all.len(), 4);
         let found_classes: std::collections::BTreeSet<String> = all
             .iter()
@@ -2672,11 +2672,11 @@ mod tests {
             rec.proof_types = vec![*pt];
             index
                 .insert_receipt(&rec, &format!("t-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let all = index
             .query_receipts(None, "t-q")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(all.len(), 3);
         // Query order is not guaranteed, so collect all proof types
         let found_types: std::collections::BTreeSet<String> =
@@ -2695,10 +2695,10 @@ mod tests {
         let mut index = make_index();
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let chain = index
             .build_audit_chain("t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // No proof inputs means no chain entries for this receipt
         assert!(chain.is_empty());
     }
@@ -2717,10 +2717,10 @@ mod tests {
         let mut index = make_index();
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let chain = index
             .build_audit_chain("t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.len(), 5);
         assert_eq!(chain[2].proof_type, ProofType::ReplayMotif);
     }
@@ -2774,10 +2774,10 @@ mod tests {
         };
         index
             .record_invalidation(&entry, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let results = index
             .query_invalidations(None, None, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert!(!results[0].fallback_confirmed);
     }
@@ -2788,10 +2788,10 @@ mod tests {
         let rec = make_record("del-evt", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .delete_receipt(&rec.receipt_id, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let delete_events: Vec<_> = index
             .events()
@@ -2808,7 +2808,7 @@ mod tests {
         let id = make_id("missing");
         let deleted = index
             .delete_receipt(&id, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!deleted);
 
         let delete_events: Vec<_> = index
@@ -2910,14 +2910,14 @@ mod tests {
         r2.proof_input_ids = vec![make_id("p4")];
         index
             .insert_receipt(&r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         index
             .insert_receipt(&r2, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary = index
             .extension_summary("ext-1", "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.proof_utilization_count, 4); // 3 + 1
     }
 
@@ -2927,7 +2927,7 @@ mod tests {
         let rec = make_record("r-ew", 1);
         index
             .insert_receipt(&rec, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let inv = InvalidationEntry {
             receipt_id: make_id("r-ew"),
             reason: InvalidationReason::EpochChange {
@@ -2939,18 +2939,18 @@ mod tests {
         };
         index
             .record_invalidation(&inv, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Window entirely before the invalidation
         let results = index
             .query_invalidations(Some(1), Some(100), "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(results.is_empty());
 
         // Window entirely after the invalidation
         let results = index
             .query_invalidations(Some(10_000), Some(20_000), "t4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(results.is_empty());
     }
 

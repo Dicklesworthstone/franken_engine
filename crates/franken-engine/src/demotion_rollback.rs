@@ -1205,7 +1205,7 @@ mod tests {
     fn test_signing_key() -> SigningKey {
         // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
         // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
-        SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn test_promotion_receipt() -> ReplacementReceipt {
@@ -1303,7 +1303,7 @@ mod tests {
         // SAFETY: Fixed 32-byte array is valid signing key format for test purposes.
         // SigningKey::from_bytes only fails on invalid length (not 32 bytes).
         let wrong_key =
-            SigningKey::from_bytes([99u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([99u8; 32]).expect("operation should succeed for valid inputs");
 
         let receipt = DemotionReceipt::create_signed(
             &key,
@@ -1499,11 +1499,11 @@ mod tests {
         // so evaluation field must be Some (monitor.is_demotion_triggered() == true).
         let eval = result
             .evaluation
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(eval.severity, DemotionSeverity::Critical);
         // SAFETY: Test verifies critical demotion was triggered,
         // so reason field must be Some (severity is Critical).
-        match eval.reason.expect("serde deserialization should succeed") {
+        match eval.reason.expect("operation should succeed for valid inputs") {
             DemotionReason::SemanticDivergence {
                 divergence_count, ..
             } => assert_eq!(divergence_count, 1),
@@ -1632,10 +1632,10 @@ mod tests {
         // so evaluation field must be Some (demotion was triggered).
         let eval = result
             .evaluation
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test verifies performance breach demotion was triggered,
         // so reason field must be Some (evaluation exists with specific reason).
-        match eval.reason.expect("serde deserialization should succeed") {
+        match eval.reason.expect("operation should succeed for valid inputs") {
             DemotionReason::PerformanceBreach {
                 metric_name,
                 observed_millionths,
@@ -1757,8 +1757,8 @@ mod tests {
 
         let eval = result
             .evaluation
-            .expect("serde deserialization should succeed");
-        match eval.reason.expect("serde deserialization should succeed") {
+            .expect("operation should succeed for valid inputs");
+        match eval.reason.expect("operation should succeed for valid inputs") {
             DemotionReason::CapabilityViolation {
                 attempted_capability,
                 ..
@@ -2194,10 +2194,10 @@ mod tests {
             DemotionSeverity::Critical,
         ] {
             // SAFETY: to_value cannot fail on derived Serialize enum
-            let json = serde_json::to_value(sev).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(sev).expect("serialization should succeed");
             // SAFETY: from_value cannot fail on valid JSON from to_value roundtrip
             let back: DemotionSeverity =
-                serde_json::from_value(json).expect("serde deserialization should succeed");
+                serde_json::from_value(json).expect("deserialization should succeed");
             assert_eq!(sev, back);
         }
     }
@@ -2409,7 +2409,7 @@ mod tests {
 
         // Wrong key should fail.
         let wrong_vk = SigningKey::from_bytes([99u8; 32])
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .verification_key();
         assert!(receipt.verify_signature(&wrong_vk).is_err());
     }
@@ -2424,7 +2424,7 @@ mod tests {
             1_000_000_000,
             "zone-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // SAFETY: derive_receipt_id cannot fail with valid test inputs
         let id2 = DemotionReceipt::derive_receipt_id(
             &test_slot(),
@@ -2433,7 +2433,7 @@ mod tests {
             1_000_000_000,
             "zone-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2);
 
         // Different timestamp -> different ID.
@@ -2444,7 +2444,7 @@ mod tests {
             2_000_000_000,
             "zone-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(id1, id3);
     }
 
@@ -2998,7 +2998,7 @@ mod tests {
         // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
         let eval = result
             .evaluation
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "divergence_trace");
         assert!(eval.evidence[0].summary.contains("divergence"));
@@ -3018,7 +3018,7 @@ mod tests {
         // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
         let eval = result
             .evaluation
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "capability_violation");
         assert!(eval.evidence[0].summary.contains("network_send"));
@@ -3036,7 +3036,7 @@ mod tests {
         // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
         let eval = result
             .evaluation
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "risk_score");
     }
@@ -3118,7 +3118,7 @@ mod tests {
             1_000_000_000,
             "zone-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_b = DemotionReceipt::derive_receipt_id(
             &test_slot(),
@@ -3127,7 +3127,7 @@ mod tests {
             1_000_000_000,
             "zone-b",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(
             id_a, id_b,
             "different zones should produce different receipt IDs"
@@ -3144,7 +3144,7 @@ mod tests {
             1_000_000_000,
             "zone",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_b = DemotionReceipt::derive_receipt_id(
             &test_slot(),
@@ -3153,7 +3153,7 @@ mod tests {
             1_000_000_000,
             "zone",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(
             id_a, id_b,
             "different digests should produce different receipt IDs"
@@ -3185,7 +3185,7 @@ mod tests {
             // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
             result
                 .evaluation
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .severity,
             DemotionSeverity::Advisory
         );
@@ -3613,7 +3613,7 @@ mod tests {
         assert!(result.trigger_fired);
         let eval = result
             .evaluation
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(eval.evidence.len(), 1);
         let summary = &eval.evidence[0].summary;
         assert!(
@@ -3639,7 +3639,7 @@ mod tests {
         assert!(result.trigger_fired);
         let eval = result
             .evaluation
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(eval.evidence.len(), 1);
         let summary = &eval.evidence[0].summary;
         assert!(
@@ -3672,7 +3672,7 @@ mod tests {
         // SAFETY: Test-only unwrap, trigger_fired=true guarantees evaluation is Some
         let eval = result
             .evaluation
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!eval.evidence.is_empty());
         assert_eq!(eval.evidence[0].category, "performance_sample");
     }
@@ -3686,11 +3686,11 @@ mod tests {
         // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_a =
             DemotionReceipt::derive_receipt_id(&slot_a, "native", "delegate", 1_000_000_000, "z")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         // SAFETY: Test-only unwrap with valid test inputs for derive_receipt_id
         let id_b =
             DemotionReceipt::derive_receipt_id(&slot_b, "native", "delegate", 1_000_000_000, "z")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b, "different slots should produce different IDs");
     }
 

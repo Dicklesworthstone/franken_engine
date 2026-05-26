@@ -1192,10 +1192,10 @@ mod tests {
     #[test]
     fn verdict_serde() {
         let json = serde_json::to_string(&EsmCjsParityVerdict::Pass)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"pass\"");
         let json = serde_json::to_string(&EsmCjsParityVerdict::Fail)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"fail\"");
     }
 

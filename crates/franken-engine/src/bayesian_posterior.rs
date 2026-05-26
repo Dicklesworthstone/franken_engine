@@ -1214,7 +1214,7 @@ mod tests {
         assert_eq!(
             store
                 .get("ext-001")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .update_count(),
             1
         );
@@ -1515,16 +1515,16 @@ mod tests {
     #[test]
     fn risk_state_json_field_names_stable() {
         let json = serde_json::to_string(&RiskState::Benign)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"Benign\"");
         let json = serde_json::to_string(&RiskState::Anomalous)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"Anomalous\"");
         let json = serde_json::to_string(&RiskState::Malicious)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"Malicious\"");
         let json = serde_json::to_string(&RiskState::Unknown)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"Unknown\"");
     }
 
@@ -1532,8 +1532,8 @@ mod tests {
     fn posterior_json_field_names_stable() {
         let p = Posterior::default_prior();
         let v: serde_json::Value =
-            serde_json::to_value(&p).expect("serde deserialization should succeed");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+            serde_json::to_value(&p).expect("serialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("p_benign"));
         assert!(obj.contains_key("p_anomalous"));
         assert!(obj.contains_key("p_malicious"));
@@ -1545,8 +1545,8 @@ mod tests {
     fn evidence_json_field_names_stable() {
         let ev = benign_evidence();
         let v: serde_json::Value =
-            serde_json::to_value(&ev).expect("serde deserialization should succeed");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+            serde_json::to_value(&ev).expect("serialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("extension_id"));
         assert!(obj.contains_key("hostcall_rate_millionths"));
         assert!(obj.contains_key("distinct_capabilities"));
@@ -1561,8 +1561,8 @@ mod tests {
     fn likelihood_model_json_field_names_stable() {
         let m = LikelihoodModel::default();
         let v: serde_json::Value =
-            serde_json::to_value(&m).expect("serde deserialization should succeed");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+            serde_json::to_value(&m).expect("serialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("benign_rate_ceiling"));
         assert!(obj.contains_key("anomalous_rate_floor"));
         assert!(obj.contains_key("benign_denial_ceiling"));
@@ -1577,8 +1577,8 @@ mod tests {
         let mut updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         let result = updater.update(&benign_evidence());
         let v: serde_json::Value =
-            serde_json::to_value(&result).expect("serde deserialization should succeed");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+            serde_json::to_value(&result).expect("serialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("posterior"));
         assert!(obj.contains_key("likelihoods"));
         assert!(obj.contains_key("cumulative_llr_millionths"));
@@ -1591,8 +1591,8 @@ mod tests {
         let updater = BayesianPosteriorUpdater::new(Posterior::default_prior(), "ext-001");
         let cal = updater.calibration_check(RiskState::Benign);
         let v: serde_json::Value =
-            serde_json::to_value(&cal).expect("serde deserialization should succeed");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+            serde_json::to_value(&cal).expect("serialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("ground_truth"));
         assert!(obj.contains_key("assigned_probability"));
         assert!(obj.contains_key("map_correct"));
@@ -1604,8 +1604,8 @@ mod tests {
     fn change_point_detector_json_field_names_stable() {
         let det = ChangePointDetector::new(50_000, 10);
         let v: serde_json::Value =
-            serde_json::to_value(&det).expect("serde deserialization should succeed");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+            serde_json::to_value(&det).expect("serialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("run_length_probs"));
         assert!(obj.contains_key("hazard_rate"));
         assert!(obj.contains_key("max_run_length"));
@@ -2111,21 +2111,21 @@ mod tests {
         assert_eq!(
             store
                 .get("ext-001")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .update_count(),
             restored
                 .get("ext-001")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .update_count()
         );
         assert_eq!(
             store
                 .get("ext-002")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .posterior(),
             restored
                 .get("ext-002")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .posterior()
         );
     }

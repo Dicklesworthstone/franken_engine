@@ -952,7 +952,7 @@ impl StaticAnalysisGraph {
                     .cycle
                     .first()
                     .map(|c| c.0.clone())
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
                 &format!("{} components in cycle", cycle.cycle.len()),
             );
         }
@@ -1036,7 +1036,7 @@ impl StaticAnalysisGraph {
                         self.components
                             .get(&child_id.0)
                             .map(|c| c.capability_boundary.all_capabilities())
-                            .expect("serde deserialization should succeed")
+                            .expect("operation should succeed for valid inputs")
                     })
                     .collect()
             };
@@ -1159,7 +1159,7 @@ impl StaticAnalysisGraph {
             components: &self.components,
             cycles: &self.cycles,
         })
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
         ContentHash::compute(&canonical)
     }
 
@@ -1273,7 +1273,7 @@ impl StaticAnalysisGraph {
                     })
                     .collect()
             })
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     /// Compute the subgraph reachable from a given node (forward).
@@ -1862,7 +1862,7 @@ mod tests {
         let mut g = StaticAnalysisGraph::new();
         let node = make_node("n1", NodeKind::Component);
         g.add_node(node)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(g.node_count(), 1);
         assert!(g.get_node(&AnalysisNodeId::new("n1")).is_some());
     }
@@ -1871,7 +1871,7 @@ mod tests {
     fn graph_add_duplicate_node_fails() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = g.add_node(make_node("n1", NodeKind::HookSlot)).unwrap_err();
         assert!(matches!(err, AnalysisError::DuplicateNode(_)));
     }
@@ -1880,11 +1880,11 @@ mod tests {
     fn graph_add_edge() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(g.edge_count(), 1);
         assert!(g.get_edge(&AnalysisEdgeId::new("e1")).is_some());
     }
@@ -1893,7 +1893,7 @@ mod tests {
     fn graph_add_edge_unknown_source_fails() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = g
             .add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
             .unwrap_err();
@@ -1904,7 +1904,7 @@ mod tests {
     fn graph_add_edge_unknown_target_fails() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = g
             .add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
             .unwrap_err();
@@ -1915,11 +1915,11 @@ mod tests {
     fn graph_add_duplicate_edge_fails() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = g
             .add_edge(make_edge("e1", "n1", "n2", EdgeKind::PropFlow))
             .unwrap_err();
@@ -1932,7 +1932,7 @@ mod tests {
     fn graph_register_component() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("App", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(g.component_count(), 1);
         assert!(g.get_component(&ComponentId::new("App")).is_some());
     }
@@ -1941,7 +1941,7 @@ mod tests {
     fn graph_register_duplicate_component_fails() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("App", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = g
             .register_component(make_component("App", &[]))
             .unwrap_err();
@@ -1965,18 +1965,18 @@ mod tests {
     fn graph_outgoing_edges() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n3", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e2", "n1", "n3", EdgeKind::PropFlow))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let out = g
             .outgoing_edges(&AnalysisNodeId::new("n1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(out.len(), 2);
     }
 
@@ -1984,18 +1984,18 @@ mod tests {
     fn graph_incoming_edges() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n3", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n3", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e2", "n2", "n3", EdgeKind::PropFlow))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let inc = g
             .incoming_edges(&AnalysisNodeId::new("n3"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(inc.len(), 2);
     }
 
@@ -2003,14 +2003,14 @@ mod tests {
     fn graph_dependencies() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let deps = g
             .dependencies(&AnalysisNodeId::new("n1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0], AnalysisNodeId::new("n2"));
     }
@@ -2019,14 +2019,14 @@ mod tests {
     fn graph_dependents() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let deps = g
             .dependents(&AnalysisNodeId::new("n2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0], AnalysisNodeId::new("n1"));
     }
@@ -2037,13 +2037,13 @@ mod tests {
     fn graph_root_components() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("App", &["Header", "Body"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Header", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Body", &["Footer"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Footer", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let roots = g.root_components();
         assert_eq!(roots.len(), 1);
         assert_eq!(roots[0], ComponentId::new("App"));
@@ -2053,13 +2053,13 @@ mod tests {
     fn graph_leaf_components() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("App", &["Header", "Body"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Header", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Body", &["Footer"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Footer", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let leaves = g.leaf_components();
         assert_eq!(leaves.len(), 2);
         // BTreeMap ordering gives alphabetical
@@ -2071,11 +2071,11 @@ mod tests {
     fn graph_component_ids() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("B", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("A", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("C", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ids = g.component_ids();
         assert_eq!(ids.len(), 3);
         // BTreeMap → sorted
@@ -2090,9 +2090,9 @@ mod tests {
     fn graph_no_cycles() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("App", &["Child"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Child", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cycles = g.detect_cycles();
         assert!(cycles.is_empty());
     }
@@ -2101,9 +2101,9 @@ mod tests {
     fn graph_simple_cycle() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("A", &["B"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("B", &["A"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cycles = g.detect_cycles();
         assert_eq!(cycles.len(), 1);
         assert_eq!(cycles[0].cycle.len(), 2);
@@ -2113,11 +2113,11 @@ mod tests {
     fn graph_three_node_cycle() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("A", &["B"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("B", &["C"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("C", &["A"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cycles = g.detect_cycles();
         assert!(!cycles.is_empty());
     }
@@ -2126,18 +2126,18 @@ mod tests {
     fn graph_data_cycle_detection() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("A", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("B", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("A", &["B"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("B", &["A"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Add a data flow edge
         g.add_edge(make_edge("e1", "A", "B", EdgeKind::PropFlow))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e2", "B", "A", EdgeKind::StateUpdateTrigger))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cycles = g.detect_cycles();
         assert!(!cycles.is_empty());
         assert!(cycles[0].is_data_cycle);
@@ -2153,11 +2153,11 @@ mod tests {
             .direct_capabilities
             .insert("fs_read".to_string());
         g.register_component(desc)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.compute_transitive_capabilities();
         let comp = g
             .get_component(&ComponentId::new("Leaf"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(comp.capability_boundary.transitive_capabilities.is_empty());
         assert!(
             comp.capability_boundary
@@ -2175,13 +2175,13 @@ mod tests {
             .direct_capabilities
             .insert("network".to_string());
         g.register_component(child)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Parent", &["Child"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.compute_transitive_capabilities();
         let parent = g
             .get_component(&ComponentId::new("Parent"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             parent
                 .capability_boundary
@@ -2198,15 +2198,15 @@ mod tests {
             .direct_capabilities
             .insert("fs_write".to_string());
         g.register_component(leaf)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Mid", &["Leaf"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Root", &["Mid"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.compute_transitive_capabilities();
         let root = g
             .get_component(&ComponentId::new("Root"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             root.capability_boundary
                 .transitive_capabilities
@@ -2220,13 +2220,13 @@ mod tests {
     fn graph_nodes_of_kind() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("c1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("c2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("h1", NodeKind::HookSlot))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("e1", NodeKind::EffectSite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let components = g.nodes_of_kind(NodeKind::Component);
         assert_eq!(components.len(), 2);
         let hooks = g.nodes_of_kind(NodeKind::HookSlot);
@@ -2239,15 +2239,15 @@ mod tests {
     fn graph_edges_of_kind() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n3", NodeKind::DataSource))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e2", "n1", "n3", EdgeKind::EffectDependency))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let render_edges = g.edges_of_kind(EdgeKind::RendersChild);
         assert_eq!(render_edges.len(), 1);
     }
@@ -2258,13 +2258,13 @@ mod tests {
     fn graph_edges_between() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e2", "n1", "n2", EdgeKind::PropFlow))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let between = g.edges_between(&AnalysisNodeId::new("n1"), &AnalysisNodeId::new("n2"));
         assert_eq!(between.len(), 2);
     }
@@ -2273,9 +2273,9 @@ mod tests {
     fn graph_edges_between_no_match() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let between = g.edges_between(&AnalysisNodeId::new("n1"), &AnalysisNodeId::new("n2"));
         assert!(between.is_empty());
     }
@@ -2286,10 +2286,10 @@ mod tests {
     fn graph_reachable_from_single() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let reachable = g
             .reachable_from(&AnalysisNodeId::new("n1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reachable.len(), 1);
     }
 
@@ -2297,18 +2297,18 @@ mod tests {
     fn graph_reachable_from_chain() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n3", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e2", "n2", "n3", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let reachable = g
             .reachable_from(&AnalysisNodeId::new("n1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reachable.len(), 3);
     }
 
@@ -2321,10 +2321,10 @@ mod tests {
         desc.hook_slots.push(make_hook_slot(0, HookKind::State));
         desc.hook_slots.push(make_hook_slot(1, HookKind::Effect));
         g.register_component(desc)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let slots = g
             .hook_slots_for(&ComponentId::new("Counter"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(slots.len(), 2);
         assert_eq!(slots[0].kind, HookKind::State);
         assert_eq!(slots[1].kind, HookKind::Effect);
@@ -2353,11 +2353,11 @@ mod tests {
             .insert("fs_read".to_string());
         let desc3 = make_component("PureComp", &[]);
         g.register_component(desc1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(desc2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(desc3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let net = g.components_requiring_capability("network");
         assert_eq!(net.len(), 1);
         assert_eq!(net[0], ComponentId::new("NetComp"));
@@ -2384,11 +2384,11 @@ mod tests {
         desc.hook_slots.push(make_hook_slot(0, HookKind::State));
         desc.is_pure = false;
         g.register_component(desc)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("PureLeaf", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("eff1", NodeKind::EffectSite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = g.summary();
         assert_eq!(s.component_count, 2);
         assert_eq!(s.hook_slot_count, 1);
@@ -2402,11 +2402,11 @@ mod tests {
     fn graph_summary_max_depth() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("Root", &["Mid"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Mid", &["Leaf"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Leaf", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = g.summary();
         assert_eq!(s.max_depth, 2);
     }
@@ -2417,9 +2417,9 @@ mod tests {
     fn graph_events_tracked() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("App", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = g.events();
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].kind, AnalysisEventKind::NodeAdded);
@@ -2448,15 +2448,15 @@ mod tests {
     fn graph_serde_roundtrip() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("n1", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_node(make_node("n2", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(make_edge("e1", "n1", "n2", EdgeKind::RendersChild))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("App", &["Child"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Child", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&g).expect("serialize derived Serialize");
         let back: StaticAnalysisGraph =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2492,11 +2492,11 @@ mod tests {
     fn graph_topological_sort_linear() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("A", &["B"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("B", &["C"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("C", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let order = g.topological_sort_components();
         assert_eq!(order, vec!["A", "B", "C"]);
     }
@@ -2505,13 +2505,13 @@ mod tests {
     fn graph_topological_sort_diamond() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("A", &["B", "C"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("B", &["D"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("C", &["D"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("D", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let order = g.topological_sort_components();
         // A must come first, D must come last, B and C can be in either order
         assert_eq!(order[0], "A");
@@ -2532,15 +2532,15 @@ mod tests {
             .direct_capabilities
             .insert("fs_read".to_string());
         g.register_component(c1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(c2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("Parent", &["Child1", "Child2"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.compute_transitive_capabilities();
         let parent = g
             .get_component(&ComponentId::new("Parent"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let trans = &parent.capability_boundary.transitive_capabilities;
         assert!(trans.contains("network"));
         assert!(trans.contains("fs_read"));
@@ -2772,9 +2772,9 @@ mod tests {
     fn graph_cycles_accessor_after_detection() {
         let mut g = StaticAnalysisGraph::new();
         g.register_component(make_component("A", &["B"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(make_component("B", &["A"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(g.cycles().is_empty()); // before detection
         let detected = g.detect_cycles();
         assert!(!detected.is_empty());
@@ -2789,10 +2789,10 @@ mod tests {
     fn graph_outgoing_edges_isolated_node() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("isolated", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let out = g
             .outgoing_edges(&AnalysisNodeId::new("isolated"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(out.is_empty());
     }
 
@@ -2800,10 +2800,10 @@ mod tests {
     fn graph_incoming_edges_isolated_node() {
         let mut g = StaticAnalysisGraph::new();
         g.add_node(make_node("isolated", NodeKind::Component))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let inc = g
             .incoming_edges(&AnalysisNodeId::new("isolated"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(inc.is_empty());
     }
 
@@ -2875,9 +2875,9 @@ mod tests {
             .direct_capabilities
             .insert("network".to_string()); // duplicate
         g.register_component(c1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register_component(c2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = g.summary();
         assert_eq!(s.distinct_capability_count, 2); // network + fs_read
     }

@@ -2050,22 +2050,22 @@ mod tests {
     fn error_severity_serde_exact_snake_case_strings() {
         assert_eq!(
             serde_json::to_string(&ErrorSeverity::Critical)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"critical\""
         );
         assert_eq!(
             serde_json::to_string(&ErrorSeverity::Error)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"error\""
         );
         assert_eq!(
             serde_json::to_string(&ErrorSeverity::Warning)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"warning\""
         );
         assert_eq!(
             serde_json::to_string(&ErrorSeverity::Info)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"info\""
         );
     }
@@ -2227,10 +2227,10 @@ mod tests {
     #[test]
     fn error_code_entry_serde_json_keys_present() {
         let entry = FrankenErrorCode::DeterministicSerdeError.to_registry_entry();
-        let json = serde_json::to_value(&entry).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&entry).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("code"));
         assert!(obj.contains_key("numeric"));
         assert!(obj.contains_key("subsystem"));

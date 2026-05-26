@@ -1046,7 +1046,7 @@ mod tests {
         let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
         let report = generate_violation_report(&cert, "rpt-1");
         assert!(report.is_some());
-        let rpt = report.expect("serde deserialization should succeed");
+        let rpt = report.expect("operation should succeed for valid inputs");
         assert!(!rpt.violations.is_empty());
         assert_eq!(rpt.stage, ExecutionStage::GcPause);
     }
@@ -1065,7 +1065,7 @@ mod tests {
         let obs = violating_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
         let report = generate_violation_report(&cert, "rpt-serde")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let deser: ViolationReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1090,7 +1090,7 @@ mod tests {
         let obs = violating_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "v", 0, vec![]);
         let report =
-            generate_violation_report(&cert, "rpt").expect("serde deserialization should succeed");
+            generate_violation_report(&cert, "rpt").expect("operation should succeed for valid inputs");
         let summary = render_violation_summary(&report);
         assert!(summary.contains("stage: gc_pause"));
         assert!(summary.contains("severity:"));
@@ -1461,7 +1461,7 @@ mod tests {
         let obs = violating_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
         let report =
-            generate_violation_report(&cert, "rpt").expect("serde deserialization should succeed");
+            generate_violation_report(&cert, "rpt").expect("operation should succeed for valid inputs");
         assert_eq!(report.schema_version, VIOLATION_REPORT_SCHEMA_VERSION);
         assert_eq!(report.bead_id, STAGE_ENVELOPE_BEAD_ID);
     }

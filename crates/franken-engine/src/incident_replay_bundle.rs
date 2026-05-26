@@ -365,7 +365,7 @@ pub fn compute_merkle_root(leaves: &[ContentHash]) -> ContentHash {
     current_level
         .into_iter()
         .next()
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
 }
 
 /// Build a Merkle proof (sibling hashes) for the leaf at `index`.
@@ -1489,7 +1489,7 @@ mod tests {
         for (i, b) in key.iter_mut().enumerate() {
             *b = (i as u8).wrapping_mul(7).wrapping_add(13);
         }
-        SigningKey::from_bytes(key).expect("serde deserialization should succeed")
+        SigningKey::from_bytes(key).expect("operation should succeed for valid inputs")
     }
 
     fn test_verification_key() -> VerificationKey {
@@ -1553,7 +1553,7 @@ mod tests {
             rationale: "test rationale".to_string(),
         })
         .build()
-        .expect("serde deserialization should succeed")
+        .expect("builder should produce a valid value")
     }
 
     fn make_policy_snapshot(policy_id: &str) -> PolicySnapshot {
@@ -1841,7 +1841,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "merkle-root-valid")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(merkle_check.outcome.is_fail());
     }
 
@@ -1877,7 +1877,7 @@ mod tests {
         bundle
             .traces
             .get_mut("trace-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .metadata
             .insert("tampered".to_string(), "true".to_string());
 
@@ -1889,7 +1889,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "artifact-hash:trace:trace-001")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(trace_hash_check.outcome.is_fail());
     }
 
@@ -1908,7 +1908,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.name == "format-version-compatible")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(version_check.outcome.is_fail());
     }
 
@@ -1930,7 +1930,7 @@ mod tests {
     fn verify_signature_fails_with_wrong_key() {
         let bundle = build_test_bundle();
         let wrong_key = SigningKey::from_bytes([99u8; 32])
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .verification_key();
         let verifier = BundleVerifier::new();
         let report = verifier.verify_signature(&bundle, &wrong_key, 6000);
@@ -1969,7 +1969,7 @@ mod tests {
         )
         .policy("p1".to_string(), make_policy_snapshot("p1"))
         .build()
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let verifier = BundleVerifier::new();
         let report = verifier.verify_replay(&bundle, 6000);
@@ -2258,7 +2258,7 @@ mod tests {
         .trace("trace-B".to_string(), make_trace("trace-B", 4))
         .trace("trace-C".to_string(), make_trace("trace-C", 1))
         .build()
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_eq!(bundle.traces.len(), 3);
         assert_eq!(bundle.manifest.artifacts.len(), 3);
@@ -2283,7 +2283,7 @@ mod tests {
         .nondeterminism("t1".to_string(), make_nondeterminism_log())
         .policy("p1".to_string(), make_policy_snapshot("p1"))
         .build()
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let verifier = BundleVerifier::new();
         let integrity = verifier.verify_integrity(&bundle, 6000);
@@ -2929,7 +2929,7 @@ mod tests {
             inspection
                 .metadata
                 .get("severity")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "high"
         );
     }
@@ -3002,7 +3002,7 @@ mod tests {
         .redaction_policy(policy.clone())
         .trace("t-1".to_string(), make_trace("t-1", 1))
         .build()
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_eq!(bundle.manifest.redaction_policy, policy);
         assert!(bundle.manifest.redaction_policy.redact_extension_ids);
@@ -3089,7 +3089,7 @@ mod tests {
         .trace("trace-b".to_string(), make_trace("trace-b", 4))
         .trace("trace-c".to_string(), make_trace("trace-c", 1))
         .build()
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let verifier = BundleVerifier::new();
         let report = verifier.verify_integrity(&bundle, 6000);

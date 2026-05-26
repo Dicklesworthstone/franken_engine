@@ -1573,7 +1573,7 @@ mod tests {
     fn end_to_end_bounds_sum_stage_budgets_and_observations() {
         // SAFETY: Test-only unwrap with valid stress profile and stage count
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 7)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.end_to_end_bounds.stage_count, 7);
         assert!(report.end_to_end_bounds.budget_p99_ns > 0);
         assert!(report.end_to_end_bounds.observed_p99_ns > 0);
@@ -1584,7 +1584,7 @@ mod tests {
     fn queue_model_calibration_is_explicit_per_stage() {
         // SAFETY: Test-only unwrap with valid stress profile and stage count
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 9)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.stage_calibrations.len(), 7);
         assert!(
             report
@@ -1605,7 +1605,7 @@ mod tests {
         // SAFETY: Test-only unwrap with valid stress profile and stage count
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 42)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert!(report.guardrails.fallback_activated);
         assert_eq!(report.guardrails.state, GuardrailState::FallbackEngaged);
         assert!(
@@ -1627,7 +1627,7 @@ mod tests {
     fn balanced_profile_stays_out_of_fallback() {
         // SAFETY: Test scenario with valid stress profile and seed; report building should succeed
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 21)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!report.guardrails.fallback_activated);
         assert_ne!(report.guardrails.state, GuardrailState::FallbackEngaged);
         assert_eq!(report.admission_manifest.summary.total_shed, 0);
@@ -1638,7 +1638,7 @@ mod tests {
         // SAFETY: Test-only unwrap with valid stress profile and stage count
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 77)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert!(report.decomposition.queue_p99_ns > 0);
         assert!(report.decomposition.service_p99_ns > 0);
         assert!(report.decomposition.synchronization_p99_ns > 0);
@@ -1709,7 +1709,7 @@ mod tests {
             let parsed: StressProfile = profile
                 .as_str()
                 .parse()
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(parsed, profile);
         }
     }
@@ -1719,7 +1719,7 @@ mod tests {
         // SAFETY: Test-only unwrap parsing known valid profile string
         let parsed: StressProfile = "synthetic_contention"
             .parse()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parsed, StressProfile::SyntheticContention);
     }
 
@@ -1772,12 +1772,12 @@ mod tests {
         // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&StressProfile::SyntheticContention)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"synthetic-contention\"");
         // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json_balanced = serde_json::to_string(&StressProfile::Balanced)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json_balanced, "\"balanced\"");
     }
 
@@ -1801,11 +1801,11 @@ mod tests {
     fn serde_guardrail_state_uses_snake_case() {
         // SAFETY: GuardrailState derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&GuardrailState::NearLimit)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"near_limit\"");
         // SAFETY: GuardrailState derives Serialize and has no non-serializable fields
         let json_fallback = serde_json::to_string(&GuardrailState::FallbackEngaged)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json_fallback, "\"fallback_engaged\"");
     }
 
@@ -2037,7 +2037,7 @@ mod tests {
     #[test]
     fn balanced_report_has_correct_schema_fields() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             report.schema_version,
             TAIL_LATENCY_CONTROL_PLANE_SCHEMA_VERSION
@@ -2052,7 +2052,7 @@ mod tests {
     #[test]
     fn balanced_report_has_admission_receipts() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Balanced plan: 3 + 4 + 2 = 9 admission invocations
         assert_eq!(report.admission_receipts.len(), 9);
     }
@@ -2060,7 +2060,7 @@ mod tests {
     #[test]
     fn balanced_report_has_feedback_decisions() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // At least one decision per controller for the tick
         assert!(!report.controller_decisions.is_empty());
     }
@@ -2068,7 +2068,7 @@ mod tests {
     #[test]
     fn balanced_report_has_admission_publication_bundle() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bundle = &report.admission_publication_bundle;
 
         assert_eq!(
@@ -2116,7 +2116,7 @@ mod tests {
     fn synthetic_contention_report_has_admission_receipts() {
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 10)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         // SyntheticContention plan: 3 + 3 + 4 + 4 = 14 admission invocations
         assert_eq!(report.admission_receipts.len(), 14);
     }
@@ -2125,7 +2125,7 @@ mod tests {
     fn synthetic_contention_has_shed_count_from_tight_policy() {
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 10)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         // With tight queue depths (2) and many admissions, shedding should occur
         assert!(
             report.guardrails.shed_count > 0
@@ -2138,7 +2138,7 @@ mod tests {
     fn synthetic_contention_publication_bundle_captures_queue_and_shed_mix() {
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 10)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let bundle = &report.admission_publication_bundle;
 
         assert_eq!(
@@ -2185,7 +2185,7 @@ mod tests {
     fn synthetic_contention_reason_codes_non_empty() {
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 50)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert!(!report.guardrails.reason_codes.is_empty());
     }
 
@@ -2196,7 +2196,7 @@ mod tests {
         // SAFETY: Test scenario with valid stress profile and seed; report building should succeed
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 77)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         // queue_p999 = sum of (p99_wait * 3/2), so it should be >= queue_p99
         assert!(report.decomposition.queue_p999_ns >= report.decomposition.queue_p99_ns);
     }
@@ -2205,7 +2205,7 @@ mod tests {
     fn decomposition_gc_comes_only_from_gc_pause_stage() {
         // SAFETY: Test scenario with valid stress profile and seed; report building should succeed
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // GC p99 should equal the GcPause observation p99_ns
         // From the balanced scenario: GcPause p99_ns = 8_600_000
         assert_eq!(report.decomposition.gc_p99_ns, 8_600_000);
@@ -2215,7 +2215,7 @@ mod tests {
     #[test]
     fn decomposition_synchronization_comes_from_sandbox_init() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // From the balanced scenario: SandboxInit p99_ns = 2_600_000, p999_ns = 9_000_000
         assert_eq!(report.decomposition.synchronization_p99_ns, 2_600_000);
         assert_eq!(report.decomposition.synchronization_p999_ns, 9_000_000);
@@ -2227,7 +2227,7 @@ mod tests {
     fn end_to_end_bounds_queue_adjusted_exceeds_observed() {
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 42)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert!(
             report.end_to_end_bounds.queue_adjusted_p99_ns
                 >= report.end_to_end_bounds.observed_p99_ns
@@ -2241,7 +2241,7 @@ mod tests {
     #[test]
     fn end_to_end_bounds_composition_model_is_serial() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             report.end_to_end_bounds.composition_model,
             "serial_min_plus_sum"
@@ -2251,7 +2251,7 @@ mod tests {
     #[test]
     fn end_to_end_bounds_budget_ordering_p50_le_p95_le_p99_le_p999() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = &report.end_to_end_bounds;
         assert!(b.budget_p50_ns <= b.budget_p95_ns);
         assert!(b.budget_p95_ns <= b.budget_p99_ns);
@@ -2263,9 +2263,9 @@ mod tests {
     #[test]
     fn serde_roundtrip_full_report() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json =
-            serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&report).expect("serialization should succeed");
         let deserialized: TailLatencyControlPlaneReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized.schema_version, report.schema_version);
@@ -2285,7 +2285,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_stage_queue_calibration() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let calibration = &report.stage_calibrations[0];
         let json = serde_json::to_string(calibration).expect("serialize derived Serialize");
         let deserialized: StageQueueCalibration =
@@ -2320,9 +2320,9 @@ mod tests {
     #[test]
     fn report_is_deterministic_for_same_inputs() {
         let report_a = build_tail_latency_control_plane_report(StressProfile::Balanced, 99)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report_b = build_tail_latency_control_plane_report(StressProfile::Balanced, 99)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json_a = serde_json::to_string(&report_a).expect("serialize derived Serialize");
         let json_b = serde_json::to_string(&report_b).expect("serialize derived Serialize");
         assert_eq!(json_a, json_b);
@@ -2332,7 +2332,7 @@ mod tests {
     fn admission_publication_bundle_receipts_stay_in_sequence_order() {
         let report =
             build_tail_latency_control_plane_report(StressProfile::SyntheticContention, 10)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let summaries = &report.admission_publication_bundle.recent_receipt_summaries;
         assert!(
             summaries
@@ -2344,9 +2344,9 @@ mod tests {
     #[test]
     fn admission_publication_bundle_hash_is_deterministic() {
         let report_a = build_tail_latency_control_plane_report(StressProfile::Balanced, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report_b = build_tail_latency_control_plane_report(StressProfile::Balanced, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             report_a.admission_publication_bundle.content_hash,
             report_b.admission_publication_bundle.content_hash

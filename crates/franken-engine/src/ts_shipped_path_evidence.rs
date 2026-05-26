@@ -1008,7 +1008,7 @@ mod tests {
             "ts-shipped-path-bundle-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .as_nanos()
         ));
         let cmds = vec!["test".to_string()];
@@ -1026,7 +1026,7 @@ mod tests {
             "ts-shipped-path-hex-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .as_nanos()
         ));
         let cmds = vec!["test".to_string()];
@@ -1042,14 +1042,14 @@ mod tests {
             "ts-shipped-det1-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .as_nanos()
         ));
         let out2 = std::env::temp_dir().join(format!(
             "ts-shipped-det2-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .as_nanos()
         ));
         let cmds = vec!["test".to_string()];

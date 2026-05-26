@@ -559,7 +559,7 @@ mod tests {
 
     #[test]
     fn parsed_version_basic() {
-        let v = ParsedVersion::parse("1.2.3").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("1.2.3").expect("operation should succeed for valid inputs");
         assert_eq!(v.major, 1);
         assert_eq!(v.minor, 2);
         assert_eq!(v.patch, 3);
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn parsed_version_with_v_prefix() {
-        let v = ParsedVersion::parse("v1.0.5").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("v1.0.5").expect("operation should succeed for valid inputs");
         assert_eq!(v.major, 1);
         assert_eq!(v.minor, 0);
         assert_eq!(v.patch, 5);
@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn parsed_version_with_prerelease() {
-        let v = ParsedVersion::parse("2.0.0-beta.1").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("2.0.0-beta.1").expect("operation should succeed for valid inputs");
         assert_eq!(v.major, 2);
         assert!(v.is_prerelease());
         assert_eq!(v.prerelease.as_deref(), Some("beta.1"));
@@ -599,28 +599,28 @@ mod tests {
 
     #[test]
     fn parsed_version_format_stable() {
-        let v = ParsedVersion::parse("1.2.3").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("1.2.3").expect("operation should succeed for valid inputs");
         assert_eq!(v.format(), "1.2.3");
     }
 
     #[test]
     fn parsed_version_format_prerelease() {
-        let v = ParsedVersion::parse("1.2.3-alpha").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("1.2.3-alpha").expect("operation should succeed for valid inputs");
         assert_eq!(v.format(), "1.2.3-alpha");
     }
 
     #[test]
     fn parsed_version_bump_patch_next() {
-        let v = ParsedVersion::parse("1.2.3").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("1.2.3").expect("operation should succeed for valid inputs");
         assert_eq!(v.bump_patch_next(), "1.2.4-next");
     }
 
     #[test]
     fn parsed_version_ordering_by_components() {
-        let v1 = ParsedVersion::parse("1.0.0").expect("serde deserialization should succeed");
-        let v2 = ParsedVersion::parse("1.0.1").expect("serde deserialization should succeed");
-        let v3 = ParsedVersion::parse("1.1.0").expect("serde deserialization should succeed");
-        let v4 = ParsedVersion::parse("2.0.0").expect("serde deserialization should succeed");
+        let v1 = ParsedVersion::parse("1.0.0").expect("operation should succeed for valid inputs");
+        let v2 = ParsedVersion::parse("1.0.1").expect("operation should succeed for valid inputs");
+        let v3 = ParsedVersion::parse("1.1.0").expect("operation should succeed for valid inputs");
+        let v4 = ParsedVersion::parse("2.0.0").expect("operation should succeed for valid inputs");
         assert!(v1 < v2);
         assert!(v2 < v3);
         assert!(v3 < v4);
@@ -629,8 +629,8 @@ mod tests {
     #[test]
     fn parsed_version_prerelease_sorts_before_stable() {
         let pre =
-            ParsedVersion::parse("1.0.0-alpha").expect("serde deserialization should succeed");
-        let stable = ParsedVersion::parse("1.0.0").expect("serde deserialization should succeed");
+            ParsedVersion::parse("1.0.0-alpha").expect("operation should succeed for valid inputs");
+        let stable = ParsedVersion::parse("1.0.0").expect("operation should succeed for valid inputs");
         assert!(pre < stable);
     }
 
@@ -693,7 +693,7 @@ mod tests {
             next_override: None,
         };
         let slots =
-            derive_version_slots(&source, "engine").expect("serde deserialization should succeed");
+            derive_version_slots(&source, "engine").expect("operation should succeed for valid inputs");
         assert_eq!(slots.current, "1.1.0");
         assert_eq!(slots.previous, Some("1.0.0".into()));
         assert!(slots.next.is_none());
@@ -709,7 +709,7 @@ mod tests {
             next_override: Some("3.0.0".into()),
         };
         let slots =
-            derive_version_slots(&source, "engine").expect("serde deserialization should succeed");
+            derive_version_slots(&source, "engine").expect("operation should succeed for valid inputs");
         assert_eq!(slots.current, "2.0.0");
         assert_eq!(slots.previous, Some("1.0.0".into()));
         assert_eq!(slots.next, Some("3.0.0".into()));
@@ -734,7 +734,7 @@ mod tests {
             next_override: None,
         };
         let slots =
-            derive_version_slots(&source, "engine").expect("serde deserialization should succeed");
+            derive_version_slots(&source, "engine").expect("operation should succeed for valid inputs");
         assert_eq!(slots.current, "1.0.0");
         assert_eq!(slots.next, Some("1.1.0-rc.1".into()));
     }
@@ -749,7 +749,7 @@ mod tests {
             next_override: None,
         };
         let slots =
-            derive_version_slots(&source, "engine").expect("serde deserialization should succeed");
+            derive_version_slots(&source, "engine").expect("operation should succeed for valid inputs");
         assert_eq!(slots.next, Some("1.0.1-next".into()));
         assert!(!slots.derivation_notes.is_empty());
     }
@@ -782,14 +782,14 @@ mod tests {
     #[test]
     fn derive_matrix_basic() {
         let plan =
-            derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
+            derive_version_matrix(&[test_spec()]).expect("operation should succeed for valid inputs");
         assert_eq!(plan.schema_version, VERSION_MATRIX_SCHEMA);
         assert!(!plan.cells.is_empty());
         let current = plan
             .cells
             .iter()
             .find(|c| c.lane_kind == MatrixLaneKind::Current)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(current.local_version, "1.0.0");
         assert_eq!(current.remote_version, "2.0.0");
     }
@@ -797,7 +797,7 @@ mod tests {
     #[test]
     fn derive_matrix_includes_previous() {
         let plan =
-            derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
+            derive_version_matrix(&[test_spec()]).expect("operation should succeed for valid inputs");
         let prev = plan
             .cells
             .iter()
@@ -813,13 +813,13 @@ mod tests {
             remote_version: "1.5.0".into(),
             reason: "legacy".into(),
         });
-        let plan = derive_version_matrix(&[spec]).expect("serde deserialization should succeed");
+        let plan = derive_version_matrix(&[spec]).expect("operation should succeed for valid inputs");
         let pinned = plan
             .cells
             .iter()
             .find(|c| c.lane_kind == MatrixLaneKind::Pinned);
         assert!(pinned.is_some());
-        assert!(pinned.expect("serde deserialization should succeed").pinned);
+        assert!(pinned.expect("operation should succeed for valid inputs").pinned);
     }
 
     #[test]
@@ -840,7 +840,7 @@ mod tests {
     fn derive_matrix_dedup_cells() {
         let spec = test_spec();
         let plan = derive_version_matrix(&[spec.clone(), spec])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let current_count = plan
             .cells
             .iter()
@@ -854,7 +854,7 @@ mod tests {
     #[test]
     fn classify_no_failures() {
         let plan =
-            derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
+            derive_version_matrix(&[test_spec()]).expect("operation should succeed for valid inputs");
         let results: Vec<MatrixCellResult> = plan
             .cells
             .iter()
@@ -878,7 +878,7 @@ mod tests {
     #[test]
     fn classify_universal_failure() {
         let plan =
-            derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
+            derive_version_matrix(&[test_spec()]).expect("operation should succeed for valid inputs");
         let results: Vec<MatrixCellResult> = plan
             .cells
             .iter()
@@ -907,7 +907,7 @@ mod tests {
     #[test]
     fn classify_version_specific_failure() {
         let plan =
-            derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
+            derive_version_matrix(&[test_spec()]).expect("operation should succeed for valid inputs");
         assert!(plan.cells.len() >= 2);
         let mut results: Vec<MatrixCellResult> = plan
             .cells
@@ -941,7 +941,7 @@ mod tests {
     #[test]
     fn health_all_pass() {
         let plan =
-            derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
+            derive_version_matrix(&[test_spec()]).expect("operation should succeed for valid inputs");
         let results: Vec<MatrixCellResult> = plan
             .cells
             .iter()
@@ -1020,7 +1020,7 @@ mod tests {
     #[test]
     fn version_matrix_plan_serde_round_trip() {
         let plan =
-            derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
+            derive_version_matrix(&[test_spec()]).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&plan).expect("serialize derived Serialize");
         let back: VersionMatrixPlan =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1120,33 +1120,33 @@ mod tests {
     #[test]
     fn parsed_version_prerelease_ordering_lexicographic() {
         let alpha =
-            ParsedVersion::parse("1.0.0-alpha").expect("serde deserialization should succeed");
+            ParsedVersion::parse("1.0.0-alpha").expect("operation should succeed for valid inputs");
         let beta =
-            ParsedVersion::parse("1.0.0-beta").expect("serde deserialization should succeed");
+            ParsedVersion::parse("1.0.0-beta").expect("operation should succeed for valid inputs");
         assert!(alpha < beta);
     }
 
     #[test]
     fn parsed_version_format_roundtrip_stable() {
-        let v = ParsedVersion::parse("3.14.159").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("3.14.159").expect("operation should succeed for valid inputs");
         let formatted = v.format();
         let reparsed =
-            ParsedVersion::parse(&formatted).expect("serde deserialization should succeed");
+            ParsedVersion::parse(&formatted).expect("operation should succeed for valid inputs");
         assert_eq!(v, reparsed);
     }
 
     #[test]
     fn parsed_version_format_roundtrip_prerelease() {
-        let v = ParsedVersion::parse("2.0.0-rc.1").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("2.0.0-rc.1").expect("operation should succeed for valid inputs");
         let formatted = v.format();
         let reparsed =
-            ParsedVersion::parse(&formatted).expect("serde deserialization should succeed");
+            ParsedVersion::parse(&formatted).expect("operation should succeed for valid inputs");
         assert_eq!(v, reparsed);
     }
 
     #[test]
     fn parsed_version_with_leading_v_and_whitespace() {
-        let v = ParsedVersion::parse("  v1.2.3  ").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("  v1.2.3  ").expect("operation should succeed for valid inputs");
         assert_eq!(v.major, 1);
         assert_eq!(v.minor, 2);
         assert_eq!(v.patch, 3);
@@ -1162,7 +1162,7 @@ mod tests {
             next_override: None,
         };
         let slots =
-            derive_version_slots(&source, "engine").expect("serde deserialization should succeed");
+            derive_version_slots(&source, "engine").expect("operation should succeed for valid inputs");
         // No stable versions; should pick latest prerelease as current
         assert_eq!(slots.current, "1.0.0-beta");
     }
@@ -1170,7 +1170,7 @@ mod tests {
     #[test]
     fn health_summary_with_mixed_outcomes() {
         let plan =
-            derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
+            derive_version_matrix(&[test_spec()]).expect("operation should succeed for valid inputs");
         let mut results: Vec<MatrixCellResult> = plan
             .cells
             .iter()
@@ -1295,7 +1295,7 @@ mod tests {
     #[test]
     fn enrichment_version_matrix_plan_json_fields() {
         let plan =
-            derive_version_matrix(&[test_spec()]).expect("serde deserialization should succeed");
+            derive_version_matrix(&[test_spec()]).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&plan).expect("serialize derived Serialize");
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"generated_at_utc\""));
@@ -1352,7 +1352,7 @@ mod tests {
 
     #[test]
     fn enrichment_derive_matrix_empty_specs_returns_empty_plan() {
-        let plan = derive_version_matrix(&[]).expect("serde deserialization should succeed");
+        let plan = derive_version_matrix(&[]).expect("operation should succeed for valid inputs");
         assert!(plan.cells.is_empty());
         assert_eq!(plan.schema_version, VERSION_MATRIX_SCHEMA);
         assert_eq!(plan.generated_at_utc, "1970-01-01T00:00:00Z");
@@ -1362,9 +1362,9 @@ mod tests {
 
     #[test]
     fn enrichment_parsed_version_ord_same_major_minor_patch_prerelease_matters() {
-        let rc1 = ParsedVersion::parse("2.1.0-rc.1").expect("serde deserialization should succeed");
-        let rc2 = ParsedVersion::parse("2.1.0-rc.2").expect("serde deserialization should succeed");
-        let stable = ParsedVersion::parse("2.1.0").expect("serde deserialization should succeed");
+        let rc1 = ParsedVersion::parse("2.1.0-rc.1").expect("operation should succeed for valid inputs");
+        let rc2 = ParsedVersion::parse("2.1.0-rc.2").expect("operation should succeed for valid inputs");
+        let stable = ParsedVersion::parse("2.1.0").expect("operation should succeed for valid inputs");
         // rc.1 < rc.2 < stable
         assert!(rc1 < rc2);
         assert!(rc2 < stable);
@@ -1455,36 +1455,36 @@ mod tests {
     #[test]
     fn enrichment_matrix_lane_kind_serde_snake_case() {
         let json = serde_json::to_string(&MatrixLaneKind::Current)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"current\"");
         let json = serde_json::to_string(&MatrixLaneKind::Previous)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"previous\"");
         let json = serde_json::to_string(&MatrixLaneKind::Next)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"next\"");
         let json = serde_json::to_string(&MatrixLaneKind::Pinned)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"pinned\"");
     }
 
     #[test]
     fn enrichment_matrix_outcome_serde_snake_case() {
         let json = serde_json::to_string(&MatrixOutcome::Pass)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"pass\"");
         let json = serde_json::to_string(&MatrixOutcome::Fail)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"fail\"");
     }
 
     #[test]
     fn enrichment_failure_scope_kind_serde_snake_case() {
         let json = serde_json::to_string(&FailureScopeKind::Universal)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"universal\"");
         let json = serde_json::to_string(&FailureScopeKind::VersionSpecific)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"version_specific\"");
     }
 
@@ -1560,7 +1560,7 @@ mod tests {
 
     #[test]
     fn enrichment_parsed_version_strips_v_prefix() {
-        let v = ParsedVersion::parse("v1.2.3").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("v1.2.3").expect("operation should succeed for valid inputs");
         assert_eq!(v.major, 1);
         assert_eq!(v.minor, 2);
         assert_eq!(v.patch, 3);
@@ -1569,7 +1569,7 @@ mod tests {
 
     #[test]
     fn enrichment_parsed_version_bump_patch_next() {
-        let v = ParsedVersion::parse("3.5.7").expect("serde deserialization should succeed");
+        let v = ParsedVersion::parse("3.5.7").expect("operation should succeed for valid inputs");
         assert_eq!(v.bump_patch_next(), "3.5.8-next");
     }
 

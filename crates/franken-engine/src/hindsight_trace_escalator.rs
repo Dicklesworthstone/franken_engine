@@ -2095,22 +2095,22 @@ mod tests {
     fn escalation_level_serde_exact_snake_case_strings() {
         assert_eq!(
             serde_json::to_string(&EscalationLevel::Minimal)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"minimal\""
         );
         assert_eq!(
             serde_json::to_string(&EscalationLevel::Extended)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"extended\""
         );
         assert_eq!(
             serde_json::to_string(&EscalationLevel::Full)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"full\""
         );
         assert_eq!(
             serde_json::to_string(&EscalationLevel::Forensic)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"forensic\""
         );
     }
@@ -2119,42 +2119,42 @@ mod tests {
     fn trigger_category_serde_exact_snake_case_strings() {
         assert_eq!(
             serde_json::to_string(&TriggerCategory::PerformanceAnomaly)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"performance_anomaly\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerCategory::SecurityEvent)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"security_event\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerCategory::CorrectnessFailure)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"correctness_failure\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerCategory::UserVisibleError)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"user_visible_error\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerCategory::Regression)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"regression\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerCategory::OperatorRequest)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"operator_request\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerCategory::ResourceExhaustion)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"resource_exhaustion\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerCategory::DeterminismViolation)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"determinism_violation\""
         );
     }
@@ -2163,22 +2163,22 @@ mod tests {
     fn trigger_severity_serde_exact_snake_case_strings() {
         assert_eq!(
             serde_json::to_string(&TriggerSeverity::Info)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"info\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerSeverity::Warning)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"warning\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerSeverity::Critical)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"critical\""
         );
         assert_eq!(
             serde_json::to_string(&TriggerSeverity::Fatal)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"fatal\""
         );
     }

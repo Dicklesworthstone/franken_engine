@@ -2173,7 +2173,7 @@ mod tests {
 
         let cached = cache
             .get(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cached.timestamp_ns, r2.timestamp_ns);
     }
 
@@ -2439,7 +2439,7 @@ mod tests {
         );
         assert_eq!(
             dead_evidence
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .analysis_method,
             AnalysisMethod::ExcludedDeadPath
         );
@@ -2468,9 +2468,9 @@ mod tests {
         let gh = ContentHash::compute(b"graph");
         let mh = ContentHash::compute(b"manifest");
         let id1 = StaticAnalysisReport::derive_report_id("ext", &gh, &mh, 100, "zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = StaticAnalysisReport::derive_report_id("ext", &gh, &mh, 100, "zone-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             id1, id2,
             "different zones should produce different report IDs"
@@ -2750,7 +2750,7 @@ mod tests {
             .per_capability_evidence
             .iter()
             .find(|e| e.capability == cap("shared_cap"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Only one hostcall node despite 3 entry paths.
         assert_eq!(ev.requiring_nodes.len(), 1);
         assert!(ev.requiring_nodes.contains("h"));
@@ -2844,7 +2844,7 @@ mod tests {
             .per_capability_evidence
             .iter()
             .find(|e| e.capability == cap("fs_read"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(fs_ev.analysis_method, AnalysisMethod::LatticeReachability);
 
         // net_send via ManifestFallback (dead path, but declared)
@@ -3002,7 +3002,7 @@ mod tests {
             .per_capability_evidence
             .iter()
             .find(|e| e.capability == cap("cap_a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.requiring_nodes.len(), 1);
         assert!(ev.requiring_nodes.contains("h1"));
     }
@@ -3057,7 +3057,7 @@ mod tests {
             .per_capability_evidence
             .iter()
             .find(|e| e.capability == cap("phantom_cap"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.analysis_method, AnalysisMethod::ManifestFallback);
         assert!(ev.summary.contains("conservatively"));
     }

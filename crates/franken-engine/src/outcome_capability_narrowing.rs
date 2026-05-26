@@ -961,7 +961,7 @@ mod tests {
         let last = validator
             .transitions()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.child_outcome, Some(BoundaryOutcome::Failure));
         assert_eq!(last.propagated_outcome, Some(BoundaryOutcome::Failure));
 

@@ -1253,7 +1253,7 @@ pub fn run_governance_pipeline(
 
         let last = results
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if !last.passed && halt_on_failure {
             return Err(GovernanceError::HookFailed {
                 hook_type: *hook_type,
@@ -1953,7 +1953,7 @@ mod tests {
             &schema,
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         EvidenceEntry {
             entry_id,
             kind: kind.to_string(),
@@ -1977,7 +1977,7 @@ mod tests {
         assert!(result.is_success(), "expected success: {:?}", result);
         result
             .artifact()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone()
     }
 
@@ -2096,7 +2096,7 @@ mod tests {
         assert!(result.is_success());
         let art = result
             .artifact()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(art.version, 1);
         assert_eq!(art.policy_name, "runtime_v1");
         assert!(!art.compiled_bytes.is_empty());
@@ -2118,7 +2118,7 @@ mod tests {
         assert!(result.is_success());
         let art = result
             .artifact()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(art.version, 2);
     }
 
@@ -2154,7 +2154,7 @@ mod tests {
         assert!(result.is_success());
         let art = result
             .artifact()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(art.version, 3);
     }
 
@@ -2177,7 +2177,7 @@ mod tests {
         assert_eq!(
             result
                 .artifact()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .tags,
             tags
         );
@@ -2209,18 +2209,18 @@ mod tests {
         // compiled_hash (and thus artifact_id) depends only on compiled_bytes.
         assert_eq!(
             r1.artifact()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .compiled_hash,
             r2.artifact()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .compiled_hash
         );
         assert_eq!(
             r1.artifact()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .artifact_id,
             r2.artifact()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .artifact_id
         );
     }
@@ -2378,7 +2378,7 @@ mod tests {
                     &schema,
                     b"placeholder",
                 )
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
             },
             version: 1,
             definition_hash: ContentHash::compute(b"x"),
@@ -2503,11 +2503,11 @@ mod tests {
         ];
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.entry_count, 2);
         assert!(result.payload_bytes.contains(&b'\n'));
         let text = std::str::from_utf8(&result.payload_bytes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(text.contains("policy_update"));
     }
 
@@ -2516,10 +2516,10 @@ mod tests {
         let entries = vec![make_entry("epoch_transition", 15)];
         let req = make_export_request(AuditExportFormat::Csv, 0, 100);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.entry_count, 1);
         let text = std::str::from_utf8(&result.payload_bytes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(text.starts_with("entry_id,"));
         assert!(text.contains("epoch_transition"));
     }
@@ -2555,10 +2555,10 @@ mod tests {
         let entries = vec![make_entry("revocation", 40)];
         let req = make_export_request(AuditExportFormat::CompliancePdf, 0, 100);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.entry_count, 1);
         let text = std::str::from_utf8(&result.payload_bytes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(text.contains("FRANKEN_COMPLIANCE_REPORT_V1"));
     }
 
@@ -2568,7 +2568,7 @@ mod tests {
         // The entry is outside the requested range.
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         let result = export_audit_evidence(req, entries, ts(300))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.entry_count, 0);
         assert!(result.payload_bytes.is_empty());
     }
@@ -2592,7 +2592,7 @@ mod tests {
         kinds.insert("policy_update".to_string());
         req.evidence_kinds = Some(kinds);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.entry_count, 2);
     }
 
@@ -2604,7 +2604,7 @@ mod tests {
         let mut req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         req.max_entries = Some(3);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.entry_count, 3);
     }
 
@@ -2613,7 +2613,7 @@ mod tests {
         let entries = vec![make_entry("policy_update", 10)];
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.payload_hash,
             ContentHash::compute(&result.payload_bytes)
@@ -2625,7 +2625,7 @@ mod tests {
         let mut req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         req.correlation_id = Some("AUDIT-2026-001".to_string());
         let result = export_audit_evidence(req, vec![], ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.request.correlation_id,
             Some("AUDIT-2026-001".to_string())
@@ -2698,7 +2698,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(bundle.framework, ComplianceFramework::Soc2);
         // With all evidence kinds present, all controls should be satisfied.
         assert!(contract.satisfaction_rate_millionths > 0);
@@ -2709,7 +2709,7 @@ mod tests {
     fn test_compliance_bundle_empty_entries() {
         let (bundle, contract) =
             generate_compliance_bundle(ComplianceFramework::Soc2, ts(0), ts(100), vec![], ts(200))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_eq!(bundle.entries.len(), 0);
         assert_eq!(contract.satisfaction_rate_millionths, 0);
         assert!(contract.unsatisfied_count() > 0);
@@ -2721,7 +2721,7 @@ mod tests {
         let entries = vec![make_entry("policy_update", 10)];
         let (_bundle, contract) =
             generate_compliance_bundle(ComplianceFramework::Soc2, ts(0), ts(100), entries, ts(200))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         // Some controls will not be satisfied (CC6.2, CC7.2, CC9.2 require
         // other kinds).
         assert!(contract.unsatisfied_count() > 0);
@@ -2739,7 +2739,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(contract.framework, ComplianceFramework::Iso27001);
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
@@ -2754,7 +2754,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(contract.framework, ComplianceFramework::Hipaa);
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
@@ -2769,7 +2769,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(contract.framework, ComplianceFramework::PciDss);
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
@@ -2784,7 +2784,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
 
@@ -2801,7 +2801,7 @@ mod tests {
             entries,
             ts(200),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(contract.satisfaction_rate_millionths, 1_000_000);
     }
 
@@ -2831,7 +2831,7 @@ mod tests {
             entries,
             ts(200),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(bundle.entries.len(), 1);
     }
 
@@ -2845,10 +2845,10 @@ mod tests {
             entries,
             ts(2000),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let ctrl = contract
             .find_control("CC6.1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.control_id, "CC6.1");
         assert!(contract.find_control("NONEXISTENT").is_none());
     }
@@ -2863,7 +2863,7 @@ mod tests {
             entries.clone(),
             ts(200),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let (b2, _) = generate_compliance_bundle(
             ComplianceFramework::Custom("f".to_string()),
             ts(0),
@@ -2871,7 +2871,7 @@ mod tests {
             entries,
             ts(999),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // bundle_hash depends only on evidence entries, not on assembled_at.
         assert_eq!(b1.bundle_hash, b2.bundle_hash);
     }
@@ -3007,7 +3007,7 @@ mod tests {
         // the pipeline continues and records all hook results.
         let mut pipeline = make_pipeline(false);
         let results = run_governance_pipeline(&mut pipeline, &single_artifact(), vec![], ts(500))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), GovernanceHookType::all().len());
         // PreDeploy, PostDeploy, PolicyChange, and AuditExport all pass.
         assert!(results[0].passed, "PreDeploy should pass");
@@ -3027,7 +3027,7 @@ mod tests {
         let mut pipeline = make_pipeline(true);
         let entries = full_evidence_set();
         let results = run_governance_pipeline(&mut pipeline, &single_artifact(), entries, ts(500))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), GovernanceHookType::all().len());
         // With full evidence set all built-in frameworks satisfy > 50% controls.
         for r in &results {
@@ -3043,7 +3043,7 @@ mod tests {
     fn test_pipeline_events_recorded() {
         let mut pipeline = make_pipeline(false);
         let results = run_governance_pipeline(&mut pipeline, &single_artifact(), vec![], ts(300))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pipeline.events().len(), results.len());
         for event in pipeline.events() {
             assert!(!event.summary.is_empty());
@@ -3093,7 +3093,7 @@ mod tests {
         art.version = 0;
         // Should NOT return Err because halt_on_failure = false.
         let results = run_governance_pipeline(&mut pipeline, &[art], vec![], ts(100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 2);
         assert!(!results[0].passed);
         // PostDeploy checks compiled_hash consistency — valid artifact still passes.
@@ -3107,7 +3107,7 @@ mod tests {
             ..Default::default()
         });
         let results = run_governance_pipeline(&mut pipeline, &[], vec![], ts(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(results.is_empty());
         assert!(pipeline.events().is_empty());
     }
@@ -3121,7 +3121,7 @@ mod tests {
         });
         let entries = vec![make_entry("policy_update", 10)];
         let results = run_governance_pipeline(&mut pipeline, &[], entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert!(results[0].passed);
         assert!(results[0].details.contains_key("entry_count"));
@@ -3144,7 +3144,7 @@ mod tests {
         );
         let art2 = art.clone();
         let results = run_governance_pipeline(&mut pipeline, &[art, art2], vec![], ts(100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed);
     }
@@ -3229,7 +3229,7 @@ mod tests {
         let entries = vec![make_entry("policy_update", 10)];
         let (bundle, _) =
             generate_compliance_bundle(ComplianceFramework::Soc2, ts(0), ts(100), entries, ts(200))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let decoded: ComplianceEvidence =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3246,7 +3246,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&contract).expect("serialize derived Serialize");
         let decoded: ComplianceEvidenceContract =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3258,7 +3258,7 @@ mod tests {
         let entries = vec![make_entry("policy_update", 10)];
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let decoded: AuditExportResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3276,7 +3276,7 @@ mod tests {
                     &schema,
                     b"test_event",
                 )
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
             },
             hook_type: GovernanceHookType::PolicyChange,
             passed: true,
@@ -3322,7 +3322,7 @@ mod tests {
         ];
         let req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // All three entries are within [0, 100] inclusive.
         assert_eq!(result.entry_count, 3);
     }
@@ -3332,7 +3332,7 @@ mod tests {
         // Force all controls to be unsatisfied (empty evidence).
         let (_bundle, contract) =
             generate_compliance_bundle(ComplianceFramework::Soc2, ts(0), ts(100), vec![], ts(200))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let gaps = contract.all_gaps();
         // Every gap should be prefixed with the control ID.
         for gap in &gaps {
@@ -3354,7 +3354,7 @@ mod tests {
             entries,
             ts(200),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let ids = bundle.ids_for_kind("policy_update");
         assert_eq!(ids.len(), 2);
         let ids2 = bundle.ids_for_kind("revocation");
@@ -3588,7 +3588,7 @@ mod tests {
             &schema,
             b"evidence_1",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let ctrl = ComplianceControl {
             control_id: "CC6.1".to_string(),
             description: "Access controls".to_string(),
@@ -3624,7 +3624,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(bundle.entry_count(), expected_count);
     }
 
@@ -3652,7 +3652,7 @@ mod tests {
             vec![make_entry("policy_update", 10)],
             ts(200),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let (b2, _) = generate_compliance_bundle(
             ComplianceFramework::Custom("f".to_string()),
             ts(0),
@@ -3660,7 +3660,7 @@ mod tests {
             vec![make_entry("security_action", 10)],
             ts(200),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(
             b1.bundle_hash, b2.bundle_hash,
             "different evidence should produce different bundle hashes"
@@ -3726,10 +3726,10 @@ mod tests {
             entries.clone(),
             ts(200),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let (b2, _) =
             generate_compliance_bundle(ComplianceFramework::Gdpr, ts(0), ts(100), entries, ts(200))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_ne!(
             b1.bundle_id, b2.bundle_id,
             "different frameworks should produce different bundle IDs"
@@ -3797,10 +3797,10 @@ mod tests {
         let entries = vec![make_entry("policy_update", 10)];
         let req_jl = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         let result_jl = export_audit_evidence(req_jl, entries.clone(), ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let req_csv = make_export_request(AuditExportFormat::Csv, 0, 100);
         let result_csv = export_audit_evidence(req_csv, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             result_jl.export_id, result_csv.export_id,
             "different formats should produce different export IDs"
@@ -3817,7 +3817,7 @@ mod tests {
             entries,
             ts(2000),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(
             contract.unsatisfied_count(),
             0,
@@ -3835,7 +3835,7 @@ mod tests {
         });
         let entries = full_evidence_set();
         let _results = run_governance_pipeline(&mut pipeline, &single_artifact(), entries, ts(500))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let event = &pipeline.events()[0];
         // ComplianceCheck hook populates details with per-framework results;
         // those should flow into the event attributes.
@@ -3853,7 +3853,7 @@ mod tests {
         let mut req = make_export_request(AuditExportFormat::JsonLines, 0, 100);
         req.max_entries = Some(999);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.entry_count, 3,
             "max_entries > available should not truncate"
@@ -3869,7 +3869,7 @@ mod tests {
         });
         let arts = single_artifact();
         let results = run_governance_pipeline(&mut pipeline, &arts, vec![], ts(100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(results[0].passed);
         assert_eq!(
             results[0].details.get("artifact_count"),
@@ -4000,9 +4000,9 @@ mod tests {
         let entries = vec![entry];
         let req = make_export_request(AuditExportFormat::Csv, 0, 100);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let text = std::str::from_utf8(&result.payload_bytes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // csv_escape wraps in quotes when commas are present.
         assert!(
             text.contains("\"contains, a comma\""),
@@ -4018,7 +4018,7 @@ mod tests {
         ];
         let req = make_export_request(AuditExportFormat::JsonLines, 50, 50);
         let result = export_audit_evidence(req, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.entry_count, 1,
             "zero-width window should include exact tick"
@@ -4049,10 +4049,10 @@ mod tests {
         );
         assert_ne!(
             r1.artifact()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .artifact_id,
             r2.artifact()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .artifact_id,
             "different policy bytes should yield different artifact IDs"
         );
@@ -4102,7 +4102,7 @@ mod tests {
             b"key2 = false",
         );
         let results = run_governance_pipeline(&mut pipeline, &[art1, art2], vec![], ts(100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert!(
             results[0].passed,
@@ -4174,10 +4174,10 @@ mod tests {
             .collect();
         let req_parquet = make_export_request(AuditExportFormat::Parquet, 0, 100);
         let result_parquet = export_audit_evidence(req_parquet, entries.clone(), ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let req_pdf = make_export_request(AuditExportFormat::CompliancePdf, 0, 100);
         let result_pdf = export_audit_evidence(req_pdf, entries, ts(200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result_parquet.entry_count, 5);
         assert_eq!(result_pdf.entry_count, 5);
     }

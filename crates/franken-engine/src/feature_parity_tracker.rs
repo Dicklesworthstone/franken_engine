@@ -1241,7 +1241,7 @@ mod tests {
         let entry = FeatureEntry::new(FeatureArea::BigInt, EsVersion::Es2020);
         tracker
             .register_feature(entry)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(tracker.feature_count(), 1);
     }
 
@@ -1251,7 +1251,7 @@ mod tests {
         let entry = FeatureEntry::new(FeatureArea::BigInt, EsVersion::Es2020);
         tracker
             .register_feature(entry.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = tracker.register_feature(entry).unwrap_err();
         assert_eq!(err.code(), "FE-FPT-0007");
     }
@@ -1267,12 +1267,12 @@ mod tests {
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let old = tracker
             .set_status(&fid, FeatureStatus::InProgress, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(old, FeatureStatus::NotStarted);
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             FeatureStatus::InProgress
         );
@@ -1310,12 +1310,12 @@ mod tests {
         };
         tracker
             .ingest_test262(&result, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let entry = tracker
             .feature(&fid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.test262_total, 100);
         assert_eq!(entry.test262_passing, 95);
         assert_eq!(entry.test262_pass_rate_millionths, 950_000);
@@ -1336,11 +1336,11 @@ mod tests {
         };
         tracker
             .ingest_test262(&zero_pass, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             FeatureStatus::InProgress
         );
@@ -1354,11 +1354,11 @@ mod tests {
         };
         tracker
             .ingest_test262(&partial, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             FeatureStatus::InProgress
         );
@@ -1372,11 +1372,11 @@ mod tests {
         };
         tracker
             .ingest_test262(&full, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             FeatureStatus::Passing
         );
@@ -1424,12 +1424,12 @@ mod tests {
         };
         tracker
             .ingest_lockstep(&result, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::GlobalThis);
         let entry = tracker
             .feature(&fid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.lockstep_matches.get("node"), Some(&48));
         assert_eq!(entry.lockstep_total_comparisons.get("node"), Some(&50));
         assert_eq!(
@@ -1466,7 +1466,7 @@ mod tests {
 
         tracker
             .register_waiver(waiver, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(tracker.waiver_count(), 1);
         assert!(tracker.is_test262_waived("test-fail-1"));
         assert!(tracker.is_lockstep_waived("lockstep-fail-1"));
@@ -1481,7 +1481,7 @@ mod tests {
 
         tracker
             .register_waiver(waiver.clone(), &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = tracker.register_waiver(waiver, &ctx).unwrap_err();
         assert_eq!(err.code(), "FE-FPT-0003");
     }
@@ -1536,16 +1536,16 @@ mod tests {
 
         tracker
             .register_waiver(waiver, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .seal_waiver("w-1", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(
             tracker
                 .waivers()
                 .get("w-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .sealed
         );
     }
@@ -1559,10 +1559,10 @@ mod tests {
 
         tracker
             .register_waiver(waiver, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .seal_waiver("w-1", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = tracker.seal_waiver("w-1", &ctx).unwrap_err();
         assert_eq!(err.code(), "FE-FPT-0004");
     }
@@ -1593,7 +1593,7 @@ mod tests {
         };
         tracker
             .ingest_test262(&result, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let dash = tracker.dashboard();
         assert_eq!(dash.total_features, FeatureArea::all().len());
@@ -1603,7 +1603,7 @@ mod tests {
         let area = dash
             .per_area
             .get(&fid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(area.test262_pass_rate_millionths, 800_000);
     }
 
@@ -1634,7 +1634,7 @@ mod tests {
             };
             tracker
                 .ingest_test262(&result, &ctx)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let decision = tracker.evaluate_gate(&ctx);
@@ -1656,7 +1656,7 @@ mod tests {
         };
         tracker
             .ingest_test262(&result, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let decision = tracker.evaluate_gate(&ctx);
         assert!(!decision.passed);
@@ -1678,14 +1678,14 @@ mod tests {
         };
         tracker
             .ingest_test262(&result, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Apply an explicit feature-wide waiver.
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let waiver = make_feature_wide_waiver(&fid, "w-bigint");
         tracker
             .register_waiver(waiver, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Make all other features pass
         for &area in FeatureArea::all() {
@@ -1700,7 +1700,7 @@ mod tests {
             };
             tracker
                 .ingest_test262(&r, &ctx)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let decision = tracker.evaluate_gate(&ctx);
@@ -1724,7 +1724,7 @@ mod tests {
         };
         tracker
             .ingest_test262(&result, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = tracker.events();
         assert!(!events.is_empty());
@@ -1740,7 +1740,7 @@ mod tests {
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         tracker
             .set_status(&fid, FeatureStatus::InProgress, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let drained = tracker.drain_events();
         assert!(!drained.is_empty());
@@ -1924,7 +1924,7 @@ mod tests {
         };
         tracker
             .ingest_lockstep(&node_result, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Bun results
         let bun_result = LockstepResult {
@@ -1936,12 +1936,12 @@ mod tests {
         };
         tracker
             .ingest_lockstep(&bun_result, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::OptionalChaining);
         let entry = tracker
             .feature(&fid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             entry.lockstep_match_rates_millionths.get("node"),
             Some(&900_000)
@@ -1965,7 +1965,7 @@ mod tests {
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             FeatureStatus::NotStarted
         );
@@ -1973,12 +1973,12 @@ mod tests {
         let waiver = make_feature_wide_waiver(&fid, "w-import-meta");
         tracker
             .register_waiver(waiver, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             FeatureStatus::Waived
         );
@@ -1993,18 +1993,18 @@ mod tests {
         // Set to passing first
         tracker
             .set_status(&fid, FeatureStatus::Passing, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let waiver = make_waiver(&fid, "w-bigint");
         tracker
             .register_waiver(waiver, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should remain Passing, not downgraded to Waived
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             FeatureStatus::Passing
         );
@@ -2018,17 +2018,17 @@ mod tests {
 
         tracker
             .set_status(&fid, FeatureStatus::Passing, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let waiver = make_feature_wide_waiver(&fid, "w-bigint-feature-wide");
         tracker
             .register_waiver(waiver, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             FeatureStatus::Waived
         );
@@ -2056,7 +2056,7 @@ mod tests {
     #[test]
     fn es_version_serde_roundtrip() {
         let json = serde_json::to_string(&EsVersion::Es2020)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let restored: EsVersion =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(EsVersion::Es2020, restored);
@@ -2675,12 +2675,12 @@ mod tests {
         };
         tracker
             .ingest_test262(&r, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .test262_pass_rate_millionths,
             0
         );
@@ -2699,11 +2699,11 @@ mod tests {
         };
         tracker
             .ingest_lockstep(&r, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let fid = format!("{}-{}", EsVersion::Es2020, FeatureArea::BigInt);
         let entry = tracker
             .feature(&fid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.lockstep_match_rates_millionths.get("node"), Some(&0));
     }
 
@@ -2856,7 +2856,7 @@ mod tests {
         };
         tracker
             .ingest_test262(&result, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let decision = tracker.evaluate_gate(&ctx);
         assert!(decision.passed);
     }
@@ -2876,13 +2876,13 @@ mod tests {
                 },
                 &ctx,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut waiver = make_waiver(&fid, "w-partial");
         waiver.test262_exemptions = vec!["f1".to_string()];
         waiver.lockstep_exemptions.clear();
         tracker
             .register_waiver(waiver, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let decision = tracker.evaluate_gate(&ctx);
         assert!(!decision.passed);
@@ -2918,12 +2918,12 @@ mod tests {
                 },
                 &ctx,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut waiver = make_waiver(&fid, "w-unrelated");
         waiver.lockstep_exemptions = vec!["other-lockstep".to_string()];
         tracker
             .register_waiver(waiver, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let decision = tracker.evaluate_gate(&ctx);
         assert!(!decision.passed);
@@ -2950,23 +2950,23 @@ mod tests {
                 },
                 &ctx,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .register_waiver(
                 make_feature_wide_waiver(&fid, "w-bigint-feature-wide"),
                 &ctx,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .set_status(&fid, FeatureStatus::Passing, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let decision = tracker.evaluate_gate(&ctx);
         assert!(decision.passed);
         assert_eq!(
             tracker
                 .feature(&fid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             FeatureStatus::Waived
         );

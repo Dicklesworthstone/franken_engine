@@ -444,7 +444,7 @@ impl CanonicalGuard {
 
         let schema_bytes: [u8; 32] = bytes[..32]
             .try_into()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let schema_hash = SchemaHash(schema_bytes);
 
         // Find the domain for this schema.
@@ -696,7 +696,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard.validate(ObjectDomain::PolicyObject, &bytes, "t-001");
         assert!(result.is_ok());
-        assert_eq!(result.expect("serde deserialization should succeed"), value);
+        assert_eq!(result.expect("operation should succeed for valid inputs"), value);
         assert_eq!(guard.acceptance_count(), 1);
         assert_eq!(guard.rejection_count(), 0);
     }
@@ -1021,7 +1021,7 @@ mod tests {
             let bytes = make_canonical_payload(&schema, value);
             let result = guard.validate(ObjectDomain::PolicyObject, &bytes, "t-round");
             assert!(result.is_ok(), "failed for value: {value:?}");
-            let decoded = result.expect("serde deserialization should succeed");
+            let decoded = result.expect("operation should succeed for valid inputs");
             assert_eq!(&decoded, value);
 
             // Re-serialize must match exactly.
@@ -1038,7 +1038,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &CanonicalValue::Null);
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-evt-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = guard.drain_events();
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0].event_type, GuardEventType::Accepted));
@@ -1069,7 +1069,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &CanonicalValue::Null);
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-cnt-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // One failure.
         let mut bad = make_canonical_payload(&schema, &CanonicalValue::Null);
@@ -1089,7 +1089,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &CanonicalValue::Null);
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-drain")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(guard.drain_events().len(), 1);
         assert_eq!(guard.drain_events().len(), 0); // second drain is empty
     }
@@ -1166,7 +1166,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &CanonicalValue::Bool(false));
         let (domain, value) = guard
             .validate_from_registry(&bytes, "t-reg-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(domain, ObjectDomain::Revocation);
         assert_eq!(value, CanonicalValue::Bool(false));
     }
@@ -1404,7 +1404,7 @@ mod tests {
             let bytes = make_canonical_payload(&schema, &CanonicalValue::U64(i));
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, &format!("t-ac-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // One invalid
         let mut bad = make_canonical_payload(&schema, &CanonicalValue::Null);
@@ -1436,7 +1436,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-nested")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, value);
     }
 
@@ -1452,7 +1452,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-arr")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, value);
     }
 
@@ -1513,7 +1513,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &CanonicalValue::U64(42));
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-drain")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = guard.drain_events();
         assert!(!events.is_empty());
         let events2 = guard.drain_events();
@@ -1534,7 +1534,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-empty-str")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, value);
     }
 
@@ -1545,7 +1545,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-empty-bytes")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, value);
     }
 
@@ -1556,7 +1556,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-empty-arr")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, value);
     }
 
@@ -1567,7 +1567,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-empty-map")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, value);
     }
 
@@ -1578,7 +1578,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-large-u64")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, value);
     }
 
@@ -1589,7 +1589,7 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-neg-i64")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, value);
     }
 
@@ -1623,7 +1623,7 @@ mod tests {
             let bytes = make_canonical_payload(&schema, &CanonicalValue::U64(42));
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-det")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         assert_eq!(run(), run());
     }
@@ -2197,7 +2197,7 @@ mod tests {
         let expected_hash = compute_input_hash(&bytes);
         guard
             .validate(ObjectDomain::PolicyObject, &bytes, "t-hash-evt")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = guard.drain_events();
         assert_eq!(events[0].input_hash, expected_hash);
     }
@@ -2298,7 +2298,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-i64-zero")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             value
         );
     }
@@ -2311,7 +2311,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-i64-max")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             value
         );
     }
@@ -2325,13 +2325,13 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &t_bytes, "t-bool-t")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             CanonicalValue::Bool(true)
         );
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &f_bytes, "t-bool-f")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             CanonicalValue::Bool(false)
         );
     }
@@ -2345,7 +2345,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-large-bytes")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             value
         );
     }
@@ -2358,7 +2358,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-unicode")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             value
         );
     }
@@ -2374,7 +2374,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-deep-arr")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             value
         );
     }
@@ -2395,7 +2395,7 @@ mod tests {
         assert_eq!(
             guard
                 .validate(ObjectDomain::PolicyObject, &bytes, "t-all-types-map")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             value
         );
     }

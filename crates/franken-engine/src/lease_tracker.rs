@@ -728,13 +728,13 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id.as_u64(), 1);
         assert_eq!(store.active_count(), 1);
 
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lease.holder, "node-1");
         assert_eq!(lease.lease_type, LeaseType::RemoteEndpoint);
         assert_eq!(lease.ttl, 100);
@@ -748,13 +748,13 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id1 = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = store
             .grant("node-2", LeaseType::Operation, 200, 10, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = store
             .grant("session-1", LeaseType::Session, 50, 20, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(store.active_count(), 3);
         assert_eq!(store.total_count(), 3);
         assert_ne!(id1, id2);
@@ -786,11 +786,11 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             store
                 .check(&id, 50)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             LeaseStatus::Active
         );
     }
@@ -800,11 +800,11 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             store
                 .check(&id, 100)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             LeaseStatus::Expired
         );
     }
@@ -814,14 +814,14 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .release(&id, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             store
                 .check(&id, 50)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             LeaseStatus::Released
         );
     }
@@ -842,14 +842,14 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         store
             .renew(&id, 50, "t-renew")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lease.expires_at, 150); // 50 + 100
         assert_eq!(lease.renewal_count, 1);
     }
@@ -859,17 +859,17 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         store
             .renew(&id, 30, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .renew(&id, 60, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lease.expires_at, 160); // 60 + 100
         assert_eq!(lease.renewal_count, 2);
     }
@@ -879,7 +879,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = store.renew(&id, 200, "t-renew").unwrap_err();
         assert!(matches!(err, LeaseError::LeaseExpired { .. }));
@@ -890,10 +890,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .release(&id, "t-rel")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = store.renew(&id, 50, "t-renew").unwrap_err();
         assert!(matches!(err, LeaseError::LeaseReleased { .. }));
@@ -915,15 +915,15 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .release(&id, "t-rel")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(store.active_count(), 0);
 
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lease.status, LeaseStatus::Released);
     }
 
@@ -932,10 +932,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .release(&id, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             store.release(&id, "t2"),
             Err(LeaseError::LeaseReleased { .. })
@@ -949,10 +949,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .grant("op-1", LeaseType::Operation, 50, 10, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // At tick 70, only op-1 (expires at 60) should be expired.
         let actions = store.scan_expired(70, "trace-scan");
@@ -968,10 +968,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .grant("session-1", LeaseType::Session, 50, 0, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // At tick 200, both should be expired.
         let actions = store.scan_expired(200, "trace-scan");
@@ -983,7 +983,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let a1 = store.scan_expired(200, "t1");
         assert_eq!(a1.len(), 1);
@@ -1000,7 +1000,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 1000, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(store.active_count(), 1);
 
         let actions = store.advance_epoch(SecurityEpoch::from_raw(2), "trace-epoch");
@@ -1017,7 +1017,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 1000, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         store.advance_epoch(SecurityEpoch::from_raw(2), "t-epoch");
         let err = store.renew(&id, 50, "t-renew").unwrap_err();
@@ -1031,10 +1031,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 300, 100, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // ttl=300, granted_at=100, expires_at=400
         // renewal_due_at = expires_at - ttl + ttl/3 = 400 - 300 + 100 = 200
         assert_eq!(lease.renewal_due_at(), 200);
@@ -1045,10 +1045,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id1 = store
             .grant("node-1", LeaseType::RemoteEndpoint, 300, 0, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _id2 = store
             .grant("node-2", LeaseType::RemoteEndpoint, 900, 0, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // id1: renewal_due_at = 0 + 100 = 100
         // id2: renewal_due_at = 0 + 300 = 300
@@ -1064,10 +1064,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 10, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             lease.escalation_action(),
             EscalationAction::MarkEndpointUnreachable { .. }
@@ -1079,10 +1079,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("op-1", LeaseType::Operation, 10, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             lease.escalation_action(),
             EscalationAction::CancelOperation { .. }
@@ -1094,10 +1094,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("sess-1", LeaseType::Session, 10, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             lease.escalation_action(),
             EscalationAction::TerminateSession { .. }
@@ -1111,7 +1111,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "trace-g")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
@@ -1125,11 +1125,11 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.drain_events();
         store
             .renew(&id, 50, "trace-r")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
@@ -1142,11 +1142,11 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.drain_events();
         store
             .release(&id, "trace-rel")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
@@ -1159,7 +1159,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.drain_events();
         store.scan_expired(200, "trace-exp");
 
@@ -1178,7 +1178,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let e1 = store.drain_events();
         assert_eq!(e1.len(), 1);
         let e2 = store.drain_events();
@@ -1190,16 +1190,16 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .renew(&id, 30, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .renew(&id, 60, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .release(&id, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(store.event_counts().get("grant"), Some(&1));
         assert_eq!(store.event_counts().get("renew"), Some(&2));
@@ -1359,30 +1359,30 @@ mod tests {
         // 1. Grant
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 2. Check active
         assert_eq!(
             store
                 .check(&id, 50)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             LeaseStatus::Active
         );
 
         // 3. Renew
         store
             .renew(&id, 80, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lease.expires_at, 180);
 
         // 4. Expire (no more renewal)
         assert_eq!(
             store
                 .check(&id, 200)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             LeaseStatus::Expired
         );
         assert_eq!(store.active_count(), 0);
@@ -1423,10 +1423,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Active just before expiration
         assert!(lease.is_active_at(99));
         // Not active at exactly expires_at
@@ -1463,10 +1463,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(lease).expect("serialize derived Serialize");
         let restored: Lease = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(*lease, restored);
@@ -1477,10 +1477,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .release(&id, "t-rel1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = store.release(&id, "t-rel2");
         assert!(result.is_err());
     }
@@ -1490,7 +1490,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 1000, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.drain_events();
         store.advance_epoch(SecurityEpoch::from_raw(2), "trace-epoch");
         let events = store.drain_events();
@@ -1562,7 +1562,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 1000, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let actions = store.scan_expired(500, "trace-scan");
         assert!(actions.is_empty());
         assert_eq!(store.active_count(), 1);
@@ -1573,7 +1573,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.scan_expired(200, "trace-scan");
         assert_eq!(store.event_counts().get("expiration"), Some(&1));
     }
@@ -1591,10 +1591,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .grant("node-2", LeaseType::Operation, 200, 0, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.scan_expired(150, "t-scan");
         // node-1 expired (ttl 100), node-2 still active (ttl 200)
         assert_eq!(store.total_count(), 2);
@@ -1606,7 +1606,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("node-1", LeaseType::RemoteEndpoint, 1000, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let actions = store.advance_epoch(test_epoch(), "t-same");
         assert!(actions.is_empty());
         assert_eq!(store.active_count(), 1);
@@ -1617,13 +1617,13 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id1 = store
             .grant("a", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = store
             .grant("b", LeaseType::Operation, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = store
             .grant("c", LeaseType::Session, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id1.as_u64(), 1);
         assert_eq!(id2.as_u64(), 2);
         assert_eq!(id3.as_u64(), 3);
@@ -1934,11 +1934,11 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Release before expiration.
         store
             .release(&id, "t-rel")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.drain_events();
         // Scan well past the original expiration.
         let actions = store.scan_expired(500, "trace-scan");
@@ -1954,12 +1954,12 @@ mod tests {
         // Grant in epoch 1, then advance to epoch 2.
         store
             .grant("old", LeaseType::RemoteEndpoint, 1000, 0, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.advance_epoch(SecurityEpoch::from_raw(2), "t-adv");
         // Now grant in epoch 2.
         let new_id = store
             .grant("new", LeaseType::Operation, 500, 100, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Advance to epoch 3 — only the new-epoch lease should survive if it
         // were in epoch 2. Actually it should be invalidated because epoch changed to 3.
         let actions = store.advance_epoch(SecurityEpoch::from_raw(3), "t-adv2");
@@ -1972,11 +1972,11 @@ mod tests {
         // "old" was already expired from the first advance.
         let old_lease = store
             .get(&LeaseId::from_raw(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(old_lease.status, LeaseStatus::Expired);
         let new_lease = store
             .get(&new_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(new_lease.status, LeaseStatus::Expired);
     }
 
@@ -2004,10 +2004,10 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::Session, 200, 1000, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lease.granted_at, 1000);
         assert_eq!(lease.expires_at, 1200);
         assert!(lease.is_active_at(1199));
@@ -2019,14 +2019,14 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Renew at tick 99, the last valid tick (expires_at=100, so 99 < 100).
         store
             .renew(&id, 99, "t-renew")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lease.expires_at, 199); // 99 + 100
         assert_eq!(lease.renewal_count, 1);
     }
@@ -2036,7 +2036,7 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         let id = store
             .grant("node-1", LeaseType::RemoteEndpoint, 100, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Renew at exactly expires_at (100) should fail — the lease is expired.
         let err = store.renew(&id, 100, "t-renew").unwrap_err();
         assert!(matches!(
@@ -2049,7 +2049,7 @@ mod tests {
         // Status should now be Expired.
         let lease = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lease.status, LeaseStatus::Expired);
     }
 
@@ -2058,13 +2058,13 @@ mod tests {
         let mut store = LeaseStore::new(test_epoch());
         store
             .grant("a", LeaseType::RemoteEndpoint, 1000, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .grant("b", LeaseType::Operation, 1000, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .grant("c", LeaseType::Session, 1000, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.advance_epoch(SecurityEpoch::from_raw(2), "t-adv");
         assert_eq!(
             store.event_counts().get("epoch_invalidation"),

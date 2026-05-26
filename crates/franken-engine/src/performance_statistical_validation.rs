@@ -962,7 +962,7 @@ mod tests {
     #[test]
     fn compute_stats_uniform() {
         let stats = compute_stats(&[1000, 1000, 1000, 1000, 1000])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stats.mean_ns, 1000);
         assert_eq!(stats.stddev_ns, 0);
         assert_eq!(stats.cv_millionths, 0);
@@ -972,7 +972,7 @@ mod tests {
     #[test]
     fn compute_stats_nonzero_stddev() {
         let stats =
-            compute_stats(&[900, 1000, 1100]).expect("serde deserialization should succeed");
+            compute_stats(&[900, 1000, 1100]).expect("operation should succeed for valid inputs");
         assert_eq!(stats.mean_ns, 1000);
         assert!(stats.stddev_ns > 0);
         assert!(stats.cv_millionths > 0);

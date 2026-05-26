@@ -978,14 +978,14 @@ mod tests {
     #[test]
     fn normalize_utc_timestamp_valid() {
         let result = normalize_utc_timestamp("2025-01-15T12:00:00Z")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.contains("2025-01-15"));
     }
 
     #[test]
     fn normalize_utc_timestamp_with_offset() {
         let result = normalize_utc_timestamp("2025-01-15T14:00:00+02:00")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.contains("12:00:00")); // Converted to UTC
     }
 
@@ -1111,7 +1111,7 @@ mod tests {
     #[test]
     fn evaluate_full_passing_not_blocked() {
         let cl = make_full_checklist();
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         assert!(!result.blocked);
         assert!(result.blockers.is_empty());
     }
@@ -1122,7 +1122,7 @@ mod tests {
         // Remove the first required item
         let first_id = REQUIRED_CHECKLIST_ITEMS[0].item_id;
         cl.items.retain(|item| item.item_id != first_id);
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         assert!(result.blocked);
         assert!(result.blockers.iter().any(|b| b.contains(first_id)));
     }
@@ -1131,7 +1131,7 @@ mod tests {
     fn evaluate_failed_required_item_is_blocked() {
         let mut cl = make_full_checklist();
         cl.items[0].status = ChecklistItemStatus::Fail;
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         assert!(result.blocked);
     }
 
@@ -1139,7 +1139,7 @@ mod tests {
     fn evaluate_pass_without_artifacts_is_blocked() {
         let mut cl = make_full_checklist();
         cl.items[0].artifact_refs.clear();
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         assert!(result.blocked);
     }
 
@@ -1150,7 +1150,7 @@ mod tests {
         let cl = make_full_checklist();
         let json = serde_json::to_string(&cl).expect("serialize derived Serialize");
         let parsed =
-            parse_release_checklist_json(&json).expect("serde deserialization should succeed");
+            parse_release_checklist_json(&json).expect("operation should succeed for valid inputs");
         assert_eq!(parsed.release_tag, "v0.1.0");
     }
 
@@ -1414,7 +1414,7 @@ mod tests {
     fn evaluate_not_run_required_item_is_blocked() {
         let mut cl = make_full_checklist();
         cl.items[0].status = ChecklistItemStatus::NotRun;
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         assert!(result.blocked);
         assert!(result.blockers.iter().any(|b| b.contains("not_run")));
     }
@@ -1424,7 +1424,7 @@ mod tests {
         let mut cl = make_full_checklist();
         // Change a security item to performance category
         cl.items[0].category = ChecklistCategory::Performance;
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         assert!(result.blocked);
         assert!(result.blockers.iter().any(|b| b.contains("category")));
     }
@@ -1438,7 +1438,7 @@ mod tests {
             approver: "admin".to_string(),
             exception_artifact_link: "bd-99".to_string(),
         });
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         // Waived items don't block release
         assert!(!result.blocked);
     }
@@ -1453,7 +1453,7 @@ mod tests {
             exception_artifact_link: "bd-99".to_string(),
         });
         cl.items[0].artifact_refs.clear();
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         assert!(result.blocked);
         assert!(
             result
@@ -1568,7 +1568,7 @@ mod tests {
     #[test]
     fn normalize_utc_timestamp_fractional_seconds() {
         let result = normalize_utc_timestamp("2025-01-15T12:00:00.123Z")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.contains("12:00:00"));
     }
 
@@ -1738,7 +1738,7 @@ mod tests {
             "decision-q",
             "policy-q",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].release_tag, "v0.1.0");
     }
@@ -1766,7 +1766,7 @@ mod tests {
         use crate::storage_adapter::InMemoryStorageAdapter;
         let mut adapter = InMemoryStorageAdapter::default();
         let results = query_release_checklists_by_tag(&mut adapter, "nonexistent", "t", "d", "p")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(results.is_empty());
     }
 
@@ -1780,7 +1780,7 @@ mod tests {
         let first_id_before = cl.items[0].item_id.clone();
         assert!(validate_release_checklist(&cl).is_ok());
         // After normalization via evaluate, items should be sorted
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         let first_id_after = result.normalized.items[0].item_id.clone();
         // The items are sorted alphabetically
         assert!(first_id_after <= result.normalized.items[1].item_id);
@@ -1806,13 +1806,13 @@ mod tests {
                 sha256: None,
             },
         ];
-        let result = evaluate_checklist(&cl).expect("serde deserialization should succeed");
+        let result = evaluate_checklist(&cl).expect("operation should succeed for valid inputs");
         let item = result
             .normalized
             .items
             .iter()
             .find(|i| i.item_id == target_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(item.artifact_refs[0].artifact_id, "a-art");
         assert_eq!(item.artifact_refs[1].artifact_id, "z-art");
     }
@@ -1850,7 +1850,7 @@ mod tests {
         let last = decision
             .events
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "release_checklist_gate_completed");
         // All events should have matching trace/decision/policy
         for event in &decision.events {
@@ -1896,7 +1896,7 @@ mod tests {
             "decision-q",
             "policy-q",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 2);
     }
 }

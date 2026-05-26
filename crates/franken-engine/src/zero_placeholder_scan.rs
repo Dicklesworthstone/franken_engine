@@ -2127,9 +2127,9 @@ mod tests {
         };
         let path = Path::new("/tmp/det.json");
         let bytes1 =
-            canonical_json_bytes(&finding, path).expect("serde deserialization should succeed");
+            canonical_json_bytes(&finding, path).expect("operation should succeed for valid inputs");
         let bytes2 =
-            canonical_json_bytes(&finding, path).expect("serde deserialization should succeed");
+            canonical_json_bytes(&finding, path).expect("operation should succeed for valid inputs");
         assert_eq!(bytes1, bytes2, "canonical JSON must be deterministic");
         let hash1 = sha256_hex(&bytes1);
         let hash2 = sha256_hex(&bytes2);
@@ -2204,14 +2204,14 @@ mod tests {
         let parser_summary = summaries
             .iter()
             .find(|s| s.subsystem == ZeroPlaceholderSubsystem::Parser)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parser_summary.finding_count, 2);
         assert_eq!(parser_summary.open_placeholder_finding_count, 1);
         assert_eq!(parser_summary.resolved_finding_count, 1);
         let cli_docs_summary = summaries
             .iter()
             .find(|s| s.subsystem == ZeroPlaceholderSubsystem::CliDocs)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cli_docs_summary.finding_count, 0);
     }
 
@@ -2266,7 +2266,7 @@ mod tests {
             events[3]
                 .detail
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("2 findings")
         );
     }
@@ -2286,7 +2286,7 @@ mod tests {
             events[1]
                 .detail
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("0 findings")
         );
     }
@@ -2296,14 +2296,14 @@ mod tests {
         let path = Path::new("/some/dir/artifact.json");
         let tmp = unique_temp_path(path);
         assert_eq!(
-            tmp.parent().expect("serde deserialization should succeed"),
+            tmp.parent().expect("operation should succeed for valid inputs"),
             Path::new("/some/dir")
         );
         let name = tmp
             .file_name()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .to_str()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(name.starts_with('.'), "temp file must be hidden: {name}");
         assert!(
             name.ends_with(".tmp"),
@@ -2320,7 +2320,7 @@ mod tests {
         let path = Path::new("standalone.bin");
         let tmp = unique_temp_path(path);
         assert_eq!(
-            tmp.parent().expect("serde deserialization should succeed"),
+            tmp.parent().expect("operation should succeed for valid inputs"),
             Path::new(".")
         );
     }

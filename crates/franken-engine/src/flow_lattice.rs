@@ -1373,7 +1373,7 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = lattice.check_flow(&LabelClass::Secret, &Clearance::NeverSink, "t1");
         assert_eq!(
@@ -1398,7 +1398,7 @@ mod tests {
                 max_uses: 1,
                 use_count: 1, // already used
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = lattice.check_flow(&LabelClass::Secret, &Clearance::NeverSink, "t1");
         assert!(result.is_blocked());
@@ -1422,17 +1422,17 @@ mod tests {
                 max_uses: 3,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         lattice
             .use_declassification("d1", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice
             .use_declassification("d1", "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice
             .use_declassification("d1", "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Fourth use should fail
         let err = lattice.use_declassification("d1", "t4").unwrap_err();
@@ -1458,12 +1458,12 @@ mod tests {
                 max_uses: 0, // unlimited
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for i in 0..100 {
             lattice
                 .use_declassification("d1", &format!("t{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
     }
 
@@ -1482,7 +1482,7 @@ mod tests {
         };
         lattice
             .register_obligation(ob.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = lattice.register_obligation(ob).unwrap_err();
         assert_eq!(
             err,
@@ -1636,7 +1636,7 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = lattice.check_flow(&LabelClass::Secret, &Clearance::NeverSink, "trace-rt");
         assert_eq!(
@@ -1670,10 +1670,10 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([9u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([9u8; 32]).expect("operation should succeed for valid inputs");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-2".to_string(),
             source_label: Label::Secret,
@@ -1694,7 +1694,7 @@ mod tests {
         };
         receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice.trust_receipt_authorizer_for_contract("decision-2", signing_key.verification_key());
 
         lattice
@@ -1730,10 +1730,10 @@ mod tests {
                 max_uses: 1,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([3u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([3u8; 32]).expect("operation should succeed for valid inputs");
         let mut denied_receipt = DeclassificationReceipt {
             receipt_id: "rcpt-deny".to_string(),
             source_label: Label::Secret,
@@ -1754,7 +1754,7 @@ mod tests {
         };
         denied_receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice.trust_receipt_authorizer_for_contract("decision-3", signing_key.verification_key());
 
         let err = lattice
@@ -1790,10 +1790,10 @@ mod tests {
                 max_uses: 1,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([4u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([4u8; 32]).expect("operation should succeed for valid inputs");
         let mut tampered_receipt = DeclassificationReceipt {
             receipt_id: "rcpt-tampered".to_string(),
             source_label: Label::Secret,
@@ -1814,7 +1814,7 @@ mod tests {
         };
         tampered_receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice.trust_receipt_authorizer_for_contract("decision-4", signing_key.verification_key());
         // Tamper after signing to simulate malicious receipt mutation.
         tampered_receipt.replay_linkage = "trace-modified".to_string();
@@ -1863,10 +1863,10 @@ mod tests {
                 max_uses: 1,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([5u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([5u8; 32]).expect("operation should succeed for valid inputs");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-untrusted".to_string(),
             source_label: Label::Secret,
@@ -1887,7 +1887,7 @@ mod tests {
         };
         receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = lattice
             .use_declassification_with_receipt("obl-5", &receipt, "trace-rt")
@@ -1926,10 +1926,10 @@ mod tests {
                 max_uses: 1,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([6u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([6u8; 32]).expect("operation should succeed for valid inputs");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-cross-trace".to_string(),
             source_label: Label::Secret,
@@ -1950,7 +1950,7 @@ mod tests {
         };
         receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice.trust_receipt_authorizer_for_contract("decision-6", signing_key.verification_key());
 
         let err = lattice
@@ -2120,7 +2120,7 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = lattice.check_flow(&LabelClass::Secret, &Clearance::NeverSink, "t1");
         assert_eq!(
@@ -2133,7 +2133,7 @@ mod tests {
         // Exercise the declassification
         lattice
             .use_declassification("auth-api", "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2601,7 +2601,7 @@ mod tests {
         };
         for expected in 1..=5 {
             ob.record_use()
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(ob.use_count, expected);
         }
         // 6th use should fail
@@ -2645,7 +2645,7 @@ mod tests {
                 max_uses: 1,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice
             .register_obligation(DeclassificationObligation {
                 obligation_id: "beta".into(),
@@ -2657,7 +2657,7 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // BTreeMap iteration is alphabetical; "alpha" < "beta", so alpha is matched first
         let result = lattice.check_flow(&LabelClass::TopSecret, &Clearance::NeverSink, "t");
@@ -2671,7 +2671,7 @@ mod tests {
         // Exhaust alpha
         lattice
             .use_declassification("alpha", "t-use")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Now alpha is exhausted, beta should be returned
         let result2 = lattice.check_flow(&LabelClass::TopSecret, &Clearance::NeverSink, "t2");
@@ -2697,7 +2697,7 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice
             .register_obligation(DeclassificationObligation {
                 obligation_id: "beta".into(),
@@ -2709,7 +2709,7 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = lattice.check_flow_with_obligation_hint(
             &LabelClass::TopSecret,
@@ -2739,10 +2739,10 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         // Receipt's source_label is Public but obligation expects Secret
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-m".into(),
@@ -2764,7 +2764,7 @@ mod tests {
         };
         receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice.trust_receipt_authorizer_for_contract("dc-m", signing_key.verification_key());
 
         let err = lattice
@@ -2785,7 +2785,7 @@ mod tests {
         assert_eq!(
             lattice
                 .obligation("obl-m")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .use_count,
             0
         );
@@ -2805,10 +2805,10 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([8u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([8u8; 32]).expect("operation should succeed for valid inputs");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-sink".into(),
             source_label: Label::Secret,
@@ -2829,7 +2829,7 @@ mod tests {
         };
         receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice.trust_receipt_authorizer_for_contract("dc-sink", signing_key.verification_key());
 
         let err = lattice
@@ -2849,7 +2849,7 @@ mod tests {
         assert_eq!(
             lattice
                 .obligation("obl-sink")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .use_count,
             0
         );
@@ -2869,10 +2869,10 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([11u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([11u8; 32]).expect("operation should succeed for valid inputs");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-custom".into(),
             source_label: Label::Secret,
@@ -2896,7 +2896,7 @@ mod tests {
         };
         receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice.trust_receipt_authorizer_for_contract("dc-custom", signing_key.verification_key());
 
         let err = lattice
@@ -2916,7 +2916,7 @@ mod tests {
         assert_eq!(
             lattice
                 .obligation("obl-custom")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .use_count,
             0
         );
@@ -2936,10 +2936,10 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([12u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([12u8; 32]).expect("operation should succeed for valid inputs");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-contract".into(),
             source_label: Label::Secret,
@@ -2960,7 +2960,7 @@ mod tests {
         };
         receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice.trust_receipt_authorizer_for_contract("dc-other", signing_key.verification_key());
 
         let err = lattice
@@ -2980,7 +2980,7 @@ mod tests {
         assert_eq!(
             lattice
                 .obligation("obl-contract")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .use_count,
             0
         );
@@ -3000,10 +3000,10 @@ mod tests {
                 max_uses: 0,
                 use_count: 0,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let signing_key =
-            SigningKey::from_bytes([13u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([13u8; 32]).expect("operation should succeed for valid inputs");
         let mut receipt = DeclassificationReceipt {
             receipt_id: "rcpt-binding".into(),
             source_label: Label::Secret,
@@ -3024,7 +3024,7 @@ mod tests {
         };
         receipt
             .sign(&signing_key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lattice
             .trust_receipt_authorizer_for_contract("dc-expected", signing_key.verification_key());
 
@@ -3045,7 +3045,7 @@ mod tests {
         assert_eq!(
             lattice
                 .obligation("obl-binding")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .use_count,
             0
         );

@@ -637,7 +637,7 @@ mod tests {
         let key = store.derive_key(&input);
         let result = store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(result, DedupResult::New));
         assert_eq!(store.entry_count(), 1);
     }
@@ -650,10 +650,10 @@ mod tests {
 
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = store
             .check_and_claim(&key, &input, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(result, DedupResult::DuplicateInProgress));
     }
 
@@ -665,14 +665,14 @@ mod tests {
 
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .mark_completed(&key, test_result_hash())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = store
             .check_and_claim(&key, &input, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(result, DedupResult::CachedResult { .. }));
         if let DedupResult::CachedResult { result_hash } = result {
             assert_eq!(result_hash, test_result_hash());
@@ -687,14 +687,14 @@ mod tests {
 
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .mark_failed(&key, "transient_timeout")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = store
             .check_and_claim(&key, &input, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(result, DedupResult::PreviouslyFailed { .. }));
         if let DedupResult::PreviouslyFailed { error_code } = result {
             assert_eq!(error_code, "transient_timeout");
@@ -721,7 +721,7 @@ mod tests {
         let key = store.derive_key(&input);
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(store.entry_count(), 1);
 
         store.advance_epoch(SecurityEpoch::from_raw(2), b"new-session-key".to_vec());
@@ -777,7 +777,7 @@ mod tests {
         let key = store.derive_key(&input);
         let result = store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(result, DedupResult::New));
     }
 
@@ -791,7 +791,7 @@ mod tests {
 
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(store.entry_count(), 1);
 
         // After TTL (default 600 ticks), entry should be evicted.
@@ -800,7 +800,7 @@ mod tests {
         let key2 = store.derive_key(&input2);
         store
             .check_and_claim(&key2, &input2, 800)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Original entry should have been evicted during claim.
         assert_eq!(store.entry_count(), 1);
@@ -822,13 +822,13 @@ mod tests {
         let key1 = store.derive_key(&input1);
         store
             .check_and_claim(&key1, &input1, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let input2 = test_derivation_input(); // uses default TTL (600)
         let key2 = store.derive_key(&input2);
         store
             .check_and_claim(&key2, &input2, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(store.entry_count(), 2);
 
@@ -849,10 +849,10 @@ mod tests {
         let key0 = store.derive_key(&input0);
         store
             .check_and_claim(&key0, &input0, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .mark_failed(&key0, "timeout")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Attempt 1: new attempt produces new key, should be New.
         let mut input1 = test_derivation_input();
@@ -862,7 +862,7 @@ mod tests {
 
         let result = store
             .check_and_claim(&key1, &input1, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(result, DedupResult::New));
     }
 
@@ -895,7 +895,7 @@ mod tests {
         let key = store.derive_key(&input);
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
@@ -914,7 +914,7 @@ mod tests {
         let key = store.derive_key(&input);
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let e1 = store.drain_events();
         assert_eq!(e1.len(), 1);
@@ -930,17 +930,17 @@ mod tests {
 
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed"); // new
+            .expect("operation should succeed for valid inputs"); // new
         store
             .check_and_claim(&key, &input, 101)
-            .expect("serde deserialization should succeed"); // duplicate_in_progress
+            .expect("operation should succeed for valid inputs"); // duplicate_in_progress
 
         store
             .mark_completed(&key, test_result_hash())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .check_and_claim(&key, &input, 102)
-            .expect("serde deserialization should succeed"); // cached
+            .expect("operation should succeed for valid inputs"); // cached
 
         assert_eq!(store.result_counts().get("new"), Some(&1));
         assert_eq!(store.result_counts().get("duplicate_in_progress"), Some(&1));
@@ -1162,18 +1162,18 @@ mod tests {
         // 2. Check — should be new
         let r1 = store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(r1, DedupResult::New));
 
         // 3. Mark completed
         store
             .mark_completed(&key, test_result_hash())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 4. Check again — should be cached
         let r2 = store
             .check_and_claim(&key, &input, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if let DedupResult::CachedResult { result_hash } = r2 {
             assert_eq!(result_hash, test_result_hash());
         } else {
@@ -1283,12 +1283,12 @@ mod tests {
         // SAFETY: test verified display.starts_with("idem:"); strip_prefix returns Some
         let hex_part = display
             .strip_prefix("idem:")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: test verified display.contains('@'); split('@').next() returns Some
         let hex_part = hex_part
             .split('@')
             .next()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(hex_part.len(), 64);
     }
 
@@ -1490,14 +1490,14 @@ mod tests {
         let key = store.derive_key(&input);
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let rh = ContentHash::compute(b"specific-result");
         store
             .mark_completed(&key, rh)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = store
             .check_and_claim(&key, &input, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if let DedupResult::CachedResult { result_hash } = result {
             assert_eq!(result_hash, rh);
         } else {
@@ -1527,10 +1527,10 @@ mod tests {
 
         let r1 = store
             .check_and_claim(&key_a, &input_a, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = store
             .check_and_claim(&key_b, &input_b, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(r1, DedupResult::New));
         assert!(matches!(r2, DedupResult::New));
         assert_eq!(store.entry_count(), 2);
@@ -1538,14 +1538,14 @@ mod tests {
         // Complete one, check it returns cached; other still in-progress.
         store
             .mark_completed(&key_a, test_result_hash())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r3 = store
             .check_and_claim(&key_a, &input_a, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(r3, DedupResult::CachedResult { .. }));
         let r4 = store
             .check_and_claim(&key_b, &input_b, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(r4, DedupResult::DuplicateInProgress));
     }
 
@@ -1610,7 +1610,7 @@ mod tests {
         let key = store.derive_key(&input);
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(store.entry_count(), 1);
 
         // Advance to epoch 2 — epoch 1 entries cleared.
@@ -1621,7 +1621,7 @@ mod tests {
         let key2 = store.derive_key(&input);
         store
             .check_and_claim(&key2, &input, 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(store.entry_count(), 1);
 
         // Advance to epoch 3 — epoch 2 entries cleared.
@@ -1698,12 +1698,12 @@ mod tests {
 
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.drain_events(); // clear first event
 
         store
             .check_and_claim(&key, &input, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].dedup_result, "duplicate_in_progress");
@@ -1718,15 +1718,15 @@ mod tests {
 
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .mark_failed(&key, "network_error")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store.drain_events();
 
         store
             .check_and_claim(&key, &input, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].dedup_result, "previously_failed");
@@ -1754,7 +1754,7 @@ mod tests {
         let key = store.derive_key(&input);
         let result = store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(result, DedupResult::New));
 
         // Attempt 1 should fail (exceeds max of 0).
@@ -1826,7 +1826,7 @@ mod tests {
             let key = store.derive_key(&input);
             store
                 .check_and_claim(&key, &input, 100 + i)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(store.entry_count(), 3);
 
@@ -1835,7 +1835,7 @@ mod tests {
         let key = store.derive_key(&input);
         store
             .check_and_claim(&key, &input, 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // This might be New (different trace_id than the 3 above)
         // or might match if trace_id matches. Let's use the original.
         let mut orig_input = test_derivation_input();
@@ -1843,7 +1843,7 @@ mod tests {
         let orig_key = store.derive_key(&orig_input);
         store
             .check_and_claim(&orig_key, &orig_input, 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // entry_count should be 4 (3 numbered + 1 default trace_id)
         assert!(store.entry_count() >= 3);
     }
@@ -1862,20 +1862,20 @@ mod tests {
         let key1 = store.derive_key(&input1);
         store
             .check_and_claim(&key1, &input1, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Generate "duplicate_in_progress" outcome.
         store
             .check_and_claim(&key1, &input1, 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Mark completed, generate "cached" outcome.
         store
             .mark_completed(&key1, test_result_hash())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .check_and_claim(&key1, &input1, 102)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Generate "previously_failed" outcome.
         let mut input2 = test_derivation_input();
@@ -1883,13 +1883,13 @@ mod tests {
         let key2 = store.derive_key(&input2);
         store
             .check_and_claim(&key2, &input2, 103)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .mark_failed(&key2, "err")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .check_and_claim(&key2, &input2, 104)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let counts = store.result_counts();
         assert_eq!(counts.get("new"), Some(&2)); // key1 + key2
@@ -1913,7 +1913,7 @@ mod tests {
             let key = store.derive_key(&input);
             store
                 .check_and_claim(&key, &input, 100)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(store.entry_count(), 3);
 
@@ -1937,7 +1937,7 @@ mod tests {
         let key = store.derive_key(&input);
         store
             .check_and_claim(&key, &input, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Internal entry should have epoch 42.
         let events = store.drain_events();

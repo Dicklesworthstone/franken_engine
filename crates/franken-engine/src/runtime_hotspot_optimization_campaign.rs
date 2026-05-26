@@ -1044,7 +1044,7 @@ mod tests {
     #[test]
     fn hotspot_evidence_json_field_names() {
         let val = sample_hotspot_evidence();
-        let json = serde_json::to_value(&val).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&val).expect("serialization should succeed");
         assert!(json.get("hotspot_id").is_some());
         assert!(json.get("phase").is_some());
         assert!(json.get("baseline_share_millionths").is_some());
@@ -1054,7 +1054,7 @@ mod tests {
     #[test]
     fn metric_vector_json_field_names() {
         let val = sample_metric_vector(100);
-        let json = serde_json::to_value(&val).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&val).expect("serialization should succeed");
         assert!(json.get("scheduler_propagation_ns").is_some());
         assert!(json.get("dom_commit_batch_ns").is_some());
         assert!(json.get("lane_router_decision_ns").is_some());
@@ -1065,7 +1065,7 @@ mod tests {
     #[test]
     fn ev_inputs_json_field_names() {
         let val = sample_ev_inputs();
-        let json = serde_json::to_value(&val).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&val).expect("serialization should succeed");
         for field in &["impact", "confidence", "reuse", "effort", "friction"] {
             assert!(json.get(*field).is_some(), "missing field: {field}");
         }
@@ -1074,7 +1074,7 @@ mod tests {
     #[test]
     fn campaign_run_json_field_names() {
         let val = sample_campaign_run("c1", 100, 80);
-        let json = serde_json::to_value(&val).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&val).expect("serialization should succeed");
         for field in &[
             "campaign_id",
             "lever_id",
@@ -1106,7 +1106,7 @@ mod tests {
             outcome: "o".into(),
             error_code: None,
         };
-        let json = serde_json::to_value(&val).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&val).expect("serialization should succeed");
         for field in &[
             "schema_version",
             "trace_id",
@@ -1179,7 +1179,7 @@ mod tests {
         assert_eq!(
             *gain_ranking
                 .last()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "gamma",
             "gamma regressed"
         );

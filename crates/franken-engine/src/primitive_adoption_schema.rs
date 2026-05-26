@@ -402,9 +402,9 @@ mod tests {
         let err = PrimitiveAdoptionValidationError::InvalidScoreRange {
             field: "risk_millionths".to_string(),
         };
-        let val = serde_json::to_value(&err).expect("serde deserialization should succeed");
+        let val = serde_json::to_value(&err).expect("serialization should succeed");
         let back: PrimitiveAdoptionValidationError =
-            serde_json::from_value(val).expect("serde deserialization should succeed");
+            serde_json::from_value(val).expect("deserialization should succeed");
         assert_eq!(err, back);
     }
 
@@ -740,14 +740,14 @@ mod tests {
         assert_eq!(
             r.reuse_scan
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .decision,
             ReuseDecision::BuildNew
         );
         assert!(
             r.reuse_scan
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .candidate_crates
                 .is_empty()
         );
@@ -1056,10 +1056,10 @@ mod tests {
     fn verification_checklist_json_field_names() {
         let v = valid_verification();
         let val: serde_json::Value =
-            serde_json::to_value(&v).expect("serde deserialization should succeed");
+            serde_json::to_value(&v).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "checklist_version",
             "primary_paper_verified",
@@ -1075,10 +1075,10 @@ mod tests {
     fn ev_relevance_risk_score_json_field_names() {
         let s = valid_score();
         let val: serde_json::Value =
-            serde_json::to_value(&s).expect("serde deserialization should succeed");
+            serde_json::to_value(&s).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in ["ev_millionths", "relevance_millionths", "risk_millionths"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1089,10 +1089,10 @@ mod tests {
     fn fallback_budget_json_field_names() {
         let fb = valid_fallback();
         let val: serde_json::Value =
-            serde_json::to_value(&fb).expect("serde deserialization should succeed");
+            serde_json::to_value(&fb).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "trigger",
             "deterministic_mode",
@@ -1109,10 +1109,10 @@ mod tests {
     fn reuse_scan_json_field_names() {
         let rs = valid_reuse_scan();
         let val: serde_json::Value =
-            serde_json::to_value(&rs).expect("serde deserialization should succeed");
+            serde_json::to_value(&rs).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "catalog_version",
             "decision",
@@ -1128,10 +1128,10 @@ mod tests {
     fn adoption_record_json_field_names() {
         let r = valid_record_tier_s();
         let val: serde_json::Value =
-            serde_json::to_value(&r).expect("serde deserialization should succeed");
+            serde_json::to_value(&r).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "primitive_id",
             "tier",
@@ -1417,7 +1417,7 @@ mod tests {
     fn record_tier_c_no_reuse_scan_json_has_null() {
         let r = valid_record_tier_c();
         let val: serde_json::Value =
-            serde_json::to_value(&r).expect("serde deserialization should succeed");
+            serde_json::to_value(&r).expect("serialization should succeed");
         assert!(val["reuse_scan"].is_null());
     }
 

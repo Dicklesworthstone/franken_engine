@@ -841,7 +841,7 @@ mod tests {
         let req = make_request(ActionCategory::DecisionContract, "extension_quarantine");
         let id = em
             .emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(em.len(), 1);
         assert!(!em.is_empty());
         assert!(id.as_str().contains("decision_contract"));
@@ -853,7 +853,7 @@ mod tests {
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "extension_quarantine");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let entry = &em.entries()[0];
         assert_eq!(entry.category, ActionCategory::DecisionContract);
@@ -871,7 +871,7 @@ mod tests {
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "capability_revocation");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let entry = &em.entries()[0];
         assert_eq!(entry.trace_id, req.trace_id.to_string());
@@ -889,7 +889,7 @@ mod tests {
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::ExtensionLifecycle, "extension_load");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let entry = &em.entries()[0];
         assert!(entry.verify_artifact_integrity());
@@ -905,13 +905,13 @@ mod tests {
         req.metadata.insert("m_key".to_string(), "m".to_string());
 
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let entry = &em.entries()[0];
         let mut legacy =
-            serde_json::to_vec(&entry.ledger_entry).expect("serde deserialization should succeed");
+            serde_json::to_vec(&entry.ledger_entry).expect("serialization should succeed");
         legacy.extend_from_slice(
-            &serde_json::to_vec(&entry.metadata).expect("serde deserialization should succeed"),
+            &serde_json::to_vec(&entry.metadata).expect("serialization should succeed"),
         );
         assert_eq!(entry.artifact_hash, ContentHash::compute(&legacy));
         assert!(entry.verify_artifact_integrity());
@@ -923,7 +923,7 @@ mod tests {
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::ExtensionLifecycle, "extension_load");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut entry = em.entries()[0].clone();
         entry.ledger_entry.ts_unix_ms = 999; // tamper
@@ -941,7 +941,7 @@ mod tests {
         for i in 0..5 {
             let req = make_request(ActionCategory::DecisionContract, &format!("action_{i}"));
             em.emit(&mut cx, &req)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert!(em.verify_chain_integrity());
     }
@@ -953,7 +953,7 @@ mod tests {
         for i in 0..3 {
             let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
             em.emit(&mut cx, &req)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // Tamper with chain hash of middle entry.
@@ -972,9 +972,9 @@ mod tests {
         let req = make_request(ActionCategory::Cancellation, "cancel_op");
 
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = em.emit(&mut cx, &req).unwrap_err();
         assert_eq!(err, EvidenceEmissionError::BufferFull { capacity: 2 });
     }
@@ -987,7 +987,7 @@ mod tests {
 
         assert_eq!(em.remaining_capacity(), 5);
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(em.remaining_capacity(), 4);
     }
 
@@ -1005,7 +1005,7 @@ mod tests {
         let req = make_request(ActionCategory::DecisionContract, "allow");
 
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cx.budget().remaining_ms(), 5);
     }
 
@@ -1038,17 +1038,17 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "quarantine"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         em.emit(
             &mut cx,
             &make_request(ActionCategory::ExtensionLifecycle, "load"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "revoke"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(em.by_category(ActionCategory::DecisionContract).len(), 2);
         assert_eq!(em.by_category(ActionCategory::ExtensionLifecycle).len(), 1);
@@ -1064,17 +1064,17 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "b"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         em.emit(
             &mut cx,
             &make_request(ActionCategory::ContainmentAction, "c"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let counts = em.category_counts();
         assert_eq!(counts[&ActionCategory::DecisionContract], 2);
@@ -1109,7 +1109,7 @@ mod tests {
 
         let req = make_request(ActionCategory::DecisionContract, "allow");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let trace_str = trace_id_from_seed(1).to_string();
         assert_eq!(em.by_trace_id(&trace_str).len(), 1);
@@ -1123,7 +1123,7 @@ mod tests {
 
         let req = make_request(ActionCategory::DecisionContract, "deny");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let dec_str = decision_id_from_seed(1).to_string();
         assert_eq!(em.by_decision_id(&dec_str).len(), 1);
@@ -1141,7 +1141,7 @@ mod tests {
         for i in 0..3 {
             let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
             em.emit(&mut cx, &req)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert_eq!(em.entries()[0].sequence, 0);
@@ -1180,7 +1180,7 @@ mod tests {
 
         let req = make_request(ActionCategory::DecisionContract, "test");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(em.get(0).is_some());
         assert!(em.get(1).is_none());
@@ -1198,7 +1198,7 @@ mod tests {
 
         let req = make_request(ActionCategory::DecisionContract, "allow");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(em.entries()[0].epoch, SecurityEpoch::from_raw(42));
     }
@@ -1217,13 +1217,13 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let h1 = *em.rolling_hash();
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "b"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let h2 = *em.rolling_hash();
 
         assert_ne!(h0, h1);
@@ -1244,7 +1244,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "allow"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(em.events().len(), 1);
         assert_eq!(em.events()[0].event, "evidence_emit");
@@ -1259,7 +1259,7 @@ mod tests {
         let req = make_request(ActionCategory::DecisionContract, "a");
 
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = em.emit(&mut cx, &req);
 
         assert_eq!(em.events().len(), 2);
@@ -1279,7 +1279,7 @@ mod tests {
         for cat in &ActionCategory::ALL {
             let req = make_request(*cat, &format!("{cat}_action"));
             em.emit(&mut cx, &req)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert_eq!(em.len(), 6);
@@ -1298,7 +1298,7 @@ mod tests {
         let mut req = make_request(ActionCategory::ExtensionLifecycle, "load");
         req.posterior = vec![]; // no Bayesian evaluation
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(em.entries()[0].ledger_entry.posterior, vec![0.5, 0.5]);
     }
@@ -1316,7 +1316,7 @@ mod tests {
         req.metadata
             .insert("extension_id".to_string(), "ext-001".to_string());
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             em.entries()[0].metadata.get("extension_id"),
@@ -1336,7 +1336,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "allow"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let entry = &em.entries()[0];
         let json = serde_json::to_string(entry).expect("serialize derived Serialize");
@@ -1394,7 +1394,7 @@ mod tests {
             for i in 0..3 {
                 let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
                 em.emit(&mut cx, &req)
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
             }
             (em.entries().to_vec(), *em.rolling_hash())
         };
@@ -1505,7 +1505,7 @@ mod tests {
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "allow");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(em.verify_chain_integrity());
         let entry = &em.entries()[0];
         assert!(entry.verify_artifact_integrity());
@@ -1521,7 +1521,7 @@ mod tests {
             .insert("ext".to_string(), "ext-001".to_string());
         req.metadata.insert("region".to_string(), "r-1".to_string());
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let entry = &em.entries()[0];
         assert_eq!(entry.metadata.get("ext"), Some(&"ext-001".to_string()));
@@ -1537,7 +1537,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "allow"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&em).expect("serialize derived Serialize");
         let back: CanonicalEvidenceEmitter =
@@ -1572,7 +1572,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let entry = em.entries()[0].clone();
         let cloned = entry.clone();
         assert_eq!(entry, cloned);
@@ -1636,7 +1636,7 @@ mod tests {
         for i in 0..3 {
             let req = make_request(ActionCategory::DecisionContract, &format!("a{i}"));
             em.emit(&mut cx, &req)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let trace_str = trace_id_from_seed(1).to_string();
         assert_eq!(em.by_trace_id(&trace_str).len(), 3);
@@ -1649,7 +1649,7 @@ mod tests {
         for i in 0..4 {
             let req = make_request(ActionCategory::RegionLifecycle, &format!("r{i}"));
             em.emit(&mut cx, &req)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let dec_str = decision_id_from_seed(1).to_string();
         assert_eq!(em.by_decision_id(&dec_str).len(), 4);
@@ -1663,9 +1663,9 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json =
-            serde_json::to_string(&em.entries()[0]).expect("serde deserialization should succeed");
+            serde_json::to_string(&em.entries()[0]).expect("serialization should succeed");
         for field in &[
             "entry_id",
             "sequence",
@@ -1691,7 +1691,7 @@ mod tests {
         let mut req = make_request(ActionCategory::DecisionContract, "allow");
         req.fallback_active = true;
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(em.entries()[0].ledger_entry.fallback_active);
     }
 
@@ -1701,7 +1701,7 @@ mod tests {
         let mut cx = mock_cx();
         let req = make_request(ActionCategory::DecisionContract, "allow");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let features = &em.entries()[0].ledger_entry.top_features;
         assert!(!features.is_empty());
     }
@@ -1715,13 +1715,13 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         em.set_epoch(SecurityEpoch::from_raw(2));
         em.emit(
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "b"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(em.entries()[0].epoch, SecurityEpoch::from_raw(1));
         assert_eq!(em.entries()[1].epoch, SecurityEpoch::from_raw(2));
     }
@@ -1735,7 +1735,7 @@ mod tests {
         let mut cx = MockCx::new(trace_id_from_seed(1), MockBudget::new(10));
         let req = make_request(ActionCategory::DecisionContract, "allow");
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(em.len(), 1);
         assert_eq!(cx.budget().remaining_ms(), 0);
     }
@@ -1747,7 +1747,7 @@ mod tests {
         let mut req = make_request(ActionCategory::ExtensionLifecycle, "load");
         req.expected_losses.clear();
         em.emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let losses = &em.entries()[0].ledger_entry.expected_loss_by_action;
         assert!(
             losses.iter().any(|(k, _)| k == "load"),
@@ -1870,7 +1870,7 @@ mod tests {
         let req = make_request(ActionCategory::ExtensionLifecycle, "load");
         let id = em
             .emit(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = id.as_str();
         assert!(s.starts_with("ev-"), "entry ID should start with ev-");
         assert!(
@@ -1895,7 +1895,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(em.entries()[0].schema_version, "evidence-v1");
     }
 
@@ -1907,7 +1907,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::Cancellation, "cancel"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let component = &em.entries()[0].ledger_entry.component;
         assert!(
             component.contains("evidence-emission"),
@@ -1945,7 +1945,7 @@ mod tests {
             &mut cx,
             &make_request(ActionCategory::DecisionContract, "a"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(
             em.by_category(ActionCategory::ObligationLifecycle)
                 .is_empty()

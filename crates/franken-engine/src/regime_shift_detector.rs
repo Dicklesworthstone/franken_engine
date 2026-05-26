@@ -431,7 +431,7 @@ impl Default for RegimeShiftConfig {
 impl RegimeShiftConfig {
     /// Content hash for audit.
     pub fn config_hash(&self) -> ContentHash {
-        let bytes = serde_json::to_vec(self).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(self).expect("serialization should succeed");
         ContentHash::compute(&bytes)
     }
 }
@@ -709,7 +709,7 @@ impl RegimeShiftManifest {
         h.update(REGIME_SHIFT_SCHEMA_VERSION.as_bytes());
         h.update(REGIME_SHIFT_BEAD_ID.as_bytes());
         let summary_bytes =
-            serde_json::to_vec(&summary).expect("serde deserialization should succeed");
+            serde_json::to_vec(&summary).expect("serialization should succeed");
         h.update(&summary_bytes);
         let hash_bytes: [u8; 32] = h.finalize().into();
 
@@ -1111,11 +1111,11 @@ mod tests {
         let det_lat = engine
             .detectors
             .get(&(MetricKind::Latency, None))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let det_thr = engine
             .detectors
             .get(&(MetricKind::Throughput, None))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Latency detector should have much higher CUSUM
         assert!(det_lat.cusum_upper > det_thr.cusum_upper);
     }
@@ -1231,7 +1231,7 @@ mod tests {
         let det_before = engine
             .detectors
             .get(&(MetricKind::Latency, None))
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .reference_millionths;
 
         // Tick enough to trigger auto-adaptation
@@ -1242,7 +1242,7 @@ mod tests {
         let det_after = engine
             .detectors
             .get(&(MetricKind::Latency, None))
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .reference_millionths;
 
         // Reference should have adapted toward the EWMA
@@ -1264,7 +1264,7 @@ mod tests {
         let ref_before = engine
             .detectors
             .get(&(MetricKind::Latency, None))
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .reference_millionths;
 
         for _ in 0..10 {
@@ -1274,7 +1274,7 @@ mod tests {
         let ref_after = engine
             .detectors
             .get(&(MetricKind::Latency, None))
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .reference_millionths;
 
         assert_eq!(ref_before, ref_after);

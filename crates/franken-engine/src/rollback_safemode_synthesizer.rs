@@ -1356,7 +1356,7 @@ mod tests {
         )];
         let constraints = vec![make_constraint("c1", ConstraintCategory::Safety, true)];
         RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     // ── Constructor Tests ───────────────────────────────────────────
@@ -1535,7 +1535,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.has_bundles());
         assert_eq!(result.approved_count, 1);
         assert_eq!(result.bundles[0].kind, BundleKind::Rollback);
@@ -1553,7 +1553,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_bundles());
         assert!(result.rules_fired.is_empty());
     }
@@ -1568,7 +1568,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_bundles());
     }
 
@@ -1589,7 +1589,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_bundles());
     }
 
@@ -1604,7 +1604,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let scan = make_scan_result(600_000, Vec::new(), Vec::new()); // risk = 400_000
         let input = SynthesisInput {
@@ -1613,7 +1613,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.has_bundles());
         assert_eq!(result.bundles[0].kind, BundleKind::SafeMode);
     }
@@ -1629,7 +1629,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let actions = vec![make_preemptive_action("pa1", 400_000)];
         let scan = make_scan_result(500_000, Vec::new(), actions); // risk = 500_000
@@ -1639,7 +1639,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.has_bundles());
         assert_eq!(result.bundles[0].deltas.len(), 1);
         assert_eq!(result.bundles[0].deltas[0].delta_id, "d-r1-pa1");
@@ -1656,7 +1656,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let scan = make_scan_result(900_000, Vec::new(), Vec::new()); // risk = 100_000, below 200_000
         let input = SynthesisInput {
@@ -1665,7 +1665,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_bundles());
     }
 
@@ -1680,7 +1680,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let warnings = vec![
             make_warning("w1", 800_000, true),
@@ -1694,7 +1694,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.has_bundles());
         assert_eq!(
             result.bundles[0].deltas[0].expected_improvement_millionths,
@@ -1713,7 +1713,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let warnings = vec![
             make_warning("w1", 800_000, true),
@@ -1726,7 +1726,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_bundles());
     }
 
@@ -1739,7 +1739,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let actions = vec![
             make_preemptive_action("pa1", 300_000),
@@ -1752,7 +1752,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.has_bundles());
         assert_eq!(result.bundles[0].deltas.len(), 2);
     }
@@ -1766,7 +1766,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let scan = make_scan_result(900_000, Vec::new(), Vec::new());
         let input = SynthesisInput {
@@ -1775,7 +1775,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_bundles());
     }
 
@@ -1791,7 +1791,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let scan = make_scan_result(600_000, Vec::new(), Vec::new()); // risk = 400_000
@@ -1801,7 +1801,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.has_bundles());
     }
 
@@ -1817,7 +1817,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         // Replay good but bifurcation stable
         let rec = make_recommendation("alt1", 200_000, 950_000);
@@ -1828,7 +1828,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_bundles());
     }
 
@@ -1846,7 +1846,7 @@ mod tests {
         let constraints = vec![make_constraint("c1", ConstraintCategory::Performance, true)];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 980_000);
         let input = SynthesisInput {
@@ -1855,7 +1855,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.bundles[0].is_approved());
         assert!(result.bundles[0].all_hard_constraints_passed);
     }
@@ -1875,7 +1875,7 @@ mod tests {
 
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         // Use low confidence to trigger regression estimate.
         let rec = make_recommendation("alt1", 500_000, 500_000);
@@ -1885,7 +1885,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.bundles[0].is_approved());
         assert_eq!(result.rejected_count, 1);
     }
@@ -1900,7 +1900,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.bundles[0].verification_hooks.is_empty());
         assert!(
             result.bundles[0]
@@ -1925,7 +1925,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let actions = vec![make_preemptive_action("pa1", 300_000)];
         let scan = make_scan_result(700_000, Vec::new(), actions);
@@ -1935,7 +1935,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result.bundles[0]
                 .verification_hooks
@@ -1958,7 +1958,7 @@ mod tests {
             ..Default::default()
         };
         let mut synth = RollbackSafemodeSynthesizer::new(config, rules, Vec::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let input = SynthesisInput {
@@ -1967,7 +1967,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.bundles[0].verification_hooks.is_empty());
     }
 
@@ -1981,7 +1981,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.bundles[0].evidence_refs.len(), 1);
         assert_eq!(
             result.bundles[0].evidence_refs[0].source,
@@ -2001,7 +2001,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let scan = make_scan_result(600_000, Vec::new(), Vec::new());
@@ -2011,7 +2011,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.bundles[0].evidence_refs.len(), 2);
     }
 
@@ -2029,7 +2029,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let warnings = vec![make_warning("w1", 900_000, true)]; // critical (risk > threshold)
@@ -2040,7 +2040,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.bundles[0].kind, BundleKind::SafeMode);
     }
 
@@ -2056,7 +2056,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         // No warnings, no preemptive actions, but risk still above threshold
@@ -2067,7 +2067,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.bundles[0].kind, BundleKind::Rollback);
     }
 
@@ -2091,7 +2091,7 @@ mod tests {
         ];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let actions = vec![make_preemptive_action("pa1", 300_000)];
@@ -2102,7 +2102,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.bundles.len(), 2);
         assert_eq!(result.rules_fired.len(), 2);
     }
@@ -2120,7 +2120,7 @@ mod tests {
         let rules = vec![rule];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let input = SynthesisInput {
@@ -2129,7 +2129,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_bundles());
         assert_eq!(result.rules_skipped, vec!["r1"]);
     }
@@ -2155,7 +2155,7 @@ mod tests {
         let rules = vec![r1, r2]; // r1 first in vec but r2 has higher priority
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let input = SynthesisInput {
@@ -2164,7 +2164,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // r2 fires first (priority 1 < 5)
         assert_eq!(result.rules_fired, vec!["r2", "r1"]);
     }
@@ -2185,7 +2185,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let improvements: Vec<i64> = result.bundles[0]
             .deltas
             .iter()
@@ -2214,7 +2214,7 @@ mod tests {
         ];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 950_000);
         let actions = vec![make_preemptive_action("pa1", 600_000)]; // Higher improvement
@@ -2225,7 +2225,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result.bundles[0].total_improvement_millionths
                 >= result.bundles[1].total_improvement_millionths
@@ -2244,10 +2244,10 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let best = result
             .best_approved()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(best.is_approved());
     }
 
@@ -2261,7 +2261,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let approved = result.approved_bundles();
         assert_eq!(approved.len(), result.approved_count as usize);
     }
@@ -2479,7 +2479,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bundle = &result.bundles[0];
         let json = serde_json::to_string(bundle).expect("serialize derived Serialize");
         let back: SynthesizedBundle =
@@ -2497,7 +2497,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: SynthesisResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2526,17 +2526,17 @@ mod tests {
             rules.clone(),
             Vec::new(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let r1 = s1
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut s2 =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let r2 = s2
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
         assert_eq!(r1.bundles[0].artifact_hash, r2.bundles[0].artifact_hash);
@@ -2575,7 +2575,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.bundles[0].delta_count(), 2);
     }
 
@@ -2593,7 +2593,7 @@ mod tests {
         let constraints = vec![constraint];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 500_000, 500_000);
         let input = SynthesisInput {
@@ -2602,7 +2602,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.bundles[0].violation_count() > 0);
     }
 
@@ -2623,7 +2623,7 @@ mod tests {
         ];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 200_000, 800_000);
         let input = SynthesisInput {
@@ -2632,18 +2632,18 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bundle = &result.bundles[0];
         let safety_check = bundle
             .constraint_checks
             .iter()
             .find(|c| c.constraint_id == "safety")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let perf_check = bundle
             .constraint_checks
             .iter()
             .find(|c| c.constraint_id == "perf")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Safety regression should be <= performance regression due to higher category factor
         assert!(safety_check.regression_millionths <= perf_check.regression_millionths);
     }
@@ -2660,7 +2660,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let display = format!("{}", result);
         assert!(display.contains("synthesis"));
         assert!(display.contains("approved=1"));
@@ -2676,7 +2676,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let display = format!("{}", result.bundles[0]);
         assert!(display.contains("bundle"));
         assert!(display.contains("approved"));
@@ -2719,7 +2719,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_bundles());
     }
 
@@ -2737,7 +2737,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.bundles[0].deltas.len(), 1);
         assert!(result.bundles[0].deltas[0].delta_id.contains("alt3"));
     }
@@ -2755,7 +2755,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result.bundles[0]
                 .verification_hooks
@@ -2774,7 +2774,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             !result.bundles[0]
                 .verification_hooks
@@ -2816,7 +2816,7 @@ mod tests {
         )];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, Vec::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let actions = vec![make_preemptive_action("pa1", 300_000)];
         let scan = make_scan_result(700_000, Vec::new(), actions);
@@ -2826,7 +2826,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.has_bundles());
         // Evidence refs should only have bifurcation scan
         assert_eq!(result.bundles[0].evidence_refs.len(), 1);
@@ -3062,7 +3062,7 @@ mod tests {
         let constraints = vec![constraint];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 500_000, 500_000);
         let input = SynthesisInput {
@@ -3071,7 +3071,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Soft constraint fails but bundle is still approved
         assert!(result.bundles[0].is_approved());
         assert!(result.bundles[0].soft_violations > 0);
@@ -3109,7 +3109,7 @@ mod tests {
         let constraints = vec![constraint];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let rec = make_recommendation("alt1", 500_000, 500_000);
         let input = SynthesisInput {
@@ -3118,7 +3118,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.best_approved().is_none());
     }
 
@@ -3132,7 +3132,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.best_approved().is_none());
     }
 
@@ -3146,7 +3146,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.schema_version, SYNTHESIZER_SCHEMA_VERSION);
         assert_eq!(result.bundles[0].schema_version, SYNTHESIZER_SCHEMA_VERSION);
     }
@@ -3163,7 +3163,7 @@ mod tests {
         let constraints = vec![make_constraint("c1", ConstraintCategory::Performance, true)];
         let mut synth =
             RollbackSafemodeSynthesizer::new(SynthesizerConfig::default(), rules, constraints)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         // Perfect confidence → uncertainty=0 → regression=0
         let rec = make_recommendation("alt1", 200_000, 1_000_000);
@@ -3173,7 +3173,7 @@ mod tests {
         };
         let result = synth
             .synthesize(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let check = &result.bundles[0].constraint_checks[0];
         assert_eq!(check.regression_millionths, 0);
         assert!(check.passed);

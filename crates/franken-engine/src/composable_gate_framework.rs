@@ -678,7 +678,7 @@ mod tests {
         let result = runner.run_gate(&gate, &policy, &evidence);
         assert!(result.is_ok());
 
-        let receipt = result.expect("serde deserialization should succeed");
+        let receipt = result.expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, GateVerdict::Approved);
         assert_eq!(receipt.gate_id, "example-gate");
         assert_eq!(receipt.schema_version, SCHEMA_VERSION);
@@ -706,7 +706,7 @@ mod tests {
         let result = runner.run_gate_batch(&gates, &policy, &evidence);
         assert!(result.is_ok());
 
-        let receipts = result.expect("serde deserialization should succeed");
+        let receipts = result.expect("operation should succeed for valid inputs");
         assert_eq!(receipts.len(), 2);
         assert!(receipts.iter().all(|r| r.verdict == GateVerdict::Approved));
     }

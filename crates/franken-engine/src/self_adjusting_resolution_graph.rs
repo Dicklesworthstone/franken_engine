@@ -1157,7 +1157,7 @@ mod tests {
         let nodes = vec![make_node("a"), make_node("b"), make_node("c")];
         let edges = vec![make_edge("a", "b"), make_edge("b", "c")];
         build_graph(nodes, edges, vec!["a".to_string()])
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     fn diamond_graph() -> ResolutionGraph {
@@ -1176,7 +1176,7 @@ mod tests {
             make_edge("c", "d"),
         ];
         build_graph(nodes, edges, vec!["a".to_string()])
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     // Construction ----------------------------------------------------------
@@ -1184,7 +1184,7 @@ mod tests {
     #[test]
     fn test_build_empty_graph() {
         let graph =
-            build_graph(vec![], vec![], vec![]).expect("serde deserialization should succeed");
+            build_graph(vec![], vec![], vec![]).expect("operation should succeed for valid inputs");
         assert_eq!(graph.node_count(), 0);
         assert_eq!(graph.edge_count(), 0);
         assert!(graph.root_modules.is_empty());
@@ -1193,7 +1193,7 @@ mod tests {
     #[test]
     fn test_build_single_node() {
         let graph = build_graph(vec![make_node("a")], vec![], vec!["a".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(graph.node_count(), 1);
         assert!(graph.nodes.contains_key("a"));
     }
@@ -1309,7 +1309,7 @@ mod tests {
     fn test_add_module_recomputes_hash() {
         let mut graph = simple_graph();
         let old_hash = graph.content_hash;
-        add_module(&mut graph, make_node("new")).expect("serde deserialization should succeed");
+        add_module(&mut graph, make_node("new")).expect("operation should succeed for valid inputs");
         assert_ne!(graph.content_hash, old_hash);
     }
 
@@ -1330,7 +1330,7 @@ mod tests {
     #[test]
     fn test_remove_module_success() {
         let mut graph = simple_graph();
-        let receipt = remove_module(&mut graph, "b").expect("serde deserialization should succeed");
+        let receipt = remove_module(&mut graph, "b").expect("operation should succeed for valid inputs");
         assert!(!graph.nodes.contains_key("b"));
         assert_eq!(graph.node_count(), 2);
         assert_eq!(receipt.trigger_module, "b");
@@ -1340,7 +1340,7 @@ mod tests {
     #[test]
     fn test_remove_module_cleans_edges() {
         let mut graph = simple_graph();
-        remove_module(&mut graph, "b").expect("serde deserialization should succeed");
+        remove_module(&mut graph, "b").expect("operation should succeed for valid inputs");
         // No edges should reference "b".
         for edge in &graph.edges {
             assert_ne!(edge.source, "b");
@@ -1362,7 +1362,7 @@ mod tests {
     fn test_remove_root_module() {
         let mut graph = simple_graph();
         assert!(graph.root_modules.contains(&"a".to_string()));
-        remove_module(&mut graph, "a").expect("serde deserialization should succeed");
+        remove_module(&mut graph, "a").expect("operation should succeed for valid inputs");
         assert!(!graph.root_modules.contains(&"a".to_string()));
     }
 
@@ -1371,7 +1371,7 @@ mod tests {
     #[test]
     fn test_invalidate_module_leaf() {
         let graph = simple_graph();
-        let receipt = invalidate_module(&graph, "c").expect("serde deserialization should succeed");
+        let receipt = invalidate_module(&graph, "c").expect("operation should succeed for valid inputs");
         // c is a leaf — affected set includes c, b (depends on c), a (depends on b).
         assert!(receipt.affected_modules.contains(&"c".to_string()));
         assert_eq!(receipt.scope, InvalidationScope::FullGraph);
@@ -1380,7 +1380,7 @@ mod tests {
     #[test]
     fn test_invalidate_module_root() {
         let graph = simple_graph();
-        let receipt = invalidate_module(&graph, "a").expect("serde deserialization should succeed");
+        let receipt = invalidate_module(&graph, "a").expect("operation should succeed for valid inputs");
         // a is a root with no reverse deps — only a is affected.
         assert_eq!(receipt.affected_modules.len(), 1);
         assert_eq!(receipt.scope, InvalidationScope::SingleModule);
@@ -1389,7 +1389,7 @@ mod tests {
     #[test]
     fn test_invalidate_module_middle() {
         let graph = diamond_graph();
-        let receipt = invalidate_module(&graph, "b").expect("serde deserialization should succeed");
+        let receipt = invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
         // b's reverse dep is a.
         assert!(receipt.affected_modules.contains(&"b".to_string()));
         assert!(receipt.affected_modules.contains(&"a".to_string()));
@@ -1411,7 +1411,7 @@ mod tests {
         let graph = simple_graph();
         let hash_before = graph.content_hash;
         let _receipt =
-            invalidate_module(&graph, "b").expect("serde deserialization should succeed");
+            invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
         assert_eq!(graph.content_hash, hash_before);
     }
 
@@ -1441,7 +1441,7 @@ mod tests {
     fn test_affected_set_isolated_node() {
         let nodes = vec![make_node("x"), make_node("y")];
         let graph =
-            build_graph(nodes, vec![], vec![]).expect("serde deserialization should succeed");
+            build_graph(nodes, vec![], vec![]).expect("operation should succeed for valid inputs");
         let affected = compute_affected_set(&graph, "x");
         assert_eq!(affected.len(), 1);
     }
@@ -1461,7 +1461,7 @@ mod tests {
         let edges = vec![make_edge("a", "b"), make_edge("b", "a")];
         // build_graph doesn't reject cycles, it's a data structure.
         let mut graph =
-            build_graph(nodes, vec![], vec![]).expect("serde deserialization should succeed");
+            build_graph(nodes, vec![], vec![]).expect("operation should succeed for valid inputs");
         graph.edges = edges;
         let cycles = detect_cycles(&graph);
         assert!(!cycles.is_empty());
@@ -1471,7 +1471,7 @@ mod tests {
     fn test_detect_cycles_self_loop() {
         let nodes = vec![make_node("a")];
         let mut graph =
-            build_graph(nodes, vec![], vec![]).expect("serde deserialization should succeed");
+            build_graph(nodes, vec![], vec![]).expect("operation should succeed for valid inputs");
         graph.edges = vec![make_edge("a", "a")];
         let cycles = detect_cycles(&graph);
         assert!(!cycles.is_empty());
@@ -1482,21 +1482,21 @@ mod tests {
     #[test]
     fn test_topological_order_linear() {
         let graph = simple_graph();
-        let order = topological_order(&graph).expect("serde deserialization should succeed");
+        let order = topological_order(&graph).expect("operation should succeed for valid inputs");
         assert_eq!(order.len(), 3);
         // a comes before b, b comes before c.
         let pos_a = order
             .iter()
             .position(|n| n == "a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos_b = order
             .iter()
             .position(|n| n == "b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos_c = order
             .iter()
             .position(|n| n == "c")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(pos_a < pos_b);
         assert!(pos_b < pos_c);
     }
@@ -1504,16 +1504,16 @@ mod tests {
     #[test]
     fn test_topological_order_diamond() {
         let graph = diamond_graph();
-        let order = topological_order(&graph).expect("serde deserialization should succeed");
+        let order = topological_order(&graph).expect("operation should succeed for valid inputs");
         assert_eq!(order.len(), 4);
         let pos_a = order
             .iter()
             .position(|n| n == "a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos_d = order
             .iter()
             .position(|n| n == "d")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(pos_a < pos_d);
     }
 
@@ -1521,7 +1521,7 @@ mod tests {
     fn test_topological_order_with_cycle() {
         let nodes = vec![make_node("a"), make_node("b")];
         let mut graph =
-            build_graph(nodes, vec![], vec![]).expect("serde deserialization should succeed");
+            build_graph(nodes, vec![], vec![]).expect("operation should succeed for valid inputs");
         graph.edges = vec![make_edge("a", "b"), make_edge("b", "a")];
         let result = topological_order(&graph);
         assert!(matches!(result, Err(ResolutionGraphError::CycleDetected)));
@@ -1530,16 +1530,16 @@ mod tests {
     #[test]
     fn test_topological_order_empty() {
         let graph =
-            build_graph(vec![], vec![], vec![]).expect("serde deserialization should succeed");
-        let order = topological_order(&graph).expect("serde deserialization should succeed");
+            build_graph(vec![], vec![], vec![]).expect("operation should succeed for valid inputs");
+        let order = topological_order(&graph).expect("operation should succeed for valid inputs");
         assert!(order.is_empty());
     }
 
     #[test]
     fn test_topological_order_single_node() {
         let graph = build_graph(vec![make_node("x")], vec![], vec!["x".to_string()])
-            .expect("serde deserialization should succeed");
-        let order = topological_order(&graph).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        let order = topological_order(&graph).expect("operation should succeed for valid inputs");
         assert_eq!(order, vec!["x".to_string()]);
     }
 
@@ -1568,7 +1568,7 @@ mod tests {
         let graph = simple_graph();
         let checkpoint = create_checkpoint(&graph);
         assert!(
-            verify_checkpoint(&graph, &checkpoint).expect("serde deserialization should succeed")
+            verify_checkpoint(&graph, &checkpoint).expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1576,9 +1576,9 @@ mod tests {
     fn test_verify_checkpoint_diverged() {
         let mut graph = simple_graph();
         let checkpoint = create_checkpoint(&graph);
-        add_module(&mut graph, make_node("d")).expect("serde deserialization should succeed");
+        add_module(&mut graph, make_node("d")).expect("operation should succeed for valid inputs");
         assert!(
-            !verify_checkpoint(&graph, &checkpoint).expect("serde deserialization should succeed")
+            !verify_checkpoint(&graph, &checkpoint).expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1599,7 +1599,7 @@ mod tests {
     #[test]
     fn test_add_edge_success() {
         let mut graph = diamond_graph();
-        add_module(&mut graph, make_node("e")).expect("serde deserialization should succeed");
+        add_module(&mut graph, make_node("e")).expect("operation should succeed for valid inputs");
         let edge = make_edge("a", "e");
         assert!(add_edge(&mut graph, edge).is_ok());
         assert_eq!(graph.edge_count(), 5);
@@ -1631,7 +1631,7 @@ mod tests {
             vec![make_edge("a", "b")],
             vec![],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let edge = make_edge_with_kind("a", "b", EdgeKind::TypeOnly);
         assert!(add_edge(&mut graph, edge).is_ok());
         assert_eq!(graph.edge_count(), 2);
@@ -1643,7 +1643,7 @@ mod tests {
     fn test_connected_component_full() {
         let graph = simple_graph();
         let component =
-            connected_component(&graph, "c").expect("serde deserialization should succeed");
+            connected_component(&graph, "c").expect("operation should succeed for valid inputs");
         assert_eq!(component.len(), 3);
     }
 
@@ -1651,9 +1651,9 @@ mod tests {
     fn test_connected_component_isolated() {
         let nodes = vec![make_node("x"), make_node("y")];
         let graph =
-            build_graph(nodes, vec![], vec![]).expect("serde deserialization should succeed");
+            build_graph(nodes, vec![], vec![]).expect("operation should succeed for valid inputs");
         let component =
-            connected_component(&graph, "x").expect("serde deserialization should succeed");
+            connected_component(&graph, "x").expect("operation should succeed for valid inputs");
         assert_eq!(component.len(), 1);
     }
 
@@ -1673,7 +1673,7 @@ mod tests {
     fn test_graph_depth_linear() {
         let graph = simple_graph();
         assert_eq!(
-            graph_depth(&graph).expect("serde deserialization should succeed"),
+            graph_depth(&graph).expect("operation should succeed for valid inputs"),
             2
         );
     }
@@ -1681,9 +1681,9 @@ mod tests {
     #[test]
     fn test_graph_depth_empty() {
         let graph =
-            build_graph(vec![], vec![], vec![]).expect("serde deserialization should succeed");
+            build_graph(vec![], vec![], vec![]).expect("operation should succeed for valid inputs");
         assert_eq!(
-            graph_depth(&graph).expect("serde deserialization should succeed"),
+            graph_depth(&graph).expect("operation should succeed for valid inputs"),
             0
         );
     }
@@ -1692,7 +1692,7 @@ mod tests {
     fn test_graph_depth_diamond() {
         let graph = diamond_graph();
         assert_eq!(
-            graph_depth(&graph).expect("serde deserialization should succeed"),
+            graph_depth(&graph).expect("operation should succeed for valid inputs"),
             2
         );
     }
@@ -1714,9 +1714,9 @@ mod tests {
             ],
             vec!["a".to_string()],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(
-            graph_depth(&graph).expect("serde deserialization should succeed"),
+            graph_depth(&graph).expect("operation should succeed for valid inputs"),
             1
         );
     }
@@ -1728,9 +1728,9 @@ mod tests {
             vec![make_edge("a", "b")],
             vec![],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(
-            graph_depth(&graph).expect("serde deserialization should succeed"),
+            graph_depth(&graph).expect("operation should succeed for valid inputs"),
             0
         );
     }
@@ -1806,7 +1806,7 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_invalidation_receipt() {
         let graph = simple_graph();
-        let receipt = invalidate_module(&graph, "b").expect("serde deserialization should succeed");
+        let receipt = invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: InvalidationReceipt =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1869,7 +1869,7 @@ mod tests {
     #[test]
     fn test_manifest_topological_order() {
         let graph = franken_engine_resolution_manifest();
-        let order = topological_order(&graph).expect("serde deserialization should succeed");
+        let order = topological_order(&graph).expect("operation should succeed for valid inputs");
         assert_eq!(order.len(), graph.node_count());
     }
 
@@ -1877,7 +1877,7 @@ mod tests {
     fn test_manifest_invalidation() {
         let graph = franken_engine_resolution_manifest();
         let receipt =
-            invalidate_module(&graph, "scheduler").expect("serde deserialization should succeed");
+            invalidate_module(&graph, "scheduler").expect("operation should succeed for valid inputs");
         assert!(receipt.affected_modules.contains(&"scheduler".to_string()));
         // scheduler is depended on by react and react-dom, so those propagate to app.
         assert!(receipt.affected_modules.len() >= 2);
@@ -1888,7 +1888,7 @@ mod tests {
         let graph = franken_engine_resolution_manifest();
         let checkpoint = create_checkpoint(&graph);
         assert!(
-            verify_checkpoint(&graph, &checkpoint).expect("serde deserialization should succeed")
+            verify_checkpoint(&graph, &checkpoint).expect("operation should succeed for valid inputs")
         );
     }
 
@@ -2022,7 +2022,7 @@ mod tests {
     #[test]
     fn test_receipt_hash_self_consistent() {
         let graph = simple_graph();
-        let receipt = invalidate_module(&graph, "b").expect("serde deserialization should succeed");
+        let receipt = invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
         let expected =
             compute_receipt_hash(&receipt).expect("receipt hash computation should not fail");
         assert_eq!(receipt.content_hash, expected);
@@ -2045,9 +2045,9 @@ mod tests {
             make_edge_with_kind("b", "c", EdgeKind::Reexport),
         ];
         let graph = build_graph(nodes, edges, vec!["a".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(graph.edge_count(), 4);
-        let order = topological_order(&graph).expect("serde deserialization should succeed");
+        let order = topological_order(&graph).expect("operation should succeed for valid inputs");
         assert_eq!(order.len(), 4);
     }
 
@@ -2063,7 +2063,7 @@ mod tests {
             conditions: vec!["import".to_string(), "node".to_string()],
         }];
         let graph = build_graph(nodes, edges, vec!["a".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(graph.edges[0].conditions.len(), 2);
     }
 
@@ -2077,16 +2077,16 @@ mod tests {
             .map(|i| make_edge(&format!("n{i}"), &format!("n{}", i + 1)))
             .collect();
         let graph = build_graph(nodes, edges, vec!["n0".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(graph.node_count(), count);
         assert_eq!(graph.edge_count(), count - 1);
 
-        let order = topological_order(&graph).expect("serde deserialization should succeed");
+        let order = topological_order(&graph).expect("operation should succeed for valid inputs");
         assert_eq!(order.len(), count);
 
         // Invalidating the last node should propagate to all nodes.
         let receipt = invalidate_module(&graph, &format!("n{}", count - 1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.affected_modules.len(), count);
     }
 
@@ -2203,7 +2203,7 @@ mod tests {
         // (reverse deps propagate to all importers).
         // Total before = 3, recomputed = 3, skipped = 0.
         let mut graph = simple_graph();
-        let receipt = remove_module(&mut graph, "c").expect("serde deserialization should succeed");
+        let receipt = remove_module(&mut graph, "c").expect("operation should succeed for valid inputs");
         assert_eq!(receipt.recomputed_count, 3);
         assert_eq!(receipt.skipped_count, 0);
         // The key invariant: recomputed + skipped == total_nodes_before_removal
@@ -2214,9 +2214,9 @@ mod tests {
         let nodes = vec![make_node("d"), make_node("e"), make_node("f")];
         let edges = vec![make_edge("d", "e")];
         let mut graph2 = build_graph(nodes, edges, vec!["d".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let receipt2 =
-            remove_module(&mut graph2, "f").expect("serde deserialization should succeed");
+            remove_module(&mut graph2, "f").expect("operation should succeed for valid inputs");
         assert_eq!(receipt2.recomputed_count, 1); // only "f"
         assert_eq!(receipt2.skipped_count, 2); // "d" and "e" unaffected
         assert_eq!(receipt2.recomputed_count + receipt2.skipped_count, 3);

@@ -836,7 +836,7 @@ pub fn run_fast_lane_evidence() -> FastLaneEvidenceManifest {
     }
 
     let hash_data =
-        serde_json::to_vec(&certificates).expect("serde deserialization should succeed");
+        serde_json::to_vec(&certificates).expect("serialization should succeed");
 
     FastLaneEvidenceManifest {
         schema_version: TYPED_ARRAY_SCHEMA_VERSION.to_string(),

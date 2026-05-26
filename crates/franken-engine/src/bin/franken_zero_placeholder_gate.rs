@@ -776,7 +776,7 @@ mod tests {
         }];
         fs::write(
             &waivers_path,
-            serde_json::to_vec_pretty(&waivers).expect("serde deserialization should succeed"),
+            serde_json::to_vec_pretty(&waivers).expect("operation should succeed for valid inputs"),
         )
         .expect("write waivers");
 
@@ -838,7 +838,7 @@ mod tests {
         fs::write(
             &waivers_path,
             serde_json::to_vec_pretty(&legacy_manifest)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         )
         .expect("write legacy manifest");
 

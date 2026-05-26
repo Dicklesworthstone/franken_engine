@@ -657,7 +657,7 @@ impl RoutingDecisionTrace {
             &router_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -961,7 +961,7 @@ impl HybridLaneRouter {
             &router_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -989,7 +989,7 @@ impl RouterSummary {
             &router_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -1423,7 +1423,7 @@ mod tests {
         let mut router = HybridLaneRouter::with_defaults();
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(router.policy, RoutingPolicy::Adaptive);
         assert_eq!(router.policy_transitions.len(), 1);
     }
@@ -1433,7 +1433,7 @@ mod tests {
         let mut router = HybridLaneRouter::with_defaults();
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // With equal weights, low draws -> Js, high draws -> Wasm
         let lane_low = router.select_lane(0);
         let lane_high = router.select_lane(MILLION - 1);
@@ -1485,7 +1485,7 @@ mod tests {
         });
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let bad_obs = LaneObservation {
             lane: LaneChoice::Wasm,
@@ -1516,7 +1516,7 @@ mod tests {
         });
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let bad_obs = LaneObservation {
             lane: LaneChoice::Wasm,
@@ -1540,10 +1540,10 @@ mod tests {
         let mut router = HybridLaneRouter::with_defaults();
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         router
             .manual_demote()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(router.policy, RoutingPolicy::Conservative);
     }
 
@@ -1561,13 +1561,13 @@ mod tests {
         assert_eq!(
             *probs
                 .get(&LaneChoice::Js)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             MILLION
         );
         assert_eq!(
             *probs
                 .get(&LaneChoice::Wasm)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             0
         );
     }
@@ -1577,14 +1577,14 @@ mod tests {
         let mut router = HybridLaneRouter::with_defaults();
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let probs = router.lane_probabilities();
         let js_p = *probs
             .get(&LaneChoice::Js)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let wasm_p = *probs
             .get(&LaneChoice::Wasm)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Both should have nonzero probability
         assert!(js_p > 0, "js prob should be > 0, got {js_p}");
         assert!(wasm_p > 0, "wasm prob should be > 0, got {wasm_p}");
@@ -1667,7 +1667,7 @@ mod tests {
         });
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Simulate 50 rounds with Wasm being slightly better
         for i in 0..50 {
@@ -1704,7 +1704,7 @@ mod tests {
         });
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Good period
         for _ in 0..10 {
@@ -1745,7 +1745,7 @@ mod tests {
         // Round 1: promote
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(router.policy, RoutingPolicy::Adaptive);
 
         // Trigger demotion via compat errors
@@ -1764,7 +1764,7 @@ mod tests {
         // Re-promote
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(router.policy, RoutingPolicy::Adaptive);
         assert_eq!(router.policy_transitions.len(), 3);
     }
@@ -1908,11 +1908,11 @@ mod tests {
         let mut router = HybridLaneRouter::with_defaults();
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Calling again is idempotent (returns Ok)
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(router.policy, RoutingPolicy::Adaptive);
     }
 
@@ -2030,7 +2030,7 @@ mod tests {
         // Promote and observe — counter resets
         router
             .promote_to_adaptive()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         router.observe(LaneChoice::Js, &obs, None);
         assert_eq!(router.consecutive_conservative_rounds, 0);
     }

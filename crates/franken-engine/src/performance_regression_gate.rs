@@ -1354,7 +1354,7 @@ mod tests {
             .logs
             .iter()
             .find(|l| l.event == "gate_decision")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.outcome, "promote");
     }
 
@@ -1369,7 +1369,7 @@ mod tests {
             .logs
             .iter()
             .find(|l| l.event == "gate_decision")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.outcome, "hold");
     }
 

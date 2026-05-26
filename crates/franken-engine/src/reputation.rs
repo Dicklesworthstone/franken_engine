@@ -1115,7 +1115,7 @@ mod tests {
         // SAFETY: Test helper creates valid extension; register_extension succeeds for first registration.
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ext2 = test_extension("ext-1", "pub-1");
         assert!(matches!(
             graph.register_extension(ext2),
@@ -1139,7 +1139,7 @@ mod tests {
         // SAFETY: Test helper creates valid extension; register_extension succeeds for new extension.
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ev = test_evidence("ev-1");
         assert!(graph.add_evidence("ext-1", ev).is_ok());
         assert_eq!(graph.evidence_count(), 1);
@@ -1161,11 +1161,11 @@ mod tests {
         // SAFETY: Test helper creates valid extension; register_extension succeeds for new extension.
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test adds evidence to registered extension; add_evidence succeeds for first evidence.
         graph
             .add_evidence("ext-1", test_evidence("ev-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             graph.add_evidence("ext-1", test_evidence("ev-1")),
             Err(ReputationGraphError::DuplicateEvidence { .. })
@@ -1182,7 +1182,7 @@ mod tests {
         // SAFETY: Test helper creates valid extension; register_extension succeeds for new extension.
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let tt = graph
             .transition_trust(
@@ -1193,7 +1193,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 3_000_000_000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(tt.old_level, TrustLevel::Established);
         assert_eq!(tt.new_level, TrustLevel::Suspicious);
@@ -1201,7 +1201,7 @@ mod tests {
         assert_eq!(
             graph
                 .get_extension("ext-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .current_trust_level,
             TrustLevel::Suspicious
         );
@@ -1212,7 +1212,7 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let tt = graph
             .transition_trust(
@@ -1223,7 +1223,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 3_000_000_000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(tt.old_level, TrustLevel::Unknown);
         assert_eq!(tt.new_level, TrustLevel::Provisional);
@@ -1236,7 +1236,7 @@ mod tests {
         ext.current_trust_level = TrustLevel::Suspicious;
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(matches!(
             graph.transition_trust(
@@ -1258,7 +1258,7 @@ mod tests {
         ext.current_trust_level = TrustLevel::Compromised;
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let tt = graph
             .operator_trust_override(OperatorOverrideInput {
@@ -1270,7 +1270,7 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(2),
                 timestamp_ns: 4_000_000_000,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(tt.operator_override);
         assert_eq!(tt.old_level, TrustLevel::Compromised);
@@ -1279,7 +1279,7 @@ mod tests {
         assert_eq!(
             graph
                 .get_extension("ext-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .current_trust_level,
             TrustLevel::Provisional
         );
@@ -1292,7 +1292,7 @@ mod tests {
         ext.current_trust_level = TrustLevel::Compromised;
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = graph
             .operator_trust_override(OperatorOverrideInput {
@@ -1317,7 +1317,7 @@ mod tests {
         assert_eq!(
             graph
                 .get_extension("ext-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .current_trust_level,
             TrustLevel::Compromised
         );
@@ -1333,13 +1333,13 @@ mod tests {
         let ext_c = test_extension_with_deps("ext-c", "pub-1", &["ext-a"]);
         graph
             .register_extension(ext_a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .register_extension(ext_b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .register_extension(ext_c)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Revoke ext-a.
         graph
@@ -1351,7 +1351,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let impact = graph
             .propagate_revocation(
@@ -1360,7 +1360,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_001,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(impact.directly_affected.contains("ext-b"));
         assert!(impact.directly_affected.contains("ext-c"));
@@ -1375,10 +1375,10 @@ mod tests {
         ext_b.current_trust_level = TrustLevel::Established;
         graph
             .register_extension(ext_a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .register_extension(ext_b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         graph
             .propagate_revocation(
@@ -1387,12 +1387,12 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 5_000_000_000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             graph
                 .get_extension("ext-b")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .current_trust_level,
             TrustLevel::Suspicious
         );
@@ -1415,17 +1415,17 @@ mod tests {
         graph.register_publisher(test_publisher("pub-1"));
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .add_evidence("ext-1", test_evidence("ev-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .add_evidence("ext-1", test_evidence("ev-2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = graph
             .trust_lookup("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.current_trust_level, TrustLevel::Unknown);
         assert_eq!(result.evidence_count, 2);
         assert_eq!(result.transition_count, 0);
@@ -1446,7 +1446,7 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         graph
             .transition_trust(
@@ -1457,7 +1457,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 1_000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .transition_trust(
                 "ext-1",
@@ -1467,7 +1467,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 2_000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let history = graph.trust_history("ext-1");
         assert_eq!(history.len(), 2);
@@ -1488,17 +1488,17 @@ mod tests {
 
         graph
             .register_extension(dep_a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .register_extension(dep_b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = graph
             .trust_lookup("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // dep-a is Unknown (300_000), dep-b is Suspicious (500_000)
         // Average: (300_000 + 500_000) / 2 = 400_000
         assert_eq!(result.dependency_risk_score, 400_000);
@@ -1509,10 +1509,10 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .trust_lookup("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.dependency_risk_score, 0);
     }
 
@@ -1523,7 +1523,7 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let record = ProvenanceRecord {
             extension_id: "ext-1".into(),
@@ -1536,11 +1536,11 @@ mod tests {
         };
         graph
             .set_provenance(record)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let prov = graph
             .get_provenance("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(prov.publisher_verified);
         assert!(prov.build_attested);
     }
@@ -1571,10 +1571,10 @@ mod tests {
         graph.register_publisher(test_publisher("pub-1"));
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .add_evidence("ext-1", test_evidence("ev-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .transition_trust(
                 "ext-1",
@@ -1584,7 +1584,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 1_000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&graph).expect("serialize derived Serialize");
         let restored: ReputationGraph =
@@ -1678,11 +1678,11 @@ mod tests {
             let mut g = ReputationGraph::new();
             g.register_publisher(test_publisher("pub-1"));
             g.register_extension(test_extension("ext-1", "pub-1"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             g.register_extension(test_extension("ext-2", "pub-1"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             g.add_evidence("ext-1", test_evidence("ev-1"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             g
         };
         let json1 = serde_json::to_string(&build_graph()).expect("serialize derived Serialize");
@@ -1697,13 +1697,13 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // register_extension creates a PublishedBy edge.
         assert_eq!(graph.edge_count(), 1);
 
         graph
             .add_evidence("ext-1", test_evidence("ev-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // add_evidence creates an ObservedBehavior edge.
         assert_eq!(graph.edge_count(), 2);
 
@@ -1716,7 +1716,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 1_000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // trust transition creates a TrustTransitioned edge.
         assert_eq!(graph.edge_count(), 3);
     }
@@ -1728,10 +1728,10 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-1", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .register_extension(test_extension("ext-2", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let initial_edges = graph.edge_count();
 
         let incident = IncidentNode {
@@ -2700,13 +2700,13 @@ mod tests {
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-rev"]);
         graph
             .register_extension(dep)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .trust_lookup("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.dependency_risk_score, 1_000_000);
     }
 
@@ -2718,13 +2718,13 @@ mod tests {
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-comp"]);
         graph
             .register_extension(dep)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .trust_lookup("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.dependency_risk_score, 800_000);
     }
 
@@ -2735,10 +2735,10 @@ mod tests {
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-ghost"]);
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .trust_lookup("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Unknown dependency = high risk (500_000)
         assert_eq!(result.dependency_risk_score, 500_000);
     }
@@ -2751,13 +2751,13 @@ mod tests {
         let ext = test_extension_with_deps("ext-1", "pub-1", &["dep-trusted"]);
         graph
             .register_extension(dep)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .register_extension(ext)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .trust_lookup("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.dependency_risk_score, 0);
     }
 
@@ -3025,7 +3025,7 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-lt", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .transition_trust(
                 "ext-lt",
@@ -3035,15 +3035,15 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 1_000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .trust_lookup("ext-lt")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.transition_count, 1);
         assert!(result.last_transition.is_some());
         let last = result
             .last_transition
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.new_level, TrustLevel::Provisional);
     }
 
@@ -3052,13 +3052,13 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-ev", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .add_evidence("ext-ev", test_evidence("ev-a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .add_evidence("ext-ev", test_evidence("ev-b"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evs = graph.get_evidence_for_extension("ext-ev");
         assert_eq!(evs.len(), 2);
     }
@@ -3075,7 +3075,7 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-inc", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let incident = IncidentNode {
             incident_id: "inc-count".into(),
             severity: IncidentSeverity::High,
@@ -3102,7 +3102,7 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-id", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let tt = graph
             .transition_trust(
                 "ext-id",
@@ -3112,7 +3112,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 0,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             tt.transition_id.starts_with("tt-"),
             "transition ID must start with tt-"
@@ -3125,7 +3125,7 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-seq", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // unknown -> provisional -> established -> trusted
         let levels = [
             TrustLevel::Provisional,
@@ -3142,13 +3142,13 @@ mod tests {
                     SecurityEpoch::from_raw(1),
                     i as u64 * 1_000,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(graph.total_transitions(), 3);
         assert_eq!(
             graph
                 .get_extension("ext-seq")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .current_trust_level,
             TrustLevel::Trusted
         );
@@ -3159,10 +3159,10 @@ mod tests {
         let mut graph = ReputationGraph::new();
         graph
             .register_extension(test_extension("ext-isolated", "pub-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let impact = graph
             .propagate_revocation("ext-isolated", "inc-noop", SecurityEpoch::from_raw(1), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(impact.directly_affected.is_empty());
         assert!(impact.transitively_affected.is_empty());
         assert!(impact.trust_degradations.is_empty());

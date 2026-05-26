@@ -2124,15 +2124,15 @@ mod tests {
     fn harness_engine_kind_snake_case_format() {
         // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&HarnessEngineKind::FrankenCanonical)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"franken_canonical\"");
         // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&HarnessEngineKind::FixtureExpectedHash)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"fixture_expected_hash\"");
         // SAFETY: HarnessEngineKind derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&HarnessEngineKind::ExternalCommand)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"external_command\"");
     }
 
@@ -2169,11 +2169,11 @@ mod tests {
     fn engine_outcome_kind_serialize() {
         // SAFETY: EngineOutcomeKind derives Serialize and has no non-serializable fields
         let hash_json = serde_json::to_string(&EngineOutcomeKind::Hash)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(hash_json, "\"hash\"");
         // SAFETY: EngineOutcomeKind derives Serialize and has no non-serializable fields
         let error_json = serde_json::to_string(&EngineOutcomeKind::Error)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(error_json, "\"error\"");
     }
 
@@ -3311,12 +3311,12 @@ mod tests {
     fn parse_goal_script_and_module() {
         // SAFETY: Test uses known valid goal strings that parse_goal supports
         assert_eq!(
-            parse_goal("f1", "script").expect("serde deserialization should succeed"),
+            parse_goal("f1", "script").expect("operation should succeed for valid inputs"),
             ParseGoal::Script
         );
         // SAFETY: Test uses known valid goal strings that parse_goal supports
         assert_eq!(
-            parse_goal("f1", "module").expect("serde deserialization should succeed"),
+            parse_goal("f1", "module").expect("operation should succeed for valid inputs"),
             ParseGoal::Module
         );
     }

@@ -419,7 +419,7 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("trace-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id, 1);
         assert_eq!(chan.pending_count(), 1);
     }
@@ -429,9 +429,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("trace-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id, "hash-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chan.pending_count(), 0);
     }
 
@@ -440,9 +440,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("trace-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.abort(id, &AbortReason::UpstreamFailure, "hash-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chan.pending_count(), 0);
     }
 
@@ -451,9 +451,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("trace-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = chan.commit(id, "h").unwrap_err();
         assert_eq!(err, ObligationError::AlreadyResolved { obligation_id: id });
     }
@@ -463,9 +463,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("trace-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.abort(id, &AbortReason::DrainTimeout, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(chan.commit(id, "h").is_err());
     }
 
@@ -489,11 +489,11 @@ mod tests {
             },
         );
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = chan.send("t").unwrap_err();
         assert_eq!(err, ObligationError::Backpressure { max_pending: 3 });
@@ -511,13 +511,13 @@ mod tests {
         );
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(chan.send("t").is_err());
 
         chan.commit(id1, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(chan.send("t").is_ok());
     }
 
@@ -528,9 +528,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.mark_leaked(id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chan.leak_count(), 1);
         assert_eq!(chan.pending_count(), 0);
     }
@@ -540,9 +540,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(chan.mark_leaked(id).is_err());
     }
 
@@ -553,14 +553,14 @@ mod tests {
         let mut chan = test_channel();
         chan.set_tick(10);
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.set_tick(20);
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let oldest = chan
             .oldest_pending()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(oldest.created_at_tick, 10);
     }
 
@@ -577,9 +577,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(chan.drain_check());
     }
 
@@ -587,7 +587,7 @@ mod tests {
     fn drain_check_false_when_pending() {
         let mut chan = test_channel();
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!chan.drain_check());
     }
 
@@ -595,14 +595,14 @@ mod tests {
     fn force_abort_all_pending() {
         let mut chan = test_channel();
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id3, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let aborted = chan.force_abort_all_pending("timeout-hash");
         assert_eq!(aborted, 2);
@@ -616,9 +616,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = chan.drain_events();
         assert_eq!(events.len(), 2);
@@ -631,9 +631,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id, "evidence-hash")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = chan.drain_events();
         let commit_event = &events[1];
@@ -656,15 +656,15 @@ mod tests {
             chan.set_tick(10);
             let id1 = chan
                 .send("t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.set_tick(20);
             let id2 = chan
                 .send("t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.commit(id1, "h1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.abort(id2, &AbortReason::DrainTimeout, "h2")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.drain_events()
         };
 
@@ -818,20 +818,20 @@ mod tests {
         let mut chan = test_channel();
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         chan.commit(id1, "h1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.abort(id2, &AbortReason::OperatorAbort, "h2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.mark_leaked(id3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(chan.pending_count(), 0);
         assert_eq!(chan.total_count(), 3);
@@ -877,13 +877,13 @@ mod tests {
         let mut chan = test_channel();
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
         assert_eq!(id3, 3);
@@ -893,7 +893,7 @@ mod tests {
     fn drain_events_clears_buffer() {
         let mut chan = test_channel();
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!chan.drain_events().is_empty());
         assert!(chan.drain_events().is_empty());
     }
@@ -925,9 +925,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id, "h1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = chan.commit(id, "h2").unwrap_err();
         assert!(matches!(err, ObligationError::AlreadyResolved { .. }));
     }
@@ -1002,19 +1002,19 @@ mod tests {
         let mut chan = test_channel();
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id1, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.abort(id2, &AbortReason::DrainTimeout, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.mark_leaked(id3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chan.total_count(), 3);
         assert_eq!(chan.pending_count(), 0);
     }
@@ -1024,9 +1024,9 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let aborted = chan.force_abort_all_pending("timeout-hash");
         assert_eq!(aborted, 0);
     }
@@ -1037,10 +1037,10 @@ mod tests {
         assert!(chan.drain_check());
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!chan.drain_check());
         chan.commit(id, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(chan.drain_check());
     }
 
@@ -1060,16 +1060,16 @@ mod tests {
         chan.set_tick(10);
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.set_tick(20);
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id1, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let oldest = chan
             .oldest_pending()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(oldest.created_at_tick, 20);
     }
 
@@ -1078,14 +1078,14 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.abort(id, &AbortReason::PolicyViolation, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = chan.drain_events();
         let abort_event = events
             .iter()
             .find(|e| e.state == ObligationState::Aborted)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(abort_event.resolution_type, Some("abort".to_string()));
     }
 
@@ -1187,10 +1187,10 @@ mod tests {
         chan.set_tick(500);
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let oldest = chan
             .oldest_pending()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(oldest.obligation_id, id);
         assert_eq!(oldest.created_at_tick, 500);
     }
@@ -1199,11 +1199,11 @@ mod tests {
     fn force_abort_all_pending_emits_events_for_each() {
         let mut chan = test_channel();
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.drain_events(); // clear send events
         chan.force_abort_all_pending("timeout-h");
         let events = chan.drain_events();
@@ -1219,10 +1219,10 @@ mod tests {
         let mut chan = test_channel();
         let id = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.drain_events(); // clear send event
         chan.mark_leaked(id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = chan.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].state, ObligationState::Leaked);
@@ -1235,21 +1235,21 @@ mod tests {
         let mut chan = test_channel();
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.mark_leaked(id1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chan.leak_count(), 1);
         chan.mark_leaked(id2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chan.leak_count(), 2);
         chan.mark_leaked(id3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chan.leak_count(), 3);
     }
 
@@ -1265,21 +1265,21 @@ mod tests {
         );
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id1, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.abort(id2, &AbortReason::DrainTimeout, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Both resolved, total_count is 2 but pending_count is 0
         assert_eq!(chan.total_count(), 2);
         // Should allow 2 more sends since only pending counts
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(chan.send("t").is_err());
     }
 
@@ -1287,7 +1287,7 @@ mod tests {
     fn pending_event_has_no_resolution_type() {
         let mut chan = test_channel();
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = chan.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].state, ObligationState::Pending);
@@ -1430,14 +1430,14 @@ mod tests {
             chan.set_tick(i as u64);
             ids.push(
                 chan.send("t")
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             );
         }
         assert_eq!(chan.pending_count(), 20);
         assert!(chan.send("t").is_err());
         for id in &ids {
             chan.commit(*id, "h")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(chan.pending_count(), 0);
         assert_eq!(chan.total_count(), 20);
@@ -1450,13 +1450,13 @@ mod tests {
             chan.set_tick(i);
             let id = chan
                 .send("t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             if i % 3 == 0 {
                 chan.abort(id, &AbortReason::OperatorAbort, "h")
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
             } else {
                 chan.commit(id, "h")
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
             }
         }
         assert_eq!(chan.pending_count(), 0);
@@ -1477,21 +1477,21 @@ mod tests {
             chan.set_tick(100);
             let id1 = chan
                 .send("t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.set_tick(200);
             let id2 = chan
                 .send("t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.set_tick(300);
             let id3 = chan
                 .send("t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.commit(id1, "h1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.mark_leaked(id2)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.abort(id3, &AbortReason::PolicyViolation, "h3")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             chan.drain_events()
         };
         let events1 = run();
@@ -1506,7 +1506,7 @@ mod tests {
     fn channel_id_propagates_to_events() {
         let mut chan = ObligationChannel::new("my-channel", "my-trace", ChannelConfig::default());
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = chan.drain_events();
         assert_eq!(events[0].channel_id, "my-channel");
         assert_eq!(events[0].trace_id, "my-trace");
@@ -1517,14 +1517,14 @@ mod tests {
         let mut chan = test_channel();
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id1, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id2, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(chan.oldest_pending().is_none());
     }
 
@@ -1533,17 +1533,17 @@ mod tests {
         let mut chan = test_channel();
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _id3 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id1, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.mark_leaked(id2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let aborted = chan.force_abort_all_pending("timeout");
         assert_eq!(aborted, 1);
         assert!(chan.drain_check());
@@ -1552,10 +1552,10 @@ mod tests {
     #[test]
     fn send_with_empty_creator_trace_id() {
         let mut chan = test_channel();
-        let id = chan.send("").expect("serde deserialization should succeed");
+        let id = chan.send("").expect("operation should succeed for valid inputs");
         let oldest = chan
             .oldest_pending()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(oldest.obligation_id, id);
         assert_eq!(oldest.creator_trace_id, "");
     }
@@ -1564,13 +1564,13 @@ mod tests {
     fn drain_then_new_events_accumulate() {
         let mut chan = test_channel();
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let batch1 = chan.drain_events();
         assert_eq!(batch1.len(), 1);
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let batch2 = chan.drain_events();
         assert_eq!(batch2.len(), 2);
     }
@@ -1617,15 +1617,15 @@ mod tests {
         let mut chan2 = ObligationChannel::new("c2", "t2", ChannelConfig::default());
         let id1 = chan1
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan2
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id1, 1);
         assert_eq!(id2, 1);
         chan1
             .commit(id1, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chan1.pending_count(), 0);
         assert_eq!(chan2.pending_count(), 1);
     }
@@ -1635,19 +1635,19 @@ mod tests {
         let mut chan = test_channel();
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.mark_leaked(id1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id2, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.mark_leaked(id3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chan.leak_count(), 2);
     }
 
@@ -1656,12 +1656,12 @@ mod tests {
         let mut chan = test_channel();
         let id1 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = chan
             .send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.commit(id1, "h")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = chan.drain_events();
         let event_ids: Vec<u64> = events.iter().map(|e| e.obligation_id).collect();
         assert_eq!(event_ids, vec![id1, id2, id1]);
@@ -1711,13 +1711,13 @@ mod tests {
         let mut chan = test_channel();
         chan.set_tick(100);
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chan.set_tick(50);
         chan.send("t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let oldest = chan
             .oldest_pending()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(oldest.created_at_tick, 50);
     }
 }

@@ -617,7 +617,7 @@ impl DemoClaimLinkageGate {
             config: &self.config,
             claim_results: canonical_claim_results,
         })
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
 
         let decision_id = format!(
             "linkage-{}-{}-{}",
@@ -804,7 +804,7 @@ mod tests {
 
     fn default_gate() -> DemoClaimLinkageGate {
         DemoClaimLinkageGate::new(LinkageGateConfig::default())
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     // ── Constructor Tests ───────────────────────────────────────────
@@ -931,7 +931,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
         assert!(decision.is_pass());
         assert_eq!(decision.linked_claims, 1);
@@ -950,7 +950,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
         assert!(!decision.is_pass());
     }
@@ -967,7 +967,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
     }
 
@@ -983,7 +983,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
     }
 
@@ -1017,7 +1017,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.aggregate_completeness_millionths, MILLION);
     }
 
@@ -1033,7 +1033,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.aggregate_completeness_millionths > 0);
         assert!(decision.aggregate_completeness_millionths < MILLION);
     }
@@ -1048,7 +1048,7 @@ mod tests {
         ];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.linkage_rate_millionths(), 500_000); // 1/2
     }
 
@@ -1064,7 +1064,7 @@ mod tests {
         ];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
         assert_eq!(decision.linked_claims, 2);
     }
@@ -1079,7 +1079,7 @@ mod tests {
         ];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
         assert_eq!(decision.linked_claims, 1);
         assert_eq!(decision.unlinked_claims, 1);
@@ -1104,7 +1104,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -1126,7 +1126,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -1204,7 +1204,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let display = format!("{}", decision);
         assert!(display.contains("m1"));
         assert!(display.contains("pass"));
@@ -1288,7 +1288,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: LinkageGateDecision =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1319,12 +1319,12 @@ mod tests {
         let mut g1 = default_gate();
         let d1 = g1
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut g2 = default_gate();
         let d2 = g2
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(d1.artifact_hash, d2.artifact_hash);
     }
@@ -1351,16 +1351,16 @@ mod tests {
         )];
 
         let mut gate_missing_evidence = DemoClaimLinkageGate::new(config.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let decision_missing_evidence = gate_missing_evidence
             .evaluate("m1", &claims_missing_evidence, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut gate_missing_demo =
             DemoClaimLinkageGate::new(config).expect("constructor with valid inputs");
         let decision_missing_demo = gate_missing_demo
             .evaluate("m1", &claims_missing_demo, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             decision_missing_evidence.claim_results[0].completeness_millionths,
@@ -1391,12 +1391,12 @@ mod tests {
         let mut gate_a = default_gate();
         let decision_a = gate_a
             .evaluate("m1", &claims_a, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut gate_b = default_gate();
         let decision_b = gate_b
             .evaluate("m1", &claims_b, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(decision_a.artifact_hash, decision_b.artifact_hash);
     }
@@ -1464,7 +1464,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -1478,7 +1478,7 @@ mod tests {
         ];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.rationale.contains("c2"));
     }
 
@@ -1494,7 +1494,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.rationale.contains("All"));
     }
 
@@ -1572,7 +1572,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         assert!(json.contains("\"decision_id\""));
         assert!(json.contains("\"milestone_id\""));
@@ -1642,7 +1642,7 @@ mod tests {
         let claims = vec![make_claim("c1", ClaimCategory::Reliability, vec![], vec![])];
         let decision = gate
             .evaluate("m1", &claims, &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
         assert_eq!(decision.aggregate_completeness_millionths, MILLION);
     }
@@ -2001,7 +2001,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut cloned = decision.clone();
         cloned.milestone_id = "m2".to_string();
         cloned.verdict = LinkageVerdict::Fail;
@@ -2249,18 +2249,18 @@ mod tests {
     fn hash_consistency_claim_category() {
         // ClaimCategory does not derive Hash, so we test serde stability instead
         let a = serde_json::to_string(&ClaimCategory::Security)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let b = serde_json::to_string(&ClaimCategory::Security)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(a, b);
     }
 
     #[test]
     fn hash_consistency_evidence_kind() {
         let a = serde_json::to_string(&EvidenceKind::CodeReview)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let b = serde_json::to_string(&EvidenceKind::CodeReview)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(a, b);
     }
 
@@ -2276,11 +2276,11 @@ mod tests {
         let mut g1 = default_gate();
         let d1 = g1
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut g2 = default_gate();
         let d2 = g2
             .evaluate("m2", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(d1.artifact_hash, d2.artifact_hash);
     }
 
@@ -2302,11 +2302,11 @@ mod tests {
         let mut g1 = default_gate();
         let d1 = g1
             .evaluate("m1", &claims_a, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut g2 = default_gate();
         let d2 = g2
             .evaluate("m1", &claims_b, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(d1.artifact_hash, d2.artifact_hash);
     }
 
@@ -2458,7 +2458,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .total_claims,
             256
         );
@@ -2645,7 +2645,7 @@ mod tests {
         let claims = vec![make_claim("c1", ClaimCategory::Security, vec![], vec![])];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Fail);
         let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: LinkageGateDecision =
@@ -2729,7 +2729,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.decision_id.starts_with("linkage-m1-1-"));
     }
 
@@ -2745,10 +2745,10 @@ mod tests {
         )];
         let d1 = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d2 = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(d1.decision_id, d2.decision_id);
         assert!(d1.decision_id.ends_with("-1"));
         assert!(d2.decision_id.ends_with("-2"));
@@ -2774,7 +2774,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -2796,7 +2796,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, LinkageVerdict::Pass);
     }
 
@@ -2808,7 +2808,7 @@ mod tests {
         let claims = vec![make_claim("c1", ClaimCategory::Performance, vec![], vec![])];
         let decision = gate
             .evaluate("m1", &claims, &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r = &decision.claim_results[0];
         assert!(!r.linked);
         assert!(!r.has_evidence);
@@ -2830,7 +2830,7 @@ mod tests {
         )];
         let decision = gate
             .evaluate("m1", &claims, &demos)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r = &decision.claim_results[0];
         assert!(!r.linked);
         assert!(r.has_runnable_demo);

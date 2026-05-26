@@ -191,16 +191,16 @@ fn main() {
     let baseline_path = PathBuf::from(
         matches
             .get_one::<String>("baseline")
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
     );
     let run_path = PathBuf::from(
         matches
             .get_one::<String>("run")
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
     );
     let threshold: f64 = matches
         .get_one::<String>("threshold")
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
         .parse()
         .unwrap_or_else(|e| {
             eprintln!("Error: Invalid threshold value: {}", e);

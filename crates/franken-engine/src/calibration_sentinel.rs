@@ -1624,7 +1624,7 @@ mod tests {
             .iter()
             .find(|d| d.rule == PromotionRule::SuppressClaim)
             // SAFETY: Test verifies SuppressClaim decision exists in hardcoded manifest
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!suppress_decision.allowed);
     }
 
@@ -1636,7 +1636,7 @@ mod tests {
             .iter()
             .find(|d| d.rule == PromotionRule::FailClosed)
             // SAFETY: Test verifies FailClosed decision exists in hardcoded manifest
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(fc_decision.allowed);
     }
 
@@ -1648,7 +1648,7 @@ mod tests {
             .iter()
             .find(|d| d.rule == PromotionRule::AllowWithWarning)
             // SAFETY: Test verifies AllowWithWarning decision exists in hardcoded manifest
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(aw_decision.allowed);
         // The cell has a red sentinel, so there should be warnings.
         assert!(!aw_decision.suppression_reasons.is_empty());

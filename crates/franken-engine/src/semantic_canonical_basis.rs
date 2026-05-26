@@ -1427,7 +1427,7 @@ mod tests {
         let basis = make_basis(vec![cls]);
         let result = query_identification(&basis, ArtifactFamily::Ir1Fragment, "a", "b");
         assert_eq!(
-            result.expect("serde deserialization should succeed"),
+            result.expect("operation should succeed for valid inputs"),
             "canon"
         );
     }

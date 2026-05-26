@@ -539,7 +539,7 @@ mod tests {
             &test_schema_id(),
             &test_canonical_bytes(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // SAFETY: Test uses same valid parameters as id1 derivation above.
         // derive_id only fails on invalid domain or malformed inputs (both impossible here).
         let id2 = derive_id(
@@ -548,7 +548,7 @@ mod tests {
             &test_schema_id(),
             &test_canonical_bytes(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2);
     }
 
@@ -566,7 +566,7 @@ mod tests {
             // derive_id only fails on invalid domain or malformed inputs (both impossible here).
             .map(|d| {
                 derive_id(*d, zone, &schema, &content)
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
             })
             .collect();
 
@@ -587,9 +587,9 @@ mod tests {
         let schema = test_schema_id();
 
         let id_a = derive_id(ObjectDomain::PolicyObject, "zone-a", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = derive_id(ObjectDomain::PolicyObject, "zone-b", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b);
     }
 
@@ -602,9 +602,9 @@ mod tests {
         let schema_v2 = SchemaId::from_definition(b"schema-v2");
 
         let id_v1 = derive_id(ObjectDomain::EvidenceRecord, "zone", &schema_v1, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_v2 = derive_id(ObjectDomain::EvidenceRecord, "zone", &schema_v2, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(id_v1, id_v2);
     }
 
@@ -614,9 +614,9 @@ mod tests {
     fn different_content_produces_different_ids() {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::Revocation, "zone", &schema, b"content-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = derive_id(ObjectDomain::Revocation, "zone", &schema, b"content-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b);
     }
 
@@ -636,7 +636,7 @@ mod tests {
         let schema = test_schema_id();
         let content = test_canonical_bytes();
         let id = derive_id(ObjectDomain::PolicyObject, "zone-a", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(verify_id(&id, ObjectDomain::PolicyObject, "zone-a", &schema, &content).is_ok());
     }
 
@@ -645,7 +645,7 @@ mod tests {
         let schema = test_schema_id();
         let content = test_canonical_bytes();
         let id = derive_id(ObjectDomain::PolicyObject, "zone-a", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let tampered = b"tampered-content";
         let err =
@@ -658,7 +658,7 @@ mod tests {
         let schema = test_schema_id();
         let content = test_canonical_bytes();
         let id = derive_id(ObjectDomain::PolicyObject, "zone-a", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = verify_id(
             &id,
@@ -676,7 +676,7 @@ mod tests {
         let schema = test_schema_id();
         let content = test_canonical_bytes();
         let id = derive_id(ObjectDomain::PolicyObject, "zone-a", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err =
             verify_id(&id, ObjectDomain::PolicyObject, "zone-b", &schema, &content).unwrap_err();
@@ -741,10 +741,10 @@ mod tests {
             &test_schema_id(),
             b"hello",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let hex = id.to_hex();
         let restored =
-            EngineObjectId::from_hex(&hex).expect("serde deserialization should succeed");
+            EngineObjectId::from_hex(&hex).expect("operation should succeed for valid inputs");
         assert_eq!(id, restored);
     }
 
@@ -757,8 +757,8 @@ mod tests {
             canonical_bytes in proptest::collection::vec(any::<u8>(), 1..128),
         ) {
             let schema = SchemaId::from_definition(&schema_bytes);
-            let id = derive_id(domain, &zone, &schema, &canonical_bytes).expect("serde deserialization should succeed");
-            let restored = EngineObjectId::from_hex(&id.to_hex()).expect("serde deserialization should succeed");
+            let id = derive_id(domain, &zone, &schema, &canonical_bytes).expect("operation should succeed for valid inputs");
+            let restored = EngineObjectId::from_hex(&id.to_hex()).expect("operation should succeed for valid inputs");
 
             prop_assert_eq!(&restored, &id);
             prop_assert!(verify_id(&id, domain, &zone, &schema, &canonical_bytes).is_ok());
@@ -773,7 +773,7 @@ mod tests {
             delta in 1u8..=u8::MAX,
         ) {
             let schema = SchemaId::from_definition(&schema_bytes);
-            let id = derive_id(domain, &zone, &schema, &canonical_bytes).expect("serde deserialization should succeed");
+            let id = derive_id(domain, &zone, &schema, &canonical_bytes).expect("operation should succeed for valid inputs");
             let mut tampered = canonical_bytes.clone();
             tampered[0] ^= delta;
 
@@ -795,8 +795,8 @@ mod tests {
             prop_assume!(zone_a != zone_b);
 
             let schema = SchemaId::from_definition(&schema_bytes);
-            let id_a = derive_id(domain, &zone_a, &schema, &canonical_bytes).expect("serde deserialization should succeed");
-            let id_b = derive_id(domain, &zone_b, &schema, &canonical_bytes).expect("serde deserialization should succeed");
+            let id_a = derive_id(domain, &zone_a, &schema, &canonical_bytes).expect("operation should succeed for valid inputs");
+            let id_b = derive_id(domain, &zone_b, &schema, &canonical_bytes).expect("operation should succeed for valid inputs");
 
             prop_assert_ne!(id_a, id_b);
         }
@@ -830,19 +830,19 @@ mod tests {
         let canonical = b"golden-vector-test-content-v1";
 
         let id = derive_id(domain, zone, &schema, canonical)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let hex = id.to_hex();
 
         // Re-derive to confirm determinism.
         let id2 = derive_id(domain, zone, &schema, canonical)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id, id2);
         assert_eq!(hex.len(), 64);
 
         // Verify that the golden vector is stable across calls.
         let expected_hex = hex.clone();
         let id3 =
-            EngineObjectId::from_hex(&expected_hex).expect("serde deserialization should succeed");
+            EngineObjectId::from_hex(&expected_hex).expect("operation should succeed for valid inputs");
         assert_eq!(id, id3);
     }
 
@@ -854,17 +854,17 @@ mod tests {
         let canonical = b"evidence-entry-canonical-payload";
 
         let id = derive_id(domain, zone, &schema, canonical)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Same inputs always produce same output.
         let id2 = derive_id(domain, zone, &schema, canonical)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id, id2);
 
         // Verify round-trip through hex.
         let hex = id.to_hex();
         let restored =
-            EngineObjectId::from_hex(&hex).expect("serde deserialization should succeed");
+            EngineObjectId::from_hex(&hex).expect("operation should succeed for valid inputs");
         assert_eq!(id, restored);
     }
 
@@ -973,7 +973,7 @@ mod tests {
             &test_schema_id(),
             b"content",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&id).expect("serialize derived Serialize");
         let restored: EngineObjectId =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1029,7 +1029,7 @@ mod tests {
             &test_schema_id(),
             b"revoke",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let display = id.to_string();
         assert_eq!(display.len(), 64);
         assert!(display.chars().all(|c| c.is_ascii_hexdigit()));
@@ -1039,9 +1039,9 @@ mod tests {
     fn id_error_std_error() {
         let schema = SchemaId::from_definition(b"test-schema");
         let id1 = derive_id(ObjectDomain::PolicyObject, "zone", &schema, b"a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = derive_id(ObjectDomain::PolicyObject, "zone", &schema, b"b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let variants: [Box<dyn std::error::Error>; 5] = [
             Box::new(IdError::EmptyCanonicalBytes),
             Box::new(IdError::IdMismatch {
@@ -1089,7 +1089,7 @@ mod tests {
         let hex = id.to_hex();
         assert_eq!(hex, "0".repeat(64));
         let restored =
-            EngineObjectId::from_hex(&hex).expect("serde deserialization should succeed");
+            EngineObjectId::from_hex(&hex).expect("operation should succeed for valid inputs");
         assert_eq!(id, restored);
     }
 
@@ -1099,7 +1099,7 @@ mod tests {
         let hex = id.to_hex();
         assert_eq!(hex, "ff".repeat(32));
         let restored =
-            EngineObjectId::from_hex(&hex).expect("serde deserialization should succeed");
+            EngineObjectId::from_hex(&hex).expect("operation should succeed for valid inputs");
         assert_eq!(id, restored);
     }
 
@@ -1111,10 +1111,10 @@ mod tests {
             &test_schema_id(),
             b"upper",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let hex_upper = id.to_hex().to_uppercase();
         let restored =
-            EngineObjectId::from_hex(&hex_upper).expect("serde deserialization should succeed");
+            EngineObjectId::from_hex(&hex_upper).expect("operation should succeed for valid inputs");
         assert_eq!(id, restored);
     }
 
@@ -1122,9 +1122,9 @@ mod tests {
     fn id_error_id_mismatch_display_contains_both_ids() {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"aaa")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"bbb")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = IdError::IdMismatch {
             expected: id_a.clone(),
             computed: id_b.clone(),
@@ -1153,11 +1153,11 @@ mod tests {
     fn derive_id_single_byte_content() {
         let schema = test_schema_id();
         let id = derive_id(ObjectDomain::EvidenceRecord, "z", &schema, &[0x42])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id.as_bytes().len(), OBJECT_ID_LEN);
         // Deterministic
         let id2 = derive_id(ObjectDomain::EvidenceRecord, "z", &schema, &[0x42])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id, id2);
     }
 
@@ -1165,9 +1165,9 @@ mod tests {
     fn id_error_id_mismatch_serde_roundtrip() {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"x")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = IdError::IdMismatch {
             expected: id_a,
             computed: id_b,
@@ -1200,7 +1200,7 @@ mod tests {
     #[test]
     fn engine_object_id_clone_equality() {
         let id = derive_id(ObjectDomain::PolicyObject, "z", &test_schema_id(), b"data")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cloned = id.clone();
         assert_eq!(id, cloned);
     }
@@ -1235,9 +1235,9 @@ mod tests {
     fn engine_object_id_ordering_deterministic() {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"aaa")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"bbb")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // As long as they're different, ordering should be consistent
         assert_ne!(id_a, id_b);
         let cmp1 = id_a.cmp(&id_b);
@@ -1288,7 +1288,7 @@ mod tests {
         let schema = test_schema_id();
         let content = [0x42u8; 10_000];
         let id = derive_id(ObjectDomain::EvidenceRecord, "z", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id.as_bytes().len(), OBJECT_ID_LEN);
     }
 
@@ -1296,7 +1296,7 @@ mod tests {
     fn verify_id_different_zone_fails() {
         let schema = test_schema_id();
         let id = derive_id(ObjectDomain::PolicyObject, "zone-a", &schema, b"data")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err =
             verify_id(&id, ObjectDomain::PolicyObject, "zone-b", &schema, b"data").unwrap_err();
         assert!(matches!(err, IdError::IdMismatch { .. }));
@@ -1384,9 +1384,9 @@ mod tests {
     fn id_error_debug_variants_distinct() {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let errors = [
             IdError::EmptyCanonicalBytes,
             IdError::IdMismatch {
@@ -1432,9 +1432,9 @@ mod tests {
     fn id_error_serde_variants_all_distinct() {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"p")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"q")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let errors = [
             IdError::EmptyCanonicalBytes,
             IdError::IdMismatch {
@@ -1533,7 +1533,7 @@ mod tests {
         let mut ids = std::collections::BTreeSet::new();
         for domain in ObjectDomain::ALL {
             let id = derive_id(*domain, "z", &schema, &[0x01])
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             ids.insert(id);
         }
         assert_eq!(ids.len(), ObjectDomain::ALL.len());
@@ -1543,7 +1543,7 @@ mod tests {
     fn derive_id_empty_zone_is_valid() {
         let schema = test_schema_id();
         let id = derive_id(ObjectDomain::PolicyObject, "", &schema, b"content")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id.as_bytes().len(), OBJECT_ID_LEN);
     }
 
@@ -1551,9 +1551,9 @@ mod tests {
     fn derive_id_empty_zone_differs_from_nonempty_zone() {
         let schema = test_schema_id();
         let id_empty = derive_id(ObjectDomain::PolicyObject, "", &schema, b"content")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_nonempty = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"content")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(id_empty, id_nonempty);
     }
 
@@ -1562,9 +1562,9 @@ mod tests {
         let schema = test_schema_id();
         let content: Vec<u8> = (0u8..=255).cycle().take(65_536).collect();
         let id1 = derive_id(ObjectDomain::RecoveryArtifact, "large", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = derive_id(ObjectDomain::RecoveryArtifact, "large", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2);
     }
 
@@ -1573,7 +1573,7 @@ mod tests {
         let schema = test_schema_id();
         let content = [0u8; 32];
         let id = derive_id(ObjectDomain::KeyBundle, "z", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id.as_bytes().len(), OBJECT_ID_LEN);
     }
 
@@ -1582,7 +1582,7 @@ mod tests {
         let schema = test_schema_id();
         let content = [0xffu8; 32];
         let id = derive_id(ObjectDomain::SignedManifest, "z", &schema, &content)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id.as_bytes().len(), OBJECT_ID_LEN);
     }
 
@@ -1667,14 +1667,14 @@ mod tests {
     #[test]
     fn object_domain_policy_object_json_field() {
         let json = serde_json::to_string(&ObjectDomain::PolicyObject)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"PolicyObject\"");
     }
 
     #[test]
     fn object_domain_evidence_record_json_field() {
         let json = serde_json::to_string(&ObjectDomain::EvidenceRecord)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"EvidenceRecord\"");
     }
 
@@ -1700,7 +1700,7 @@ mod tests {
     #[test]
     fn id_error_empty_canonical_bytes_json_field() {
         let json = serde_json::to_string(&IdError::EmptyCanonicalBytes)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"EmptyCanonicalBytes\"");
     }
 
@@ -1783,7 +1783,7 @@ mod tests {
             &test_schema_id(),
             b"checkpoint-data",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(id.to_string(), id.to_hex());
     }
 
@@ -1799,9 +1799,9 @@ mod tests {
     fn id_error_display_all_variants_nonempty() {
         let schema = test_schema_id();
         let id_a = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = derive_id(ObjectDomain::PolicyObject, "z", &schema, b"b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let errors = [
             IdError::EmptyCanonicalBytes,
             IdError::IdMismatch {
@@ -1867,7 +1867,7 @@ mod tests {
         let mut set = std::collections::BTreeSet::new();
         for domain in ObjectDomain::ALL {
             let id = derive_id(*domain, "zone", &schema, b"data")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             set.insert(id);
         }
         assert_eq!(set.len(), ObjectDomain::ALL.len());
@@ -1906,7 +1906,7 @@ mod tests {
         let schema = test_schema_id();
         for domain in ObjectDomain::ALL {
             let id = derive_id(*domain, "test-zone", &schema, b"payload")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(
                 id.as_bytes().len(),
                 OBJECT_ID_LEN,

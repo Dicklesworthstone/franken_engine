@@ -1360,11 +1360,11 @@ mod tests {
         let before_due = Utc
             .with_ymd_and_hms(2026, 3, 1, 0, 0, 0)
             .single()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let after_due = Utc
             .with_ymd_and_hms(2026, 3, 13, 0, 0, 0)
             .single()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let before = build_risk_acceptance_ledger(&risk_register, before_due).expect("ledger");
         let after = build_risk_acceptance_ledger(&risk_register, after_due).expect("ledger");
@@ -1670,7 +1670,7 @@ mod tests {
             &register,
             Utc.with_ymd_and_hms(2026, 3, 2, 0, 0, 0)
                 .single()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         )
         .expect_err("missing review mapping must fail closed");
         assert!(matches!(
@@ -1825,16 +1825,16 @@ mod tests {
     #[test]
     fn bundle_has_non_empty_hash() {
         let bundle = build_rgc_planning_track_bundle_with_generated_at(1709251200000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!bundle.report_hash.is_empty());
     }
 
     #[test]
     fn bundle_hash_is_deterministic() {
         let a = build_rgc_planning_track_bundle_with_generated_at(1709251200000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = build_rgc_planning_track_bundle_with_generated_at(1709251200000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(a.report_hash, b.report_hash);
     }
 
@@ -1843,7 +1843,7 @@ mod tests {
     #[test]
     fn scope_source_contains_expected_fields() {
         let scope: CompatibilityMatrixSource = parse_embedded_json(SCOPE_SOURCE_JSON, "scope")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!scope.milestone_targets.is_empty());
     }
 
@@ -1851,7 +1851,7 @@ mod tests {
     fn milestone_source_has_ordered_milestones() {
         let milestones: MilestoneGatebookSource =
             parse_embedded_json(MILESTONE_SOURCE_JSON, "milestones")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert!(!milestones.milestones.is_empty());
         // M1 should come before M5
         if milestones.milestones.len() >= 2 {
@@ -1862,7 +1862,7 @@ mod tests {
     #[test]
     fn risk_source_has_non_empty_risks() {
         let risk: RiskRegisterSource = parse_embedded_json(RISK_SOURCE_JSON, "risk")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!risk.risks.is_empty());
     }
 }

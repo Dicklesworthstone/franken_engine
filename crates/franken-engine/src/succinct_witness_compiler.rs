@@ -1117,7 +1117,7 @@ mod tests {
         let tree = MerkleTree::build(&[leaf]);
         let proof = tree
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(proof.verify());
     }
 
@@ -1128,12 +1128,12 @@ mod tests {
         let tree = MerkleTree::build(&[l1, l2]);
         assert!(
             tree.inclusion_proof(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .verify()
         );
         assert!(
             tree.inclusion_proof(1)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .verify()
         );
     }
@@ -1147,7 +1147,7 @@ mod tests {
         for i in 0..4 {
             assert!(
                 tree.inclusion_proof(i)
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .verify(),
                 "proof for leaf {i} failed"
             );
@@ -1168,7 +1168,7 @@ mod tests {
         assert!(
             !tree
                 .inclusion_proof(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .verify_against(&[0xFFu8; 32])
         );
     }
@@ -1180,11 +1180,11 @@ mod tests {
         let tree = MerkleTree::build(&[l1, l2]);
         let proof = tree
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let back: InclusionProof = serde_json::from_str(
             &serde_json::to_string(&proof).expect("serialize derived Serialize"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(proof, back);
         assert!(back.verify());
     }
@@ -1210,7 +1210,7 @@ mod tests {
         let back: ProvenanceAttachment = serde_json::from_str(
             &serde_json::to_string(&prov).expect("serialize derived Serialize"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(prov, back);
     }
 
@@ -1239,7 +1239,7 @@ mod tests {
             let back: ReconstructionKind = serde_json::from_str(
                 &serde_json::to_string(&kind).expect("serialize derived Serialize"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -1251,7 +1251,7 @@ mod tests {
             .with_reconstruction(ReconstructionKind::Inline)
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.pack.chunk_count, 1);
         assert!(result.pack.pack_id.starts_with("wp-"));
         assert!(result.verify_all_proofs());
@@ -1265,7 +1265,7 @@ mod tests {
             .add_chunk("security", b"chunk three".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.pack.chunk_count, 3);
         assert_eq!(result.inclusion_proofs.len(), 3);
         assert!(result.verify_all_proofs());
@@ -1311,7 +1311,7 @@ mod tests {
                 .add_chunk("decision", b"same data".to_vec())
                 .provenance(test_provenance())
                 .compile(test_epoch())
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         assert_eq!(build().pack.pack_id, build().pack.pack_id);
     }
@@ -1323,7 +1323,7 @@ mod tests {
             .with_content_addressed_reconstruction("abc123def456")
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.pack.reconstruction_hints.len(), 1);
         assert_eq!(
             result.pack.reconstruction_hints[0].kind,
@@ -1343,7 +1343,7 @@ mod tests {
             .obligation_category(ObligationCategory::BehavioralPreservation)
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.pack.covers_obligation(&ObligationCategory::Safety));
         assert!(
             result
@@ -1361,7 +1361,7 @@ mod tests {
             .add_chunk("decision", b"d2".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.pack.families(), vec!["decision", "replay"]);
     }
 
@@ -1371,11 +1371,11 @@ mod tests {
             .add_chunk("decision", b"data".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let back: WitnessPack = serde_json::from_str(
             &serde_json::to_string(&result.pack).expect("serialize derived Serialize"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(result.pack, back);
     }
 
@@ -1386,7 +1386,7 @@ mod tests {
             .add_chunk("replay", b"world".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let v = PackVerifier::verify_result(&result);
         assert!(v.valid);
         assert!(v.issues.is_empty());
@@ -1399,7 +1399,7 @@ mod tests {
         let tree = MerkleTree::build(&[l1, l2]);
         let proof = tree
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(PackVerifier::verify_inclusion(
             &proof,
             &hex::encode(tree.root_hash)
@@ -1433,7 +1433,7 @@ mod tests {
             .add_chunk("decision", b"data".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut scores = BTreeMap::new();
         scores.insert("replay_completeness".into(), 950_000);
         scores.insert("verification_coverage".into(), 800_000);
@@ -1477,7 +1477,7 @@ mod tests {
             .add_chunk("decision", b"evidence".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = generate_report(&[&result]);
         assert!(report.all_valid);
         assert_eq!(report.total_chunks, 1);
@@ -1489,13 +1489,13 @@ mod tests {
             .add_chunk("decision", b"pack one".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = WitnessCompiler::new(test_schema())
             .add_chunk("replay", b"pack two a".to_vec())
             .add_chunk("security", b"pack two b".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = generate_report(&[&r1, &r2]);
         assert!(report.all_valid);
         assert_eq!(report.total_chunks, 3);
@@ -1507,7 +1507,7 @@ mod tests {
             .add_chunk("decision", b"data".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             generate_report(&[&result]).content_hash,
             generate_report(&[&result]).content_hash
@@ -1520,12 +1520,12 @@ mod tests {
             .add_chunk("decision", b"data".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = generate_report(&[&result]);
         let back: WitnessPackReport = serde_json::from_str(
             &serde_json::to_string(&report).expect("serialize derived Serialize"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(report, back);
     }
 
@@ -1555,7 +1555,7 @@ mod tests {
         for i in 0..32 {
             assert!(
                 tree.inclusion_proof(i)
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .verify(),
                 "proof for leaf {i} failed"
             );
@@ -1576,7 +1576,7 @@ mod tests {
             .obligation_category(ObligationCategory::BehavioralPreservation)
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.verify_all_proofs());
         assert!(PackVerifier::verify_result(&result).valid);
         let mut scores = BTreeMap::new();
@@ -1666,7 +1666,7 @@ mod tests {
         for i in 0..63 {
             assert!(
                 tree.inclusion_proof(i)
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .verify(),
                 "proof for leaf {i} failed"
             );
@@ -1682,7 +1682,7 @@ mod tests {
             .add_chunk("decision", b"data".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut scores = BTreeMap::new();
         scores.insert("replay_completeness".into(), 900_000);
         scores.insert("verification_coverage".into(), 700_000);
@@ -1884,7 +1884,7 @@ mod tests {
             .add_chunk("decision", b"data".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CompilationResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1927,7 +1927,7 @@ mod tests {
             .add_chunk("decision", b"data".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut pack2 = result.pack.clone();
         pack2.merkle_root = "tampered".into();
         assert_ne!(result.pack.merkle_root, pack2.merkle_root);
@@ -2058,7 +2058,7 @@ mod tests {
         let tree = MerkleTree::build(&[l1]);
         let proof = tree
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!PackVerifier::verify_inclusion(&proof, "not-hex!!"));
     }
 
@@ -2068,7 +2068,7 @@ mod tests {
         let tree = MerkleTree::build(&[l1]);
         let proof = tree
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Valid hex but only 16 bytes (not 32)
         assert!(!PackVerifier::verify_inclusion(
             &proof,
@@ -2089,7 +2089,7 @@ mod tests {
         for &idx in &[0, 63, 127] {
             assert!(
                 tree.inclusion_proof(idx)
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .verify(),
                 "proof for leaf {idx} failed"
             );
@@ -2105,7 +2105,7 @@ mod tests {
         let result = compiler
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.pack.chunk_count, 50);
         assert!(result.verify_all_proofs());
         assert!(PackVerifier::verify_result(&result).valid);
@@ -2119,7 +2119,7 @@ mod tests {
                     .add_chunk("decision", format!("pack-{i}").into_bytes())
                     .provenance(test_provenance())
                     .compile(test_epoch())
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
             })
             .collect();
         let refs: Vec<&CompilationResult> = results.iter().collect();
@@ -2142,7 +2142,7 @@ mod tests {
                 .obligation_category(ObligationCategory::Safety)
                 .provenance(test_provenance())
                 .compile(test_epoch())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let mut scores = BTreeMap::new();
             scores.insert("replay_completeness".into(), 900_000_i64);
             scores.insert("verification_coverage".into(), 800_000);
@@ -2165,12 +2165,12 @@ mod tests {
             .add_chunk("decision", b"alpha".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = WitnessCompiler::new(test_schema())
             .add_chunk("decision", b"beta".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.pack.merkle_root, r2.pack.merkle_root);
     }
 
@@ -2181,7 +2181,7 @@ mod tests {
             .add_chunk("decision", b"data".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut s1 = BTreeMap::new();
         s1.insert("replay_completeness".into(), 900_000_i64);
         let mut s2 = BTreeMap::new();
@@ -2275,7 +2275,7 @@ mod tests {
         let result = compiler
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for cat in &ObligationCategory::ALL {
             assert!(result.pack.covers_obligation(cat), "missing {cat:?}");
         }
@@ -2289,7 +2289,7 @@ mod tests {
             .add_chunk("middle", b"m".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let fams = result.pack.families();
         assert_eq!(fams, vec!["alpha", "middle", "zebra"]);
     }
@@ -2304,11 +2304,11 @@ mod tests {
             .add_chunk("c", b"gamma".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for i in 0..3 {
             let proof = result
                 .proof_for_chunk(i)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(proof.leaf_index, i);
             assert!(proof.verify());
         }
@@ -2369,12 +2369,12 @@ mod tests {
             .add_chunk("decision", b"aaa".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = WitnessCompiler::new(test_schema())
             .add_chunk("decision", b"bbb".to_vec())
             .provenance(test_provenance())
             .compile(test_epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let rpt1 = generate_report(&[&r1]);
         let rpt2 = generate_report(&[&r2]);
         assert_ne!(rpt1.content_hash, rpt2.content_hash);

@@ -727,10 +727,10 @@ mod tests {
         let mut harness = test_harness();
         harness
             .transition_to(CellLifecycle::Starting, 1_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .transition_to(CellLifecycle::Running, 2_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
     }
 
@@ -821,7 +821,7 @@ mod tests {
         let sandbox = test_sandbox();
         let violation = usage
             .exceeds_limits(&sandbox)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(violation, ResourceViolation::HeapExceeded { .. }));
     }
 
@@ -834,7 +834,7 @@ mod tests {
         let sandbox = test_sandbox();
         let violation = usage
             .exceeds_limits(&sandbox)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             violation,
             ResourceViolation::ExecutionTimeExceeded { .. }
@@ -850,7 +850,7 @@ mod tests {
         let sandbox = test_sandbox();
         let violation = usage
             .exceeds_limits(&sandbox)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             violation,
             ResourceViolation::HostcallLimitExceeded { .. }
@@ -867,7 +867,7 @@ mod tests {
         assert!(!sandbox.network_egress_allowed);
         let violation = usage
             .exceeds_limits(&sandbox)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             violation,
             ResourceViolation::NetworkEgressDenied { .. }
@@ -883,7 +883,7 @@ mod tests {
         let sandbox = test_sandbox();
         let violation = usage
             .exceeds_limits(&sandbox)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             violation,
             ResourceViolation::FilesystemAccessDenied { .. }
@@ -913,30 +913,30 @@ mod tests {
         let mut harness = test_harness();
         harness
             .transition_to(CellLifecycle::Starting, 1_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(harness.lifecycle, CellLifecycle::Starting);
 
         harness
             .transition_to(CellLifecycle::Running, 2_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(harness.lifecycle, CellLifecycle::Running);
 
         harness
             .transition_to(CellLifecycle::Suspended, 3_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(harness.lifecycle, CellLifecycle::Suspended);
 
         harness
             .transition_to(CellLifecycle::Running, 4_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(harness.lifecycle, CellLifecycle::Running);
 
         harness
             .transition_to(CellLifecycle::Stopping, 5_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .transition_to(CellLifecycle::Terminated, 6_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(harness.lifecycle.is_terminal());
     }
 
@@ -954,7 +954,7 @@ mod tests {
         let mut harness = running_harness();
         harness
             .transition_to(CellLifecycle::Quarantined, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(harness.lifecycle.is_terminal());
     }
 
@@ -989,14 +989,14 @@ mod tests {
         let mut harness = test_harness();
         harness
             .check_capability(&SlotCapability::ReadSource, 1_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = harness.events_of_type(&HarnessEventType::CapabilityCheck);
         assert_eq!(events.len(), 1);
         assert_eq!(
             events[0]
                 .fields
                 .get("permitted")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "true"
         );
     }
@@ -1017,7 +1017,7 @@ mod tests {
         let mut harness = running_harness();
         let record = harness
             .record_invocation(b"input", b"output", 42, ok_usage(), 50_000, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.sequence, 1);
         assert_eq!(record.replay_seed, 42);
@@ -1030,10 +1030,10 @@ mod tests {
         let mut harness = running_harness();
         let r1 = harness
             .record_invocation(b"a", b"b", 1, ok_usage(), 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = harness
             .record_invocation(b"c", b"d", 2, ok_usage(), 200, 20_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r2.sequence > r1.sequence);
     }
 
@@ -1046,7 +1046,7 @@ mod tests {
         };
         let record = harness
             .record_invocation(b"in", b"out", 1, excessive, 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             record.outcome,
             InvocationOutcome::ResourceViolation(ResourceViolation::HeapExceeded { .. })
@@ -1058,10 +1058,10 @@ mod tests {
         let mut harness = running_harness();
         harness
             .record_invocation(b"a", b"b", 1, ok_usage(), 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .record_invocation(b"c", b"d", 2, ok_usage(), 200, 20_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(harness.invocation_log().len(), 2);
         assert!(harness.get_invocation(1).is_some());
@@ -1076,7 +1076,7 @@ mod tests {
         let mut harness = running_harness();
         let record = harness
             .record_invocation(b"input", b"output", 42, ok_usage(), 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = harness.verify_replay(&record, b"output", 20_000);
         assert!(matches!(result, ReplayVerification::Match { .. }));
@@ -1087,7 +1087,7 @@ mod tests {
         let mut harness = running_harness();
         let record = harness
             .record_invocation(b"input", b"output", 42, ok_usage(), 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = harness.verify_replay(&record, b"different-output", 20_000);
         assert!(matches!(result, ReplayVerification::Mismatch { .. }));
@@ -1098,7 +1098,7 @@ mod tests {
         let mut harness = running_harness();
         let record = harness
             .record_invocation(b"in", b"out", 1, ok_usage(), 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness.verify_replay(&record, b"out", 20_000);
 
         let events = harness.events_of_type(&HarnessEventType::ReplayVerification);
@@ -1107,7 +1107,7 @@ mod tests {
             events[0]
                 .fields
                 .get("match")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "true"
         );
     }
@@ -1127,10 +1127,10 @@ mod tests {
         let mut harness = running_harness();
         harness
             .record_invocation(b"a", b"b", 1, ok_usage(), 1_000_000, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .record_invocation(b"c", b"d", 2, ok_usage(), 3_000_000, 20_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(harness.metrics.total_invocations, 2);
         assert_eq!(harness.metrics.successful_invocations, 2);
@@ -1148,7 +1148,7 @@ mod tests {
         // One success.
         harness
             .record_invocation(b"a", b"b", 1, ok_usage(), 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // One resource violation (failure).
         let excessive = ResourceUsage {
             heap_bytes_used: 5_000_000,
@@ -1156,7 +1156,7 @@ mod tests {
         };
         harness
             .record_invocation(b"c", b"d", 2, excessive, 200, 20_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(harness.metrics.total_invocations, 2);
         assert_eq!(harness.metrics.successful_invocations, 1);
@@ -1297,15 +1297,15 @@ mod tests {
         // Start the cell.
         harness
             .transition_to(CellLifecycle::Starting, 1_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .transition_to(CellLifecycle::Running, 2_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Check capabilities.
         harness
             .check_capability(&SlotCapability::ReadSource, 3_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             harness
                 .check_capability(&SlotCapability::HeapAlloc, 4_000)
@@ -1315,7 +1315,7 @@ mod tests {
         // Execute invocations.
         let r1 = harness
             .record_invocation(b"source-code", b"ir-output", 42, ok_usage(), 50_000, 5_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(r1.outcome, InvocationOutcome::Success));
 
         // Verify replay.
@@ -1329,16 +1329,16 @@ mod tests {
         // Suspend, resume, then stop.
         harness
             .transition_to(CellLifecycle::Suspended, 7_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .transition_to(CellLifecycle::Running, 8_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .transition_to(CellLifecycle::Stopping, 9_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .transition_to(CellLifecycle::Terminated, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify lifecycle events were emitted.
         let lifecycle_events = harness.events_of_type(&HarnessEventType::LifecycleTransition);
@@ -1352,7 +1352,7 @@ mod tests {
         // Normal invocation.
         let r1 = harness
             .record_invocation(b"a", b"b", 1, ok_usage(), 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(r1.outcome, InvocationOutcome::Success));
 
         // Excessive resource usage.
@@ -1365,7 +1365,7 @@ mod tests {
         };
         let r2 = harness
             .record_invocation(b"c", b"d", 2, excessive, 200_000_000, 20_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             r2.outcome,
             InvocationOutcome::ResourceViolation(_)
@@ -1383,10 +1383,10 @@ mod tests {
         // Record two invocations with same inputs but different seeds.
         let r1 = harness
             .record_invocation(b"input-x", b"output-a", 100, ok_usage(), 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = harness
             .record_invocation(b"input-x", b"output-a", 200, ok_usage(), 100, 20_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Same output should verify against both.
         assert!(matches!(
@@ -1846,10 +1846,10 @@ mod tests {
         let mut harness = running_harness();
         harness
             .record_invocation(b"input1", b"output1", 42, ok_usage(), 5_000, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .record_invocation(b"input2", b"output2", 43, ok_usage(), 6_000, 20_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&harness).expect("serialize derived Serialize");
         let decoded: DelegateCellHarness =
@@ -1866,7 +1866,7 @@ mod tests {
         let mut harness = running_harness();
         let record = harness
             .record_invocation(b"in", b"out", 1, ok_usage(), 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = harness.verify_replay(&record, b"wrong", 20_000);
         match result {
@@ -1901,10 +1901,10 @@ mod tests {
         };
         harness
             .record_invocation(b"a", b"b", 1, usage1, 100, 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         harness
             .record_invocation(b"c", b"d", 2, usage2, 200, 20_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(harness.metrics.total_heap_bytes, 300_000);
         assert_eq!(harness.metrics.total_hostcalls, 20);

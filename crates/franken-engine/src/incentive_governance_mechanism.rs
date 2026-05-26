@@ -832,7 +832,7 @@ mod tests {
             let back: GovernanceRole = serde_json::from_str(
                 &serde_json::to_string(role).expect("serialize derived Serialize"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
             assert_eq!(*role, back);
         }
     }
@@ -857,7 +857,7 @@ mod tests {
             let back: GovernanceAction = serde_json::from_str(
                 &serde_json::to_string(action).expect("serialize derived Serialize"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
             assert_eq!(*action, back);
         }
     }
@@ -1378,7 +1378,7 @@ mod tests {
         let back: GovernanceReport = serde_json::from_str(
             &serde_json::to_string(&report).expect("serialize derived Serialize"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(report, back);
     }
 

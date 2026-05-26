@@ -807,7 +807,7 @@ fn verify_attestation_layer(receipt: &OptReceipt, input: &AttestationLayerInput)
             format!(
                 "policy measurement ({}:{}) != expected (sha256:{})",
                 serde_json::to_string(&input.policy_quote.measurement.algorithm)
-                    .expect("serde deserialization should succeed"),
+                    .expect("serialization should succeed"),
                 input.policy_quote.measurement.digest_hex,
                 expected_measurement_digest
             ),
@@ -1360,7 +1360,7 @@ mod tests {
         let current_root = mmr.root_hash().expect("root");
 
         let operator_signing_key =
-            SigningKey::from_bytes([9u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([9u8; 32]).expect("operation should succeed for valid inputs");
         let operator_verification_key = operator_signing_key.verification_key();
         let checkpoint = SignedLogCheckpoint {
             checkpoint_seq: 1,
@@ -1753,7 +1753,7 @@ mod tests {
         let mut input = ReceiptVerifierCliInput::default();
         input.receipts.insert(receipt_id.clone(), request);
         let verdict = verify_receipt_by_id(&input, &receipt_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(verdict.passed);
         assert_eq!(verdict.receipt_id, receipt_id);
     }
@@ -2102,7 +2102,7 @@ mod tests {
             .logs
             .iter()
             .find(|log| log.event == "receipt_verification_complete")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(complete.outcome, "pass");
         assert!(complete.error_code.is_none());
     }
@@ -2116,7 +2116,7 @@ mod tests {
             .logs
             .iter()
             .find(|log| log.event == "receipt_verification_complete")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(complete.outcome, "warn");
         assert_eq!(complete.error_code.as_deref(), Some("stale_data"));
     }
@@ -2130,7 +2130,7 @@ mod tests {
             .logs
             .iter()
             .find(|log| log.event == "receipt_verification_complete")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(complete.outcome, "fail");
         assert_eq!(complete.error_code.as_deref(), Some("signature"));
     }
@@ -2204,8 +2204,8 @@ mod tests {
         let software_root = SoftwareTrustRoot::new("root-1", 7);
         let measurement = software_root.measure(b"a", b"b", b"c", b"d", "e");
         let quote = software_root.attest(&measurement, [0u8; 32], 1000, 0);
-        let a = attestation_quote_digest(&quote).expect("serde deserialization should succeed");
-        let b = attestation_quote_digest(&quote).expect("serde deserialization should succeed");
+        let a = attestation_quote_digest(&quote).expect("operation should succeed for valid inputs");
+        let b = attestation_quote_digest(&quote).expect("operation should succeed for valid inputs");
         assert_eq!(a, b);
     }
 
@@ -2270,7 +2270,7 @@ mod tests {
         let key = LogOperatorKey {
             key_id: "op-key-1".to_string(),
             verification_key: SigningKey::from_bytes([3u8; 32])
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .verification_key(),
             revoked: false,
         };

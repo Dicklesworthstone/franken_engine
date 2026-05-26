@@ -1130,7 +1130,7 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
         let result = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(result.deterministic);
         assert_eq!(result.steps.len(), 5);
@@ -1149,7 +1149,7 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
         let result = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(result.deterministic);
         for (i, step) in result.steps.iter().enumerate() {
@@ -1172,12 +1172,12 @@ mod tests {
 
         let baseline = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for run in 1..100 {
             let result = replayer
                 .replay(&trace, &ReplayConfig::default())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(result.deterministic, "non-deterministic on run {run}");
             assert_eq!(
                 result.content_hash, baseline.content_hash,
@@ -1201,11 +1201,11 @@ mod tests {
         assert_eq!(replayer.replay_count(), 0);
         replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(replayer.replay_count(), 1);
         replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(replayer.replay_count(), 2);
     }
 
@@ -1216,11 +1216,11 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
         let result = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let last_step = result
             .steps
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.final_posterior, last_step.update_result.posterior);
     }
 
@@ -1230,10 +1230,10 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
         let r1 = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -1249,14 +1249,14 @@ mod tests {
 
         let original = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cf = replayer
             .counterfactual(
                 &trace,
                 &ReplayConfig::default(),
                 &CounterfactualSpec::identity(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(original.steps.len(), cf.steps.len());
         for (i, (o, c)) in original.steps.iter().zip(cf.steps.iter()).enumerate() {
@@ -1277,7 +1277,7 @@ mod tests {
 
         let original = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cf = replayer
             .counterfactual(
                 &trace,
@@ -1287,7 +1287,7 @@ mod tests {
                     "conservative matrix",
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Conservative matrix should be at least as aggressive.
         let orig_max_severity = original
@@ -1326,7 +1326,7 @@ mod tests {
 
         let cf = replayer
             .counterfactual(&trace, &ReplayConfig::default(), &spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(cf.steps.len(), 2); // Only benign + malicious.
     }
@@ -1345,7 +1345,7 @@ mod tests {
 
         let cf = replayer
             .counterfactual(&trace, &ReplayConfig::default(), &spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(cf.steps.len(), 2);
     }
@@ -1358,7 +1358,7 @@ mod tests {
 
         let original = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Start with a suspicious prior.
         let suspicious_prior = Posterior::from_millionths(100_000, 400_000, 400_000, 100_000);
@@ -1368,19 +1368,19 @@ mod tests {
                 &ReplayConfig::default(),
                 &CounterfactualSpec::with_prior(suspicious_prior, "suspicious prior"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // With a suspicious prior, the same evidence should lead to more severe actions.
         let orig_final = original
             .final_decision
             .as_ref()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .action
             .severity();
         let cf_final = cf
             .final_decision
             .as_ref()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .action
             .severity();
         assert!(
@@ -1401,10 +1401,10 @@ mod tests {
 
         let r1 = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let diff = replayer.diff(&r1, &r2, "identical");
         assert!(diff.first_divergence_step.is_none());
@@ -1424,14 +1424,14 @@ mod tests {
 
         let original = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cf = replayer
             .counterfactual(
                 &trace,
                 &ReplayConfig::default(),
                 &CounterfactualSpec::with_loss_matrix(LossMatrix::conservative(), "conservative"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let diff = replayer.diff(&original, &cf, "conservative vs balanced");
         assert_eq!(
@@ -1449,14 +1449,14 @@ mod tests {
 
         let original = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cf = replayer
             .counterfactual(
                 &trace,
                 &ReplayConfig::default(),
                 &CounterfactualSpec::with_loss_matrix(LossMatrix::permissive(), "permissive"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let diff = replayer.diff(&original, &cf, "permissive");
         // action_change_count should be >= 0 (may or may not differ).
@@ -1471,7 +1471,7 @@ mod tests {
 
         let original = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Counterfactual with injected evidence (more steps).
         let spec = CounterfactualSpec {
@@ -1481,7 +1481,7 @@ mod tests {
         };
         let cf = replayer
             .counterfactual(&trace, &ReplayConfig::default(), &spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let diff = replayer.diff(&original, &cf, "extra step");
         assert_eq!(
@@ -1546,7 +1546,7 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
         let result = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // With benign evidence, should stay Running (Allow action).
         assert_eq!(result.final_containment_state, ContainmentState::Running);
     }
@@ -1699,7 +1699,7 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
         let result = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let decoded: ReplayResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1843,7 +1843,7 @@ mod tests {
         // Replay.
         let result = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.deterministic);
         assert_eq!(result.steps.len(), 6);
 
@@ -1857,7 +1857,7 @@ mod tests {
                     "conservative escalation",
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Diff.
         let diff = replayer.diff(&result, &cf, "conservative escalation");
@@ -1867,11 +1867,11 @@ mod tests {
         if diff.final_outcome_differs {
             let orig = diff
                 .original_final_action
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .severity();
             let cf_sev = diff
                 .counterfactual_final_action
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .severity();
             assert!(cf_sev >= orig);
         }
@@ -1885,7 +1885,7 @@ mod tests {
 
         let original = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Inject malicious evidence between the two benign ones.
         let spec = CounterfactualSpec {
@@ -1896,7 +1896,7 @@ mod tests {
 
         let cf = replayer
             .counterfactual(&trace, &ReplayConfig::default(), &spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(cf.steps.len(), 4); // 2 original + 2 injected.
 
@@ -1912,7 +1912,7 @@ mod tests {
         let trace = build_trace(vec![benign_evidence()]);
         let result = replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Steps should have epoch from the replayer.
         assert_eq!(result.steps[0].decision.epoch, SecurityEpoch::from_raw(5));
     }
@@ -2269,7 +2269,7 @@ mod tests {
         assert!(spec.override_loss_matrix.is_some());
         assert_eq!(
             spec.override_loss_matrix
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             matrix
         );
         assert!(spec.override_prior.is_none());
@@ -2286,7 +2286,7 @@ mod tests {
         assert!(spec.override_prior.is_some());
         assert_eq!(
             spec.override_prior
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             prior
         );
         assert!(spec.override_loss_matrix.is_none());
@@ -2316,10 +2316,10 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
         replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         replayer
             .replay(&trace, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(replayer.replay_count(), 2);
 
         let json = serde_json::to_string(&replayer).expect("serialize derived Serialize");
@@ -2493,10 +2493,10 @@ mod tests {
         let mut replayer = ForensicReplayer::new();
         let r1 = replayer
             .replay(&trace1, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = replayer
             .replay(&trace2, &ReplayConfig::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             r1.content_hash, r2.content_hash,
             "different trace_ids should produce different replay result hashes"

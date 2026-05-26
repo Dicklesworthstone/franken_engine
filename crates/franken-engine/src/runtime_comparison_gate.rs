@@ -854,7 +854,7 @@ pub fn evaluate_gate(input: &GateInput<'_>) -> Result<GateEvidenceBundle, GateEr
         environment: input.environment,
         total_benchmarks,
     })
-    .expect("serde deserialization should succeed");
+    .expect("serialization should succeed");
     let evidence_hash = ContentHash::compute(&hash_input);
 
     Ok(GateEvidenceBundle {
@@ -1397,7 +1397,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(bundle.outcome.is_pass());
         assert!(bundle.blockers.is_empty());
@@ -1412,8 +1412,8 @@ mod tests {
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
 
-        let b1 = evaluate_gate(&input).expect("serde deserialization should succeed");
-        let b2 = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let b1 = evaluate_gate(&input).expect("operation should succeed for valid inputs");
+        let b2 = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         assert_eq!(b1.evidence_hash, b2.evidence_hash);
     }
 
@@ -1428,8 +1428,8 @@ mod tests {
         let mut i2 = i1.clone();
         i2.run_id = "different-run";
 
-        let b1 = evaluate_gate(&i1).expect("serde deserialization should succeed");
-        let b2 = evaluate_gate(&i2).expect("serde deserialization should succeed");
+        let b1 = evaluate_gate(&i1).expect("operation should succeed for valid inputs");
+        let b2 = evaluate_gate(&i2).expect("operation should succeed for valid inputs");
         assert_ne!(b1.evidence_hash, b2.evidence_hash);
     }
 
@@ -1449,9 +1449,9 @@ mod tests {
             make_passing_input(&results_higher_runs, &methodology, &artifacts, &[], &env);
 
         let low_runs_bundle =
-            evaluate_gate(&low_runs_input).expect("serde deserialization should succeed");
+            evaluate_gate(&low_runs_input).expect("operation should succeed for valid inputs");
         let higher_runs_bundle =
-            evaluate_gate(&higher_runs_input).expect("serde deserialization should succeed");
+            evaluate_gate(&higher_runs_input).expect("operation should succeed for valid inputs");
 
         assert_ne!(low_runs_bundle.blockers, higher_runs_bundle.blockers);
         assert_ne!(
@@ -1478,9 +1478,9 @@ mod tests {
         let input_with_repro = make_passing_input(&results, &methodology, &artifacts, &repro, &env);
 
         let bundle_without_repro =
-            evaluate_gate(&input_without_repro).expect("serde deserialization should succeed");
+            evaluate_gate(&input_without_repro).expect("operation should succeed for valid inputs");
         let bundle_with_repro =
-            evaluate_gate(&input_with_repro).expect("serde deserialization should succeed");
+            evaluate_gate(&input_with_repro).expect("operation should succeed for valid inputs");
 
         assert_ne!(
             bundle_without_repro.reproducibility_results,
@@ -1508,9 +1508,9 @@ mod tests {
             make_passing_input(&reversed_results, &methodology, &artifacts, &[], &env);
 
         let forward_bundle =
-            evaluate_gate(&forward_input).expect("serde deserialization should succeed");
+            evaluate_gate(&forward_input).expect("operation should succeed for valid inputs");
         let reversed_bundle =
-            evaluate_gate(&reversed_input).expect("serde deserialization should succeed");
+            evaluate_gate(&reversed_input).expect("operation should succeed for valid inputs");
 
         assert_eq!(forward_bundle.blockers, reversed_bundle.blockers);
         assert_eq!(forward_bundle.evidence_hash, reversed_bundle.evidence_hash);
@@ -1548,9 +1548,9 @@ mod tests {
             make_passing_input(&results, &methodology, &artifacts, &repro_reversed, &env);
 
         let forward_bundle =
-            evaluate_gate(&forward_input).expect("serde deserialization should succeed");
+            evaluate_gate(&forward_input).expect("operation should succeed for valid inputs");
         let reversed_bundle =
-            evaluate_gate(&reversed_input).expect("serde deserialization should succeed");
+            evaluate_gate(&reversed_input).expect("operation should succeed for valid inputs");
 
         assert_eq!(
             forward_bundle.reproducibility_results,
@@ -1584,7 +1584,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!bundle.outcome.is_pass());
         assert!(
@@ -1604,7 +1604,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!bundle.outcome.is_pass());
         assert!(
@@ -1623,7 +1623,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!bundle.outcome.is_pass());
         assert!(
@@ -1642,7 +1642,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!bundle.outcome.is_pass());
         assert!(
@@ -1661,7 +1661,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!bundle.outcome.is_pass());
         assert!(
@@ -1680,7 +1680,7 @@ mod tests {
         artifacts.replay_script = false;
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!bundle.outcome.is_pass());
         assert!(
@@ -1706,7 +1706,7 @@ mod tests {
             within_tolerance: false,
         }];
         let input = make_passing_input(&results, &methodology, &artifacts, &repro, &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!bundle.outcome.is_pass());
         assert!(
@@ -1726,7 +1726,7 @@ mod tests {
         let mut input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
         input.benchmark_sniffing_check_passed = false;
         input.benchmark_sniffing_detail = "detected V8 flag in benchmark config";
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!bundle.outcome.is_pass());
         assert!(
@@ -1748,7 +1748,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert_eq!(bundle.performance_summary.category_summaries.len(), 5);
         assert_eq!(bundle.performance_summary.total_benchmarks, 5);
@@ -1761,7 +1761,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         // FrankenEngine is faster than both (800 vs 1000/900).
         assert!(bundle.performance_summary.overall_vs_node_delta_millionths > 0);
@@ -1796,7 +1796,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         assert!(passes_release_gate(&bundle));
     }
 
@@ -1808,7 +1808,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         assert!(!passes_release_gate(&bundle));
     }
 
@@ -1823,7 +1823,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &bundle);
 
         assert!(!entries.is_empty());
@@ -1838,7 +1838,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &bundle);
 
         let cat_entries: Vec<_> = entries
@@ -1876,7 +1876,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let back: GateEvidenceBundle =
@@ -1994,7 +1994,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(bundle.outcome.is_pass());
         assert_eq!(bundle.total_benchmarks, 6); // 5 original + 1 extra
@@ -2010,7 +2010,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!bundle.outcome.is_pass());
         assert!(bundle.blockers.len() >= 3);
@@ -2023,7 +2023,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         assert_eq!(bundle.schema_version, GATE_SCHEMA_VERSION);
     }
 
@@ -2042,7 +2042,7 @@ mod tests {
             within_tolerance: true,
         }];
         let input = make_passing_input(&results, &methodology, &artifacts, &repro, &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(bundle.outcome.is_pass());
         assert_eq!(bundle.reproducibility_results.len(), 1);
@@ -2317,8 +2317,8 @@ mod tests {
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
 
-        let b1 = evaluate_gate(&input).expect("serde deserialization should succeed");
-        let b2 = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let b1 = evaluate_gate(&input).expect("operation should succeed for valid inputs");
+        let b2 = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         let json1 = serde_json::to_string(&b1).expect("serialize derived Serialize");
         let json2 = serde_json::to_string(&b2).expect("serialize derived Serialize");
         assert_eq!(json1, json2, "identical inputs must produce identical JSON");
@@ -2331,10 +2331,10 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&bundle.performance_summary)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let back: PerformanceSummary =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bundle.performance_summary, back);
@@ -2450,7 +2450,7 @@ mod tests {
         let artifacts = passing_artifacts();
         let env = test_environment();
         let input = make_passing_input(&results, &methodology, &artifacts, &[], &env);
-        let bundle = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let bundle = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         assert!(!bundle.outcome.is_pass());
 
         let entries = generate_log_entries("trace-fail", &bundle);

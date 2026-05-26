@@ -1023,7 +1023,7 @@ mod tests {
             *summary
                 .kind_totals
                 .get(&EffectKind::Allocation)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             3 * MILLION
         );
     }
@@ -1298,7 +1298,7 @@ mod tests {
         // SAFETY: Test composes bounds with same dimension, should succeed
         let composed = b1
             .compose(&b2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(composed.upper_bound_millionths, 8 * MILLION);
         assert_eq!(composed.confidence_millionths, 950_000);
     }

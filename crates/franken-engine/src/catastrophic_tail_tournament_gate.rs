@@ -1174,7 +1174,7 @@ mod tests {
             MILLION,
         )];
         CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     fn dual_threat_gate() -> CatastrophicTailTournamentGate {
@@ -1183,7 +1183,7 @@ mod tests {
             make_threat("t2", ThreatCategory::ResourceExhaustion, MILLION),
         ];
         CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     fn low_risk_payoffs(n: usize) -> Vec<i64> {
@@ -1328,7 +1328,7 @@ mod tests {
         ];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Pass);
         assert!(decision.is_pass());
         assert!(decision.rollback_playbook.is_none());
@@ -1347,12 +1347,12 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let campaigns = vec![make_campaign("c1", "t1", high_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Fail);
         assert!(!decision.is_pass());
         assert!(decision.rollback_playbook.is_some());
@@ -1377,7 +1377,7 @@ mod tests {
         ];
         let _ = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate.risk_ledger().len(), 2);
     }
 
@@ -1387,7 +1387,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-gap", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Inconclusive);
         assert_eq!(decision.risk_metrics.len(), 2);
         assert!(decision.rationale.contains("t2"));
@@ -1413,12 +1413,12 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let _ = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(gate.risk_ledger().is_empty());
     }
 
@@ -1430,7 +1430,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let metrics = &decision.risk_metrics[0];
         assert_eq!(metrics.threat_class_id, "t1");
         assert_eq!(metrics.observation_count, 200);
@@ -1445,7 +1445,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", payoffs)];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.risk_metrics[0].max_payoff_millionths, 100_000);
     }
 
@@ -1461,7 +1461,7 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Most payoffs small, one huge → high e-value.
         let mut payoffs = vec![1_000; 199];
@@ -1469,7 +1469,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", payoffs)];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.risk_metrics[0].alarm_active);
         assert!(decision.any_alarm_active);
     }
@@ -1481,7 +1481,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", payoffs)];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.risk_metrics[0].alarm_active);
     }
 
@@ -1498,11 +1498,11 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", vec![100_000; 200])];
         let decision = gate
             .evaluate("rc-near", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Pass);
         let certificate = &decision.continuation_cliff_atlas.margin_certificates[0];
         assert_eq!(certificate.cliff_band, CliffBand::NearCliff);
@@ -1525,7 +1525,7 @@ mod tests {
             make_threat("t2", ThreatCategory::ResourceExhaustion, MILLION),       // 1x weight
         ];
         let mut gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let campaigns = vec![
             make_campaign("c1", "t1", vec![100_000; 200]),
@@ -1533,7 +1533,7 @@ mod tests {
         ];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // t1 has CVaR ~100k with weight 2M, t2 has CVaR ~200k with weight 1M
         // Aggregate = (100k*2 + 200k*1) / 3 ≈ 133k
         assert!(decision.aggregate_cvar_millionths > 0);
@@ -1553,17 +1553,17 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let campaigns = vec![make_campaign("c1", "t1", high_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Fail);
         let playbook = decision
             .rollback_playbook
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!playbook.triggering_threats.is_empty());
         assert_eq!(playbook.mitigation_steps.len(), 4);
         assert!(playbook.mitigation_steps[0].automated);
@@ -1579,7 +1579,7 @@ mod tests {
         ];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.rollback_playbook.is_none());
     }
 
@@ -1596,12 +1596,12 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let campaigns = vec![make_campaign("c1", "t1", high_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Fail);
         assert!(decision.rollback_playbook.is_none());
     }
@@ -1614,7 +1614,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(decision.artifact_hash, ContentHash::compute(b""));
     }
 
@@ -1629,16 +1629,16 @@ mod tests {
 
         let mut g1 =
             CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats.clone())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let d1 = g1
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut g2 = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d2 = g2
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(d1.artifact_hash, d2.artifact_hash);
     }
@@ -1652,7 +1652,7 @@ mod tests {
         ];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.total_rounds, 500);
     }
 
@@ -1718,7 +1718,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let display = format!("{}", decision);
         assert!(display.contains("rc-1"));
     }
@@ -1808,7 +1808,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: GateDecision = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
@@ -1833,11 +1833,11 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.risk_metrics.len(), 1);
     }
 
@@ -1849,14 +1849,14 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![
             make_campaign("c1", "t1", low_risk_payoffs(200)),
             make_campaign("c2", "t1", low_risk_payoffs(300)),
         ];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should merge payoffs from both campaigns for one threat class.
         assert_eq!(decision.risk_metrics.len(), 1);
         assert_eq!(decision.risk_metrics[0].observation_count, 500);
@@ -1870,11 +1870,11 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", vec![0; 200])];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Pass);
     }
 
@@ -1937,7 +1937,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let _ = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate.risk_ledger()[0].epoch, SecurityEpoch::from_raw(1));
     }
 
@@ -1964,11 +1964,11 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", high_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             decision.rationale.contains("CVaR")
                 || decision.rationale.contains("cvar")
@@ -1982,7 +1982,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-1", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.rationale.contains("within budget"));
     }
 
@@ -2018,7 +2018,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-clone", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cloned = decision.clone();
         assert_eq!(decision, cloned);
     }
@@ -2161,11 +2161,11 @@ mod tests {
         };
         let threats = vec![make_threat("t1", ThreatCategory::PolicyBypass, MILLION)];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", vec![1; 200])];
         let decision = gate
             .evaluate("rc-boundary", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // CVaR of all-1 payoffs is 1, which exceeds budget 0
         assert_eq!(decision.verdict, GateVerdict::Fail);
     }
@@ -2366,12 +2366,12 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let _ = gate
             .evaluate("rc-clone-ind", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut cloned = gate.clone();
         // Mutate original by evaluating again.
         let _ = cloned
             .evaluate("rc-clone-ind-2", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate.evaluation_count(), 1);
         assert_eq!(cloned.evaluation_count(), 2);
     }
@@ -2445,7 +2445,7 @@ mod tests {
         ];
         let decision = gate
             .evaluate("rc-disp", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = format!("{}", decision);
         assert!(s.contains("rc-disp"));
         assert!(s.contains("pass")); // verdict
@@ -2611,16 +2611,16 @@ mod tests {
 
         let mut g1 =
             CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats.clone())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let d1 = g1
             .evaluate("rc-det", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut g2 = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d2 = g2
             .evaluate("rc-det", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(d1.verdict, d2.verdict);
         assert_eq!(d1.aggregate_cvar_millionths, d2.aggregate_cvar_millionths);
@@ -2640,16 +2640,16 @@ mod tests {
 
         let mut g1 =
             CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats.clone())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let d1 = g1
             .evaluate("rc-alpha", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut g2 = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d2 = g2
             .evaluate("rc-beta", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(d1.artifact_hash, d2.artifact_hash);
     }
@@ -2667,11 +2667,11 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", vec![100_000; 200])];
         let decision = gate
             .evaluate("rc-display-hash", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let atlas = &decision.continuation_cliff_atlas;
 
         let mut hash_buf = Vec::new();
@@ -2722,7 +2722,7 @@ mod tests {
         let gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats);
         assert!(gate.is_ok());
         assert_eq!(
-            gate.expect("serde deserialization should succeed")
+            gate.expect("operation should succeed for valid inputs")
                 .threat_class_count(),
             64
         );
@@ -2736,7 +2736,7 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let campaigns: Vec<_> = (0..128)
             .map(|i| make_campaign(&format!("c{}", i), "t1", low_risk_payoffs(200)))
@@ -2745,7 +2745,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .campaigns_evaluated,
             128
         );
@@ -2759,7 +2759,7 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let campaigns: Vec<_> = (0..129)
             .map(|i| make_campaign(&format!("c{}", i), "t1", low_risk_payoffs(200)))
@@ -2832,7 +2832,7 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Exactly 100 payoffs → exactly 100 rounds.
         let campaigns = vec![make_campaign("c1", "t1", vec![1_000; 100])];
         let result = gate.evaluate("rc-bound", &campaigns);
@@ -2851,7 +2851,7 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", vec![1_000; 99])];
         let result = gate.evaluate("rc-short", &campaigns);
         assert!(matches!(
@@ -2873,10 +2873,10 @@ mod tests {
         let c2 = vec![make_campaign("c2", "t2", low_risk_payoffs(200))];
         let _ = gate
             .evaluate("rc-1", &c1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = gate
             .evaluate("rc-2", &c2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Each evaluation adds one ledger entry per threat class in its campaigns.
         assert_eq!(gate.risk_ledger().len(), 2);
         assert_eq!(gate.evaluation_count(), 2);
@@ -2888,7 +2888,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-idcheck", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.decision_id.contains("rc-idcheck"));
         assert!(decision.decision_id.contains("1")); // epoch 1
     }
@@ -2899,10 +2899,10 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", low_risk_payoffs(200))];
         let d1 = gate
             .evaluate("rc-a", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d2 = gate
             .evaluate("rc-b", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(d1.decision_id, d2.decision_id);
     }
 
@@ -2917,7 +2917,7 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaign = Campaign {
             campaign_id: "c-empty".to_string(),
             threat_class_id: "t1".to_string(),
@@ -2926,7 +2926,7 @@ mod tests {
         };
         let decision = gate
             .evaluate("rc-inc", &[campaign])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Inconclusive);
         assert!(decision.rationale.contains("insufficient"));
     }
@@ -2938,11 +2938,11 @@ mod tests {
         // If all impact weights are 0, aggregate CVaR should be 0 (division guard).
         let threats = vec![make_threat("t1", ThreatCategory::CapabilityEscalation, 0)];
         let mut gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", vec![100_000; 200])];
         let decision = gate
             .evaluate("rc-zw", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.aggregate_cvar_millionths, 0);
     }
 
@@ -2951,11 +2951,11 @@ mod tests {
         // With one threat class at weight=MILLION, aggregate = cvar of that class.
         let threats = vec![make_threat("t1", ThreatCategory::PolicyBypass, MILLION)];
         let mut gate = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", vec![100_000; 200])];
         let decision = gate
             .evaluate("rc-single", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             decision.aggregate_cvar_millionths,
             decision.risk_metrics[0].cvar_millionths
@@ -2976,15 +2976,15 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns = vec![make_campaign("c1", "t1", high_risk_payoffs(200))];
         let decision = gate
             .evaluate("rc-steps", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let playbook = decision
             .rollback_playbook
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for (i, step) in playbook.mitigation_steps.iter().enumerate() {
             assert_eq!(step.step, (i as u32) + 1);
         }
@@ -3004,23 +3004,23 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", high_risk_payoffs(200))];
 
         let mut g1 = CatastrophicTailTournamentGate::new(config.clone(), threats.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d1 = g1
             .evaluate("rc-ehash", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut g2 = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d2 = g2
             .evaluate("rc-ehash", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let h1 = &d1
             .rollback_playbook
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .evidence_hash;
         let h2 = &d2
             .rollback_playbook
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .evidence_hash;
         assert_eq!(h1, h2);
     }
@@ -3040,14 +3040,14 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 199 zeros + one big value → mean ≈ big/200, max=big → e-value = big * M / (big/200) = 200M >> threshold
         let mut payoffs = vec![0_i64; 199];
         payoffs.push(10_000_000);
         let campaigns = vec![make_campaign("c1", "t1", payoffs)];
         let decision = gate
             .evaluate("rc-evalue", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.risk_metrics[0].e_value_millionths > 5_000_000);
     }
 
@@ -3057,7 +3057,7 @@ mod tests {
         let campaigns = vec![make_campaign("c1", "t1", vec![0; 200])];
         let decision = gate
             .evaluate("rc-zero-ev", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.risk_metrics[0].alarm_active);
         assert_eq!(decision.risk_metrics[0].e_value_millionths, MILLION);
     }
@@ -3114,13 +3114,13 @@ mod tests {
             MILLION,
         )];
         let mut gate = CatastrophicTailTournamentGate::new(config, threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut payoffs = vec![1_000; 199];
         payoffs.push(100_000_000);
         let campaigns = vec![make_campaign("c1", "timing-leak", payoffs)];
         let decision = gate
             .evaluate("rc-alarm", &campaigns)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if decision.verdict == GateVerdict::Fail {
             assert!(decision.rationale.contains("alarm"));
         }
@@ -3139,18 +3139,18 @@ mod tests {
 
         let mut g1 =
             CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats.clone())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let campaigns_low = vec![make_campaign("c1", "t1", vec![10_000; 200])];
         let d_low = g1
             .evaluate("rc-low", &campaigns_low)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut g2 = CatastrophicTailTournamentGate::new(TailGateConfig::default(), threats)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let campaigns_high = vec![make_campaign("c1", "t1", vec![500_000; 200])];
         let d_high = g2
             .evaluate("rc-high", &campaigns_high)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(d_high.risk_metrics[0].cvar_millionths >= d_low.risk_metrics[0].cvar_millionths);
     }

@@ -1185,7 +1185,7 @@ mod tests {
         let response =
             template.health_endpoint(&auth_with_scopes(&[SCOPE_HEALTH_READ]), &context());
 
-        let json = serde_json::to_value(response).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(response).expect("serialization should succeed");
         assert_eq!(json["status"], "ok");
         assert_eq!(json["endpoint"], "health");
         assert!(json["trace_id"].is_string());
@@ -1645,9 +1645,9 @@ mod tests {
             ControlAction::Suspend,
             ControlAction::Quarantine,
         ] {
-            let json = serde_json::to_value(action).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(action).expect("serialization should succeed");
             let back: ControlAction =
-                serde_json::from_value(json).expect("serde deserialization should succeed");
+                serde_json::from_value(json).expect("deserialization should succeed");
             assert_eq!(action, back);
         }
     }
@@ -1659,9 +1659,9 @@ mod tests {
             ReplayCommand::Stop,
             ReplayCommand::Status,
         ] {
-            let json = serde_json::to_value(cmd).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(cmd).expect("serialization should succeed");
             let back: ReplayCommand =
-                serde_json::from_value(json).expect("serde deserialization should succeed");
+                serde_json::from_value(json).expect("deserialization should succeed");
             assert_eq!(cmd, back);
         }
     }
@@ -1842,10 +1842,10 @@ mod tests {
     #[test]
     fn request_context_json_field_names() {
         let ctx = context();
-        let json = serde_json::to_value(&ctx).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&ctx).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("request_id"));
         assert!(obj.contains_key("component"));
@@ -1862,10 +1862,10 @@ mod tests {
             security_epoch: 99,
             gc_pressure_basis_points: 42,
         };
-        let json = serde_json::to_value(&h).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&h).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("runtime_status"));
         assert!(obj.contains_key("loaded_extensions"));
         assert!(obj.contains_key("security_epoch"));
@@ -1884,10 +1884,10 @@ mod tests {
             outcome: "ok".to_string(),
             artifact_ref: "ref".to_string(),
         };
-        let json = serde_json::to_value(&r).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&r).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -2044,7 +2044,7 @@ mod tests {
             };
             let resp = tmpl.control_action_endpoint(&auth, &ctx, &req);
             assert_eq!(resp.status, "ok");
-            let data = resp.data.expect("serde deserialization should succeed");
+            let data = resp.data.expect("operation should succeed for valid inputs");
             assert_eq!(data.action, *action);
             assert!(data.accepted);
         }
@@ -2065,7 +2065,7 @@ mod tests {
         let resp = tmpl.control_action_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "error");
         assert!(resp.data.is_none());
-        let err = resp.error.expect("serde deserialization should succeed");
+        let err = resp.error.expect("operation should succeed for valid inputs");
         assert_eq!(err.error_code, "invalid_request");
         assert_eq!(counter.get(), 0); // executor never called
     }
@@ -2084,7 +2084,7 @@ mod tests {
         };
         let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "error");
-        let err = resp.error.expect("serde deserialization should succeed");
+        let err = resp.error.expect("operation should succeed for valid inputs");
         assert!(
             err.details
                 .values()
@@ -2106,7 +2106,7 @@ mod tests {
         };
         let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "ok");
-        let data = resp.data.expect("serde deserialization should succeed");
+        let data = resp.data.expect("operation should succeed for valid inputs");
         // MockEvidenceProvider echoes cursor as next_cursor
         assert_eq!(data.next_cursor, Some("cursor-abc".to_string()));
         assert_eq!(data.records.len(), 1);
@@ -2173,7 +2173,7 @@ mod tests {
         };
         let resp = tmpl.replay_control_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "error");
-        let err = resp.error.expect("serde deserialization should succeed");
+        let err = resp.error.expect("operation should succeed for valid inputs");
         assert_eq!(err.error_code, "unauthorized");
     }
 
@@ -2190,7 +2190,7 @@ mod tests {
         };
         let resp = tmpl.replay_control_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "error");
-        let err = resp.error.expect("serde deserialization should succeed");
+        let err = resp.error.expect("operation should succeed for valid inputs");
         assert_eq!(err.error_code, "unauthorized");
     }
 
@@ -2294,7 +2294,7 @@ mod tests {
         let ctx = context();
         let resp = tmpl.health_endpoint(&auth, &ctx);
         assert_eq!(resp.status, "error");
-        let err = resp.error.expect("serde deserialization should succeed");
+        let err = resp.error.expect("operation should succeed for valid inputs");
         assert_eq!(err.error_code, "unauthorized");
         assert!(
             err.details
@@ -2387,7 +2387,7 @@ mod tests {
         let auth = auth_with_scopes(&[SCOPE_HEALTH_READ]);
         let ctx = context();
         let resp = tmpl.health_endpoint(&auth, &ctx);
-        let data = resp.data.expect("serde deserialization should succeed");
+        let data = resp.data.expect("operation should succeed for valid inputs");
         assert_eq!(data.runtime_status, "healthy");
         assert!(data.loaded_extensions.contains(&"ext-a".to_string()));
         assert_eq!(data.security_epoch, 42);

@@ -336,13 +336,13 @@ impl HookSemanticContract {
         let mut data = Vec::new();
         data.extend_from_slice(
             serde_json::to_string(&self.hook_kind)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         for rule in &self.invocation_rules {
             data.extend_from_slice(
                 serde_json::to_string(rule)
-                    .expect("serde deserialization should succeed")
+                    .expect("serialization should succeed")
                     .as_bytes(),
             );
         }
@@ -356,7 +356,7 @@ impl HookSemanticContract {
         }
         data.extend_from_slice(
             serde_json::to_string(&self.cleanup_semantics)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         for pat in &self.forbidden_patterns {
@@ -436,12 +436,12 @@ impl EffectSemanticContract {
         let mut data = Vec::new();
         data.extend_from_slice(
             serde_json::to_string(&self.effect_kind)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.timing)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(&(self.capability_requirements.len() as u64).to_le_bytes());
@@ -451,12 +451,12 @@ impl EffectSemanticContract {
         }
         data.extend_from_slice(
             serde_json::to_string(&self.side_effect_boundary)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.determinism_guarantee)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         ContentHash::compute(&data)
@@ -508,13 +508,13 @@ impl AdjudicationRule {
         data.extend_from_slice(self.name.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.category)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(self.condition.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.resolution)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         ContentHash::compute(&data)
@@ -1189,7 +1189,7 @@ impl DriftDetector {
                 id: derive_drift_alert_id(&format!(
                     "effect_boundary_{}_{epoch}",
                     serde_json::to_string(effect_kind)
-                        .expect("serde deserialization should succeed")
+                        .expect("serialization should succeed")
                 )),
                 kind: DriftKind::EffectBoundaryLeak,
                 severity: ViolationSeverity::Error,
@@ -1566,7 +1566,7 @@ mod tests {
             );
             corpus
                 .add_fixture(fixture)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         corpus
     }
@@ -1594,17 +1594,17 @@ mod tests {
                     cat.clone(),
                     FixturePriority::Critical,
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_effect())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         pkg.add_effect_contract(EffectSemanticContract::canonical_dom_mutation())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         pkg.add_effect_contract(EffectSemanticContract::canonical_state_update())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         pkg
     }
 
@@ -1679,7 +1679,7 @@ mod tests {
         let fix = make_fixture("test1", FixtureCategory::HookState, FixturePriority::High);
         corpus
             .add_fixture(fix)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(corpus.fixtures.len(), 1);
     }
 
@@ -1689,7 +1689,7 @@ mod tests {
         let fix = make_fixture("dup", FixtureCategory::HookState, FixturePriority::High);
         corpus
             .add_fixture(fix.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             corpus.add_fixture(fix),
             Err(FoundationError::DuplicateFixture)
@@ -1701,7 +1701,7 @@ mod tests {
         let mut corpus = make_corpus_with_fixtures(3);
         corpus
             .freeze()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(corpus.frozen);
     }
 
@@ -1716,7 +1716,7 @@ mod tests {
         let mut corpus = make_corpus_with_fixtures(1);
         corpus
             .freeze()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let fix = make_fixture("new", FixtureCategory::HookEffect, FixturePriority::Low);
         assert_eq!(
             corpus.add_fixture(fix),
@@ -1729,7 +1729,7 @@ mod tests {
         let mut corpus = make_corpus_with_fixtures(1);
         corpus
             .freeze()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(corpus.freeze(), Err(FoundationError::CorpusAlreadyFrozen));
     }
 
@@ -1765,7 +1765,7 @@ mod tests {
                     cat.clone(),
                     FixturePriority::Medium,
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(corpus.coverage_score_millionths(), MILLION);
     }
@@ -1785,14 +1785,14 @@ mod tests {
                 FixtureCategory::HookState,
                 FixturePriority::Low,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         corpus
             .add_fixture(make_fixture(
                 "crit",
                 FixtureCategory::HookEffect,
                 FixturePriority::Critical,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let sorted = corpus.fixtures_by_priority();
         assert_eq!(sorted[0].priority, FixturePriority::Critical);
         assert_eq!(sorted[1].priority, FixturePriority::Low);
@@ -1807,14 +1807,14 @@ mod tests {
                 FixtureCategory::HookState,
                 FixturePriority::High,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         corpus
             .add_fixture(make_fixture(
                 "b",
                 FixtureCategory::Suspense,
                 FixturePriority::High,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             corpus
                 .fixtures_by_category(&FixtureCategory::Suspense)
@@ -1837,7 +1837,7 @@ mod tests {
                 FixtureCategory::HookState,
                 FixturePriority::High,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(h1, corpus.corpus_hash);
     }
 
@@ -1847,7 +1847,7 @@ mod tests {
         let h1 = corpus.corpus_hash;
         corpus
             .freeze()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(h1, corpus.corpus_hash);
     }
 
@@ -1963,7 +1963,7 @@ mod tests {
         let corpus = make_corpus_with_fixtures(1);
         let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pkg.total_contracts(), 1);
     }
 
@@ -1972,7 +1972,7 @@ mod tests {
         let corpus = make_corpus_with_fixtures(1);
         let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_effect_contract(EffectSemanticContract::canonical_dom_mutation())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pkg.total_contracts(), 1);
     }
 
@@ -1990,7 +1990,7 @@ mod tests {
             precedent_fixture_ids: Vec::new(),
         };
         pkg.add_adjudication_rule(rule)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pkg.adjudication_rules.len(), 1);
     }
 
@@ -1998,7 +1998,7 @@ mod tests {
     fn package_freeze() {
         let mut pkg = make_full_package();
         pkg.freeze(100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(pkg.is_frozen());
         assert_eq!(pkg.frozen_at_epoch, Some(100));
     }
@@ -2013,14 +2013,14 @@ mod tests {
     #[test]
     fn package_double_freeze_fails() {
         let mut pkg = make_full_package();
-        pkg.freeze(1).expect("serde deserialization should succeed");
+        pkg.freeze(1).expect("operation should succeed for valid inputs");
         assert_eq!(pkg.freeze(2), Err(FoundationError::PackageAlreadyFrozen));
     }
 
     #[test]
     fn package_frozen_reject_add() {
         let mut pkg = make_full_package();
-        pkg.freeze(1).expect("serde deserialization should succeed");
+        pkg.freeze(1).expect("operation should succeed for valid inputs");
         assert_eq!(
             pkg.add_hook_contract(HookSemanticContract::canonical_use_state()),
             Err(FoundationError::PackageAlreadyFrozen)
@@ -2033,7 +2033,7 @@ mod tests {
         let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         let h1 = pkg.package_hash;
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(h1, pkg.package_hash);
     }
 
@@ -2042,7 +2042,7 @@ mod tests {
         let pkg = make_full_package();
         let v = pkg
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(v.coverage_millionths, MILLION);
         // Missing UseMemo/UseRef contracts
         assert!(!v.warnings.is_empty());
@@ -2058,7 +2058,7 @@ mod tests {
             cleanup_semantics: CleanupPolicy::NoCleanup,
             forbidden_patterns: Vec::new(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         pkg.add_hook_contract(HookSemanticContract {
             hook_kind: HookKind::UseRef,
             invocation_rules: vec![InvocationRule::MustBeTopLevel],
@@ -2066,10 +2066,10 @@ mod tests {
             cleanup_semantics: CleanupPolicy::NoCleanup,
             forbidden_patterns: Vec::new(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let v = pkg
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(v.is_valid);
     }
 
@@ -2084,7 +2084,7 @@ mod tests {
             100,
             vec![ConsumerLane::Compiler, ConsumerLane::Runtime],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(baseline.cut_line_id, "C0");
         assert!(baseline.serves_lane(&ConsumerLane::Compiler));
         assert!(!baseline.serves_lane(&ConsumerLane::Governance));
@@ -2105,7 +2105,7 @@ mod tests {
         assert!(!pkg.is_frozen());
         let baseline =
             FrozenBaseline::create(pkg, "C0".to_string(), 10, vec![ConsumerLane::Verification])
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert!(baseline.package.is_frozen());
     }
 
@@ -2114,9 +2114,9 @@ mod tests {
         let pkg1 = make_full_package();
         let pkg2 = make_full_package();
         let b1 = FrozenBaseline::create(pkg1, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b2 = FrozenBaseline::create(pkg2, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(b1.baseline_hash, b2.baseline_hash);
     }
 
@@ -2130,7 +2130,7 @@ mod tests {
             1,
             vec![ConsumerLane::Compiler],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let detector = DriftDetector::new(baseline);
         assert!(detector.alerts.is_empty());
         assert!(!detector.exceeds_threshold());
@@ -2144,7 +2144,7 @@ mod tests {
             1,
             vec![ConsumerLane::Compiler],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let detector = DriftDetector::new(baseline).with_sensitivity(100_000);
         assert_eq!(detector.sensitivity_threshold_millionths, 100_000);
     }
@@ -2157,7 +2157,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline.clone());
         let fixture = &baseline.package.corpus.fixtures[0];
         let result = detector.check_trace_compliance(
@@ -2177,14 +2177,14 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline.clone());
         let fixture = &baseline.package.corpus.fixtures[0];
         let bad_hash = ContentHash::compute(b"wrong_trace");
         let result =
             detector.check_trace_compliance(&fixture.id, &bad_hash, ConsumerLane::Runtime, 2);
         assert!(result.is_some());
-        let alert = result.expect("serde deserialization should succeed");
+        let alert = result.expect("operation should succeed for valid inputs");
         assert_eq!(alert.kind, DriftKind::SemanticRegression);
         assert_eq!(alert.severity, ViolationSeverity::Fatal); // Critical fixture
     }
@@ -2197,7 +2197,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_trace_compliance(
             &make_id("nonexistent"),
@@ -2216,7 +2216,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_effect_boundary(
             &EffectKind::DomMutation,
@@ -2235,7 +2235,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_effect_boundary(
             &EffectKind::DomMutation,
@@ -2245,7 +2245,7 @@ mod tests {
         );
         assert!(result.is_some());
         assert_eq!(
-            result.expect("serde deserialization should succeed").kind,
+            result.expect("operation should succeed for valid inputs").kind,
             DriftKind::EffectBoundaryLeak
         );
     }
@@ -2258,7 +2258,7 @@ mod tests {
             1,
             vec![ConsumerLane::Compiler],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_hook_ordering(
             &HookKind::UseState,
@@ -2277,7 +2277,7 @@ mod tests {
             1,
             vec![ConsumerLane::Compiler],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline);
         let result = detector.check_hook_ordering(
             &HookKind::UseState,
@@ -2287,7 +2287,7 @@ mod tests {
         );
         assert!(result.is_some());
         assert_eq!(
-            result.expect("serde deserialization should succeed").kind,
+            result.expect("operation should succeed for valid inputs").kind,
             DriftKind::HookContractBreach
         );
     }
@@ -2300,7 +2300,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline.clone());
         // Trigger fatal alerts on all critical fixtures
         for fixture in &baseline.package.corpus.fixtures {
@@ -2318,7 +2318,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline.clone()).with_sensitivity(1); // very sensitive
         let fixture = &baseline.package.corpus.fixtures[0];
         detector.check_trace_compliance(
@@ -2338,7 +2338,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime, ConsumerLane::Compiler],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline.clone());
         let fixture = &baseline.package.corpus.fixtures[0];
         detector.check_trace_compliance(
@@ -2364,7 +2364,7 @@ mod tests {
             1,
             vec![ConsumerLane::Runtime],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut detector = DriftDetector::new(baseline.clone());
         let fixture = &baseline.package.corpus.fixtures[0];
         detector.check_trace_compliance(
@@ -2413,7 +2413,7 @@ mod tests {
         f.register_package(make_full_package());
         let idx = f
             .freeze_baseline(0, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(idx, 0);
         assert_eq!(f.frozen_baselines.len(), 1);
     }
@@ -2432,9 +2432,9 @@ mod tests {
         let mut f = SemanticContractFoundation::new();
         f.register_package(make_full_package());
         f.freeze_baseline(0, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         f.activate_drift_detection(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(f.drift_detector.is_some());
     }
 
@@ -2453,7 +2453,7 @@ mod tests {
         assert!(f.latest_baseline().is_none());
         f.register_package(make_full_package());
         f.freeze_baseline(0, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(f.latest_baseline().is_some());
     }
 
@@ -2636,21 +2636,21 @@ mod tests {
                 FixtureCategory::HookState,
                 FixturePriority::Critical,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         corpus
             .add_fixture(make_fixture(
                 "effect_basic",
                 FixtureCategory::HookEffect,
                 FixturePriority::High,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 2. Build package
         let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         pkg.add_effect_contract(EffectSemanticContract::canonical_dom_mutation())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 3. Foundation + freeze
         let mut foundation = SemanticContractFoundation::new();
@@ -2666,21 +2666,21 @@ mod tests {
                     ConsumerLane::Verification,
                 ],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         foundation
             .activate_drift_detection(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 4. Check compliance — pass
         let baseline = foundation
             .latest_baseline()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         let fixture = &baseline.package.corpus.fixtures[0];
         let detector = foundation
             .drift_detector
             .as_mut()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = detector.check_trace_compliance(
             &fixture.id,
             &fixture.expected_trace_hash,
@@ -2693,7 +2693,7 @@ mod tests {
         let bad_hash = ContentHash::compute(b"diverged_trace");
         let alert = detector
             .check_trace_compliance(&fixture.id, &bad_hash, ConsumerLane::Runtime, 102)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(alert.kind, DriftKind::SemanticRegression);
         assert_eq!(alert.severity, ViolationSeverity::Fatal);
 
@@ -2711,7 +2711,7 @@ mod tests {
         foundation.register_package(make_full_package());
         foundation
             .freeze_baseline(0, "C0".to_string(), 10, vec![ConsumerLane::Compiler])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Package v2
         foundation.register_package(make_full_package());
@@ -2722,13 +2722,13 @@ mod tests {
                 20,
                 vec![ConsumerLane::Compiler, ConsumerLane::Runtime],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(foundation.frozen_baselines.len(), 2);
         assert_eq!(
             foundation
                 .latest_baseline()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .cut_line_id,
             "C1"
         );
@@ -3261,13 +3261,13 @@ mod tests {
         let mut corpus = make_corpus_with_fixtures(3);
         corpus
             .freeze()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut pkg = ContractPackage::new(corpus).expect("constructor with valid inputs");
         pkg.add_hook_contract(HookSemanticContract::canonical_use_state())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lanes = vec![ConsumerLane::Compiler, ConsumerLane::Runtime];
         let baseline = FrozenBaseline::create(pkg, "cut-1".into(), 10, lanes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(baseline.serves_lane(&ConsumerLane::Compiler));
         assert!(baseline.serves_lane(&ConsumerLane::Runtime));
         assert!(!baseline.serves_lane(&ConsumerLane::Verification));

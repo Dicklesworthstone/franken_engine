@@ -456,7 +456,7 @@ fn metadata_gaps_for_controller(contract: &ControllerContract) -> Vec<Controller
 }
 
 fn registry_id_from_contracts(controllers: &[ControllerContract]) -> String {
-    let json = serde_json::to_vec(controllers).expect("serde deserialization should succeed");
+    let json = serde_json::to_vec(controllers).expect("serialization should succeed");
     format!("registry-{}", to_hex(&hash_bytes(&json)[..12]))
 }
 
@@ -624,7 +624,7 @@ fn coupling_score_millionths(
 
 fn graph_id_from_edges(controller_names: &[String], edges: &[ControllerInteractionEdge]) -> String {
     let json = serde_json::to_vec(&(controller_names, edges))
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
     format!("graph-{}", to_hex(&hash_bytes(&json)[..12]))
 }
 
@@ -911,7 +911,7 @@ impl ControllerCompositionMatrix {
             &matrix_schema(),
             &canonical,
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     fn to_canonical_value(&self) -> CanonicalValue {
@@ -1298,7 +1298,7 @@ impl GateResult {
             &matrix_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -1661,7 +1661,7 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let entry = matrix
             .lookup(ControllerRole::Router, ControllerRole::Router)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.interaction, InteractionClass::MutuallyExclusive);
     }
 
@@ -1670,7 +1670,7 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let entry = matrix
             .lookup(ControllerRole::Fallback, ControllerRole::Fallback)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.interaction, InteractionClass::MutuallyExclusive);
     }
 
@@ -1679,7 +1679,7 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let entry = matrix
             .lookup(ControllerRole::Monitor, ControllerRole::Monitor)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.interaction, InteractionClass::ReadShared);
     }
 
@@ -1688,7 +1688,7 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let entry = matrix
             .lookup(ControllerRole::Router, ControllerRole::Optimizer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.interaction, InteractionClass::ProducerConsumer);
     }
 
@@ -1697,10 +1697,10 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let ab = matrix
             .lookup(ControllerRole::Router, ControllerRole::Optimizer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ba = matrix
             .lookup(ControllerRole::Optimizer, ControllerRole::Router)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ab, ba);
     }
 
@@ -1717,7 +1717,7 @@ mod tests {
         matrix.set_entry(entry);
         let lookup = matrix
             .lookup(ControllerRole::Router, ControllerRole::Optimizer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lookup.interaction, InteractionClass::Independent);
         assert_eq!(lookup.rationale, "overridden");
     }
@@ -1735,7 +1735,7 @@ mod tests {
         matrix.set_entry(entry);
         let lookup = matrix
             .lookup(ControllerRole::Router, ControllerRole::Optimizer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lookup.role_a, ControllerRole::Router);
         assert_eq!(lookup.role_b, ControllerRole::Optimizer);
     }
@@ -2114,7 +2114,7 @@ mod tests {
         let mb = result
             .microbench
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mb.pairs_measured, 1);
     }
 
@@ -2543,7 +2543,7 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let entry = matrix
             .lookup(ControllerRole::Optimizer, ControllerRole::Optimizer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.interaction, InteractionClass::WriteConflict);
         assert_eq!(entry.min_timescale_separation_millionths, 500_000);
     }
@@ -2553,7 +2553,7 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let entry = matrix
             .lookup(ControllerRole::Optimizer, ControllerRole::Fallback)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.interaction, InteractionClass::ProducerConsumer);
     }
 
@@ -2562,7 +2562,7 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let entry = matrix
             .lookup(ControllerRole::Router, ControllerRole::Monitor)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.interaction, InteractionClass::ReadShared);
     }
 
@@ -2571,7 +2571,7 @@ mod tests {
         let matrix = ControllerCompositionMatrix::default_matrix();
         let entry = matrix
             .lookup(ControllerRole::Monitor, ControllerRole::Custom)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.interaction, InteractionClass::ProducerConsumer);
     }
 

@@ -1183,7 +1183,7 @@ mod tests {
         let a = sample_axis();
         let mid = a
             .normalize(64_500_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mid > 0 && mid < MILLION);
     }
 
@@ -1581,7 +1581,7 @@ mod tests {
         let mut g = sample_graph();
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         assert_eq!(g.pending_count(), 5);
         assert_eq!(g.discharged_count(), 1);
@@ -1592,10 +1592,10 @@ mod tests {
         let mut g = sample_graph();
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         g.find_obligation_mut("fp1", "q-gc")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         // 2 of 6 resolved = 333_333 (one-third)
         let cov = g.coverage_millionths();
@@ -1629,27 +1629,27 @@ mod tests {
         g.generate_obligations();
         // Discharge fp1's obligations directly
         g.find_obligation_mut("fp1", "q-tiering")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         g.find_obligation_mut("fp1", "q-gc")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         // Now reduce by symmetry
         g.reduce_by_symmetry();
         // fp2's obligations should be discharged by transport
         let o_fp2_tier = g
             .find_obligation("fp2", "q-tiering")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(o_fp2_tier.status, ObligationStatus::DischargedByTransport);
         assert_eq!(o_fp2_tier.transport_source.as_deref(), Some("fp1"));
         let o_fp2_gc = g
             .find_obligation("fp2", "q-gc")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(o_fp2_gc.status, ObligationStatus::DischargedByTransport);
         // fp3 should still be pending (not in the class)
         assert_eq!(
             g.find_obligation("fp3", "q-tiering")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             ObligationStatus::Pending
         );
@@ -1670,10 +1670,10 @@ mod tests {
         ));
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         g.find_obligation_mut("fp1", "q-gc")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         g.reduce_by_symmetry();
         // 4 discharged total: 2 direct + 2 transport → ratio = 500_000
@@ -1685,7 +1685,7 @@ mod tests {
         let g = sample_graph();
         let dist = g
             .chebyshev_distance("fp1", "fp2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // fp1 and fp2 have similar values
         assert!(dist < 50_000);
     }
@@ -1695,7 +1695,7 @@ mod tests {
         let g = sample_graph();
         let dist = g
             .chebyshev_distance("fp1", "fp3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // fp1 and fp3 have very different values
         assert!(dist > 100_000);
     }
@@ -1753,7 +1753,7 @@ mod tests {
         let mut g = sample_graph();
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         let r = ObligationReport::from_graph(&g, epoch());
         assert_eq!(r.total_obligations, 6);
@@ -1777,10 +1777,10 @@ mod tests {
         ));
         g.generate_obligations();
         g.find_obligation_mut("fp1", "q-tiering")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         g.find_obligation_mut("fp1", "q-gc")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .discharge_direct();
         g.reduce_by_symmetry();
         let r = ObligationReport::from_graph(&g, epoch());

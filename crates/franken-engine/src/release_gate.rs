@@ -1176,7 +1176,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.kind == GateCheckKind::FrankenlabScenario)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(scenario_check.passed);
         assert_eq!(scenario_check.items_checked, 7);
         assert_eq!(scenario_check.items_passed, 7);
@@ -1193,7 +1193,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.kind == GateCheckKind::EvidenceReplay)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(replay_check.passed);
         assert!(
             replay_check.items_checked > 0,
@@ -1210,7 +1210,7 @@ mod tests {
         let suite = run_all_scenarios(42, &mut cx);
         let replay_entries = gate
             .build_replay_entries_from_scenarios(&suite)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let replay = ReleaseGate::frankenlab_lifecycle_replay_evaluator();
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let artifact = checker.replay_and_collect(&replay_entries, Some(&replay));
@@ -1234,7 +1234,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.kind == GateCheckKind::ObligationTracking)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obligation_check.passed);
     }
 
@@ -1248,7 +1248,7 @@ mod tests {
             .checks
             .iter()
             .find(|c| c.kind == GateCheckKind::EvidenceCompleteness)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(completeness_check.passed);
     }
 
@@ -1367,7 +1367,7 @@ mod tests {
             Some("ADR-2026-002"),
             None,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(result.exception_applied);
         assert_eq!(
             result.verdict,
@@ -1395,7 +1395,7 @@ mod tests {
         let final_event = result
             .gate_events
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(final_event.event, "release_gate_evaluated");
         assert_eq!(final_event.outcome, "pass");
     }
@@ -2033,7 +2033,7 @@ mod tests {
 
         let digest_before = result.result_digest.clone();
         gate.apply_exception(&mut result, "hotfix", None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(result.result_digest, digest_before);
     }
 
@@ -2279,7 +2279,7 @@ mod tests {
             reviewer_signature: "sig-review".to_string(),
         };
         gate.apply_exception(&mut result, "critical hotfix", None, Some(review))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.exception_applied);
     }
 
@@ -2390,7 +2390,7 @@ mod tests {
             result_digest: "orig".into(),
         };
         gate.apply_exception(&mut result, "not needed", None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Exception on a passing result is a true noop — no state mutated.
         assert!(!result.exception_applied);
         assert_eq!(result.result_digest, "orig");
@@ -2678,7 +2678,7 @@ mod tests {
             result_digest: String::new(),
         };
         gate.apply_exception(&mut result, "critical CVE fix", None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.exception_applied);
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: ReleaseGateResult =
@@ -2794,7 +2794,7 @@ mod tests {
         };
         let original_digest = result.result_digest.clone();
         gate.apply_exception(&mut result, "test", None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.result_digest, original_digest);
         assert!(!result.exception_applied);
     }
@@ -2860,7 +2860,7 @@ mod tests {
         };
 
         gate.apply_exception(&mut result, "critical CVE fix", None, Some(attestation))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.exception_applied);
         assert_eq!(
             result.verdict,
@@ -2894,7 +2894,7 @@ mod tests {
         };
 
         gate.apply_exception(&mut result, "urgent hotfix", None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.exception_applied);
         assert_eq!(
             result.verdict,

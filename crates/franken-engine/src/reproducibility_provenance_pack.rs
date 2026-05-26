@@ -1194,7 +1194,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-01".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         assert!(pack.pack_id.starts_with("pack-"));
         assert_eq!(pack.claim_id, "FRX-01");
@@ -1214,7 +1214,7 @@ mod tests {
             .dependency(test_dep("serde", "1.0.200"))
             .dependency(test_dep("sha2", "0.10.9"))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         assert_eq!(pack.artifact_count(), 2);
         assert_eq!(pack.dependency_count(), 2);
@@ -1231,14 +1231,14 @@ mod tests {
                 notes: "strong copyleft".to_string(),
             })
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         assert!(pack.requires_legal_review());
         assert!(pack.legal.is_some());
         assert!(
             pack.legal
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .has_high_risk
         );
     }
@@ -1252,7 +1252,7 @@ mod tests {
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .dependency(test_dep("serde", "1.0"))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let result = pack.verify_integrity();
         assert!(result.all_valid);
@@ -1268,11 +1268,11 @@ mod tests {
         let p1 = PackBuilder::new("FRX-05".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let p2 = PackBuilder::new("FRX-05".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(p1.pack_hash, p2.pack_hash);
         assert_eq!(p1.pack_id, p2.pack_id);
     }
@@ -1282,11 +1282,11 @@ mod tests {
         let p1 = PackBuilder::new("FRX-05".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let p2 = PackBuilder::new("FRX-06".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_ne!(p1.pack_hash, p2.pack_hash);
     }
 
@@ -1303,7 +1303,7 @@ mod tests {
                 notes: String::new(),
             })
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let json = serde_json::to_string(&pack).expect("serialize derived Serialize");
         let back: ReproducibilityPack =
@@ -1319,7 +1319,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let report = generate_report(&pack);
         assert_eq!(report.schema_version, SCHEMA_VERSION);
@@ -1336,7 +1336,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-09".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let r1 = generate_report(&pack);
         let r2 = generate_report(&pack);
@@ -1354,7 +1354,7 @@ mod tests {
                 notes: "strong copyleft".to_string(),
             })
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let report = generate_report(&pack);
         assert!(report.legal_review_required);
@@ -1366,7 +1366,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-11".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let report = generate_report(&pack);
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
@@ -1382,7 +1382,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-12".to_string(), test_epoch())
             .environment(env)
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let report = generate_report(&pack);
         assert!(report.git_dirty);
@@ -1477,7 +1477,7 @@ mod tests {
             .artifact(test_artifact("c.bin", ArtifactKind::Binary))
             .dependency(test_dep("serde", "1.0"))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(pack.artifact_count(), 3);
         assert_eq!(pack.dependency_count(), 1);
     }
@@ -1487,7 +1487,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-nolegal".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert!(!pack.requires_legal_review());
         assert!(pack.legal.is_none());
     }
@@ -1503,11 +1503,11 @@ mod tests {
                 notes: "permissive".to_string(),
             })
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let legal = pack
             .legal
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!legal.has_high_risk);
         assert_eq!(legal.max_risk, LicenseRisk::Low);
     }
@@ -1597,7 +1597,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-json".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let json = serde_json::to_string(&pack).expect("serialize derived Serialize");
         for field in &[
             "pack_id",
@@ -1617,7 +1617,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-rpt".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let report = generate_report(&pack);
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         for field in &[
@@ -1678,7 +1678,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-clone".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let report = generate_report(&pack);
         assert_eq!(report, report.clone());
     }
@@ -1956,11 +1956,11 @@ mod tests {
         let p1 = PackBuilder::new("FRX-ep".to_string(), SecurityEpoch::from_raw(1))
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let p2 = PackBuilder::new("FRX-ep".to_string(), SecurityEpoch::from_raw(2))
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_ne!(p1.pack_hash, p2.pack_hash);
         assert_ne!(p1.pack_id, p2.pack_id);
     }
@@ -1971,7 +1971,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         pack.pack_hash = "deadbeefdeadbeef".to_string();
         let result = pack.verify_integrity();
         assert!(!result.pack_hash_valid);
@@ -1984,7 +1984,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         pack.manifest.total_count = 999;
         let result = pack.verify_integrity();
         assert!(!result.manifest_count_valid);
@@ -1997,7 +1997,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         pack.manifest.total_size_bytes = 0;
         let result = pack.verify_integrity();
         assert!(!result.manifest_size_valid);
@@ -2010,7 +2010,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         pack.manifest.artifacts[0].content_hash = "tampered-artifact".to_string();
         let result = pack.verify_integrity();
         assert!(!result.pack_hash_valid);
@@ -2023,7 +2023,7 @@ mod tests {
             .environment(test_env())
             .dependency(test_dep("serde", "1.0.200"))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         pack.dependencies.dependencies[0].version = "9.9.9".to_string();
         let result = pack.verify_integrity();
         assert!(!result.pack_hash_valid);
@@ -2036,7 +2036,7 @@ mod tests {
             .environment(test_env())
             .dependency(test_dep("serde", "1.0.200"))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         pack.dependencies.total_count = 99;
         let result = pack.verify_integrity();
         assert!(!result.all_valid);
@@ -2048,7 +2048,7 @@ mod tests {
             .environment(test_env())
             .artifact(test_artifact("a.rs", ArtifactKind::Source))
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         pack.pack_id = "pack-tampered".to_string();
         pack.manifest.pack_id = pack.pack_id.clone();
         pack.manifest.manifest_hash =
@@ -2071,7 +2071,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-norisk".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let report = generate_report(&pack);
         assert!(report.max_license_risk.is_none());
         assert!(!report.legal_review_required);
@@ -2082,11 +2082,11 @@ mod tests {
         let p1 = PackBuilder::new("FRX-r1".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let p2 = PackBuilder::new("FRX-r2".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let r1 = generate_report(&p1);
         let r2 = generate_report(&p2);
         assert_ne!(r1.report_hash, r2.report_hash);
@@ -2138,11 +2138,11 @@ mod tests {
                 notes: String::new(),
             })
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let legal = pack
             .legal
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(legal.findings[0].dependency, "a-dep");
         assert_eq!(legal.findings[1].dependency, "z-dep");
     }
@@ -2179,7 +2179,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-prefix".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert!(
             pack.pack_id.starts_with("pack-"),
             "pack_id must start with 'pack-'"
@@ -2195,7 +2195,7 @@ mod tests {
         let pack = PackBuilder::new("FRX-sv".to_string(), test_epoch())
             .environment(test_env())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(pack.schema_version, SCHEMA_VERSION);
     }
 }

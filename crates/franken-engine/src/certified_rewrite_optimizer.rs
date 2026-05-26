@@ -799,7 +799,7 @@ impl CertifiedRewriteOptimizer {
             step = step.with_validation_receipt(
                 validation_result
                     .receipt()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             );
 
             // Generate optimization certificate if required
@@ -1370,7 +1370,7 @@ mod tests {
         let result = optimizer.optimize(request);
         assert!(result.is_ok());
 
-        let result = result.expect("serde deserialization should succeed");
+        let result = result.expect("operation should succeed for valid inputs");
         assert!(result.success);
         assert_eq!(result.optimized_program, Some("x".to_string()));
         assert!(result.all_steps_validated());
@@ -1392,7 +1392,7 @@ mod tests {
 
         let result = optimizer
             .optimize(request)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(result.success);
         assert_eq!(
@@ -1414,19 +1414,19 @@ mod tests {
 
         let result = optimizer
             .validate_transformation("x + 0", "x + 0", &"const_fold".to_string(), &mode)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!result.is_valid());
         assert!(
             result
                 .error_message()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("no-op")
         );
         assert!(
             !result
                 .receipt()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .validation_passed()
         );
     }

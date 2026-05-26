@@ -1360,7 +1360,7 @@ mod tests {
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.cell_verdicts.len(), 1);
         assert_eq!(
             report.cell_verdicts[0].verdict,
@@ -1380,7 +1380,7 @@ mod tests {
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cv = &report.cell_verdicts[0];
         assert_eq!(cv.verdict, SupremacyVerdict::Confirmed);
         assert!(cv.effect_size > 0);
@@ -1396,7 +1396,7 @@ mod tests {
             .map(|_| make_measurement("cell_a", 1000, 500))
             .collect();
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cv = &report.cell_verdicts[0];
         assert_eq!(cv.verdict, SupremacyVerdict::Rejected);
         assert!(
@@ -1418,7 +1418,7 @@ mod tests {
             m.crash_observed = true;
         }
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cv = &report.cell_verdicts[0];
         assert!(!cv.violations.is_empty());
         assert!(
@@ -1438,7 +1438,7 @@ mod tests {
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cv = &report.cell_verdicts[0];
         assert!(
             cv.violations
@@ -1464,7 +1464,7 @@ mod tests {
             measurements.push(make_measurement("cell_b", 500, 1000));
         }
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.cell_verdicts.len(), 2);
         assert_eq!(report.board_verdict, SupremacyVerdict::Confirmed);
         assert_eq!(report.confirmed_fraction, MILLIONTHS);
@@ -1490,7 +1490,7 @@ mod tests {
             measurements.push(make_measurement("cell_c", 2000, 1000));
         }
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Only 1/3 confirmed = 33%, below 80%
         assert_eq!(report.board_verdict, SupremacyVerdict::Rejected);
         assert!(
@@ -1507,7 +1507,7 @@ mod tests {
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 12345)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.receipt.schema_version, SCHEMA_VERSION);
         assert_eq!(report.receipt.component, COMPONENT);
         assert_eq!(report.receipt.bead_id, BEAD_ID);
@@ -1523,9 +1523,9 @@ mod tests {
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
         let r1 = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.receipt.input_hash, r2.receipt.input_hash);
         assert_eq!(r1.receipt.verdict_hash, r2.receipt.verdict_hash);
     }
@@ -1555,7 +1555,7 @@ mod tests {
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = summarize_report(&report);
         assert!(summary.contains("Board verdict:"));
         assert!(summary.contains("cell_a"));
@@ -1602,7 +1602,7 @@ mod tests {
             .map(|_| make_measurement("cell_a", 500, 1000))
             .collect();
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let report2: VerdictReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1665,7 +1665,7 @@ mod tests {
             measurements.push(m);
         }
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cv = &report.cell_verdicts[0];
         assert!(
             cv.violations
@@ -1684,7 +1684,7 @@ mod tests {
             .map(|_| make_measurement("cell_a", 1000, 1000))
             .collect();
         let report = evaluate_supremacy(&measurements, &config, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cv = &report.cell_verdicts[0];
         assert!(
             cv.rejection_reasons

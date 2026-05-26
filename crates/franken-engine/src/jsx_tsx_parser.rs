@@ -1535,7 +1535,7 @@ mod tests {
     fn test_parse_simple_div() {
         // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result = parse_jsx("<div>hello</div>", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.name.to_string_repr(), "div");
@@ -1551,7 +1551,7 @@ mod tests {
     fn test_parse_self_closing() {
         // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result =
-            parse_jsx("<br />", &default_config()).expect("serde deserialization should succeed");
+            parse_jsx("<br />", &default_config()).expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert!(el.self_closing);
@@ -1566,7 +1566,7 @@ mod tests {
     fn test_parse_component() {
         // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result =
-            parse_jsx("<App />", &default_config()).expect("serde deserialization should succeed");
+            parse_jsx("<App />", &default_config()).expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert!(el.name.is_component());
@@ -1583,7 +1583,7 @@ mod tests {
     fn test_parse_fragment() {
         // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result = parse_jsx("<>hello</>", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Fragment(frag) => {
                 assert_eq!(frag.children.len(), 1);
@@ -1597,7 +1597,7 @@ mod tests {
     fn test_parse_fragment_with_element_child() {
         // SAFETY: Test-only unwrap expecting valid JSX parsing
         let result = parse_jsx("<><div>inner</div></>", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Fragment(frag) => {
                 assert_eq!(frag.children.len(), 1);
@@ -1620,7 +1620,7 @@ mod tests {
     #[test]
     fn test_parse_string_attribute() {
         let result = parse_jsx(r#"<div className="app">x</div>"#, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.attributes.len(), 1);
@@ -1649,7 +1649,7 @@ mod tests {
     #[test]
     fn test_parse_expression_attribute() {
         let result = parse_jsx("<div count={42}>x</div>", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.attributes.len(), 1);
@@ -1677,7 +1677,7 @@ mod tests {
     #[test]
     fn test_parse_spread_attribute() {
         let result = parse_jsx("<Comp {...props} />", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.attributes.len(), 1);
@@ -1698,7 +1698,7 @@ mod tests {
     #[test]
     fn test_parse_boolean_attribute() {
         let result = parse_jsx("<input disabled />", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.attributes.len(), 1);
@@ -1722,7 +1722,7 @@ mod tests {
             r#"<Btn onClick={handler} disabled className="primary" />"#,
             &default_config(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.attributes.len(), 3);
@@ -1738,7 +1738,7 @@ mod tests {
     #[test]
     fn test_parse_expression_child() {
         let result = parse_jsx("<div>{x + 1}</div>", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.children.len(), 1);
@@ -1758,7 +1758,7 @@ mod tests {
     #[test]
     fn test_parse_nested_elements() {
         let result = parse_jsx("<div><span>inner</span></div>", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.children.len(), 1);
@@ -1780,7 +1780,7 @@ mod tests {
     #[test]
     fn test_parse_member_expression_name() {
         let result = parse_jsx("<Ctx.Provider>x</Ctx.Provider>", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.name.to_string_repr(), "Ctx.Provider");
@@ -1794,7 +1794,7 @@ mod tests {
     #[test]
     fn test_parse_namespaced_name() {
         let result =
-            parse_jsx("<svg:rect />", &ns_config()).expect("serde deserialization should succeed");
+            parse_jsx("<svg:rect />", &ns_config()).expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.name.to_string_repr(), "svg:rect");
@@ -1883,7 +1883,7 @@ mod tests {
     #[test]
     fn test_span_starts_at_zero() {
         let result =
-            parse_jsx("<div />", &default_config()).expect("serde deserialization should succeed");
+            parse_jsx("<div />", &default_config()).expect("operation should succeed for valid inputs");
         let span = result.node.span();
         assert_eq!(span.start_offset, 0);
         assert_eq!(span.start_line, 1);
@@ -1894,7 +1894,7 @@ mod tests {
     fn test_span_covers_full_element() {
         let source = "<div>hello</div>";
         let result =
-            parse_jsx(source, &default_config()).expect("serde deserialization should succeed");
+            parse_jsx(source, &default_config()).expect("operation should succeed for valid inputs");
         let span = result.node.span();
         assert_eq!(span.start_offset, 0);
         assert_eq!(span.end_offset, source.len() as u64);
@@ -2118,7 +2118,7 @@ mod tests {
     #[test]
     fn test_key_prop_detected() {
         let result = parse_jsx(r#"<Item key="a" />"#, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .feature_families_used
@@ -2131,7 +2131,7 @@ mod tests {
     #[test]
     fn test_mixed_children() {
         let result = parse_jsx("<div>text{expr}<span /></div>", &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.children.len(), 3);

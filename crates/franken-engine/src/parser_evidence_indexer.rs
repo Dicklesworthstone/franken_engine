@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn schema_version_parse_ok() {
         let tag = SchemaVersionTag::parse("franken-engine.parser-log-event.v12")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(tag.family, "franken-engine.parser-log-event");
         assert_eq!(tag.major, 12);
     }
@@ -687,7 +687,7 @@ mod tests {
                 "events-b.jsonl",
                 "commands-b.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_run(
                 &manifest(
@@ -699,20 +699,20 @@ mod tests {
                 "events-a.jsonl",
                 "commands-a.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         builder
             .add_events_jsonl(
                 "run-b",
                 r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"tb","decision_id":"db","policy_id":"pb","component":"gate","event":"done","outcome":"pass","error_code":null}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"franken-engine.parser-log-event.v1","trace_id":"ta","decision_id":"da","policy_id":"pa","component":"gate","event":"done","outcome":"pass","error_code":null}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let index = builder.build();
         assert_eq!(index.runs[0].run_id, "run-a");
@@ -737,14 +737,14 @@ mod tests {
                     format!("{run_id}.events"),
                     format!("{run_id}.commands"),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             let events = format!(
                 "{{\"schema_version\":\"franken-engine.parser-log-event.v1\",\"trace_id\":\"trace-{run_id}\",\"decision_id\":\"decision-{run_id}\",\"policy_id\":\"policy\",\"component\":\"parser_equivalence\",\"event\":\"drift_detected\",\"outcome\":\"fail\",\"error_code\":\"FE-PARSER-DRIFT\",\"replay_command\":\"replay-{run_id}\",\"scenario_id\":\"fixture-1\"}}"
             );
             builder
                 .add_events_jsonl(run_id, &events)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let index = builder.build();
@@ -795,7 +795,7 @@ mod tests {
                 "events-a.jsonl",
                 "commands-a.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
@@ -804,7 +804,7 @@ mod tests {
 {"schema_version":"franken-engine.parser-log-event.v1","trace_id":"t2","decision_id":"d2","policy_id":"p1","component":"gate","event":"done","outcome":"pass","error_code":null}
 "#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut index = builder.build();
         assert!(index.schema_migrations.is_empty());
@@ -818,7 +818,7 @@ mod tests {
                     to_schema: "franken-engine.parser-log-event.v2".to_string(),
                 }],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].migration_id, "mig-log-v1-v2");
@@ -846,13 +846,13 @@ mod tests {
                 "events-a.jsonl",
                 "commands-a.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"franken-engine.parser-log-event.v3","trace_id":"t1","decision_id":"d1","policy_id":"p1","component":"gate","event":"done","outcome":"pass","error_code":null}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let index = builder.build();
         let err = index
@@ -883,7 +883,7 @@ mod tests {
 
     #[test]
     fn schema_version_parse_zero_major() {
-        let tag = SchemaVersionTag::parse("fam.v0").expect("serde deserialization should succeed");
+        let tag = SchemaVersionTag::parse("fam.v0").expect("operation should succeed for valid inputs");
         assert_eq!(tag.family, "fam");
         assert_eq!(tag.major, 0);
     }
@@ -891,7 +891,7 @@ mod tests {
     #[test]
     fn schema_version_tag_serde_round_trip() {
         let tag = SchemaVersionTag::parse("franken-engine.parser-log-event.v5")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&tag).expect("serialize derived Serialize");
         let back: SchemaVersionTag =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -900,9 +900,9 @@ mod tests {
 
     #[test]
     fn schema_version_tag_ordering() {
-        let a = SchemaVersionTag::parse("alpha.v1").expect("serde deserialization should succeed");
-        let b = SchemaVersionTag::parse("alpha.v2").expect("serde deserialization should succeed");
-        let c = SchemaVersionTag::parse("beta.v1").expect("serde deserialization should succeed");
+        let a = SchemaVersionTag::parse("alpha.v1").expect("operation should succeed for valid inputs");
+        let b = SchemaVersionTag::parse("alpha.v2").expect("operation should succeed for valid inputs");
+        let c = SchemaVersionTag::parse("beta.v1").expect("operation should succeed for valid inputs");
         assert!(a < b);
         assert!(a < c);
     }
@@ -917,7 +917,7 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = builder
             .add_run(
                 &manifest("run-a", "fam.run.v1", "replay-a2"),
@@ -948,13 +948,13 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 "\n  \n{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t\",\"decision_id\":\"d\",\"policy_id\":\"p\",\"component\":\"c\",\"event\":\"e\",\"outcome\":\"pass\"}\n\n",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let index = builder.build();
         assert_eq!(index.events.len(), 1);
     }
@@ -969,20 +969,20 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"fam.event.v1","trace_id":"t1","decision_id":"d1","policy_id":"p","component":"c","event":"e1","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"fam.event.v1","trace_id":"t2","decision_id":"d2","policy_id":"p","component":"c","event":"e2","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let index = builder.build();
         assert_eq!(index.events.len(), 2);
@@ -1036,7 +1036,7 @@ mod tests {
             "replay_command": "replay-cmd"
         });
         let r = ParserRunArtifactRef::from_manifest_value(&val, "m", "e", "c")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.generated_at_utc.is_none());
         assert!(r.outcome.is_none());
     }
@@ -1051,7 +1051,7 @@ mod tests {
             "outcome": null
         });
         let r = ParserRunArtifactRef::from_manifest_value(&val, "m", "e", "c")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.generated_at_utc.is_none());
         assert!(r.outcome.is_none());
     }
@@ -1069,7 +1069,7 @@ mod tests {
             "fixture_id": "fix-42"
         });
         let event = IndexedParserEvent::from_value("run-1", 0, &val)
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
         assert_eq!(event.scenario_id.as_deref(), Some("fix-42"));
     }
 
@@ -1087,7 +1087,7 @@ mod tests {
             "fixture_id": "fix-42"
         });
         let event = IndexedParserEvent::from_value("run-1", 0, &val)
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
         assert_eq!(event.scenario_id.as_deref(), Some("scen-1"));
     }
 
@@ -1101,13 +1101,13 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"fam.event.v1","trace_id":"t","decision_id":"d","policy_id":"p","component":"gate","event":"fail_check","outcome":"fail","error_code":"E01"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let index = builder.build();
         let clusters = index.correlate_regressions();
         assert!(clusters.is_empty());
@@ -1124,13 +1124,13 @@ mod tests {
                     format!("{run_id}-e.jsonl"),
                     format!("{run_id}-c.txt"),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let events = format!(
                 "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"check\",\"outcome\":\"pass\"}}"
             );
             builder
                 .add_events_jsonl(run_id, &events)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let index = builder.build();
         assert!(index.correlate_regressions().is_empty());
@@ -1170,17 +1170,17 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"fam.event.v2","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let index = builder.build();
         index
             .validate_event_schema_compatibility("fam.event.v2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1193,13 +1193,13 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"fam-a.event.v1","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let index = builder.build();
         let err = index
             .validate_event_schema_compatibility("fam-b.event.v1")
@@ -1220,17 +1220,17 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"fam.event.v2","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut index = builder.build();
         let receipts = index
             .migrate_event_schemas("fam.event.v2", &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(receipts.is_empty());
     }
 
@@ -1244,13 +1244,13 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"fam.event.v1","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let steps = vec![
             SchemaMigrationStep {
                 migration_id: "mig-1-2".to_string(),
@@ -1266,7 +1266,7 @@ mod tests {
         let mut index = builder.build();
         let receipts = index
             .migrate_event_schemas("fam.event.v3", &steps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipts.len(), 2);
         assert_eq!(receipts[0].migration_id, "mig-1-2");
         assert_eq!(receipts[1].migration_id, "mig-2-3");
@@ -1288,13 +1288,13 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"fam.event.v1","trace_id":"t","decision_id":"d","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut index = builder.build();
         let err = index
             .migrate_event_schemas("fam.event.v5", &[])
@@ -1312,7 +1312,7 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
@@ -1322,7 +1322,7 @@ mod tests {
                     r#"{"schema_version":"fam.event.v2","trace_id":"t2","decision_id":"d2","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let index = builder.build();
         assert_eq!(index.schema_migrations.len(), 1);
         assert_eq!(index.schema_migrations[0].from_schema, "fam.event.v1");
@@ -1439,7 +1439,7 @@ mod tests {
                 "run-a-e.jsonl",
                 "run-a-c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_run(
                 &manifest("run-b", "fam.run.v1", "replay-b"),
@@ -1447,20 +1447,20 @@ mod tests {
                 "run-b-e.jsonl",
                 "run-b-c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         builder
             .add_events_jsonl(
                 "run-a",
                 r#"{"schema_version":"fam.event.v1","trace_id":"ta","decision_id":"da","policy_id":"p","component":"c","event":"done","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-b",
                 r#"{"schema_version":"fam.event.v2","trace_id":"tb","decision_id":"db","policy_id":"p","component":"c","event":"done","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let index = builder.build();
         assert!(
@@ -1944,7 +1944,7 @@ mod tests {
         // No events means nothing to reject.
         index
             .validate_event_schema_compatibility("fam.event.v99")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- Enrichment: PearlTower 2026-03-02 --
@@ -1952,7 +1952,7 @@ mod tests {
     #[test]
     fn enrichment_schema_version_parse_multiple_dot_v_picks_last() {
         // rsplit_once(".v") picks the last ".v" so family includes earlier segments.
-        let tag = SchemaVersionTag::parse("a.v1.v2").expect("serde deserialization should succeed");
+        let tag = SchemaVersionTag::parse("a.v1.v2").expect("operation should succeed for valid inputs");
         assert_eq!(tag.family, "a.v1");
         assert_eq!(tag.major, 2);
     }
@@ -1960,7 +1960,7 @@ mod tests {
     #[test]
     fn enrichment_schema_version_parse_large_major() {
         let tag = SchemaVersionTag::parse("franken-engine.v999999")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(tag.family, "franken-engine");
         assert_eq!(tag.major, 999_999);
     }
@@ -2034,7 +2034,7 @@ mod tests {
             }],
         };
         let json =
-            serde_json::to_string_pretty(&index).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&index).expect("serialization should succeed");
         let back: ParserEvidenceIndex =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(index, back);
@@ -2102,7 +2102,7 @@ mod tests {
     #[test]
     fn enrichment_resolve_migration_path_same_from_to() {
         let result = resolve_migration_path("fam.event.v3", "fam.event.v3", &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_empty());
     }
 
@@ -2117,7 +2117,7 @@ mod tests {
                     format!("{run_id}-e.jsonl"),
                     format!("{run_id}-c.txt"),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // gate/check fails in both runs once each -> occurrence_count=2
@@ -2128,7 +2128,7 @@ mod tests {
             );
             builder
                 .add_events_jsonl(run_id, &ev_check)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for run_id in ["run-a", "run-b"] {
             let ev_drift = format!(
@@ -2136,13 +2136,13 @@ mod tests {
             );
             builder
                 .add_events_jsonl(run_id, &ev_drift)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Extra drift for run-a
         builder.add_events_jsonl(
             "run-a",
             r#"{"schema_version":"fam.event.v1","trace_id":"td-a-extra","decision_id":"dd-a-extra","policy_id":"p","component":"gate","event":"drift","outcome":"fail"}"#,
-        ).expect("serde deserialization should succeed");
+        ).expect("operation should succeed for valid inputs");
 
         let index = builder.build();
         let clusters = index.correlate_regressions();
@@ -2165,13 +2165,13 @@ mod tests {
                     format!("{run_id}-e.jsonl"),
                     format!("{run_id}-c.txt"),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let ev = format!(
                 "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d-{run_id}\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"fail_check\",\"outcome\":\"fail\",\"replay_command\":\"replay-cmd-{run_id}\"}}"
             );
             builder
                 .add_events_jsonl(run_id, &ev)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let index = builder.build();
         let clusters = index.correlate_regressions();
@@ -2201,13 +2201,13 @@ mod tests {
                     format!("{run_id}-e.jsonl"),
                     format!("{run_id}-c.txt"),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let ev = format!(
                 "{{\"schema_version\":\"fam.event.v1\",\"trace_id\":\"t-{run_id}\",\"decision_id\":\"d-{run_id}\",\"policy_id\":\"p\",\"component\":\"gate\",\"event\":\"warn_check\",\"outcome\":\"warn\",\"error_code\":\"E-WARN\"}}"
             );
             builder
                 .add_events_jsonl(run_id, &ev)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let index = builder.build();
         let clusters = index.correlate_regressions();
@@ -2251,7 +2251,7 @@ mod tests {
                 "e.jsonl",
                 "c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-a",
@@ -2263,7 +2263,7 @@ mod tests {
                     r#"{"schema_version":"fam.event.v3","trace_id":"t3","decision_id":"d3","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
                 ),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let index = builder.build();
         assert_eq!(index.schema_migrations.len(), 2);
         assert_eq!(index.schema_migrations[0].from_schema, "fam.event.v1");
@@ -2282,7 +2282,7 @@ mod tests {
                 "a-e.jsonl",
                 "a-c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_run(
                 &manifest("run-b", "fam.run.v1", "replay-b"),
@@ -2290,7 +2290,7 @@ mod tests {
                 "b-e.jsonl",
                 "b-c.txt",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // run-a has v1 events, run-b has v2 events
         builder
@@ -2298,13 +2298,13 @@ mod tests {
                 "run-a",
                 r#"{"schema_version":"fam.event.v1","trace_id":"ta","decision_id":"da","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         builder
             .add_events_jsonl(
                 "run-b",
                 r#"{"schema_version":"fam.event.v2","trace_id":"tb","decision_id":"db","policy_id":"p","component":"c","event":"e","outcome":"pass"}"#,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let steps = vec![
             SchemaMigrationStep {
@@ -2321,7 +2321,7 @@ mod tests {
         let mut index = builder.build();
         let receipts = index
             .migrate_event_schemas("fam.event.v3", &steps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Both migration steps should be applied
         assert_eq!(receipts.len(), 2);
@@ -2336,12 +2336,12 @@ mod tests {
         let mig_1_2 = receipts
             .iter()
             .find(|r| r.migration_id == "mig-1-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mig_1_2.affected_records, 1);
         let mig_2_3 = receipts
             .iter()
             .find(|r| r.migration_id == "mig-2-3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mig_2_3.affected_records, 2);
     }
 }

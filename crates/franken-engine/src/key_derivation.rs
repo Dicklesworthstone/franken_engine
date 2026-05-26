@@ -1302,7 +1302,7 @@ mod tests {
                 context: DerivationContext::empty(),
                 output_len: 1,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(key.key_bytes.len(), 1);
     }
 
@@ -1318,7 +1318,7 @@ mod tests {
                 context: DerivationContext::empty(),
                 output_len: DeterministicTestDeriver::MAX_OUTPUT,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(key.key_bytes.len(), 256);
     }
 
@@ -1360,7 +1360,7 @@ mod tests {
                 context: ctx.clone(),
                 output_len: 32,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Test deriver with valid parameters should succeed
         let key_b = deriver
@@ -1371,7 +1371,7 @@ mod tests {
                 context: ctx,
                 output_len: 32,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(key_a.key_bytes, key_b.key_bytes);
     }
@@ -1388,7 +1388,7 @@ mod tests {
                 context: DerivationContext::empty(),
                 output_len: 32,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(key.key_bytes.len(), 32);
     }
 
@@ -1420,11 +1420,11 @@ mod tests {
         // SAFETY: cache operation with test deriver should succeed
         cache
             .get_or_derive(KeyDomain::Symbol, &ctx, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: cache operation with test deriver should succeed
         cache
             .get_or_derive(KeyDomain::Session, &ctx, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cache.cached_count(), 2);
         assert_eq!(cache.events().len(), 2);
     }
@@ -1443,13 +1443,13 @@ mod tests {
             // SAFETY: Cache operation with test deriver should succeed
             cache
                 .get_or_derive(KeyDomain::Symbol, &ctx, &format!("t{epoch}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(cache.cached_count(), 1);
             if epoch < 5 {
                 // SAFETY: Cache epoch advance with valid epoch should succeed
                 cache
                     .advance_epoch(SecurityEpoch::from_raw(epoch + 1))
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
                 assert_eq!(cache.cached_count(), 0);
             }
         }
@@ -1473,7 +1473,7 @@ mod tests {
                 context: ctx.clone(),
                 output_len: 32,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Test deriver with valid parameters should succeed
         let key2 = deriver
@@ -1484,7 +1484,7 @@ mod tests {
                 context: ctx,
                 output_len: 32,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(key1.context_hash, key2.context_hash);
     }
@@ -1503,7 +1503,7 @@ mod tests {
                 context: DerivationContext::with("ext", "alpha"),
                 output_len: 32,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Test deriver with valid parameters should succeed
         let key2 = deriver
@@ -1514,7 +1514,7 @@ mod tests {
                 context: DerivationContext::with("ext", "beta"),
                 output_len: 32,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(key1.context_hash, key2.context_hash);
     }
@@ -1628,12 +1628,12 @@ mod tests {
         let ctx = DerivationContext::empty();
         let key1 = cache
             .get_or_derive(KeyDomain::Symbol, &ctx, "t1")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         // Second call should return the cached key (no new event).
         let key2 = cache
             .get_or_derive(KeyDomain::Symbol, &ctx, "t2")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         assert_eq!(key1.key_bytes, key2.key_bytes);
         // Only 1 derivation event, the second was a cache hit.
@@ -1818,7 +1818,7 @@ mod tests {
             // SAFETY: cache operation with test deriver should succeed
             let key = cache
                 .get_or_derive(*domain, &ctx, "t")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .clone();
             key_bytes_set.insert(key.key_bytes);
         }
@@ -1878,16 +1878,16 @@ mod tests {
         // SAFETY: cache operation with test deriver should succeed
         cache
             .get_or_derive(KeyDomain::Symbol, &DerivationContext::empty(), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cache.events()[0].epoch, SecurityEpoch::from_raw(10));
 
         // SAFETY: advancing cache epoch with valid epoch should succeed
         cache
             .advance_epoch(SecurityEpoch::from_raw(11))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         cache
             .get_or_derive(KeyDomain::Symbol, &DerivationContext::empty(), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cache.events()[1].epoch, SecurityEpoch::from_raw(11));
     }
 

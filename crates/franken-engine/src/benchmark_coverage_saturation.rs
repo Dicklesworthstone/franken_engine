@@ -1376,7 +1376,7 @@ mod tests {
                 );
                 board
                     .add_entry(entry)
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
             }
         }
         board
@@ -1890,13 +1890,13 @@ mod tests {
         let e3 = make_entry("vec_1", WorkloadFamily::Vectorizable, 300);
         board
             .add_entry(e1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         board
             .add_entry(e2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         board
             .add_entry(e3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             board.entries_for_family(WorkloadFamily::BranchHeavy).len(),
             2
@@ -1935,7 +1935,7 @@ mod tests {
             );
             board
                 .add_entry(entry)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let config = default_config();
         let report = board.evaluate(&config);
@@ -1967,7 +1967,7 @@ mod tests {
                 let entry = make_entry_with_tags(&name, *family, (i + 1) * 100, &["a", "b"]);
                 board
                     .add_entry(entry)
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
             }
         }
         // Add only 1 entry to remaining families (sparse).
@@ -1976,7 +1976,7 @@ mod tests {
             let entry = make_entry(&name, *family, 50);
             board
                 .add_entry(entry)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let config = default_config();
         let report = board.evaluate(&config);
@@ -1994,7 +1994,7 @@ mod tests {
                 let entry = make_entry_with_tags(&name, *family, 100, &["tag_a", "tag_b"]);
                 board
                     .add_entry(entry)
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
             }
         }
         let mut config = default_config();
@@ -2055,7 +2055,7 @@ mod tests {
                     100,
                     &[&family_tag],
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             varied
                 .add_entry(make_entry_with_tags(
                     &format!("varied_{i}"),
@@ -2063,7 +2063,7 @@ mod tests {
                     (i as u64 + 1) * 100,
                     &[&family_tag],
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let mut config = relaxed_config();
         config.min_families_covered = WorkloadFamily::COUNT as u64;
@@ -2085,7 +2085,7 @@ mod tests {
         let entry = make_entry("only_one", WorkloadFamily::BranchHeavy, 100);
         board
             .add_entry(entry)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let config = default_config();
         let report = board.evaluate(&config);
         // Should have 11 uncovered families.
@@ -2128,7 +2128,7 @@ mod tests {
             .representativeness_scores
             .iter()
             .find(|s| s.metric == RepresentativenessMetric::CorpusRatio)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(corpus.score_millionths, MILLIONTHS);
     }
 
@@ -2143,7 +2143,7 @@ mod tests {
                     100,
                     &["same_tag"],
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let mut config = relaxed_config();
         config.min_families_covered = WorkloadFamily::COUNT as u64;
@@ -2182,7 +2182,7 @@ mod tests {
         let entry = make_entry("only", WorkloadFamily::BranchHeavy, 100);
         board
             .add_entry(entry)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let config = default_config();
         let report = board.evaluate(&config);
         // 11 uncovered + the 1 sparse = some blocking families.
@@ -2338,13 +2338,13 @@ mod tests {
             );
             board
                 .add_entry(entry)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let config = default_config();
         let coverages = board.compute_family_coverages(&config);
         let rb = coverages
             .get(&WorkloadFamily::ResourceBounded)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(rb.entry_count, 10);
         assert_eq!(rb.total_complexity, 2750); // sum of 50..500 step 50.
         assert_eq!(rb.min_complexity, 50);

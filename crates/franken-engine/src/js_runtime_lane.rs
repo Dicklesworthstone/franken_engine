@@ -1031,7 +1031,7 @@ mod tests {
         assert_eq!(g.node_count(), 1);
         assert_eq!(
             g.get(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .depth,
             0
         );
@@ -1042,23 +1042,23 @@ mod tests {
         let mut g = SignalGraph::new();
         let s1 = g.next_signal_id();
         g.register(s1, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let d1 = g.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s1);
         g.register(d1, SignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             g.get(d1)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .depth,
             1
         );
         assert!(
             g.get(s1)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .dependents
                 .contains(&d1)
         );
@@ -1069,7 +1069,7 @@ mod tests {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
         g.register(s, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut prev = s;
         for _ in 0..5 {
@@ -1077,12 +1077,12 @@ mod tests {
             let mut deps = BTreeSet::new();
             deps.insert(prev);
             g.register(next, SignalKind::Derived, deps)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             prev = next;
         }
         assert_eq!(
             g.get(prev)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .depth,
             5
         );
@@ -1093,7 +1093,7 @@ mod tests {
         let mut g = SignalGraph::new();
         let id = g.next_signal_id();
         g.register(id, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             g.register(id, SignalKind::Source, BTreeSet::new()),
             Err(SignalGraphError::DuplicateSignal(_))
@@ -1118,29 +1118,29 @@ mod tests {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
         g.register(s, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.mark_clean(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let d1 = g.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         g.register(d1, SignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.mark_clean(d1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let d2 = g.next_signal_id();
         let mut deps2 = BTreeSet::new();
         deps2.insert(d1);
         g.register(d2, SignalKind::Effect, deps2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.mark_clean(d2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let dirty = g
             .mark_dirty(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(dirty.len(), 3);
         // Should be in topological order
         assert_eq!(dirty[0], s);
@@ -1162,18 +1162,18 @@ mod tests {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
         g.register(s, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d = g.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         g.register(d, SignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
-        g.dispose(d).expect("serde deserialization should succeed");
+        g.dispose(d).expect("operation should succeed for valid inputs");
         assert_eq!(g.node_count(), 1); // only source remains active
         assert!(
             g.get(s)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .dependents
                 .is_empty()
         );
@@ -1185,16 +1185,16 @@ mod tests {
         let s1 = g.next_signal_id();
         let s2 = g.next_signal_id();
         g.register(s1, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register(s2, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let d = g.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s1);
         deps.insert(s2);
         g.register(d, SignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let order = g.dirty_evaluation_order();
         // Sources first (depth 0), derived last (depth 1)
@@ -1202,11 +1202,11 @@ mod tests {
             order
                 .iter()
                 .position(|&x| x == d)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 > order
                     .iter()
                     .position(|&x| x == s1)
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1215,7 +1215,7 @@ mod tests {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
         g.register(s, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&g).expect("serialize derived Serialize");
         let g2: SignalGraph = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(g, g2);
@@ -1315,10 +1315,10 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(t.element_count(), 1);
         assert_eq!(
-            t.get(id).expect("serde deserialization should succeed").tag,
+            t.get(id).expect("operation should succeed for valid inputs").tag,
             "div"
         );
     }
@@ -1333,23 +1333,23 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::CreateElement {
             id: child,
             tag: "span".into(),
             parent: Some(root),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(
             t.get(root)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .children
                 .len(),
             1
         );
         assert_eq!(
             t.get(child)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .parent,
             Some(root)
         );
@@ -1366,22 +1366,22 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::CreateElement {
             id: child,
             tag: "ul".into(),
             parent: Some(root),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::CreateElement {
             id: grandchild,
             tag: "li".into(),
             parent: Some(child),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         t.apply_patch(&DomPatch::RemoveElement { id: child })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(t.element_count(), 1); // only root remains
         assert!(!t.contains(child));
         assert!(!t.contains(grandchild));
@@ -1396,19 +1396,19 @@ mod tests {
             tag: "input".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::SetProperty {
             id,
             key: "type".into(),
             value: "text".into(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(
             t.get(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .properties
                 .get("type")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "text"
         );
     }
@@ -1422,21 +1422,21 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::SetProperty {
             id,
             key: "class".into(),
             value: "active".into(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::RemoveProperty {
             id,
             key: "class".into(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(
             t.get(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .properties
                 .is_empty()
         );
@@ -1451,15 +1451,15 @@ mod tests {
             tag: "p".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::SetTextContent {
             id,
             text: "hello".into(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(
             t.get(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .text_content
                 .as_deref(),
             Some("hello")
@@ -1477,41 +1477,41 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::CreateElement {
             id: b,
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::CreateElement {
             id: child,
             tag: "span".into(),
             parent: Some(a),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         t.apply_patch(&DomPatch::MoveElement {
             id: child,
             new_parent: b,
             before_sibling: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(
             t.get(a)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .children
                 .is_empty()
         );
         assert_eq!(
             t.get(b)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .children,
             vec![child]
         );
         assert_eq!(
             t.get(child)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .parent,
             Some(b)
         );
@@ -1528,30 +1528,30 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::CreateElement {
             id: old,
             tag: "span".into(),
             parent: Some(root),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         t.apply_patch(&DomPatch::ReplaceElement {
             old,
             new_id,
             tag: "strong".into(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(!t.contains(old));
         assert_eq!(
             t.get(new_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .tag,
             "strong"
         );
         assert_eq!(
             t.get(root)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .children,
             vec![new_id]
         );
@@ -1577,7 +1577,7 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(matches!(
             t.apply_patch(&DomPatch::CreateElement {
                 id,
@@ -1614,11 +1614,11 @@ mod tests {
             component: "App".into(),
         };
         t.apply_batch(&batch)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(t.element_count(), 2);
         assert_eq!(
             t.get(child)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .text_content
                 .as_deref(),
             Some("hello")
@@ -1634,7 +1634,7 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let t2: DomTree = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(t, t2);
@@ -1819,10 +1819,10 @@ mod tests {
         let counter_signal = lane.signal_graph.next_signal_id();
         lane.signal_graph
             .register(counter_signal, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.signal_graph
             .mark_clean(counter_signal)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 2. Create derived signal (display text)
         let display_signal = lane.signal_graph.next_signal_id();
@@ -1830,10 +1830,10 @@ mod tests {
         deps.insert(counter_signal);
         lane.signal_graph
             .register(display_signal, SignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.signal_graph
             .mark_clean(display_signal)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 3. Create DOM tree
         let root = lane.dom_tree.next_element_id();
@@ -1844,14 +1844,14 @@ mod tests {
                 tag: "div".into(),
                 parent: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.dom_tree
             .apply_patch(&DomPatch::CreateElement {
                 id: text_node,
                 tag: "span".into(),
                 parent: Some(root),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 4. Register click handler
         lane.event_delegation
@@ -1868,14 +1868,14 @@ mod tests {
         let dirty = lane
             .signal_graph
             .mark_dirty(counter_signal)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(dirty.len(), 2); // counter + display
 
         // Evaluate signals in order
         for sig in &dirty {
             lane.signal_graph
                 .mark_clean(*sig)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // Apply DOM patch
@@ -1886,13 +1886,13 @@ mod tests {
         });
         lane.dom_tree
             .apply_batch(&batch)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.flush_count += 1;
 
         assert_eq!(
             lane.dom_tree
                 .get(text_node)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .text_content
                 .as_deref(),
             Some("Count: 1")
@@ -1913,14 +1913,14 @@ mod tests {
                 tag: "div".into(),
                 parent: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.dom_tree
             .apply_patch(&DomPatch::CreateElement {
                 id: button,
                 tag: "button".into(),
                 parent: Some(root),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.event_delegation
             .register(EventType::Click, button, "MyComponent", false);
         lane.event_delegation
@@ -1933,7 +1933,7 @@ mod tests {
         lane.event_delegation.cleanup_component("MyComponent");
         lane.dom_tree
             .apply_patch(&DomPatch::RemoveElement { id: root })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(lane.dom_tree.element_count(), 0);
         assert_eq!(lane.event_delegation.handler_count(), 0);
@@ -1965,26 +1965,26 @@ mod tests {
         let s = lane.signal_graph.next_signal_id();
         lane.signal_graph
             .register(s, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let effect = lane.signal_graph.next_signal_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         lane.signal_graph
             .register(effect, SignalKind::Effect, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Dispose effect
         lane.signal_graph
             .dispose(effect)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lane.signal_graph.node_count(), 1);
 
         // Source should have no dependents
         assert!(
             lane.signal_graph
                 .get(s)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .dependents
                 .is_empty()
         );
@@ -2119,8 +2119,8 @@ mod tests {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
         g.register(s, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
-        g.dispose(s).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        g.dispose(s).expect("operation should succeed for valid inputs");
         assert!(matches!(
             g.mark_dirty(s),
             Err(SignalGraphError::Disposed(_))
@@ -2132,8 +2132,8 @@ mod tests {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
         g.register(s, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
-        g.dispose(s).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        g.dispose(s).expect("operation should succeed for valid inputs");
         assert!(matches!(
             g.mark_clean(s),
             Err(SignalGraphError::Disposed(_))
@@ -2154,19 +2154,19 @@ mod tests {
         let mut g = SignalGraph::new();
         let s = g.next_signal_id();
         g.register(s, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.mark_clean(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let gen_before = g
             .get(s)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .generation;
         g.mark_dirty(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let gen_after = g
             .get(s)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .generation;
         assert!(gen_after > gen_before);
     }
@@ -2194,7 +2194,7 @@ mod tests {
             tag: "div".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(matches!(
             t.apply_patch(&DomPatch::MoveElement {
                 id: DomElementId(999),
@@ -2214,7 +2214,7 @@ mod tests {
             tag: "span".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(matches!(
             t.apply_patch(&DomPatch::MoveElement {
                 id: elem,
@@ -2274,36 +2274,36 @@ mod tests {
             tag: "ul".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::CreateElement {
             id: a,
             tag: "li".into(),
             parent: Some(parent),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::CreateElement {
             id: b,
             tag: "li".into(),
             parent: Some(parent),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Create c as orphan, then move before b
         t.apply_patch(&DomPatch::CreateElement {
             id: c,
             tag: "li".into(),
             parent: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         t.apply_patch(&DomPatch::MoveElement {
             id: c,
             new_parent: parent,
             before_sibling: Some(b),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Should be: a, c, b
         let children = &t
             .get(parent)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .children;
         assert_eq!(children, &[a, c, b]);
     }
@@ -2511,7 +2511,7 @@ mod tests {
         let s = lane.signal_graph.next_signal_id();
         lane.signal_graph
             .register(s, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_after = lane.derive_id();
         assert_ne!(id_before, id_after);
     }
@@ -2580,11 +2580,11 @@ mod tests {
         let s1 = g.next_signal_id();
         let s2 = g.next_signal_id();
         g.register(s1, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register(s2, SignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(g.node_count(), 2);
-        g.dispose(s1).expect("serde deserialization should succeed");
+        g.dispose(s1).expect("operation should succeed for valid inputs");
         assert_eq!(g.node_count(), 1);
     }
 

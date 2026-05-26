@@ -892,7 +892,7 @@ impl SwarmControlLoop {
 
         // Compute artifact hash.
         let hash_input = serde_json::to_vec(&(&queue, &signals, &bottlenecks, &self.risk_budget))
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let artifact_hash = ContentHash::compute(&hash_input);
 
         // Save current queue for next iteration's delta computation.
@@ -978,7 +978,7 @@ mod tests {
 
     fn default_loop() -> SwarmControlLoop {
         SwarmControlLoop::new(ControlLoopConfig::default())
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     fn add_chain(ctrl: &mut SwarmControlLoop, ids: &[&str]) {
@@ -999,7 +999,7 @@ mod tests {
                 BTreeSet::new()
             };
             ctrl.add_task(task)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
     }
 
@@ -1349,7 +1349,7 @@ mod tests {
     fn add_task_and_count() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.task_count(), 1);
     }
 
@@ -1357,7 +1357,7 @@ mod tests {
     fn complete_task_updates_status() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(ctrl.complete_task("t1"));
         assert_eq!(ctrl.completed_count(), 1);
     }
@@ -1380,7 +1380,7 @@ mod tests {
     fn validate_unknown_dependency_fails() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &["unknown"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             ctrl.validate(),
             Err(ControlLoopError::UnknownDependency { .. })
@@ -1395,9 +1395,9 @@ mod tests {
         t1.dependents.insert("t2".to_string());
         t2.dependents.insert("t1".to_string());
         ctrl.add_task(t1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.add_task(t2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             ctrl.validate(),
             Err(ControlLoopError::CycleDetected { .. })
@@ -1427,7 +1427,7 @@ mod tests {
         let t1 = ctrl
             .graph
             .get("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.wave_for(t1), Wave::ReadyNext);
     }
 
@@ -1436,18 +1436,18 @@ mod tests {
         let mut ctrl = default_loop();
         let mut t = make_task("t1", &["d1", "d2", "d3"]);
         ctrl.add_task(make_task("d1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("d2", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("d3", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         t.dependents = BTreeSet::new();
         ctrl.add_task(t)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let t1 = ctrl
             .graph
             .get("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.wave_for(t1), Wave::Gated);
     }
 
@@ -1461,7 +1461,7 @@ mod tests {
         let t1 = ctrl
             .graph
             .get("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.wave_for(t1), Wave::ReadyNext);
 
         // Complete d2 → t1 becomes ReadyNow
@@ -1470,7 +1470,7 @@ mod tests {
         let t1 = ctrl
             .graph
             .get("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.wave_for(t1), Wave::ReadyNow);
     }
 
@@ -1509,16 +1509,16 @@ mod tests {
             let id = format!("d{i}");
             deps.insert(id.clone());
             ctrl.add_task(make_task(&id, &["root"]))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         root.dependents = deps;
         ctrl.add_task(root)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bottlenecks = ctrl.detect_bottlenecks();
         let root_bn = bottlenecks
             .iter()
             .find(|b| b.task_id == "root")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(root_bn.severity, BottleneckSeverity::Critical);
     }
 
@@ -1535,7 +1535,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec!["ev-001".to_string()],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.schema_version, SWARM_CONTROL_SCHEMA_VERSION);
         assert_eq!(artifact.epoch, SecurityEpoch::from_raw(1));
         assert_eq!(artifact.total_tasks, 3);
@@ -1547,14 +1547,14 @@ mod tests {
     fn recompute_increments_iteration() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.recompute(
             SecurityEpoch::from_raw(1),
             1_000,
             CrossCuttingSignals::default(),
             vec![],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.iteration_count, 1);
         ctrl.recompute(
             SecurityEpoch::from_raw(2),
@@ -1562,7 +1562,7 @@ mod tests {
             CrossCuttingSignals::default(),
             vec![],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.iteration_count, 2);
     }
 
@@ -1586,10 +1586,10 @@ mod tests {
             queue_depth: 2,
             ..Default::default()
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         for i in 0..5 {
             ctrl.add_task(make_task(&format!("t{i}"), &[]))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let artifact = ctrl
             .recompute(
@@ -1598,7 +1598,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.queue.len(), 2);
     }
 
@@ -1608,17 +1608,17 @@ mod tests {
         let mut root = make_task("root", &[]);
         root.dependents = ["d1", "d2", "d3"].iter().map(|s| s.to_string()).collect();
         ctrl.add_task(root)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // These tasks have 3 open blockers each — should be excluded from queue
         for i in 1..=3 {
             ctrl.add_task(make_task(&format!("d{i}"), &["root"]))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // But they each have 1 blocker so they're ReadyNext.
         // Add a truly gated task.
         let gated = make_task("gated", &["d1", "d2", "d3"]);
         ctrl.add_task(gated)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let artifact = ctrl
             .recompute(
@@ -1627,7 +1627,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             artifact.queue.iter().all(|e| e.task_id != "gated"),
             "gated tasks should be excluded"
@@ -1640,18 +1640,18 @@ mod tests {
             include_gated_in_queue: true,
             ..Default::default()
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("root", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("d1", &["root"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("d2", &["root"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("d3", &["root"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let gated = make_task("gated", &["d1", "d2", "d3"]);
         ctrl.add_task(gated)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1659,7 +1659,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(artifact.queue.iter().any(|e| e.task_id == "gated"));
     }
 
@@ -1669,7 +1669,7 @@ mod tests {
     fn rationale_delta_on_first_run() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1677,7 +1677,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // First run: all entries are "entered queue".
         assert!(!artifact.rationale_deltas.is_empty());
         assert!(
@@ -1691,16 +1691,16 @@ mod tests {
     fn rationale_delta_on_completion() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("t2", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.recompute(
             SecurityEpoch::from_raw(1),
             1_000,
             CrossCuttingSignals::default(),
             vec![],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Complete t1 → it drops from queue.
         ctrl.complete_task("t1");
@@ -1711,12 +1711,12 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let dropped = artifact.rationale_deltas.iter().find(|d| d.task_id == "t1");
         assert!(dropped.is_some());
         assert!(
             dropped
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .reason
                 .contains("dropped")
         );
@@ -1730,9 +1730,9 @@ mod tests {
             conservative_threshold_millionths: 800_000,
             ..Default::default()
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bad_signals = CrossCuttingSignals {
             observability_quality_millionths: 100_000,
             catastrophic_tail_score_millionths: 500_000,
@@ -1743,7 +1743,7 @@ mod tests {
         };
         let artifact = ctrl
             .recompute(SecurityEpoch::from_raw(1), 1_000, bad_signals, vec![])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(artifact.is_conservative());
     }
 
@@ -1751,7 +1751,7 @@ mod tests {
     fn healthy_signals_no_conservative() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1759,7 +1759,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!artifact.is_conservative());
     }
 
@@ -1769,9 +1769,9 @@ mod tests {
     fn artifact_completion_millionths() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("t2", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.complete_task("t1");
         let artifact = ctrl
             .recompute(
@@ -1780,7 +1780,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.completion_millionths(), 500_000);
     }
 
@@ -1852,7 +1852,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d = artifact.to_string();
         assert!(d.contains("queue_artifact"));
         assert!(d.contains("epoch=1"));
@@ -1862,7 +1862,7 @@ mod tests {
     fn artifact_serde_roundtrip() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1870,7 +1870,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec!["ev-001".to_string()],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: QueueArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1893,7 +1893,7 @@ mod tests {
     fn loop_serde_roundtrip() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&ctrl).expect("serialize derived Serialize");
         let back: SwarmControlLoop =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1910,12 +1910,12 @@ mod tests {
         t1.dependents.insert("t2".to_string());
         t1.impact_millionths = 500_000; // lower EV
         ctrl.add_task(t1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut t2 = make_task("t2", &["t1"]);
         t2.impact_millionths = 900_000; // higher EV
         ctrl.add_task(t2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let artifact = ctrl
             .recompute(
@@ -1924,7 +1924,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // t1 (ready_now) should come before t2 (ready_next) despite lower EV
         assert_eq!(artifact.queue[0].task_id, "t1");
@@ -1937,12 +1937,12 @@ mod tests {
         let mut t1 = make_task("t1", &[]);
         t1.impact_millionths = 500_000;
         ctrl.add_task(t1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut t2 = make_task("t2", &[]);
         t2.impact_millionths = 900_000;
         ctrl.add_task(t2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let artifact = ctrl
             .recompute(
@@ -1951,7 +1951,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // t2 has higher impact → higher relevance → should be first
         assert_eq!(artifact.queue[0].task_id, "t2");
@@ -1964,7 +1964,7 @@ mod tests {
     fn evidence_ids_preserved() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -1972,7 +1972,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec!["ev-001".to_string(), "ev-002".to_string()],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.evidence_ids.len(), 2);
         assert_eq!(artifact.evidence_ids[0], "ev-001");
     }
@@ -1989,21 +1989,21 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         ctrl.add_task(root)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut mid = make_task("mid", &["root"]);
         mid.dependents.insert("leaf".to_string());
         ctrl.add_task(mid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         ctrl.add_task(make_task("gated_dep1", &["root"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.add_task(make_task("gated_dep2", &["root"]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let leaf = make_task("leaf", &["mid", "gated_dep1", "gated_dep2"]);
         ctrl.add_task(leaf)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let artifact = ctrl
             .recompute(
@@ -2012,7 +2012,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(artifact.ready_now_count, 1); // root
         assert!(artifact.ready_next_count >= 1); // mid, gated_dep1, gated_dep2 (1 blocker each)
@@ -2026,7 +2026,7 @@ mod tests {
         let mut ctrl1 = default_loop();
         ctrl1
             .add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let a1 = ctrl1
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -2034,12 +2034,12 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ctrl2 = default_loop();
         ctrl2
             .add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let a2 = ctrl2
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -2047,7 +2047,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(a1.artifact_hash, a2.artifact_hash);
     }
@@ -2056,7 +2056,7 @@ mod tests {
     fn artifact_hash_changes_with_different_data() {
         let mut ctrl = default_loop();
         ctrl.add_task(make_task("t1", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let a1 = ctrl
             .recompute(
                 SecurityEpoch::from_raw(1),
@@ -2064,11 +2064,11 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Add another task and recompute.
         ctrl.add_task(make_task("t2", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let a2 = ctrl
             .recompute(
                 SecurityEpoch::from_raw(2),
@@ -2076,7 +2076,7 @@ mod tests {
                 CrossCuttingSignals::default(),
                 vec![],
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(a1.artifact_hash, a2.artifact_hash);
     }

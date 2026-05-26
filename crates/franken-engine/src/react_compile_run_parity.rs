@@ -1413,7 +1413,7 @@ mod tests {
             100,
         );
         let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mm.class, MismatchClass::ContentDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Major);
     }
@@ -1438,7 +1438,7 @@ mod tests {
             90,
         );
         let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mm.class, MismatchClass::SizeDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Minor);
     }
@@ -1463,7 +1463,7 @@ mod tests {
             170,
         );
         let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mm.class, MismatchClass::SizeDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Major);
     }
@@ -1488,7 +1488,7 @@ mod tests {
             50,
         );
         let mm = classify_mismatch(&a, &b, DEFAULT_MAX_SIZE_DIVERGENCE)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mm.class, MismatchClass::SizeDivergence);
         assert_eq!(mm.severity, MismatchSeverity::Critical);
     }
@@ -2306,7 +2306,7 @@ mod tests {
             .surface_coverage
             .iter()
             .find(|(s, _)| *s == Surface::Library)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .1;
         assert_eq!(lib_cov, MILLIONTHS);
         let compile_cov = report
@@ -2314,7 +2314,7 @@ mod tests {
             .surface_coverage
             .iter()
             .find(|(s, _)| *s == Surface::FrankenctlCompile)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .1;
         assert_eq!(compile_cov, 0);
     }

@@ -158,7 +158,7 @@ pub struct WorkloadOutcome {
 impl WorkloadOutcome {
     /// Compute a content hash over the deterministic canonical form.
     pub fn content_hash(&self) -> ContentHash {
-        let canonical = serde_json::to_vec(self).expect("serde deserialization should succeed");
+        let canonical = serde_json::to_vec(self).expect("serialization should succeed");
         ContentHash::compute(&canonical)
     }
 }
@@ -1199,7 +1199,7 @@ mod tests {
             &schema_id(),
             tag.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     fn test_epoch() -> SecurityEpoch {
@@ -1594,7 +1594,7 @@ mod tests {
         let detail = result
             .divergence_detail
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(detail.divergence_kind, DivergenceKind::ReturnValue);
         assert_eq!(detail.specialized_summary, "42");
         assert_eq!(detail.unspecialized_summary, "99");
@@ -1634,7 +1634,7 @@ mod tests {
         let detail = result
             .divergence_detail
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(detail.divergence_kind, DivergenceKind::SideEffectTrace);
     }
 
@@ -1667,7 +1667,7 @@ mod tests {
         let detail = result
             .divergence_detail
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(detail.divergence_kind, DivergenceKind::ExceptionSequence);
     }
 
@@ -1700,7 +1700,7 @@ mod tests {
         let detail = result
             .divergence_detail
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(detail.divergence_kind, DivergenceKind::EvidenceEmission);
     }
 
@@ -1736,7 +1736,7 @@ mod tests {
             result
                 .fallback_outcome
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_success()
         );
     }
@@ -1768,7 +1768,7 @@ mod tests {
             result
                 .fallback_outcome
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_failure()
         );
     }
@@ -2911,7 +2911,7 @@ mod tests {
             log_fail
                 .fallback_outcome
                 .as_deref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .starts_with("failure:")
         );
     }
@@ -3406,7 +3406,7 @@ mod tests {
         let detail = result
             .divergence_detail
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // ReturnValue check fires first
         assert_eq!(detail.divergence_kind, DivergenceKind::ReturnValue);
     }

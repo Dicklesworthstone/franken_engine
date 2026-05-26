@@ -886,7 +886,7 @@ mod tests {
     fn geometric_mean_uniform_weights() {
         let cases = vec![test_case("w1", 3000.0, 1000.0)];
         let score = weighted_geometric_mean(&cases, BaselineEngine::Node)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!((score - 3.0).abs() < 1e-6);
     }
 
@@ -897,7 +897,7 @@ mod tests {
             test_case("w2", 4000.0, 1000.0),
         ];
         let score = weighted_geometric_mean(&cases, BaselineEngine::Node)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!((score - 4.0).abs() < 1e-6);
     }
 
@@ -908,7 +908,7 @@ mod tests {
             test_case_weighted("w2", 1000.0, 1000.0, 0.5),
         ];
         let score = weighted_geometric_mean(&cases, BaselineEngine::Node)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // geometric mean of 9x and 1x with equal weights = sqrt(9*1) = 3
         assert!((score - 3.0).abs() < 1e-6);
     }
@@ -1018,7 +1018,7 @@ mod tests {
         let input = test_gate_input();
         let ctx = test_context();
         let decision =
-            evaluate_publication_gate(&input, &ctx).expect("serde deserialization should succeed");
+            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
         assert!(decision.publish_allowed);
         assert!(decision.score_vs_node >= SCORE_THRESHOLD);
         assert!(decision.score_vs_bun >= SCORE_THRESHOLD);
@@ -1031,7 +1031,7 @@ mod tests {
         let mut input = test_gate_input();
         input.node_cases = vec![test_case("w1", 2000.0, 1000.0)]; // 2x < 3x
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1046,7 +1046,7 @@ mod tests {
         let mut input = test_gate_input();
         input.bun_cases = vec![test_case("w1", 1000.0, 1000.0)]; // 1x < 3x
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(decision.blockers.iter().any(|b| b.contains("score_vs_bun")));
     }
@@ -1056,7 +1056,7 @@ mod tests {
         let mut input = test_gate_input();
         input.node_cases[0].behavior_equivalent = false;
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1071,7 +1071,7 @@ mod tests {
         let mut input = test_gate_input();
         input.bun_cases[0].latency_envelope_ok = false;
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1086,7 +1086,7 @@ mod tests {
         let mut input = test_gate_input();
         input.node_cases[0].error_envelope_ok = false;
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
     }
 
@@ -1095,7 +1095,7 @@ mod tests {
         let mut input = test_gate_input();
         input.node_cases[0].execution_authentic = false;
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1111,7 +1111,7 @@ mod tests {
         let mut input = test_gate_input();
         input.bun_cases[0].execution_authentic = false;
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1153,7 +1153,7 @@ mod tests {
             "lineage-2".into(),
         ];
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.replacement_lineage_ids.len(), 2);
     }
 
@@ -1172,7 +1172,7 @@ mod tests {
     fn gate_events_contain_baselines() {
         let input = test_gate_input();
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             decision
                 .events
@@ -1199,10 +1199,10 @@ mod tests {
     fn decision_to_json_pretty() {
         let input = test_gate_input();
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = decision
             .to_json_pretty()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(json.contains("publish_allowed"));
     }
 
@@ -1261,7 +1261,7 @@ mod tests {
     fn gate_decision_serde_round_trip() {
         let input = test_gate_input();
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let back: PublicationGateDecision =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1336,7 +1336,7 @@ mod tests {
     fn geometric_mean_single_case_equals_speedup() {
         let cases = vec![test_case("w1", 5000.0, 1000.0)];
         let score = weighted_geometric_mean(&cases, BaselineEngine::Node)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!((score - 5.0).abs() < 1e-6);
     }
 
@@ -1348,9 +1348,9 @@ mod tests {
             test_case("w3", 5000.0, 1000.0),
         ];
         let s1 = weighted_geometric_mean(&cases, BaselineEngine::Bun)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s2 = weighted_geometric_mean(&cases, BaselineEngine::Bun)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s1, s2, "geometric mean must be deterministic");
     }
 
@@ -1358,7 +1358,7 @@ mod tests {
     fn gate_decision_events_count() {
         let input = test_gate_input();
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should have: node_score, bun_score, publication_gate_decision = 3 events
         assert_eq!(decision.events.len(), 3);
     }
@@ -1367,7 +1367,7 @@ mod tests {
     fn gate_passing_events_all_pass() {
         let input = test_gate_input();
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for event in &decision.events {
             assert!(
                 event.outcome == "pass" || event.outcome == "allow",
@@ -1484,7 +1484,7 @@ mod tests {
     fn publication_gate_decision_json_field_names() {
         let input = test_gate_input();
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         assert!(json.contains("\"score_vs_node\""));
         assert!(json.contains("\"score_vs_bun\""));
@@ -1538,7 +1538,7 @@ mod tests {
             replacement_lineage_ids: vec!["lin-exact".into()],
         };
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.publish_allowed, "exactly 3x should pass the gate");
     }
 
@@ -1606,7 +1606,7 @@ mod tests {
     fn publication_gate_decision_clone_independence() {
         let input = test_gate_input();
         let mut decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cloned = decision.clone();
         decision.publish_allowed = false;
         decision.blockers.push("injected".into());
@@ -1838,10 +1838,10 @@ mod tests {
     #[test]
     fn baseline_engine_serde_snake_case_format() {
         let json = serde_json::to_string(&BaselineEngine::Node)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"node\"");
         let json = serde_json::to_string(&BaselineEngine::Bun)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"bun\"");
     }
 
@@ -1860,9 +1860,9 @@ mod tests {
             test_case("beta", 4000.0, 1000.0),
         ];
         let s_fwd = weighted_geometric_mean(&cases_fwd, BaselineEngine::Node)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s_rev = weighted_geometric_mean(&cases_rev, BaselineEngine::Node)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s_fwd, s_rev, "ordering of cases must not affect score");
     }
 
@@ -1875,7 +1875,7 @@ mod tests {
             .map(|i| test_case(&format!("stress-{i}"), 4000.0, 1000.0))
             .collect();
         let score = weighted_geometric_mean(&cases, BaselineEngine::Bun)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // All cases have identical speedup of 4x, geometric mean should be 4x
         assert!((score - 4.0).abs() < 1e-6);
     }
@@ -1891,7 +1891,7 @@ mod tests {
             test_case_weighted("light", 1000.0, 1000.0, 0.1),
         ];
         let score = weighted_geometric_mean(&cases, BaselineEngine::Node)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let expected = 10.0_f64.powf(0.9);
         assert!(
             (score - expected).abs() < 1e-4,
@@ -1911,7 +1911,7 @@ mod tests {
         input.bun_cases[0].behavior_equivalent = false;
         input.bun_cases[0].latency_envelope_ok = false;
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         // Should have at least 4 blockers:
         // behavior-equiv, latency, score_vs_node, score_vs_bun
@@ -1929,7 +1929,7 @@ mod tests {
         input.node_cases[0].latency_envelope_ok = false;
         input.node_cases[0].error_envelope_ok = false;
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         let blockers_str = decision.blockers.join("; ");
         assert!(blockers_str.contains("behavior-equivalence"));
@@ -1944,13 +1944,13 @@ mod tests {
         let mut input = test_gate_input();
         input.node_cases = vec![test_case("w1", 2000.0, 1000.0)]; // 2x < 3x
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // The node_score_evaluated event should have an error_code
         let node_event = decision
             .events
             .iter()
             .find(|e| e.event == "node_score_evaluated")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(node_event.outcome, "fail");
         assert!(node_event.error_code.is_some());
         assert_eq!(
@@ -1962,7 +1962,7 @@ mod tests {
             .events
             .iter()
             .find(|e| e.event == "publication_gate_decision")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate_event.outcome, "deny");
         assert!(gate_event.error_code.is_some());
     }
@@ -1973,10 +1973,10 @@ mod tests {
     fn decision_to_json_pretty_structure() {
         let input = test_gate_input();
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = decision
             .to_json_pretty()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Pretty-printed JSON should have newlines and indentation
         assert!(json.contains('\n'));
         assert!(json.contains("  "));
@@ -1991,7 +1991,7 @@ mod tests {
         let mut input = test_gate_input();
         input.replacement_lineage_ids = vec!["charlie".into(), "alpha".into(), "bravo".into()];
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             decision.replacement_lineage_ids,
             vec!["alpha", "bravo", "charlie"]
@@ -2021,7 +2021,7 @@ mod tests {
             },
         ];
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decision.native_coverage_progression.len(), 3);
         assert_eq!(decision.native_coverage_progression[0].native_slots, 5);
         assert_eq!(decision.native_coverage_progression[2].native_slots, 18);
@@ -2046,9 +2046,9 @@ mod tests {
         let input = test_gate_input();
         let ctx = test_context();
         let d1 =
-            evaluate_publication_gate(&input, &ctx).expect("serde deserialization should succeed");
+            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
         let d2 =
-            evaluate_publication_gate(&input, &ctx).expect("serde deserialization should succeed");
+            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
         assert_eq!(d1.score_vs_node, d2.score_vs_node);
         assert_eq!(d1.score_vs_bun, d2.score_vs_bun);
         assert_eq!(d1.publish_allowed, d2.publish_allowed);
@@ -2065,9 +2065,9 @@ mod tests {
         input.node_cases = vec![test_case("w1", 1500.0, 1000.0)]; // 1.5x
         let ctx = test_context();
         let d1 =
-            evaluate_publication_gate(&input, &ctx).expect("serde deserialization should succeed");
+            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
         let d2 =
-            evaluate_publication_gate(&input, &ctx).expect("serde deserialization should succeed");
+            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
         assert_eq!(d1.publish_allowed, d2.publish_allowed);
         assert!(!d1.publish_allowed);
         assert_eq!(d1.score_vs_node, d2.score_vs_node);
@@ -2167,7 +2167,7 @@ mod tests {
         let ctx = PublicationContext::new("trace-ctx", "dec-ctx", "pol-ctx");
         let input = test_gate_input();
         let decision =
-            evaluate_publication_gate(&input, &ctx).expect("serde deserialization should succeed");
+            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
         for event in &decision.events {
             assert_eq!(event.trace_id, "trace-ctx");
             assert_eq!(event.decision_id, "dec-ctx");
@@ -2184,7 +2184,7 @@ mod tests {
         input.node_cases = vec![test_case("w1", 1000.0, 1000.0)]; // 1x
         input.bun_cases = vec![test_case("w1", 5000.0, 1000.0)]; // 5x
         let decision = evaluate_publication_gate(&input, &test_context())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(decision.score_vs_bun >= SCORE_THRESHOLD);
         assert!(decision.score_vs_node < SCORE_THRESHOLD);
@@ -2193,7 +2193,7 @@ mod tests {
             .events
             .iter()
             .find(|e| e.event == "bun_score_evaluated")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bun_event.outcome, "pass");
         assert!(bun_event.error_code.is_none());
     }

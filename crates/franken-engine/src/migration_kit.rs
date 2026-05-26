@@ -1246,7 +1246,7 @@ pub fn analyze_package(
     dependency_entries.sort_by(|a, b| a.name.cmp(&b.name));
 
     let report_bytes = serde_json::to_vec(&(&api_entries, &dependency_entries))
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
     let report_content_hash = ContentHash::compute(&report_bytes);
 
     Ok(CompatibilityReport {
@@ -1316,7 +1316,7 @@ pub fn infer_capabilities(
     inferred_capabilities.sort_by_key(|c| std::cmp::Reverse(c.confidence_millionths));
 
     let bytes = serde_json::to_vec(&(&inferred_capabilities, &minimum_capability_set))
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
     let capability_hash = ContentHash::compute(&bytes);
 
     Ok(CapabilityInferenceResult {
@@ -1438,7 +1438,7 @@ pub fn validate_behavior(
     divergences.sort_by_key(|d| d.severity);
 
     let report_bytes = serde_json::to_vec(&(&passing_count, &divergences))
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
     let report_content_hash = ContentHash::compute(&report_bytes);
 
     Ok(BehaviorValidationReport {
@@ -1714,7 +1714,7 @@ pub fn generate_manifest(
         readiness,
         input.epoch.as_u64(),
     ))
-    .expect("serde deserialization should succeed");
+    .expect("serialization should succeed");
     let manifest_content_hash = ContentHash::compute(&manifest_bytes);
 
     Ok(MigrationManifest {
@@ -1838,7 +1838,7 @@ mod tests {
     #[test]
     fn test_analyze_minimal_package() {
         let report = analyze_package(&minimal_package_json(), &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.source_runtime, SourceRuntime::Node);
         assert!(report.total_apis_used > 0);
         assert!(report.compatibility_score_millionths > 0);
@@ -1847,7 +1847,7 @@ mod tests {
     #[test]
     fn test_analyze_complex_package() {
         let report = analyze_package(&complex_package_json(), &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(report.dependency_entries.len() >= 6);
         let incompatible: Vec<_> = report
             .dependency_entries
@@ -1860,7 +1860,7 @@ mod tests {
     #[test]
     fn test_analyze_empty_package() {
         let report =
-            analyze_package("{}", &default_config()).expect("serde deserialization should succeed");
+            analyze_package("{}", &default_config()).expect("operation should succeed for valid inputs");
         assert_eq!(report.total_apis_used, 0);
         assert_eq!(report.compatibility_score_millionths, 1_000_000);
     }
@@ -1881,7 +1881,7 @@ mod tests {
     fn test_analyze_no_dependencies() {
         let json = r#"{"name": "bare", "version": "0.0.1"}"#;
         let report =
-            analyze_package(json, &default_config()).expect("serde deserialization should succeed");
+            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
         assert!(report.dependency_entries.is_empty());
     }
 
@@ -1892,7 +1892,7 @@ mod tests {
             ..default_config()
         };
         let report = analyze_package(&complex_package_json(), &config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(report.dependency_entries.is_empty());
     }
 
@@ -1900,7 +1900,7 @@ mod tests {
     fn test_analyze_esm_entry_point() {
         let json = r#"{"name": "esm-pkg", "version": "1.0.0", "module": "dist/index.mjs"}"#;
         let report =
-            analyze_package(json, &default_config()).expect("serde deserialization should succeed");
+            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
         let esm_entries: Vec<_> = report
             .api_entries
             .iter()
@@ -1914,7 +1914,7 @@ mod tests {
         let json =
             r#"{"name": "cli-pkg", "version": "1.0.0", "scripts": {"start": "node server.js"}}"#;
         let report =
-            analyze_package(json, &default_config()).expect("serde deserialization should succeed");
+            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
         let cli_entries: Vec<_> = report
             .api_entries
             .iter()
@@ -1927,12 +1927,12 @@ mod tests {
     fn test_analyze_known_incompatible_dependency() {
         let json = r#"{"name": "x", "version": "1.0.0", "dependencies": {"sharp": "^0.33.0"}}"#;
         let report =
-            analyze_package(json, &default_config()).expect("serde deserialization should succeed");
+            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
         let sharp = report
             .dependency_entries
             .iter()
             .find(|d| d.name == "sharp")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!sharp.compatible);
     }
 
@@ -1941,12 +1941,12 @@ mod tests {
         let json =
             r#"{"name": "x", "version": "1.0.0", "dependencies": {"my-custom-lib": "^1.0.0"}}"#;
         let report =
-            analyze_package(json, &default_config()).expect("serde deserialization should succeed");
+            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
         let custom = report
             .dependency_entries
             .iter()
             .find(|d| d.name == "my-custom-lib")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(custom.compatible);
         assert!(custom.migration_notes.contains("manual review"));
     }
@@ -1954,9 +1954,9 @@ mod tests {
     #[test]
     fn test_analyze_deterministic() {
         let report1 = analyze_package(&complex_package_json(), &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report2 = analyze_package(&complex_package_json(), &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report1.report_content_hash, report2.report_content_hash);
         assert_eq!(
             report1.compatibility_score_millionths,
@@ -1973,7 +1973,7 @@ mod tests {
             "const fs = require('fs');\nfs.readFile('test.txt');",
         )];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.contains("cap:fs"));
     }
 
@@ -1984,7 +1984,7 @@ mod tests {
             "const http = require('http');\nhttp.createServer();",
         )];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.contains("cap:net"));
     }
 
@@ -1995,7 +1995,7 @@ mod tests {
             "const crypto = require('crypto');\ncrypto.createHash('sha256');",
         )];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.contains("cap:crypto"));
     }
 
@@ -2006,7 +2006,7 @@ mod tests {
             "const { exec } = require('child_process');",
         )];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.contains("cap:process:child"));
     }
 
@@ -2017,7 +2017,7 @@ mod tests {
             "const port = process.env.PORT || 3000;",
         )];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.contains("cap:env"));
     }
 
@@ -2025,7 +2025,7 @@ mod tests {
     fn test_infer_no_capabilities_from_empty() {
         let files = vec![make_source_file("empty.js", "// empty file")];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.is_empty());
     }
 
@@ -2041,7 +2041,7 @@ mod tests {
             "#,
         )];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.len() >= 4);
     }
 
@@ -2052,7 +2052,7 @@ mod tests {
             make_source_file("b.js", "const http = require('http');"),
         ];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.contains("cap:fs"));
         assert!(result.minimum_capability_set.contains("cap:net"));
     }
@@ -2064,7 +2064,7 @@ mod tests {
             "const instance = await WebAssembly.instantiate(buffer);",
         )];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.contains("cap:wasm"));
     }
 
@@ -2075,7 +2075,7 @@ mod tests {
             "const sab = new SharedArrayBuffer(1024);",
         )];
         let result = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.minimum_capability_set.contains("cap:shared-memory"));
     }
 
@@ -2083,9 +2083,9 @@ mod tests {
     fn test_infer_deterministic() {
         let files = vec![make_source_file("a.js", "const fs = require('fs');")];
         let r1 = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = infer_capabilities(&files, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.capability_hash, r2.capability_hash);
     }
 
@@ -2098,7 +2098,7 @@ mod tests {
             make_test_result("test2", "42", "42"),
         ];
         let report = validate_behavior(&results, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.passing_count, 2);
         assert_eq!(report.divergence_count, 0);
         assert_eq!(report.parity_score_millionths, 1_000_000);
@@ -2111,7 +2111,7 @@ mod tests {
             make_test_result("test2", "expected", "different"),
         ];
         let report = validate_behavior(&results, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.passing_count, 1);
         assert_eq!(report.divergence_count, 1);
         assert_eq!(report.parity_score_millionths, 500_000);
@@ -2129,7 +2129,7 @@ mod tests {
             franken_duration_us: 100,
         }];
         let report = validate_behavior(&results, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -2149,7 +2149,7 @@ mod tests {
             franken_duration_us: 100,
         }];
         let report = validate_behavior(&results, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.divergences[0].severity, DivergenceSeverity::Critical);
     }
 
@@ -2167,7 +2167,7 @@ mod tests {
             make_test_result("t3", "e", "f"),
         ];
         let report = validate_behavior(&results, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.passing_count, 0);
         assert_eq!(report.divergence_count, 3);
         assert_eq!(report.parity_score_millionths, 0);
@@ -2180,9 +2180,9 @@ mod tests {
             make_test_result("t2", "a", "b"),
         ];
         let r1 = validate_behavior(&results, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = validate_behavior(&results, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.report_content_hash, r2.report_content_hash);
     }
 
@@ -2225,7 +2225,7 @@ mod tests {
         };
 
         let steps = generate_remediation(&compat, &behavior, &caps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].category, RemediationCategory::ApiReplacement);
     }
@@ -2266,7 +2266,7 @@ mod tests {
         };
 
         let steps = generate_remediation(&compat, &behavior, &caps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].category, RemediationCategory::DependencySwap);
     }
@@ -2302,7 +2302,7 @@ mod tests {
         };
 
         let steps = generate_remediation(&compat, &behavior, &caps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(steps.is_empty());
     }
 
@@ -2348,7 +2348,7 @@ mod tests {
             capabilities: caps,
             epoch: SecurityEpoch::from_raw(1),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(manifest.source_package_name, "my-extension");
         assert_eq!(manifest.franken_extension_name, "my-extension");
@@ -2396,7 +2396,7 @@ mod tests {
             capabilities: caps,
             epoch: SecurityEpoch::from_raw(5),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(manifest.franken_extension_name, "myorg__my-pkg");
         assert_eq!(manifest.source_runtime, SourceRuntime::Bun);
@@ -2511,7 +2511,7 @@ mod tests {
             &schema_id,
             b"test-div",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let compat = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
@@ -2671,7 +2671,7 @@ mod tests {
 
     #[test]
     fn test_lookup_known_api() {
-        let api = lookup_api("fs", "readFile").expect("serde deserialization should succeed");
+        let api = lookup_api("fs", "readFile").expect("operation should succeed for valid inputs");
         assert_eq!(api.support_level, ApiSupportLevel::FullySupported);
     }
 
@@ -2712,7 +2712,7 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_compatibility_report() {
         let report = analyze_package(&minimal_package_json(), &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let roundtripped: CompatibilityReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3372,7 +3372,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3390,7 +3390,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3407,7 +3407,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3425,7 +3425,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3442,7 +3442,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3459,7 +3459,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3477,12 +3477,12 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         let cap = result
             .inferred_capabilities
             .iter()
             .find(|c| c.kind == InferredCapabilityKind::WorkerThreads)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cap.confidence_millionths, 700_000);
         // 700_000 < 800_000 threshold => NOT in minimum set
         assert!(!result.minimum_capability_set.contains("cap:worker"));
@@ -3498,7 +3498,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3516,7 +3516,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3534,7 +3534,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3551,7 +3551,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .inferred_capabilities
@@ -3590,7 +3590,7 @@ mod tests {
             franken_duration_us: 500, // >2x
         }];
         let report =
-            validate_behavior(&results, &config).expect("serde deserialization should succeed");
+            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(report.divergences[0].kind, DivergenceKind::TimingDifference);
     }
@@ -3608,7 +3608,7 @@ mod tests {
             franken_duration_us: 120, // within 2x
         }];
         let report =
-            validate_behavior(&results, &config).expect("serde deserialization should succeed");
+            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -3629,7 +3629,7 @@ mod tests {
             franken_duration_us: 100,
         }];
         let report =
-            validate_behavior(&results, &config).expect("serde deserialization should succeed");
+            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -3651,7 +3651,7 @@ mod tests {
             franken_duration_us: 100,
         }];
         let report =
-            validate_behavior(&results, &config).expect("serde deserialization should succeed");
+            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -3684,7 +3684,7 @@ mod tests {
             },
         ];
         let report =
-            validate_behavior(&results, &config).expect("serde deserialization should succeed");
+            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
         assert_eq!(report.total_test_cases, 2);
         assert_eq!(report.passing_count, 1);
         assert_eq!(report.divergence_count, 1);
@@ -3731,7 +3731,7 @@ mod tests {
             capability_hash: ContentHash::compute(b"test"),
         };
         let steps = generate_remediation(&compatibility, &behavior, &caps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].category, RemediationCategory::ApiReplacement);
         assert_eq!(steps[0].effort, RemediationEffort::Low);
@@ -3747,7 +3747,7 @@ mod tests {
             &schema_id,
             b"test-div",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let compatibility = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
             total_apis_used: 0,
@@ -3785,7 +3785,7 @@ mod tests {
             capability_hash: ContentHash::compute(b"test"),
         };
         let steps = generate_remediation(&compatibility, &behavior, &caps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].category, RemediationCategory::CodeRefactor);
         assert_eq!(steps[0].effort, RemediationEffort::Significant);
@@ -3806,7 +3806,7 @@ mod tests {
             &schema_id,
             b"test-div-high",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let compatibility = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
             total_apis_used: 0,
@@ -3844,7 +3844,7 @@ mod tests {
             capability_hash: ContentHash::compute(b"test"),
         };
         let steps = generate_remediation(&compatibility, &behavior, &caps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0].effort, RemediationEffort::Medium);
     }
@@ -3858,7 +3858,7 @@ mod tests {
             &schema_id,
             b"test-div-low",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let compatibility = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
             total_apis_used: 0,
@@ -3896,7 +3896,7 @@ mod tests {
             capability_hash: ContentHash::compute(b"test"),
         };
         let steps = generate_remediation(&compatibility, &behavior, &caps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(steps.is_empty());
     }
 
@@ -3943,7 +3943,7 @@ mod tests {
             capabilities: caps,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let manifest = generate_manifest(input).expect("serde deserialization should succeed");
+        let manifest = generate_manifest(input).expect("operation should succeed for valid inputs");
         assert_eq!(manifest.franken_extension_name, "scope__my-pkg");
         assert_eq!(manifest.franken_extension_version, "0.1.0");
     }
@@ -3989,8 +3989,8 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(5),
             }
         };
-        let m1 = generate_manifest(mk_input()).expect("serde deserialization should succeed");
-        let m2 = generate_manifest(mk_input()).expect("serde deserialization should succeed");
+        let m1 = generate_manifest(mk_input()).expect("operation should succeed for valid inputs");
+        let m2 = generate_manifest(mk_input()).expect("operation should succeed for valid inputs");
         assert_eq!(m1.manifest_id, m2.manifest_id);
         assert_eq!(m1.manifest_content_hash, m2.manifest_content_hash);
     }
@@ -4035,7 +4035,7 @@ mod tests {
             &schema_id,
             b"crit",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let compatibility = CompatibilityReport {
             source_runtime: SourceRuntime::Node,
             total_apis_used: 1,
@@ -4082,7 +4082,7 @@ mod tests {
             ..MigrationConfig::default()
         };
         let pkg = r#"{"name":"bun-pkg","dependencies":{"express":"^4"}}"#;
-        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
+        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         assert_eq!(report.source_runtime, SourceRuntime::Bun);
     }
 
@@ -4090,7 +4090,7 @@ mod tests {
     fn analyze_package_peer_deps() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"test","peerDependencies":{"react":"^18"}}"#;
-        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
+        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         assert!(!report.dependency_entries.is_empty());
         assert_eq!(report.dependency_entries[0].name, "react");
     }
@@ -4099,7 +4099,7 @@ mod tests {
     fn analyze_package_ts_entry_as_esm() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"ts-app","main":"index.ts"}"#;
-        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
+        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         let esm_entry = report
             .api_entries
             .iter()
@@ -4111,7 +4111,7 @@ mod tests {
     fn analyze_package_mjs_entry_as_esm() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"esm-app","module":"dist/index.mjs"}"#;
-        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
+        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         let esm_entry = report
             .api_entries
             .iter()
@@ -4123,7 +4123,7 @@ mod tests {
     fn analyze_package_cjs_entry() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"cjs-app","main":"dist/index.js"}"#;
-        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
+        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         let cjs_entry = report
             .api_entries
             .iter()
@@ -4135,7 +4135,7 @@ mod tests {
     fn analyze_package_node_cli_scripts() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"cli","scripts":{"build":"node build.js","test":"npx jest"}}"#;
-        let report = analyze_package(pkg, &config).expect("serde deserialization should succeed");
+        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         let cli_entries: Vec<_> = report
             .api_entries
             .iter()
@@ -4187,7 +4187,7 @@ mod tests {
             capabilities: caps,
             epoch: SecurityEpoch::from_raw(1),
         };
-        let manifest = generate_manifest(input).expect("serde deserialization should succeed");
+        let manifest = generate_manifest(input).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&manifest).expect("serialize derived Serialize");
         let back: MigrationManifest =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -4207,7 +4207,7 @@ mod tests {
             franken_duration_us: 10,
         }];
         let report =
-            validate_behavior(&results, &config).expect("serde deserialization should succeed");
+            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: BehaviorValidationReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -4222,7 +4222,7 @@ mod tests {
         }];
         let config = MigrationConfig::default();
         let result =
-            infer_capabilities(&files, &config).expect("serde deserialization should succeed");
+            infer_capabilities(&files, &config).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CapabilityInferenceResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -4291,7 +4291,7 @@ mod tests {
             &schema_id,
             b"serde-step",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let step = RemediationStep {
             step_id,
             category: RemediationCategory::PolyfillAddition,

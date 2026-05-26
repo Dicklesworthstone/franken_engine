@@ -73,7 +73,7 @@ impl BenchmarkEnvironment {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -162,7 +162,7 @@ impl PercentileStats {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -347,7 +347,7 @@ impl ProfileArtifact {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -407,7 +407,7 @@ impl BenchmarkResult {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -554,7 +554,7 @@ impl BaselineComparison {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -624,7 +624,7 @@ impl OptimizationOpportunity {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -684,7 +684,7 @@ impl OpportunityMatrix {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -786,7 +786,7 @@ impl BaselineRegistry {
             &baseline_schema(),
             canonical.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 }
 
@@ -868,7 +868,7 @@ mod tests {
             is_warmup: false,
         }];
         let stats =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         assert_eq!(stats.p50_ns, 5000);
         assert_eq!(stats.min_ns, 5000);
         assert_eq!(stats.max_ns, 5000);
@@ -885,7 +885,7 @@ mod tests {
             })
             .collect();
         let stats =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         assert_eq!(stats.min_ns, 100);
         assert_eq!(stats.max_ns, 10000);
         assert_eq!(stats.sample_count, 100);
@@ -903,7 +903,7 @@ mod tests {
             })
             .collect();
         let stats =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         assert!(stats.jitter_ns() > 0);
     }
 
@@ -917,7 +917,7 @@ mod tests {
             })
             .collect();
         let stats =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         let cv = stats.cv_millionths();
         assert!(cv >= 0, "cv should be non-negative, got {cv}");
     }
@@ -932,9 +932,9 @@ mod tests {
             })
             .collect();
         let s1 =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         let s2 =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         assert_eq!(s1.derive_id(), s2.derive_id());
     }
 
@@ -1254,7 +1254,7 @@ mod tests {
             .collect();
         let baseline = BenchmarkResult::new("bench-1", env.clone()).with_latency(
             PercentileStats::from_samples(&samples_baseline)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         );
         reg.register(baseline);
 
@@ -1267,12 +1267,12 @@ mod tests {
             .collect();
         let candidate = BenchmarkResult::new("bench-1-v2", env).with_latency(
             PercentileStats::from_samples(&samples_candidate)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         );
 
         let comparison = reg
             .compare("bench-1", &candidate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(comparison.improvement_count() > 0);
     }
 
@@ -1339,7 +1339,7 @@ mod tests {
             .collect();
 
         let stats =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         assert_eq!(stats.sample_count, 110); // 120 - 10 warmup
 
         // 3. Build benchmark result
@@ -1407,13 +1407,13 @@ mod tests {
         let candidate = BenchmarkResult::new("sg-flush-v2", env)
             .with_latency(
                 PercentileStats::from_samples(&candidate_samples)
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             )
             .with_throughput(ThroughputMeasurement::new(15_000, 2_000_000_000));
 
         let comparison = registry
             .compare("sg-flush-v1", &candidate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Latency should be improved
         assert!(comparison.improvement_count() > 0);
     }
@@ -1664,7 +1664,7 @@ mod tests {
             })
             .collect();
         let stats =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         let mut cloned = stats.clone();
         cloned.p50_ns = 999_999;
         assert_ne!(stats.p50_ns, 999_999);
@@ -1712,10 +1712,10 @@ mod tests {
     fn benchmark_environment_json_field_names() {
         let env = BenchmarkEnvironment::default_env("test");
         let val: serde_json::Value =
-            serde_json::to_value(&env).expect("serde deserialization should succeed");
+            serde_json::to_value(&env).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "env_id",
             "warmup_iterations",
@@ -1738,10 +1738,10 @@ mod tests {
             is_warmup: false,
         };
         let val: serde_json::Value =
-            serde_json::to_value(&sample).expect("serde deserialization should succeed");
+            serde_json::to_value(&sample).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in ["latency_ns", "iteration", "is_warmup"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1752,10 +1752,10 @@ mod tests {
     fn throughput_measurement_json_field_names() {
         let t = ThroughputMeasurement::new(100, 1_000_000);
         let val: serde_json::Value =
-            serde_json::to_value(&t).expect("serde deserialization should succeed");
+            serde_json::to_value(&t).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "ops_per_sec_millionths",
             "total_ops",
@@ -1771,10 +1771,10 @@ mod tests {
     fn memory_snapshot_json_field_names() {
         let m = MemorySnapshot::empty();
         let val: serde_json::Value =
-            serde_json::to_value(&m).expect("serde deserialization should succeed");
+            serde_json::to_value(&m).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "heap_bytes",
             "stack_bytes",
@@ -1797,10 +1797,10 @@ mod tests {
             module_path: "m".to_string(),
         };
         let val: serde_json::Value =
-            serde_json::to_value(&hs).expect("serde deserialization should succeed");
+            serde_json::to_value(&hs).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in ["symbol", "percentage_millionths", "samples", "module_path"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1812,10 +1812,10 @@ mod tests {
         let threshold = SignificanceThreshold::default_threshold();
         let cmp = compare_metric("test", 100, 200, &threshold);
         let val: serde_json::Value =
-            serde_json::to_value(&cmp).expect("serde deserialization should succeed");
+            serde_json::to_value(&cmp).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "metric_name",
             "baseline_value",
@@ -1911,7 +1911,7 @@ mod tests {
             })
             .collect();
         let stats =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         assert_eq!(stats.jitter_ns(), 0);
         assert_eq!(stats.cv_millionths(), 0);
     }
@@ -1936,7 +1936,7 @@ mod tests {
             },
         ];
         let stats =
-            PercentileStats::from_samples(&samples).expect("serde deserialization should succeed");
+            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
         assert_eq!(stats.sample_count, 2);
         assert_eq!(stats.min_ns, 1000);
         assert_eq!(stats.max_ns, 2000);
@@ -2044,7 +2044,7 @@ mod tests {
         let mut result = BenchmarkResult::new("full", env)
             .with_latency(
                 PercentileStats::from_samples(&samples)
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             )
             .with_throughput(ThroughputMeasurement::new(5000, 1_000_000_000).with_bytes(500_000))
             .with_memory(MemorySnapshot {
@@ -2147,7 +2147,7 @@ mod tests {
             .with_throughput(ThroughputMeasurement::new(2000, 1_000_000_000));
         let comparison = reg
             .compare("bench-1", &candidate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Higher throughput = improvement (direction inverted in compare())
         assert!(comparison.improvement_count() > 0);
     }

@@ -1343,7 +1343,7 @@ mod tests {
     fn record_update_decrements_budget() {
         let mut site = make_site_with_budget("r1", 10);
         let _update = record_update(&mut site, "key1", MILLION)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(site.budget_remaining, 9);
     }
 
@@ -1351,7 +1351,7 @@ mod tests {
     fn record_update_returns_correct_key() {
         let mut site = make_site_with_budget("r2", 5);
         let update =
-            record_update(&mut site, "my_key", 42).expect("serde deserialization should succeed");
+            record_update(&mut site, "my_key", 42).expect("operation should succeed for valid inputs");
         assert_eq!(update.key, "my_key");
         assert_eq!(update.weight_millionths, 42);
         assert_eq!(update.site_id, "r2");
@@ -1706,7 +1706,7 @@ mod tests {
             make_site("d", SketchKind::CountMin),
         ]);
         add_site_to_inventory(&mut inv, make_site("c", SketchKind::Quantile))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ids: Vec<&str> = inv.sites.iter().map(|s| s.site_id.as_str()).collect();
         assert_eq!(ids, vec!["b", "c", "d"]);
     }
@@ -1718,7 +1718,7 @@ mod tests {
             make_site("b", SketchKind::CountMin),
         ]);
         let removed = remove_site_from_inventory(&mut inv, "a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(removed.site_id, "a");
         assert_eq!(inv.sites.len(), 1);
     }
@@ -1773,7 +1773,7 @@ mod tests {
         ]);
         let measurements = vec![("a", 100u64, 100u64), ("b", 200, 198)];
         let report = calibrate_inventory(&inv, &measurements, SecurityEpoch::GENESIS)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.results.len(), 2);
         assert!(report.all_passed());
     }
@@ -1872,7 +1872,7 @@ mod tests {
         assert!(result.is_ok());
         assert!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_some()
         );
     }
@@ -1892,7 +1892,7 @@ mod tests {
         assert!(result.is_ok());
         assert!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
         assert_eq!(site.budget_remaining, 100); // budget not consumed

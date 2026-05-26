@@ -1530,7 +1530,7 @@ mod tests {
         let security = profiles
             .iter()
             .find(|p| p.name == "security_policy")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(security.restriction.allowed_capabilities.is_empty());
         assert!(!security.restriction.allow_network);
         assert!(!security.restriction.allow_fs_write);
@@ -1543,7 +1543,7 @@ mod tests {
         let governance = profiles
             .iter()
             .find(|p| p.name == "governance_policy")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(governance.restriction.is_allowed("read_evidence"));
         assert!(!governance.restriction.is_allowed("write_policy"));
     }

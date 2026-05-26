@@ -1709,7 +1709,7 @@ mod tests {
             LaneId::quickjs_native(),
             epoch(1),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     // -- LaneId tests --
@@ -1752,7 +1752,7 @@ mod tests {
         // SAFETY: String literal is valid JSON format for LaneId deserialization.
         // from_str only fails on invalid JSON or schema mismatch (both impossible here).
         let back: LaneId = serde_json::from_str("\"v8_inspired_native\"")
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
         assert_eq!(back, LaneId::v8_native());
         assert_eq!(back.to_string(), THROUGHPUT_PROFILE_LABEL);
     }
@@ -1913,7 +1913,7 @@ mod tests {
         // SAFETY: Test with valid candidates and policies should succeed selection
         let (best, _loss) = policy
             .select_min_loss_action(&candidates, &posteriors, RegimeEstimate::Normal)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // deterministic profile should be cheapest under low risk.
         assert_eq!(best, format!("select:{DETERMINISTIC_PROFILE_LABEL}"));
     }
@@ -2223,7 +2223,7 @@ mod tests {
         let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 1);
         let output = core
             .decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!output.fallback_triggered);
         assert_eq!(core.decision_count(), 1);
     }
@@ -2233,7 +2233,7 @@ mod tests {
         let mut core = make_core();
         let input1 = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 5);
         core.decide(&input1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let input2 = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 3);
         let result = core.decide(&input2);
         assert!(result.is_err());
@@ -2245,7 +2245,7 @@ mod tests {
         let input = make_input(1_000, RegimeEstimate::Attack, 800_000, false, 1);
         let output = core
             .decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(output.fallback_triggered);
         assert!(matches!(
             output.fallback_reason,
@@ -2259,7 +2259,7 @@ mod tests {
         let input = make_input(1_000, RegimeEstimate::Degraded, 800_000, false, 1);
         let output = core
             .decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(output.fallback_triggered);
     }
 
@@ -2269,7 +2269,7 @@ mod tests {
         let input = make_input(1_000, RegimeEstimate::Normal, 100_000, false, 1);
         let output = core
             .decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(output.fallback_triggered);
         assert!(matches!(
             output.fallback_reason,
@@ -2283,7 +2283,7 @@ mod tests {
         // First consume most of budget.
         let input1 = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 1);
         core.decide(&input1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Force budget exhaustion.
         core.budget.record(100, 0);
@@ -2291,7 +2291,7 @@ mod tests {
         let input2 = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 2);
         let output = core
             .decide(&input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(output.fallback_triggered);
         assert!(matches!(
             output.fallback_reason,
@@ -2315,7 +2315,7 @@ mod tests {
         let input = make_input(50_000, RegimeEstimate::Normal, 800_000, false, 1);
         let output = core
             .decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(output.fallback_triggered);
         assert!(matches!(
             output.fallback_reason,
@@ -2332,7 +2332,7 @@ mod tests {
             let input = make_input(1_000, RegimeEstimate::Normal, 800_000, true, i + 1);
             let output = core
                 .decide(&input)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             if i < 2 {
                 assert!(!output.fallback_triggered, "should not trigger at step {i}");
             } else {
@@ -2351,7 +2351,7 @@ mod tests {
         for i in 0..5 {
             let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, i + 1);
             core.decide(&input)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(core.trace.len(), 5);
     }
@@ -2362,7 +2362,7 @@ mod tests {
         for i in 0..5 {
             let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, i + 1);
             core.decide(&input)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(core.calibration_ledger.len(), 5);
     }
@@ -2372,7 +2372,7 @@ mod tests {
         let mut core = make_core();
         let input = make_input(1_000, RegimeEstimate::Attack, 800_000, false, 1);
         core.decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(core.fallback_events.len(), 1);
         assert_eq!(core.fallback_events[0].regime, RegimeEstimate::Attack);
     }
@@ -2400,7 +2400,7 @@ mod tests {
         let mut core = make_core();
         let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 1);
         core.decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&core).expect("serialize derived Serialize");
         let back: RuntimeDecisionCore =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2416,7 +2416,7 @@ mod tests {
             let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, i);
             let output = core
                 .decide(&input)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(!output.fallback_triggered);
         }
         assert_eq!(core.decision_count(), 10);
@@ -2430,21 +2430,21 @@ mod tests {
         let input = make_input(1_000, RegimeEstimate::Normal, 800_000, false, 1);
         let out = core
             .decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!out.fallback_triggered);
 
         // Attack phase: triggers fallback.
         let input = make_input(1_000, RegimeEstimate::Attack, 800_000, false, 2);
         let out = core
             .decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(out.fallback_triggered);
 
         // Recovery phase: no mandatory demotion.
         let input = make_input(1_000, RegimeEstimate::Recovery, 800_000, false, 3);
         let out = core
             .decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!out.fallback_triggered);
     }
 
@@ -2937,12 +2937,12 @@ mod tests {
         // Attack triggers fallback.
         let input = make_input(1_000, RegimeEstimate::Attack, 800_000, false, 1);
         core.decide(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(core.is_fallback_active());
         // Recovery returns to normal.
         let input2 = make_input(1_000, RegimeEstimate::Recovery, 800_000, false, 2);
         core.decide(&input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!core.is_fallback_active());
     }
 

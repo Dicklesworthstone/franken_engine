@@ -1846,7 +1846,7 @@ mod tests {
     fn test_classic_simple_div() {
         let node = simple_div();
         let cfg = classic_config();
-        let result = lower_jsx_to_react(&node, &cfg).expect("serde deserialization should succeed");
+        let result = lower_jsx_to_react(&node, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(
             result.element.element_type,
             ElementType::Intrinsic {
@@ -1886,7 +1886,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.element.props.named_count(), 2);
         assert!(!result.element.props.has_spreads);
     }
@@ -1913,7 +1913,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.element.children.len(), 2);
         assert_eq!(result.stats.text_children, 1);
         assert_eq!(result.stats.expression_children, 1);
@@ -1947,7 +1947,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.element.props.extracted_key.is_some());
         assert_eq!(result.element.props.named_count(), 1); // only 'data', 'key' extracted
         assert_eq!(result.stats.keys_extracted, 1);
@@ -1972,7 +1972,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.element.props.extracted_ref.is_some());
         assert_eq!(result.stats.refs_extracted, 1);
     }
@@ -1980,7 +1980,7 @@ mod tests {
     #[test]
     fn test_classic_call_convention() {
         let result = lower_jsx_to_react(&simple_div(), &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.element.call_convention {
             CallConvention::Classic { object, method } => {
                 assert_eq!(object, "React");
@@ -2000,7 +2000,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.element.element_type, ElementType::Fragment);
         assert_eq!(result.element.children.len(), 1);
         assert_eq!(result.stats.fragments_lowered, 1);
@@ -2011,7 +2011,7 @@ mod tests {
     #[test]
     fn test_automatic_simple_div() {
         let result = lower_jsx_to_react(&simple_div(), &automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             result.element.call_convention,
             CallConvention::Automatic { .. }
@@ -2041,7 +2041,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.element.call_convention {
             CallConvention::Automatic { factory, .. } => {
                 assert_eq!(factory, "jsx");
@@ -2082,7 +2082,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.element.call_convention {
             CallConvention::Automatic { factory, .. } => {
                 assert_eq!(factory, "jsxs");
@@ -2113,7 +2113,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should have 'id' prop and 'children' prop
         assert_eq!(result.element.props.entries.len(), 2);
     }
@@ -2121,7 +2121,7 @@ mod tests {
     #[test]
     fn test_automatic_import_source() {
         let result = lower_jsx_to_react(&simple_div(), &automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .required_imports
@@ -2140,7 +2140,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.required_imports.iter().any(|i| i.name == "Fragment"));
     }
 
@@ -2149,13 +2149,13 @@ mod tests {
     #[test]
     fn test_dev_mode_source_location() {
         let result = lower_jsx_to_react(&simple_div(), &dev_automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.element.source_location.is_some());
         let loc = result
             .element
             .source_location
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(loc.file_name.as_deref(), Some("test.tsx"));
         assert_eq!(loc.line_number, 1);
         assert_eq!(loc.column_number, 0);
@@ -2164,7 +2164,7 @@ mod tests {
     #[test]
     fn test_dev_mode_uses_jsxdev() {
         let result = lower_jsx_to_react(&simple_div(), &dev_automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match &result.element.call_convention {
             CallConvention::Automatic { factory, .. } => {
                 assert_eq!(factory, "jsxDEV");
@@ -2176,7 +2176,7 @@ mod tests {
     #[test]
     fn test_dev_mode_import_source() {
         let result = lower_jsx_to_react(&simple_div(), &dev_automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .required_imports
@@ -2188,7 +2188,7 @@ mod tests {
     #[test]
     fn test_prod_mode_no_source_location() {
         let result = lower_jsx_to_react(&simple_div(), &automatic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.element.source_location.is_none());
     }
 
@@ -2256,7 +2256,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.element.props.has_spreads);
         assert!(
             result
@@ -2305,7 +2305,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.element.children.is_empty());
     }
 
@@ -2325,7 +2325,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .diagnostics
@@ -2406,7 +2406,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.element.children.len(), 1);
         assert_eq!(result.stats.elements_lowered, 2); // div + span
         assert_eq!(result.stats.max_depth_reached, 1);
@@ -2431,7 +2431,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.stats.elements_lowered, 1);
         assert_eq!(result.stats.fragments_lowered, 1);
     }
@@ -2466,7 +2466,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .diagnostics
@@ -2516,7 +2516,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.stats.elements_lowered, 1);
         assert_eq!(result.stats.total_props, 1);
         assert_eq!(result.stats.spread_attributes, 1);
@@ -2594,7 +2594,7 @@ mod tests {
             feature_families_used: vec![JsxFeatureFamily::SelfClosing],
         };
         let lowered =
-            lower_jsx_to_react(&node, &cfg).expect("serde deserialization should succeed");
+            lower_jsx_to_react(&node, &cfg).expect("operation should succeed for valid inputs");
         let receipt = compute_lowering_receipt(&parse_result, &lowered, &cfg);
         assert_eq!(receipt.schema_version, REACT_LOWERING_SCHEMA_VERSION);
         assert_eq!(receipt.config_summary.runtime_mode, "classic");
@@ -2611,7 +2611,7 @@ mod tests {
             feature_families_used: vec![],
         };
         let lowered =
-            lower_jsx_to_react(&node, &cfg).expect("serde deserialization should succeed");
+            lower_jsx_to_react(&node, &cfg).expect("operation should succeed for valid inputs");
         let r1 = compute_lowering_receipt(&parse_result, &lowered, &cfg);
         let r2 = compute_lowering_receipt(&parse_result, &lowered, &cfg);
         assert_eq!(r1.input_hash, r2.input_hash);
@@ -2642,7 +2642,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result.element).expect("serialize derived Serialize");
         let back: LoweredElement =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2750,7 +2750,7 @@ mod tests {
             span: test_span(),
         });
         let result = lower_jsx_to_react(&node, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .feature_families_used
@@ -2777,7 +2777,7 @@ mod tests {
             ..classic_config()
         };
         let result =
-            lower_jsx_to_react(&simple_div(), &cfg).expect("serde deserialization should succeed");
+            lower_jsx_to_react(&simple_div(), &cfg).expect("operation should succeed for valid inputs");
         match &result.element.call_convention {
             CallConvention::Classic { object, .. } => {
                 assert_eq!(object, "h");
@@ -2793,7 +2793,7 @@ mod tests {
             ..automatic_config()
         };
         let result =
-            lower_jsx_to_react(&simple_div(), &cfg).expect("serde deserialization should succeed");
+            lower_jsx_to_react(&simple_div(), &cfg).expect("operation should succeed for valid inputs");
         assert!(
             result
                 .required_imports
@@ -2842,7 +2842,7 @@ mod tests {
             feature_families_used: vec![],
         };
         let result = lower_parse_result(&pr, &classic_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.element.element_type,
             ElementType::Intrinsic {

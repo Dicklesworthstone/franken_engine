@@ -2188,7 +2188,7 @@ mod tests {
         let metadata = catalog
             .cross_interference
             .remove("a::b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         catalog.cross_interference.insert("b::a".into(), metadata);
 
         assert!(!catalog.is_canonical());

@@ -656,7 +656,7 @@ mod tests {
     use crate::ifc_artifacts::{DeclassificationRoute, FlowPolicyEnforcement};
 
     fn test_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn make_policy() -> FlowPolicy {
@@ -748,7 +748,7 @@ mod tests {
 
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, DeclassificationDecision::Allow);
         assert_eq!(receipt.source_label, Label::Secret);
         assert_eq!(receipt.sink_clearance, Label::Internal);
@@ -756,7 +756,7 @@ mod tests {
         assert!(!receipt.signature.is_sentinel());
         receipt
             .verify(&key.verification_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -767,7 +767,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = pipeline.events();
         assert!(events.len() >= 5);
@@ -789,7 +789,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pipeline.receipts().len(), 1);
     }
 
@@ -829,7 +829,7 @@ mod tests {
 
         let result = pipeline.process(&request, &policy, &high_loss(), &test_key());
         // High loss should produce a deny receipt (not an error)
-        let receipt = result.expect("serde deserialization should succeed");
+        let receipt = result.expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, DeclassificationDecision::Deny);
     }
 
@@ -844,7 +844,7 @@ mod tests {
 
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, DeclassificationDecision::Allow);
         assert_eq!(receipt.declassification_route_ref, "emergency");
         assert_eq!(receipt.decision_contract_id, request.decision_contract_id);
@@ -863,7 +863,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let grant = pipeline
             .check_emergency_grant(
@@ -873,7 +873,7 @@ mod tests {
                 &request.decision_contract_id,
                 request.timestamp_ms,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!grant.review_completed);
         assert!(!grant.is_expired(request.timestamp_ms));
         assert_eq!(grant.extension_id, request.extension_id);
@@ -889,7 +889,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Check after expiry
         let far_future = request.timestamp_ms + 1_000_000;
@@ -915,7 +915,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let grant_id = format!("emg-{}", request.request_id);
         assert!(pipeline.complete_emergency_review(&grant_id));
@@ -934,14 +934,14 @@ mod tests {
         let req1 = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         pipeline
             .process(&req1, &policy, &low_loss(), &key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Deny (high loss)
         let mut req2 = make_request("declass-conf-public", Label::Confidential, Label::Public);
         req2.request_id = "req-2".to_string();
         pipeline
             .process(&req2, &policy, &high_loss(), &key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stats = pipeline.stats();
         assert_eq!(stats.decision_count, 2);
@@ -963,7 +963,7 @@ mod tests {
             let mut pipeline = DeclassificationPipeline::default();
             let receipt = pipeline
                 .process(&request, &policy, &loss, &key)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             receipts.push(receipt);
         }
 
@@ -1149,7 +1149,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for event in pipeline.events() {
             assert_eq!(event.component, "declassification_pipeline");
@@ -1165,7 +1165,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!pipeline.events().is_empty());
 
         let drained = pipeline.drain_events();
@@ -1186,10 +1186,10 @@ mod tests {
 
         let receipt1 = pipeline
             .process(&r1, &policy, &low_loss(), &key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let receipt2 = pipeline
             .process(&r2, &policy, &low_loss(), &key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             receipt1.declassification_route_ref,
@@ -1213,7 +1213,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(pipeline.events().is_empty());
     }
 
@@ -1386,7 +1386,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let grant_id = format!("emg-{}", request.request_id);
         assert!(
@@ -1491,7 +1491,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let sentinel = Signature::from_bytes(SIGNATURE_SENTINEL);
         assert_ne!(receipt.signature, sentinel, "receipt must be signed");
     }
@@ -1503,7 +1503,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!receipt.replay_linkage.is_empty());
     }
 
@@ -1526,7 +1526,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stats = pipeline.stats();
         assert_eq!(stats.emergency_grants_active, 1);
@@ -1554,7 +1554,7 @@ mod tests {
             req.request_id = format!("req-{i}");
             pipeline
                 .process(&req, &policy, &low_loss(), &key)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(pipeline.receipts().len(), 5);
     }
@@ -1568,7 +1568,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cloned = receipt.clone();
         assert_eq!(receipt, cloned);
     }
@@ -1580,7 +1580,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: DeclassificationReceipt =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1620,7 +1620,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         pipeline
             .process(&request, &policy, &low_loss(), &key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let stats = pipeline.stats();
         assert_eq!(stats.decision_count, 1);
         assert_eq!(stats.allow_count, 1);
@@ -1684,7 +1684,7 @@ mod tests {
             let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
             pipeline
                 .process(&request, &policy, &low_loss(), &key)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         let r1 = run();
         let r2 = run();
@@ -1700,7 +1700,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         assert!(json.contains("\"receipt_id\""));
         assert!(json.contains("\"source_label\""));
@@ -1716,7 +1716,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         pipeline
             .process(&request, &policy, &low_loss(), &key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let stats = pipeline.stats();
         let json = serde_json::to_string(&stats).expect("serialize derived Serialize");
         let back: PipelineStats =
@@ -2658,7 +2658,7 @@ mod tests {
             req.is_emergency = true;
             pipeline
                 .process(&req, &policy, &low_loss(), &key)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let stats = pipeline.stats();
@@ -2673,7 +2673,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &high_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, DeclassificationDecision::Deny);
         assert_eq!(pipeline.receipts().len(), 1);
         assert_eq!(
@@ -2696,7 +2696,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Grant should be active at timestamp + 59_999
         assert!(
@@ -2733,7 +2733,7 @@ mod tests {
 
         pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Correct labels find the grant
         assert!(
@@ -2803,7 +2803,7 @@ mod tests {
         let request = make_request("declass-conf-public", Label::Confidential, Label::Public);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, DeclassificationDecision::Allow);
         assert_eq!(receipt.source_label, Label::Confidential);
         assert_eq!(receipt.sink_clearance, Label::Public);
@@ -2817,7 +2817,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             receipt.receipt_id.starts_with("rcpt-"),
             "receipt_id should start with 'rcpt-'"
@@ -2831,7 +2831,7 @@ mod tests {
         let request = make_request("declass-secret-internal", Label::Secret, Label::Internal);
         let receipt = pipeline
             .process(&request, &policy, &low_loss(), &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.timestamp_ms, request.timestamp_ms);
     }
 
@@ -2843,7 +2843,7 @@ mod tests {
         let loss = low_loss();
         let receipt = pipeline
             .process(&request, &policy, &loss, &test_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.loss_assessment_milli, loss.expected_loss_milli);
     }
 }

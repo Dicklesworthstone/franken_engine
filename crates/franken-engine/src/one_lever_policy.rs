@@ -937,7 +937,7 @@ mod tests {
         assert!(
             decision
                 .change_id
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .starts_with("olp-")
         );
     }
@@ -1310,19 +1310,19 @@ mod tests {
     #[test]
     fn enrichment_lever_category_serde_snake_case_field_names() {
         let json = serde_json::to_string(&LeverCategory::Execution)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"execution\"");
         let json = serde_json::to_string(&LeverCategory::Memory)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"memory\"");
         let json = serde_json::to_string(&LeverCategory::Security)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"security\"");
         let json = serde_json::to_string(&LeverCategory::Benchmark)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"benchmark\"");
         let json = serde_json::to_string(&LeverCategory::Config)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"config\"");
     }
 

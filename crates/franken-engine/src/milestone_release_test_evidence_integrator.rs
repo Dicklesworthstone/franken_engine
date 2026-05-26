@@ -1372,7 +1372,7 @@ mod tests {
             .signals
             .iter_mut()
             .find(|s| s.source == EvidenceSource::UnitDepthGate)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .score_millionths = 1_000_000;
         let decision =
             integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
@@ -1519,7 +1519,7 @@ mod tests {
             .signals
             .iter_mut()
             .find(|s| s.source == EvidenceSource::TestLoggingSchema)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .collected_at_ns = 0; // extremely old → stale
         input.now_ns = 10_000_000_000_000;
         // Also update other signals so they are not stale
@@ -1536,7 +1536,7 @@ mod tests {
         let logging_gate = gate_inputs
             .iter()
             .find(|g| g.category == GateCategory::ObservabilityIntegrity)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!logging_gate.passed);
     }
 
@@ -1608,7 +1608,7 @@ mod tests {
             .items
             .iter()
             .find(|i| i.item_id == "security.conformance_suite")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(item.status, ChecklistItemStatus::Pass);
         assert_eq!(item.category, ChecklistCategory::Security);
         assert!(item.required);
@@ -1834,30 +1834,30 @@ mod tests {
     #[test]
     fn evidence_source_serde_snake_case_convention() {
         let json = serde_json::to_string(&EvidenceSource::UnitDepthGate)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"unit_depth_gate\"");
 
         let json = serde_json::to_string(&EvidenceSource::EndToEndScenarioMatrix)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"end_to_end_scenario_matrix\"");
 
         let json = serde_json::to_string(&EvidenceSource::ProofCarryingArtifactGate)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"proof_carrying_artifact_gate\"");
     }
 
     #[test]
     fn signature_status_serde_snake_case_convention() {
         let json = serde_json::to_string(&SignatureStatus::Signed)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"signed\"");
 
         let json = serde_json::to_string(&SignatureStatus::Unsigned)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"unsigned\"");
 
         let json = serde_json::to_string(&SignatureStatus::Invalid)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"invalid\"");
     }
 
@@ -2640,7 +2640,7 @@ mod tests {
             .signals
             .iter_mut()
             .find(|s| s.source == EvidenceSource::UnitDepthGate)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .passed = false;
         let decision =
             integrate_milestone_release_test_evidence(&input, &IntegratorPolicy::default());
@@ -2658,7 +2658,7 @@ mod tests {
             .items
             .iter()
             .find(|i| i.item_id == "security.conformance_suite")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(item.status, ChecklistItemStatus::Fail);
     }
 

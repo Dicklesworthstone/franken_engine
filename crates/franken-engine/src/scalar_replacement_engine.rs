@@ -1777,7 +1777,7 @@ mod tests {
         let config = default_config();
         // SAFETY: Test-only unwrap expecting valid inputs to build scalar plan successfully
         let plan = build_scalar_plan(&cert, &layout, &config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.site_id, "s1");
         assert_eq!(plan.fields.len(), 4);
         assert_eq!(plan.register_slots, 2); // Even indices are Number (register-safe).
@@ -1869,7 +1869,7 @@ mod tests {
         let config = default_config();
         // SAFETY: Test-only unwrap expecting valid inputs to build scalar plan successfully
         let plan = build_scalar_plan(&cert, &layout, &config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(plan.fully_register_safe);
         assert_eq!(plan.register_slots, 2);
         assert_eq!(plan.stack_slots, 0);
@@ -1922,7 +1922,7 @@ mod tests {
             precise: true,
         };
         // SAFETY: Test-only unwrap expecting valid inputs to build sinking plan successfully
-        let plan = build_sinking_plan(&cert, &[]).expect("serde deserialization should succeed");
+        let plan = build_sinking_plan(&cert, &[]).expect("operation should succeed for valid inputs");
         assert_eq!(plan.site_id, "s1");
         assert_eq!(plan.sunk_position, 20);
         assert_eq!(plan.instructions_saved, 20);
@@ -1950,7 +1950,7 @@ mod tests {
         }];
         // SAFETY: Test-only unwrap expecting valid inputs to build sinking plan successfully
         let plan =
-            build_sinking_plan(&cert, &barriers).expect("serde deserialization should succeed");
+            build_sinking_plan(&cert, &barriers).expect("operation should succeed for valid inputs");
         assert_eq!(plan.sunk_position, 11); // Just after the barrier.
     }
 
@@ -2645,7 +2645,7 @@ mod tests {
         let layout = make_layout("s1", 2);
         let config = default_config();
         let plan = build_scalar_plan(&cert, &layout, &config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let witness = build_deopt_witness(
             &cert,
             TransformKind::ScalarReplacement,

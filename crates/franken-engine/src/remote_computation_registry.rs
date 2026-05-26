@@ -671,7 +671,7 @@ mod tests {
     #[test]
     fn valid_computation_name() {
         let name = ComputationName::new("revocation_propagate")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(name.as_str(), "revocation_propagate");
         assert_eq!(name.to_string(), "revocation_propagate");
     }
@@ -685,7 +685,7 @@ mod tests {
     #[test]
     fn computation_name_with_digits() {
         let name = ComputationName::new("checkpoint_publish_3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(name.as_str(), "checkpoint_publish_3");
     }
 
@@ -769,7 +769,7 @@ mod tests {
     fn register_computation() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("revocation_propagate"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reg.len(), 1);
         assert!(!reg.is_empty());
     }
@@ -778,7 +778,7 @@ mod tests {
     fn register_duplicate_rejected() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("evidence_sync"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             reg.register(test_registration("evidence_sync")),
             Err(RegistryError::DuplicateRegistration { .. })
@@ -789,11 +789,11 @@ mod tests {
     fn register_multiple_computations() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("alpha"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.register(test_registration("beta"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.register(test_registration("gamma"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reg.len(), 3);
     }
 
@@ -801,11 +801,11 @@ mod tests {
     fn computation_names_are_sorted() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("gamma"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.register(test_registration("alpha"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.register(test_registration("beta"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reg.computation_names(), vec!["alpha", "beta", "gamma"]);
     }
 
@@ -813,11 +813,11 @@ mod tests {
     fn lookup_registered_computation() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("evidence_sync"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("evidence_sync").expect("constructor with valid inputs");
         let found = reg
             .lookup(&name)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(found.name.as_str(), "evidence_sync");
         assert_eq!(found.version, SchemaVersion::new(1, 0, 0));
     }
@@ -836,7 +836,7 @@ mod tests {
         let mut reg = RemoteComputationRegistry::new();
         let profile = CapabilityProfile::policy(); // has EvidenceEmit
         reg.hot_register(test_registration("late_addition"), &profile, "trace-hot")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reg.len(), 1);
         let events = reg.drain_events();
         assert_eq!(events.len(), 1);
@@ -860,7 +860,7 @@ mod tests {
         let mut reg = RemoteComputationRegistry::new();
         let profile = CapabilityProfile::policy();
         reg.hot_register(test_registration("dup_hot"), &profile, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             reg.hot_register(test_registration("dup_hot"), &profile, "t2"),
             Err(RegistryError::DuplicateRegistration { .. })
@@ -873,11 +873,11 @@ mod tests {
     fn validate_valid_input() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         let hash = reg
             .validate_input(&name, &valid_input(), "trace-v")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(hash.as_bytes().len(), 32);
     }
 
@@ -885,7 +885,7 @@ mod tests {
     fn validate_input_missing_field() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
 
         let mut map = BTreeMap::new();
@@ -904,7 +904,7 @@ mod tests {
     fn validate_input_undeclared_field() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
 
         let mut map = BTreeMap::new();
@@ -930,7 +930,7 @@ mod tests {
     fn validate_input_not_a_map() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
 
         let input = CanonicalValue::String("not a map".to_string());
@@ -1004,7 +1004,7 @@ mod tests {
     fn capability_check_passes_with_sufficient_profile() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         // Remote profile has all capabilities needed for RemoteCaps
         assert!(
@@ -1017,7 +1017,7 @@ mod tests {
     fn capability_check_passes_with_full_profile() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         assert!(
             reg.check_capability(&name, &full_profile(), "trace-full")
@@ -1029,7 +1029,7 @@ mod tests {
     fn capability_check_denied_with_compute_only() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         let err = reg
             .check_capability(&name, &compute_only_profile(), "trace-co")
@@ -1053,11 +1053,11 @@ mod tests {
     fn version_negotiation_compatible() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         let result = reg
             .negotiate_version(&name, SchemaVersion::new(1, 2, 0))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.compatible);
         assert_eq!(result.local_version, SchemaVersion::new(1, 0, 0));
         assert_eq!(result.remote_version, SchemaVersion::new(1, 2, 0));
@@ -1067,11 +1067,11 @@ mod tests {
     fn version_negotiation_exact_match() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         let result = reg
             .negotiate_version(&name, SchemaVersion::new(1, 0, 0))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.compatible);
     }
 
@@ -1079,11 +1079,11 @@ mod tests {
     fn version_negotiation_incompatible_major() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         let result = reg
             .negotiate_version(&name, SchemaVersion::new(2, 0, 0))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.compatible);
     }
 
@@ -1093,11 +1093,11 @@ mod tests {
         let mut comp = test_registration("test_comp");
         comp.version = SchemaVersion::new(1, 3, 0);
         reg.register(comp)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         let result = reg
             .negotiate_version(&name, SchemaVersion::new(1, 1, 0))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.compatible);
     }
 
@@ -1128,10 +1128,10 @@ mod tests {
     fn validation_emits_event() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         reg.validate_input(&name, &valid_input(), "trace-ev")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = reg.drain_events();
         assert_eq!(events.len(), 1);
@@ -1146,7 +1146,7 @@ mod tests {
     fn validation_failure_emits_event() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         let _ = reg.validate_input(
             &name,
@@ -1163,10 +1163,10 @@ mod tests {
     fn drain_events_clears() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
         reg.validate_input(&name, &valid_input(), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let e1 = reg.drain_events();
         assert_eq!(e1.len(), 1);
@@ -1178,13 +1178,13 @@ mod tests {
     fn event_counts_track_outcomes() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("test_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("test_comp").expect("constructor with valid inputs");
 
         reg.validate_input(&name, &valid_input(), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.validate_input(&name, &valid_input(), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = reg.validate_input(&name, &CanonicalValue::String("bad".to_string()), "t3");
 
         assert_eq!(reg.event_counts().get("validation_success"), Some(&2));
@@ -1279,7 +1279,7 @@ mod tests {
     fn version_negotiation_result_serialization_round_trip() {
         let result = VersionNegotiationResult {
             computation_name: ComputationName::new("test_comp")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             compatible: true,
             local_version: SchemaVersion::new(1, 0, 0),
             remote_version: SchemaVersion::new(1, 2, 0),
@@ -1334,25 +1334,25 @@ mod tests {
 
         // 1. Register
         reg.register(test_registration("revocation_propagate"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let name = ComputationName::new("revocation_propagate")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 2. Check capability
         reg.check_capability(&name, &remote_profile(), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 3. Validate input
         let input_hash = reg
             .validate_input(&name, &valid_input(), "trace-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(input_hash.as_bytes().len(), 32);
 
         // 4. Negotiate version
         let negotiation = reg
             .negotiate_version(&name, SchemaVersion::new(1, 1, 0))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(negotiation.compatible);
 
         // 5. Compute idempotency hash
@@ -1513,7 +1513,7 @@ mod tests {
     fn version_negotiation_result_debug_nonempty() {
         let result = VersionNegotiationResult {
             computation_name: ComputationName::new("x")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             compatible: true,
             local_version: SchemaVersion::new(1, 0, 0),
             remote_version: SchemaVersion::new(1, 0, 0),
@@ -1564,9 +1564,9 @@ mod tests {
     #[test]
     fn idempotency_class_serde_variants_distinct() {
         let a = serde_json::to_string(&IdempotencyClass::NaturallyIdempotent)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let b = serde_json::to_string(&IdempotencyClass::RequiresKey)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_ne!(a, b);
     }
 
@@ -1674,7 +1674,7 @@ mod tests {
     fn version_negotiation_result_json_field_names() {
         let result = VersionNegotiationResult {
             computation_name: ComputationName::new("field_check")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             compatible: false,
             local_version: SchemaVersion::new(1, 0, 0),
             remote_version: SchemaVersion::new(2, 0, 0),
@@ -1843,7 +1843,7 @@ mod tests {
     fn validate_input_empty_map_missing_all_fields() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("empty_map_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("empty_map_comp").expect("constructor with valid inputs");
         let empty = CanonicalValue::Map(BTreeMap::new());
         let err = reg.validate_input(&name, &empty, "t").unwrap_err();
@@ -1854,7 +1854,7 @@ mod tests {
     fn validate_input_array_rejected_as_non_map() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("arr_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("arr_comp").expect("constructor with valid inputs");
         let arr = CanonicalValue::Array(vec![CanonicalValue::U64(1)]);
         let err = reg.validate_input(&name, &arr, "t").unwrap_err();
@@ -1865,7 +1865,7 @@ mod tests {
     fn validate_input_null_rejected_as_non_map() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("null_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("null_comp").expect("constructor with valid inputs");
         let err = reg
             .validate_input(&name, &CanonicalValue::Null, "t")
@@ -1898,7 +1898,7 @@ mod tests {
         for i in 0..5u32 {
             let name = format!("comp_{i}");
             reg.register(test_registration(&name))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(reg.len(), (i + 1) as usize);
         }
     }
@@ -1962,7 +1962,7 @@ mod tests {
     fn version_negotiation_result_serde_incompatible_roundtrip() {
         let result = VersionNegotiationResult {
             computation_name: ComputationName::new("incompat_rt")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             compatible: false,
             local_version: SchemaVersion::new(2, 0, 0),
             remote_version: SchemaVersion::new(1, 0, 0),
@@ -1984,7 +1984,7 @@ mod tests {
         ] {
             let reg = ComputationRegistration {
                 name: ComputationName::new("rt_comp")
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
                 input_schema: test_input_schema(),
                 output_schema: test_output_schema(),
                 version: SchemaVersion::new(1, 0, 0),
@@ -2006,7 +2006,7 @@ mod tests {
     fn event_count_registration_key_present() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("cnt_comp"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reg.event_counts().get("registration"), Some(&1));
     }
 
@@ -2014,7 +2014,7 @@ mod tests {
     fn event_count_capability_denied_increments() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("cap_cnt"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("cap_cnt").expect("constructor with valid inputs");
         let _ = reg.check_capability(&name, &compute_only_profile(), "t");
         assert_eq!(reg.event_counts().get("capability_denied"), Some(&1));
@@ -2024,10 +2024,10 @@ mod tests {
     fn event_count_capability_granted_increments() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("cap_grant"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("cap_grant").expect("constructor with valid inputs");
         reg.check_capability(&name, &remote_profile(), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reg.event_counts().get("capability_granted"), Some(&1));
     }
 
@@ -2036,7 +2036,7 @@ mod tests {
         let mut reg = RemoteComputationRegistry::new();
         let profile = CapabilityProfile::policy();
         reg.hot_register(test_registration("hot_cnt"), &profile, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reg.event_counts().get("hot_registration"), Some(&1));
     }
 
@@ -2059,7 +2059,7 @@ mod tests {
     fn capability_denied_emits_event() {
         let mut reg = RemoteComputationRegistry::new();
         reg.register(test_registration("cap_ev"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let name = ComputationName::new("cap_ev").expect("constructor with valid inputs");
         let _ = reg.check_capability(&name, &compute_only_profile(), "trace-cap-ev");
         let events = reg.drain_events();
@@ -2075,7 +2075,7 @@ mod tests {
         let names = ["zeta", "alpha", "mu", "delta", "beta"];
         for n in &names {
             reg.register(test_registration(n))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let mut expected = names.to_vec();
         expected.sort_unstable();

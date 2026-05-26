@@ -450,7 +450,7 @@ impl SignaturePreimage for SpecializationReceipt {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+            serde_json::to_vec(&copy).expect("serialization should succeed"),
         )
     }
 }
@@ -894,7 +894,7 @@ mod tests {
     }
 
     fn signing_key() -> SigningKey {
-        SigningKey::from_bytes([1u8; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([1u8; 32]).expect("operation should succeed for valid inputs")
     }
 
     // -- Serde round-trip tests --
@@ -1106,7 +1106,7 @@ mod tests {
             .performance_delta(test_performance_delta())
             .timestamp_ns(1_000_000)
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_ne!(r1.receipt_id, r2.receipt_id);
     }
 
@@ -1119,7 +1119,7 @@ mod tests {
         let mut receipt = test_receipt(epoch());
         receipt
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(receipt.verify(&vk).is_ok());
     }
 
@@ -1127,12 +1127,12 @@ mod tests {
     fn verify_fails_with_wrong_key() {
         let key = signing_key();
         let wrong_vk = SigningKey::from_bytes([2u8; 32])
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .verification_key();
         let mut receipt = test_receipt(epoch());
         receipt
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(receipt.verify(&wrong_vk).is_err());
     }
 
@@ -1143,7 +1143,7 @@ mod tests {
         let mut receipt = test_receipt(epoch());
         receipt
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         receipt.timestamp_ns = 999;
         assert!(receipt.verify(&vk).is_err());
     }
@@ -1225,19 +1225,19 @@ mod tests {
             .metadata("author", "plas")
             .metadata("version", "3")
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(
             receipt
                 .metadata
                 .get("author")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "plas"
         );
         assert_eq!(
             receipt
                 .metadata
                 .get("version")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "3"
         );
     }
@@ -1249,7 +1249,7 @@ mod tests {
         let mut idx = ReceiptIndex::new();
         assert!(idx.is_empty());
         idx.insert(test_receipt(epoch()))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(idx.len(), 1);
     }
 
@@ -1259,7 +1259,7 @@ mod tests {
         let receipt = test_receipt(epoch());
         let proof_id = receipt.proof_inputs[0].proof_id.clone();
         idx.insert(receipt)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let found = idx.specializations_from_proof(&proof_id);
         assert_eq!(found.len(), 1);
@@ -1274,7 +1274,7 @@ mod tests {
         let receipt = test_receipt(epoch());
         let rid = receipt.receipt_id.clone();
         idx.insert(receipt)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let proofs = idx.proofs_for_specialization(&rid);
         assert_eq!(proofs.len(), 2); // two proof inputs in test_receipt
@@ -1287,7 +1287,7 @@ mod tests {
     fn index_by_optimization_class() {
         let mut idx = ReceiptIndex::new();
         idx.insert(test_receipt(epoch()))
-            .expect("serde deserialization should succeed"); // HostcallDispatchSpecialization
+            .expect("operation should succeed for valid inputs"); // HostcallDispatchSpecialization
         let found = idx.by_optimization_class(OptimizationClass::HostcallDispatchSpecialization);
         assert_eq!(found.len(), 1);
         let empty = idx.by_optimization_class(OptimizationClass::PathElimination);
@@ -1300,7 +1300,7 @@ mod tests {
         let e42 = SecurityEpoch::from_raw(42);
         let e99 = SecurityEpoch::from_raw(99);
         idx.insert(test_receipt(e42))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(idx.by_epoch(e42).len(), 1);
         assert!(idx.by_epoch(e99).is_empty());
     }
@@ -1311,7 +1311,7 @@ mod tests {
         let e42 = SecurityEpoch::from_raw(42);
         let e43 = SecurityEpoch::from_raw(43);
         idx.insert(test_receipt(e42))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let stale = idx.invalidate_stale(e43);
         assert_eq!(stale.len(), 1);
         assert!(idx.is_empty());
@@ -1322,7 +1322,7 @@ mod tests {
         let mut idx = ReceiptIndex::new();
         let e42 = SecurityEpoch::from_raw(42);
         idx.insert(test_receipt(e42))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let stale = idx.invalidate_stale(e42);
         assert!(stale.is_empty());
         assert_eq!(idx.len(), 1);
@@ -1464,7 +1464,7 @@ mod tests {
             .fallback_path("modules::ifc::unspecialized_check")
             .performance_delta(test_performance_delta())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(receipt.proof_inputs.len(), 3);
     }
 
@@ -1485,7 +1485,7 @@ mod tests {
             .fallback_path("fallback_a")
             .performance_delta(test_performance_delta())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let r2 = ReceiptBuilder::new(OptimizationClass::PathElimination, e)
             .add_proof_input(pi.clone())
             .transformation_witness(TransformationWitness {
@@ -1498,12 +1498,12 @@ mod tests {
             .fallback_path("fallback_b")
             .performance_delta(test_performance_delta())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         idx.insert(r1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         idx.insert(r2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let found = idx.specializations_from_proof(&pi.proof_id);
         assert_eq!(found.len(), 2);
@@ -1537,7 +1537,7 @@ mod tests {
     fn receipt_index_serde_roundtrip() {
         let mut idx = ReceiptIndex::new();
         idx.insert(test_receipt(epoch()))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&idx).expect("serialize derived Serialize");
         let back: ReceiptIndex = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.len(), 1);
@@ -1556,11 +1556,11 @@ mod tests {
             .fallback_path("modules::fusion::baseline")
             .performance_delta(test_performance_delta())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(receipt.proof_inputs.len(), 1);
         receipt
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- ReceiptError serde --
@@ -1975,11 +1975,11 @@ mod tests {
         let mut original = ReceiptIndex::new();
         original
             .insert(test_receipt(epoch()))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut cloned = original.clone();
         cloned
             .insert(test_receipt(SecurityEpoch::from_raw(99)))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(original.len(), 1);
         assert_eq!(cloned.len(), 2);
     }
@@ -2337,11 +2337,11 @@ mod tests {
             .fallback_path("some::fallback")
             .performance_delta(test_performance_delta())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert!(receipt.metadata.is_empty());
         receipt
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2359,7 +2359,7 @@ mod tests {
         }
         let receipt = builder
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(receipt.metadata.len(), 50);
     }
 
@@ -2375,7 +2375,7 @@ mod tests {
             .performance_delta(test_performance_delta())
             .timestamp_ns(0)
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(receipt.timestamp_ns, 0);
     }
 
@@ -2391,7 +2391,7 @@ mod tests {
             .performance_delta(test_performance_delta())
             .timestamp_ns(u64::MAX)
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(receipt.timestamp_ns, u64::MAX);
     }
 
@@ -2593,7 +2593,7 @@ mod tests {
                 .fallback_path("fb")
                 .performance_delta(test_performance_delta())
                 .build()
-                .expect("serde deserialization should succeed");
+                .expect("builder should produce a valid value");
             let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
             let back: SpecializationReceipt =
                 serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2627,7 +2627,7 @@ mod tests {
         let mut receipt = test_receipt(epoch());
         receipt
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: SpecializationReceipt =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2643,7 +2643,7 @@ mod tests {
         for raw in [10u64, 20, 30] {
             let e = SecurityEpoch::from_raw(raw);
             idx.insert(test_receipt(e))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let json = serde_json::to_string(&idx).expect("serialize derived Serialize");
         let back: ReceiptIndex = serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2673,7 +2673,7 @@ mod tests {
             .performance_delta(test_performance_delta())
             .timestamp_ns(100)
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let r2 = ReceiptBuilder::new(OptimizationClass::HostcallDispatchSpecialization, e)
             .add_proof_input(test_proof_input(ProofType::CapabilityWitness, e))
             .transformation_witness(test_transformation_witness())
@@ -2683,7 +2683,7 @@ mod tests {
             .performance_delta(test_performance_delta())
             .timestamp_ns(200)
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_ne!(r1.receipt_id, r2.receipt_id);
     }
 
@@ -2698,7 +2698,7 @@ mod tests {
             .fallback_path("fb")
             .performance_delta(test_performance_delta())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let r2 = ReceiptBuilder::new(OptimizationClass::PathElimination, e)
             .add_proof_input(test_proof_input(ProofType::FlowProof, e))
             .transformation_witness(test_transformation_witness())
@@ -2708,7 +2708,7 @@ mod tests {
             .performance_delta(test_performance_delta())
             .metadata("extra", "value")
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_ne!(r1.content_hash(), r2.content_hash());
     }
 
@@ -2730,11 +2730,11 @@ mod tests {
             .fallback_path("fb2")
             .performance_delta(test_performance_delta())
             .build()
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         idx.insert(r1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         idx.insert(r2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(idx.by_epoch(e42).len(), 2);
     }
 
@@ -2744,9 +2744,9 @@ mod tests {
         let e1 = SecurityEpoch::from_raw(1);
         let e2 = SecurityEpoch::from_raw(2);
         idx.insert(test_receipt(e1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         idx.insert(test_receipt(e2))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(idx.len(), 2);
         let stale = idx.invalidate_stale(e2);
         assert_eq!(stale.len(), 1); // e1 receipt removed
@@ -2759,7 +2759,7 @@ mod tests {
         let mut idx = ReceiptIndex::new();
         for raw in 1..=5u64 {
             idx.insert(test_receipt(SecurityEpoch::from_raw(raw)))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(idx.all().len(), 5);
     }

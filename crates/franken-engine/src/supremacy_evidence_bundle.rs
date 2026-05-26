@@ -1392,7 +1392,7 @@ mod tests {
         let cells = vec![green_cell("a"), green_cell("b"), green_cell("c")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("bundle-1", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.verdict.is_approved());
         assert_eq!(bundle.cells.len(), 3);
         assert_eq!(bundle.coverage_stats.green_count, 3);
@@ -1403,7 +1403,7 @@ mod tests {
         let cells = vec![green_cell("a"), red_cell("b")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("bundle-red", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1416,7 +1416,7 @@ mod tests {
         let direct_verdict = evaluate_publication_gate_inputs(&cells, &stats, epoch(), &config);
 
         let bundle = assemble_bundle("bundle-direct-gate", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(bundle.verdict, direct_verdict);
         assert!(validate_bundle_integrity(&bundle).is_ok());
@@ -1458,7 +1458,7 @@ mod tests {
         let mut config = BundleConfig::permissive();
         config.max_staleness_epochs = 5;
         let bundle = assemble_bundle("stale-bundle", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.verdict.is_blocked());
         if let PublicationGateVerdict::Blocked { reasons } = &bundle.verdict {
             assert!(reasons.iter().any(|r| r.tag() == "stale_evidence"));
@@ -1472,7 +1472,7 @@ mod tests {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("valid", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(validate_bundle_integrity(&bundle).is_ok());
     }
 
@@ -1481,7 +1481,7 @@ mod tests {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
         let mut bundle = assemble_bundle("tamper", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         bundle.bundle_id = "tampered-id".to_string();
         assert!(validate_bundle_integrity(&bundle).is_err());
     }
@@ -1493,7 +1493,7 @@ mod tests {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("rcpt", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let genesis_hash = ContentHash::compute(b"genesis");
         let receipt = DecisionReceipt::new("rcpt-001", &bundle, genesis_hash);
         assert_eq!(receipt.bundle_id, "rcpt");
@@ -1505,9 +1505,9 @@ mod tests {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
         let bundle1 = assemble_bundle("b1", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bundle2 = assemble_bundle("b2", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let genesis = ContentHash::compute(b"genesis");
         let r1 = DecisionReceipt::new("r1", &bundle1, genesis);
@@ -1523,7 +1523,7 @@ mod tests {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("rtamp", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let genesis = ContentHash::compute(b"genesis");
         let mut receipt = DecisionReceipt::new("rtamp-001", &bundle, genesis);
         receipt.verdict_tag = "tampered".to_string();
@@ -1535,7 +1535,7 @@ mod tests {
         let cells = vec![green_cell("a")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("rserde", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let genesis = ContentHash::compute(b"genesis");
         let receipt = DecisionReceipt::new("rs-001", &bundle, genesis);
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
@@ -1551,7 +1551,7 @@ mod tests {
         let cells = vec![green_cell("a"), unsupported_cell("b")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("unsup", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1560,7 +1560,7 @@ mod tests {
         let cells = vec![green_cell("a"), ambiguous_cell("b")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("ambig", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1569,7 +1569,7 @@ mod tests {
         let cells = vec![green_cell("a"), missing_cell("b")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("miss-status", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1581,7 +1581,7 @@ mod tests {
         config.min_coverage_fraction_millionths = MILLIONTHS;
         config.require_all_green = true;
         let bundle = assemble_bundle("cov-low", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.verdict.is_blocked());
     }
 
@@ -1590,7 +1590,7 @@ mod tests {
         let cells = vec![green_cell("a"), yellow_cell("b")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("yellow-ok", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Permissive: yellow is not blocking by itself (no strict check).
         assert!(bundle.verdict.is_approved());
     }
@@ -1602,7 +1602,7 @@ mod tests {
         let cells = vec![green_cell("a"), green_cell("b")];
         let config = BundleConfig::permissive();
         let bundle = assemble_bundle("serde-test", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&bundle).expect("serialize derived Serialize");
         let back: EvidenceBundle =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1614,9 +1614,9 @@ mod tests {
         let cells = vec![green_cell("a"), green_cell("b")];
         let config = BundleConfig::permissive();
         let b1 = assemble_bundle("det", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b2 = assemble_bundle("det", &cells, &config, epoch())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(b1.bundle_hash, b2.bundle_hash);
     }
 }

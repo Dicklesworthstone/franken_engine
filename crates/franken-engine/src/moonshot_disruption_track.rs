@@ -902,7 +902,7 @@ mod tests {
             result
                 .error_message
                 .as_ref()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "Evidence validation failed"
         );
     }
@@ -1053,7 +1053,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: Just verified result.is_ok() above
-        let execution = result.expect("serde deserialization should succeed");
+        let execution = result.expect("operation should succeed for valid inputs");
         assert!(execution.scorecard_result.is_some());
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Pass);
     }
@@ -1070,7 +1070,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: Just verified result.is_ok() above
-        let execution = result.expect("serde deserialization should succeed");
+        let execution = result.expect("operation should succeed for valid inputs");
         assert!(execution.scorecard_result.is_none()); // No scorecard if gates fail
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Fail);
     }
@@ -1087,7 +1087,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: Just verified result.is_ok() above
-        let execution = result.expect("serde deserialization should succeed");
+        let execution = result.expect("operation should succeed for valid inputs");
         assert_eq!(execution.overall_status(), DisruptionTrackStatus::Pending);
     }
 
@@ -1106,7 +1106,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(allows_frontier_release(&execution));
     }
 
@@ -1121,7 +1121,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(!allows_frontier_release(&execution));
     }
 
@@ -1162,7 +1162,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &execution);
         // Should have one overall status entry + one per gate
         assert_eq!(entries.len(), 1 + MoonshotGateId::all().len());
@@ -1179,7 +1179,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-42", &execution);
         assert!(entries.iter().all(|e| e.trace_id == "trace-42"));
     }
@@ -1241,7 +1241,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test-env".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // SAFETY: DisruptionTrackExecution derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&execution).expect("serialize derived Serialize");
         // SAFETY: JSON was just produced by valid DisruptionTrackExecution serialization

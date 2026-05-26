@@ -1209,7 +1209,7 @@ mod tests {
         let contract = LaneContract::new();
         let e = contract
             .lookup(BuiltinFamily::ArrayMap)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(e.max_lane_width, LaneWidth::Lane16);
         assert!(!e.supports_early_exit);
         assert!(e.supports_masking);
@@ -1221,7 +1221,7 @@ mod tests {
         let contract = LaneContract::new();
         let e = contract
             .lookup(BuiltinFamily::ArrayEvery)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(e.supports_early_exit);
     }
 
@@ -1230,7 +1230,7 @@ mod tests {
         let contract = LaneContract::new();
         let e = contract
             .lookup(BuiltinFamily::TypedArrayFill)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(e.required_oracles.is_empty());
     }
 
@@ -1270,7 +1270,7 @@ mod tests {
             decision
                 .rejection_reason
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("missing required oracle")
         );
     }
@@ -1291,7 +1291,7 @@ mod tests {
             decision
                 .rejection_reason
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("not met")
         );
     }
@@ -1307,7 +1307,7 @@ mod tests {
             decision
                 .rejection_reason
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("zero-length")
         );
     }
@@ -1466,7 +1466,7 @@ mod tests {
             decision
                 .rejection_reason
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("missing")
         );
     }

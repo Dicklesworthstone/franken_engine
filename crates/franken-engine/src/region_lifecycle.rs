@@ -529,7 +529,7 @@ mod tests {
         let mut region = test_region();
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = region.cancel(CancelReason::Quarantine).unwrap_err();
         assert_eq!(err.current_state, RegionState::CancelRequested);
         assert_eq!(err.attempted_transition, "cancel");
@@ -548,7 +548,7 @@ mod tests {
         let mut region = test_region();
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(region.drain(DrainDeadline::default()).is_ok());
         assert_eq!(region.state(), RegionState::Draining);
     }
@@ -558,7 +558,7 @@ mod tests {
         let mut region = test_region();
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = region.finalize().unwrap_err();
         assert_eq!(err.current_state, RegionState::CancelRequested);
         assert_eq!(err.attempted_transition, "finalize");
@@ -578,13 +578,13 @@ mod tests {
         let mut region = test_region();
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         region
             .drain(DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = region
             .finalize()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.success);
         assert_eq!(region.state(), RegionState::Closed);
     }
@@ -594,7 +594,7 @@ mod tests {
         let mut region = test_region();
         let result = region
             .close(CancelReason::Quarantine, DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.success);
         assert_eq!(region.state(), RegionState::Closed);
     }
@@ -627,13 +627,13 @@ mod tests {
 
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         region
             .drain(DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = region
             .finalize()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(result.success);
         assert_eq!(result.obligations_committed, 1);
@@ -648,13 +648,13 @@ mod tests {
 
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         region
             .drain(DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = region
             .finalize()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Pending obligations remain but since no timeout escalation, they stay pending
         // and the result is not success.
@@ -670,10 +670,10 @@ mod tests {
 
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         region
             .drain(DrainDeadline { max_ticks: 5 })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for _ in 0..4 {
             assert!(!region.drain_tick());
@@ -683,7 +683,7 @@ mod tests {
 
         let result = region
             .finalize()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.drain_timeout_escalated);
         // Pending obligations force-aborted by timeout escalation
         assert_eq!(result.obligations_aborted, 1);
@@ -702,7 +702,7 @@ mod tests {
 
         parent
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parent.state(), RegionState::CancelRequested);
     }
 
@@ -716,10 +716,10 @@ mod tests {
 
         parent
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parent
             .drain(DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Resolve obligations
         parent.commit_obligation("ob-p1");
@@ -741,13 +741,13 @@ mod tests {
         let mut region = test_region();
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         region
             .drain(DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         region
             .finalize()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = region.drain_events();
         // cancel_initiated, drain_started, finalize_success, closed
@@ -763,7 +763,7 @@ mod tests {
         let mut region = test_region();
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = region.drain_events();
         let event = &events[0];
@@ -781,13 +781,13 @@ mod tests {
 
         parent
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parent
             .drain(DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parent
             .finalize()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = parent.drain_events();
         let parent_events: Vec<_> = events.iter().filter(|e| e.region_id == "parent").collect();
@@ -805,16 +805,16 @@ mod tests {
             region.register_obligation("ob-1", "flush");
             region
                 .cancel(CancelReason::Quarantine)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             region
                 .drain(DrainDeadline { max_ticks: 3 })
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             for _ in 0..3 {
                 region.drain_tick();
             }
             region
                 .finalize()
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             region.drain_events()
         };
 
@@ -846,7 +846,7 @@ mod tests {
         let mut region = test_region();
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(region.cancel(CancelReason::Quarantine).is_err());
     }
 
@@ -855,7 +855,7 @@ mod tests {
         let mut region = test_region();
         region
             .close(CancelReason::OperatorShutdown, DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             region
                 .close(CancelReason::Quarantine, DrainDeadline::default())
@@ -1093,7 +1093,7 @@ mod tests {
         // CancelRequested state
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!region.drain_tick());
     }
 
@@ -1103,7 +1103,7 @@ mod tests {
         assert!(region.cancel_reason().is_none());
         region
             .cancel(CancelReason::Quarantine)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(region.cancel_reason(), Some(&CancelReason::Quarantine));
     }
 
@@ -1123,7 +1123,7 @@ mod tests {
         parent.add_child(Region::new("child", "ext", "t"));
         parent
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Parent should have 1 event (cancel_initiated), child should also have 1
         // event_count() only counts the parent's own events
         assert_eq!(parent.event_count(), 1);
@@ -1142,7 +1142,7 @@ mod tests {
                 CancelReason::OperatorShutdown,
                 DrainDeadline { max_ticks: 10 },
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.success);
         assert_eq!(result.obligations_committed, 2);
         assert_eq!(result.obligations_aborted, 0);
@@ -1169,10 +1169,10 @@ mod tests {
         region.register_obligation("ob-1", "slow");
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         region
             .drain(DrainDeadline { max_ticks: 2 })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Tick 1: no timeout
         assert!(!region.drain_tick());
@@ -1272,13 +1272,13 @@ mod tests {
         let mut region = test_region();
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         region
             .drain(DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = region
             .finalize()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.success);
         assert_eq!(result.obligations_committed, 0);
         assert_eq!(result.obligations_aborted, 0);
@@ -1290,7 +1290,7 @@ mod tests {
         let mut region = test_region();
         region
             .cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events1 = region.drain_events();
         assert!(!events1.is_empty());
         let events2 = region.drain_events();
@@ -1302,7 +1302,7 @@ mod tests {
         let mut region = test_region();
         region
             .close(CancelReason::BudgetExhausted, DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(region.cancel_reason(), Some(&CancelReason::BudgetExhausted));
     }
 
@@ -1343,7 +1343,7 @@ mod tests {
 
         let result = parent
             .close(CancelReason::OperatorShutdown, DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.success);
         assert_eq!(parent.state(), RegionState::Closed);
     }
@@ -1791,14 +1791,14 @@ mod tests {
         let mut r = test_region();
         r.register_obligation("ob-1", "stuck");
         r.cancel(CancelReason::OperatorShutdown)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r.drain(DrainDeadline { max_ticks: 2 })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Tick past deadline
         r.drain_tick();
         r.drain_tick();
         assert!(r.drain_tick()); // timed out
-        let result = r.finalize().expect("serde deserialization should succeed");
+        let result = r.finalize().expect("operation should succeed for valid inputs");
         // obligation was force-aborted
         assert_eq!(result.obligations_aborted, 1);
         assert!(result.drain_timeout_escalated);
@@ -1820,7 +1820,7 @@ mod tests {
         parent.add_child(child);
         parent
             .close(CancelReason::Quarantine, DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = parent.drain_events();
         // Should have events from both parent and child
         let parent_events: Vec<_> = events.iter().filter(|e| e.region_id == "p").collect();
@@ -1833,7 +1833,7 @@ mod tests {
     fn drain_events_is_idempotent_empty_on_second_call() {
         let mut r = test_region();
         r.close(CancelReason::Revocation, DrainDeadline::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let first = r.drain_events();
         assert!(!first.is_empty());
         let second = r.drain_events();

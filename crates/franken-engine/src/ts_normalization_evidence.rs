@@ -699,7 +699,7 @@ mod tests {
         let ts = std::time::SystemTime::now()
             // SAFETY: Test helper getting current timestamp; system time is after UNIX_EPOCH
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .as_nanos();
         std::env::temp_dir().join(format!("{}-{}", prefix, ts))
     }

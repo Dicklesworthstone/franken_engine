@@ -145,18 +145,18 @@ fn main() {
     let source_file = PathBuf::from(
         matches
             .get_one::<String>("source")
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
     );
     let output_dir = PathBuf::from(
         matches
             .get_one::<String>("output")
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
     );
     let alien_artifact_mode = matches.get_flag("alien-artifact");
 
     let dom_strategy = match matches
         .get_one::<String>("dom-strategy")
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
         .as_str()
     {
         "direct" => DomManipulationStrategy::Direct,

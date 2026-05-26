@@ -1228,9 +1228,9 @@ mod tests {
     #[test]
     fn policy_serde_json_string_shape() {
         let json_lab = serde_json::to_string(&ObligationLeakPolicy::Lab)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let json_prod = serde_json::to_string(&ObligationLeakPolicy::Production)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json_lab.starts_with('"'));
         assert!(json_prod.starts_with('"'));
         assert_ne!(json_lab, json_prod);
@@ -1251,11 +1251,11 @@ mod tests {
     #[test]
     fn failover_action_serde_tagged_shape() {
         let alert = serde_json::to_string(&FailoverAction::AlertOnly)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let scoped = serde_json::to_string(&FailoverAction::ScopedRegionClose {
             region_id: "r".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
         assert_ne!(alert, scoped);
     }
 

@@ -685,19 +685,19 @@ mod tests {
         assert_eq!(
             "smoke"
                 .parse::<OraclePartition>()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             OraclePartition::Smoke
         );
         assert_eq!(
             "full"
                 .parse::<OraclePartition>()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             OraclePartition::Full
         );
         assert_eq!(
             "nightly"
                 .parse::<OraclePartition>()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             OraclePartition::Nightly
         );
     }
@@ -737,13 +737,13 @@ mod tests {
         assert_eq!(
             "report_only"
                 .parse::<OracleGateMode>()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             OracleGateMode::ReportOnly
         );
         assert_eq!(
             "fail_closed"
                 .parse::<OracleGateMode>()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             OracleGateMode::FailClosed
         );
     }
@@ -855,7 +855,7 @@ mod tests {
         let obs = ParseObservation::Hash(hash);
         let hex_str = obs
             .hash_hex()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(hex_str.starts_with("sha256:"));
         assert!(hex_str.contains("ab"));
         assert!(hex_str.contains("cd"));
@@ -872,7 +872,7 @@ mod tests {
         let obs = ParseObservation::Error(ParseErrorCode::UnsupportedSyntax);
         let code = obs
             .error_code()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!code.is_empty());
     }
 
@@ -1120,7 +1120,7 @@ mod tests {
             decision
                 .fallback_reason
                 .as_deref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("critical")
         );
     }
@@ -1136,7 +1136,7 @@ mod tests {
             decision
                 .fallback_reason
                 .as_deref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("minor")
         );
     }
@@ -1236,7 +1236,7 @@ mod tests {
             expected_hash: String::new(),
         };
         assert_eq!(
-            parse_goal_from_fixture(&fixture).expect("serde deserialization should succeed"),
+            parse_goal_from_fixture(&fixture).expect("operation should succeed for valid inputs"),
             ParseGoal::Script
         );
     }
@@ -1251,7 +1251,7 @@ mod tests {
             expected_hash: String::new(),
         };
         assert_eq!(
-            parse_goal_from_fixture(&fixture).expect("serde deserialization should succeed"),
+            parse_goal_from_fixture(&fixture).expect("operation should succeed for valid inputs"),
             ParseGoal::Module
         );
     }

@@ -1645,7 +1645,7 @@ mod tests {
         let a = library_result(arts.clone(), vec![]);
         let b = cli_result(arts, vec![]);
         let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.verdict, VerificationVerdict::Pass);
         assert!(report.mismatches.is_empty());
     }
@@ -1673,7 +1673,7 @@ mod tests {
         let mut b = cli_result(vec![], vec![]);
         b.success = false;
         let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.verdict, VerificationVerdict::Inconclusive);
     }
 
@@ -1689,7 +1689,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.verdict, VerificationVerdict::Fail);
         assert!(
             report
@@ -1712,7 +1712,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.verdict, VerificationVerdict::Pass);
         assert!(
             report
@@ -1737,7 +1737,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.verdict, VerificationVerdict::Fail);
         assert!(
             report
@@ -1773,7 +1773,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Size divergence is info-level, doesn't cause fail.
         assert!(
             report
@@ -1799,7 +1799,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             report
                 .mismatches
@@ -1813,7 +1813,7 @@ mod tests {
         let a = library_result(vec![make_artifact(ArtifactKind::SourceMap, b"map")], vec![]);
         let b = cli_result(vec![], vec![]);
         let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             report
                 .mismatches
@@ -1833,7 +1833,7 @@ mod tests {
             vec![],
         );
         let report = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             report
                 .mismatches
@@ -1851,7 +1851,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             !report
                 .mismatches
@@ -1921,7 +1921,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(report.mismatch_count_by_kind(MismatchKind::ArtifactMissing) > 0);
     }
 
@@ -1940,7 +1940,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(report.weighted_score() > 0);
     }
 
@@ -1956,7 +1956,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_compile_parity(&a, &b, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(report.has_errors());
     }
 
@@ -1966,9 +1966,9 @@ mod tests {
         let a = library_result(arts.clone(), vec![]);
         let b = cli_result(arts, vec![]);
         let r1 = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = verify_compile_parity(&a, &b, &default_config(), &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.content_hash(), r2.content_hash());
     }
 
@@ -2020,7 +2020,7 @@ mod tests {
     #[test]
     fn batch_empty_pass() {
         let report = verify_batch(&[], &default_config(), &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.overall_verdict, VerificationVerdict::Pass);
         assert_eq!(report.total_mismatches, 0);
     }
@@ -2038,7 +2038,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_batch(&[scenario], &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.overall_verdict, VerificationVerdict::Pass);
         assert_eq!(report.pass_count(), 1);
         assert_eq!(report.fail_count(), 0);
@@ -2064,7 +2064,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_batch(&[s_pass, s_fail], &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.overall_verdict, VerificationVerdict::Fail);
         assert_eq!(report.pass_count(), 1);
         assert_eq!(report.fail_count(), 1);
@@ -2085,7 +2085,7 @@ mod tests {
             ..default_config()
         };
         let report = verify_batch(&scenarios, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.pass_rate(), 1_000_000);
     }
 
@@ -2102,9 +2102,9 @@ mod tests {
             ..default_config()
         };
         let r1 = verify_batch(&scenarios, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = verify_batch(&scenarios, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 

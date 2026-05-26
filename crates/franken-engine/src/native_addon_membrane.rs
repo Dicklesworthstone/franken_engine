@@ -1407,7 +1407,7 @@ mod tests {
         let reg = make_registration(addon_id, AddonAbi::NodeApi, &[CapabilityKind::Buffer]);
         state
             .register_addon(reg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
     }
 
@@ -1854,7 +1854,7 @@ mod tests {
         let mut s = MembraneState::new();
         let reg = make_registration("a", AddonAbi::NodeApi, &[]);
         s.register_addon(reg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let reg2 = make_registration("a", AddonAbi::WasiPreview1, &[]);
         assert!(matches!(
             s.register_addon(reg2),
@@ -1886,7 +1886,7 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id, 1);
         assert_eq!(s.active_handles, 1);
         assert_eq!(s.handle_table.len(), 1);
@@ -1898,10 +1898,10 @@ mod tests {
         let policy = default_policy();
         let id1 = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = s
             .allocate_handle("a", HandleKind::BufferHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
     }
@@ -1933,7 +1933,7 @@ mod tests {
         policy.allow_external_handles = true;
         let id = s
             .allocate_handle("a", HandleKind::ExternalHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(id > 0);
     }
 
@@ -1943,9 +1943,9 @@ mod tests {
         let mut policy = default_policy();
         policy.max_active_handles = 2;
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy),
             Err(MembraneError::HandleLimitExceeded { .. })
@@ -1969,13 +1969,13 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(s.revoke_handle(id).is_ok());
         assert_eq!(s.active_handles, 0);
         assert_eq!(s.revoked_handles, 1);
         assert_eq!(
             s.get_handle(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             HandleState::Revoked
         );
@@ -1996,9 +1996,9 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.revoke_handle(id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             s.revoke_handle(id),
             Err(MembraneError::HandleAlreadyRevoked { .. })
@@ -2011,9 +2011,9 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.finalize_handle(id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             s.revoke_handle(id),
             Err(MembraneError::HandleAlreadyFinalized { .. })
@@ -2026,12 +2026,12 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(s.finalize_handle(id).is_ok());
         assert_eq!(s.active_handles, 0);
         assert_eq!(
             s.get_handle(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             HandleState::Finalized
         );
@@ -2043,13 +2043,13 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.revoke_handle(id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(s.finalize_handle(id).is_ok());
         assert_eq!(
             s.get_handle(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             HandleState::Finalized
         );
@@ -2061,9 +2061,9 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.finalize_handle(id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             s.finalize_handle(id),
             Err(MembraneError::HandleAlreadyFinalized { .. })
@@ -2076,11 +2076,11 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(s.mark_handle_escaped(id, 1000).is_ok());
         assert_eq!(
             s.get_handle(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             HandleState::Escaped
         );
@@ -2095,9 +2095,9 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::CallbackHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.mark_handle_escaped(id, 5000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s.violations.len(), 1);
         assert_eq!(s.violations[0].addon_id, "a");
         assert_eq!(s.violations[0].timestamp_micros, 5000);
@@ -2109,13 +2109,13 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.mark_handle_escaped(id, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(s.revoke_handle(id).is_ok());
         assert_eq!(
             s.get_handle(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             HandleState::Revoked
         );
@@ -2136,7 +2136,7 @@ mod tests {
         let mut s = MembraneState::new();
         let reg = make_registration("a", AddonAbi::CustomFfi, &[CapabilityKind::Buffer]);
         s.register_addon(reg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let config = default_routing();
         let decision = s.route_call("a", &config);
         assert_eq!(decision, RouteDecision::SlowPath);
@@ -2148,7 +2148,7 @@ mod tests {
         let mut s = MembraneState::new();
         let reg = make_registration("netless", AddonAbi::NodeApi, &[]);
         s.register_addon(reg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut required = BTreeSet::new();
         required.insert(CapabilityKind::Network);
         assert_eq!(
@@ -2178,7 +2178,7 @@ mod tests {
         let mut s = MembraneState::new();
         let reg = make_registration("netful", AddonAbi::NodeApi, &[CapabilityKind::Network]);
         s.register_addon(reg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = default_routing();
         config.required_capabilities = [CapabilityKind::Network].into_iter().collect();
 
@@ -2244,13 +2244,13 @@ mod tests {
         let policy = default_policy();
         let id1 = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _id2 = s
             .allocate_handle("a", HandleKind::BufferHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s.count_handles_in_state(HandleState::Active), 2);
         s.revoke_handle(id1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s.count_handles_in_state(HandleState::Active), 1);
         assert_eq!(s.count_handles_in_state(HandleState::Revoked), 1);
     }
@@ -2261,16 +2261,16 @@ mod tests {
         let reg_a = make_registration("a", AddonAbi::NodeApi, &[]);
         let reg_b = make_registration("b", AddonAbi::NodeApi, &[]);
         s.register_addon(reg_a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_addon(reg_b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let policy = default_policy();
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.allocate_handle("b", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.allocate_handle("a", HandleKind::BufferHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s.handles_for_addon("a").len(), 2);
         assert_eq!(s.handles_for_addon("b").len(), 1);
     }
@@ -2280,9 +2280,9 @@ mod tests {
         let mut s = make_state_with_addon("a");
         let policy = default_policy();
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s.total_handle_count(), 2);
     }
 
@@ -2329,9 +2329,9 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.mark_handle_escaped(id, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
         assert_eq!(report.verdict, MembraneVerdict::Breached);
     }
@@ -2364,7 +2364,7 @@ mod tests {
         let policy = default_policy();
         let config = default_routing();
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.route_call("a", &config);
         s.route_call("a", &config);
         let report = evaluate_membrane(&s, &policy, &epoch(1), 1000);
@@ -2472,16 +2472,16 @@ mod tests {
         let reg_a = make_registration("a", AddonAbi::NodeApi, &[]);
         let reg_b = make_registration("b", AddonAbi::NodeApi, &[]);
         s.register_addon(reg_a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_addon(reg_b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let policy = default_policy();
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.allocate_handle("a", HandleKind::BufferHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.allocate_handle("b", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let revoked = revoke_all_handles_for_addon(&mut s, "a");
         assert_eq!(revoked.len(), 2);
         assert_eq!(s.active_handles, 1); // only b's handle
@@ -2491,11 +2491,11 @@ mod tests {
     fn count_registrations_by_abi_test() {
         let mut s = MembraneState::new();
         s.register_addon(make_registration("a", AddonAbi::NodeApi, &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_addon(make_registration("b", AddonAbi::NodeApi, &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_addon(make_registration("c", AddonAbi::CustomFfi, &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(count_registrations_by_abi(&s, AddonAbi::NodeApi), 2);
         assert_eq!(count_registrations_by_abi(&s, AddonAbi::CustomFfi), 1);
         assert_eq!(count_registrations_by_abi(&s, AddonAbi::WasiPreview1), 0);
@@ -2514,7 +2514,7 @@ mod tests {
         let mut s = MembraneState::new();
         let h1 = compute_state_hash(&s);
         s.register_addon(make_registration("a", AddonAbi::NodeApi, &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let h2 = compute_state_hash(&s);
         assert_ne!(h1, h2);
     }
@@ -2580,13 +2580,13 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.mark_handle_escaped(id, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(s.finalize_handle(id).is_ok());
         assert_eq!(
             s.get_handle(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             HandleState::Finalized
         );
@@ -2598,9 +2598,9 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.finalize_handle(id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             s.mark_handle_escaped(id, 100),
             Err(MembraneError::HandleAlreadyFinalized { .. })
@@ -2615,13 +2615,13 @@ mod tests {
             AddonAbi::NodeApi,
             &[CapabilityKind::Buffer],
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         s.register_addon(make_registration(
             "slow",
             AddonAbi::CustomFfi,
             &[CapabilityKind::Buffer],
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let config = default_routing();
         let d1 = s.route_call("fast", &config);
         let d2 = s.route_call("slow", &config);
@@ -2637,13 +2637,13 @@ mod tests {
             AddonAbi::NodeApi,
             &[CapabilityKind::Buffer],
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         s.register_addon(make_registration(
             "b",
             AddonAbi::NodeApi,
             &[CapabilityKind::Buffer],
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         for _ in 0..DEFAULT_FALLBACK_THRESHOLD_FAILURES {
             s.record_crash("a", "crash", 100);
         }
@@ -2660,7 +2660,7 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.shutdown();
         assert!(matches!(
             s.revoke_handle(id),
@@ -2674,7 +2674,7 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.shutdown();
         assert!(matches!(
             s.finalize_handle(id),
@@ -2688,7 +2688,7 @@ mod tests {
         let policy = default_policy();
         let id = s
             .allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.shutdown();
         assert!(matches!(
             s.mark_handle_escaped(id, 100),
@@ -2701,7 +2701,7 @@ mod tests {
         let mut s = make_state_with_addon("a");
         let policy = default_policy();
         s.allocate_handle("a", HandleKind::ValueHandle, epoch(1), &policy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_crash("a", "boom", 100);
         let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: MembraneState =

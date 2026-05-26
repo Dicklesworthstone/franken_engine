@@ -1949,7 +1949,7 @@ mod tests {
         // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker
             .accept(&node, 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = tracker.accept(&node, 2).unwrap_err();
         assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
     }
@@ -1962,7 +1962,7 @@ mod tests {
         // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker
             .accept(&node, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = tracker.accept(&node, 1).unwrap_err();
         assert!(matches!(err, ProtocolError::ReplayDetected { .. }));
     }
@@ -1976,11 +1976,11 @@ mod tests {
         // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker
             .accept(&a, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker
             .accept(&b, 1)
-            .expect("serde deserialization should succeed"); // independent
+            .expect("operation should succeed for valid inputs"); // independent
         assert_eq!(tracker.last_sequence(&a), 5);
         assert_eq!(tracker.last_sequence(&b), 1);
     }
@@ -1991,11 +1991,11 @@ mod tests {
         // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker
             .accept(&NodeId::new("a"), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test accepts valid sequence number; accept succeeds in controlled test environment.
         tracker
             .accept(&NodeId::new("b"), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let nodes = tracker.known_nodes();
         assert_eq!(nodes.len(), 2);
         assert!(nodes.contains(&NodeId::new("a")));
@@ -2047,7 +2047,7 @@ mod tests {
 
         // SAFETY: Test creates valid intents; resolve_all succeeds in controlled test environment.
         let winner = DeterministicPrecedence::resolve_all(&intents)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(winner.proposed_action, ContainmentAction::Quarantine);
     }
 
@@ -2070,7 +2070,7 @@ mod tests {
 
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&packet)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(acc.posterior_delta("ext-1"), 500_000);
         assert_eq!(acc.evidence_count("ext-1"), 1);
     }
@@ -2081,10 +2081,10 @@ mod tests {
 
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-1", 1, 300_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-2", "ext-1", 1, 200_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(acc.posterior_delta("ext-1"), 500_000);
         assert_eq!(acc.evidence_count("ext-1"), 2);
@@ -2096,10 +2096,10 @@ mod tests {
 
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-1", 1, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-2", "ext-1", 1, -200_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(acc.posterior_delta("ext-1"), 300_000);
     }
@@ -2111,7 +2111,7 @@ mod tests {
 
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&packet)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = acc.ingest(&packet).unwrap_err();
         assert!(matches!(err, ProtocolError::DuplicateEvidence { .. }));
         assert_eq!(acc.posterior_delta("ext-1"), 500_000); // not doubled
@@ -2123,10 +2123,10 @@ mod tests {
 
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-1", 1, 300_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-2", 2, 700_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(acc.posterior_delta("ext-1"), 300_000);
         assert_eq!(acc.posterior_delta("ext-2"), 700_000);
@@ -2141,10 +2141,10 @@ mod tests {
         for acc in [&mut acc1, &mut acc2] {
             // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
             acc.ingest(&test_evidence("node-1", "ext-1", 1, 300_000))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
             acc.ingest(&test_evidence("node-2", "ext-1", 1, 200_000))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert_eq!(acc1.summary_hash(), acc2.summary_hash());
@@ -2155,10 +2155,10 @@ mod tests {
         let mut acc = EvidenceAccumulator::new();
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-a", 1, 100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test creates valid evidence packet; ingest succeeds in controlled test environment.
         acc.ingest(&test_evidence("node-1", "ext-b", 2, 200))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let exts = acc.extensions();
         assert!(exts.contains("ext-a"));
@@ -2225,7 +2225,7 @@ mod tests {
         // SAFETY: Test processes valid evidence packet; process_evidence succeeds in controlled test environment.
         state
             .process_evidence(&packet)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.evidence.posterior_delta("ext-1"), 500_000);
     }
 
@@ -2237,7 +2237,7 @@ mod tests {
         // SAFETY: Test processes valid evidence packet; process_evidence succeeds in controlled test environment.
         state
             .process_evidence(&p1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Same node, lower sequence → replay.
         let p2 = test_evidence("remote-1", "ext-2", 1, 100_000);
@@ -2253,7 +2253,7 @@ mod tests {
         // SAFETY: Test processes valid containment intent; process_intent succeeds in controlled test environment.
         state
             .process_intent(&intent)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.pending_intents.len(), 1);
     }
 
@@ -2270,7 +2270,7 @@ mod tests {
                 1,
                 1,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test processes valid containment intent; process_intent succeeds in controlled test environment.
         state
             .process_intent(&test_intent(
@@ -2280,12 +2280,12 @@ mod tests {
                 1,
                 1,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Test resolves valid extension intents; resolve_intents succeeds in controlled test environment.
         let winner = state
             .resolve_intents("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(winner.proposed_action, ContainmentAction::Terminate);
     }
 
@@ -2297,7 +2297,7 @@ mod tests {
         // SAFETY: Test processes valid heartbeat; process_heartbeat succeeds in controlled test environment.
         state
             .process_heartbeat(&hb)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.health.known_node_count(), 1);
     }
 
@@ -2330,7 +2330,7 @@ mod tests {
 
         state
             .process_heartbeat(&test_heartbeat("node-1", 1, 1_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // At time 20s with default 15s timeout → node-1 partitioned.
         let partitioned = state.partitioned_nodes(20_000_000_000);
@@ -2454,10 +2454,10 @@ mod tests {
         let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
         state
             .process_evidence(&test_evidence("remote-1", "ext-1", 1, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .process_heartbeat(&test_heartbeat("remote-2", 1, 5_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         let decoded: FleetProtocolState =
@@ -2473,9 +2473,9 @@ mod tests {
         // Ingest same evidence in same order.
         for acc in [&mut acc1, &mut acc2] {
             acc.ingest(&test_evidence("node-1", "ext-b", 1, 100))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             acc.ingest(&test_evidence("node-1", "ext-a", 2, 200))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let json1 = serde_json::to_string(&acc1).expect("serialize derived Serialize");
@@ -2487,9 +2487,9 @@ mod tests {
     fn accumulator_saturating_add_no_overflow() {
         let mut acc = EvidenceAccumulator::new();
         acc.ingest(&test_evidence("node-1", "ext-1", 1, i64::MAX))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         acc.ingest(&test_evidence("node-2", "ext-1", 1, 1_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should saturate at i64::MAX, not overflow.
         assert_eq!(acc.posterior_delta("ext-1"), i64::MAX);
@@ -2991,10 +2991,10 @@ mod tests {
         let now = 10_000_000_000u64;
         state
             .process_heartbeat(&test_heartbeat("node-1", 1, now))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .process_heartbeat(&test_heartbeat("node-2", 1, now))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Add an intent so there's something to resolve
         state
@@ -3005,12 +3005,12 @@ mod tests {
                 2,
                 1,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let sig = test_signature("local");
         let checkpoint = state
             .build_checkpoint(now + 1_000_000_000, sig)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(checkpoint.checkpoint_seq, 1);
         assert_eq!(checkpoint.participating_nodes.len(), 2);
@@ -3035,16 +3035,16 @@ mod tests {
 
         state
             .process_heartbeat(&test_heartbeat("node-1", 1, old))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .process_heartbeat(&test_heartbeat("node-2", 1, old))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .process_heartbeat(&test_heartbeat("node-3", 1, old))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .process_heartbeat(&test_heartbeat("node-4", 1, now))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let sig = test_signature("local");
         let err = state.build_checkpoint(now, sig).unwrap_err();
@@ -3057,14 +3057,14 @@ mod tests {
         let now = 10_000_000_000u64;
         state
             .process_heartbeat(&test_heartbeat("node-1", 1, now))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = state
             .build_checkpoint(now + 1_000_000, test_signature("local"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cp2 = state
             .build_checkpoint(now + 2_000_000, test_signature("local"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(cp1.checkpoint_seq, 1);
         assert_eq!(cp2.checkpoint_seq, 2);
@@ -3093,7 +3093,7 @@ mod tests {
                 5,
                 1,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = state
             .process_intent(&test_intent(
@@ -3124,7 +3124,7 @@ mod tests {
         let mut state = FleetProtocolState::new(NodeId::new("local"), GossipConfig::default());
         state
             .process_heartbeat(&test_heartbeat("node-1", 5, 5_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = state
             .process_heartbeat(&test_heartbeat("node-1", 3, 6_000_000_000))
@@ -3145,10 +3145,10 @@ mod tests {
         let mut tracker = NodeSequenceTracker::new();
         tracker
             .accept(&NodeId::new("a"), 10)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .accept(&NodeId::new("b"), 20)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&tracker).expect("serialize derived Serialize");
         let back: NodeSequenceTracker =
@@ -3221,11 +3221,11 @@ mod tests {
     fn accumulator_summary_hash_differs_with_different_evidence() {
         let mut acc1 = EvidenceAccumulator::new();
         acc1.ingest(&test_evidence("node-1", "ext-1", 1, 100_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut acc2 = EvidenceAccumulator::new();
         acc2.ingest(&test_evidence("node-1", "ext-1", 1, 200_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(acc1.summary_hash(), acc2.summary_hash());
     }
@@ -3259,7 +3259,7 @@ mod tests {
             1,
         )];
         let winner = DeterministicPrecedence::resolve_all(&intents)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(winner.proposed_action, ContainmentAction::Terminate);
         assert_eq!(winner.node_id, NodeId::new("node-a"));
     }
@@ -3298,7 +3298,7 @@ mod tests {
                 1,
                 1,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .process_intent(&test_intent(
                 "node-b",
@@ -3307,16 +3307,16 @@ mod tests {
                 1,
                 1,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let w1 = state
             .resolve_intents("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(w1.proposed_action, ContainmentAction::Sandbox);
 
         let w2 = state
             .resolve_intents("ext-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(w2.proposed_action, ContainmentAction::Quarantine);
 
         assert!(state.resolve_intents("ext-unknown").is_none());
@@ -3329,7 +3329,7 @@ mod tests {
         // node-a sends evidence seq=1, then intent seq=2
         state
             .process_evidence(&test_evidence("node-a", "ext-1", 1, 100_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .process_intent(&test_intent(
                 "node-a",
@@ -3338,7 +3338,7 @@ mod tests {
                 2,
                 1,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify both accumulated
         assert_eq!(state.evidence.posterior_delta("ext-1"), 100_000);

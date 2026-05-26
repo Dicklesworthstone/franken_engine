@@ -857,7 +857,7 @@ mod tests {
     #[test]
     fn lane_type_serde_round_trip() {
         let json = serde_json::to_string(&LaneType::ProofSpecialized)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let back: LaneType = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, LaneType::ProofSpecialized);
     }
@@ -1283,7 +1283,7 @@ mod tests {
         let summary = decision
             .logs
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.event, "gate_decision");
         assert_eq!(summary.outcome, "pass");
     }

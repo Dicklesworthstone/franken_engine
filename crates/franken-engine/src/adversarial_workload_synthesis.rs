@@ -1062,7 +1062,7 @@ impl SynthesisEngine {
                 .inputs_by_domain
                 .get(&domain_key)
                 .cloned()
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             for strategy in &config.strategies {
                 for seed in &seeds {
@@ -1689,7 +1689,7 @@ mod tests {
         // SAFETY: Test helper creates valid input; add_input succeeds in controlled test environment.
         engine
             .add_input(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.input_count(), 1);
         assert!(
             engine
@@ -1712,7 +1712,7 @@ mod tests {
         // SAFETY: Test-only unwrap for add_input with valid input to empty engine
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.domains.clear();
         let err = engine.validate_config(&config).unwrap_err();
@@ -1725,7 +1725,7 @@ mod tests {
         // SAFETY: Test helper creates valid input; add_input succeeds in controlled test environment.
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.strategies.clear();
         let err = engine.validate_config(&config).unwrap_err();
@@ -1738,7 +1738,7 @@ mod tests {
         // SAFETY: Test helper creates valid input; add_input succeeds in controlled test environment.
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let config = SynthesisConfig::default_config(epoch());
         let err = engine.validate_config(&config).unwrap_err();
         assert_eq!(err.tag(), "missing_domain_inputs");
@@ -1750,14 +1750,14 @@ mod tests {
         // SAFETY: Test helper creates valid input; add_input succeeds in controlled test environment.
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
         // SAFETY: Valid config with inputs for all domains; run_campaign succeeds in test.
         let campaign = engine
             .run_campaign("c1", config, |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(campaign.counterexample_count(), 0);
         // With 1 seed, 1 strategy, 1 domain: 1 iteration.
         assert_eq!(campaign.iterations_completed, 1);
@@ -1769,13 +1769,13 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
         let campaign = engine
             .run_campaign("c1", config, |_, _, _| Some(80_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(campaign.counterexample_count(), 1);
         assert_eq!(campaign.verdict(), SynthesisVerdict::Falsified);
         assert_eq!(campaign.worst_regression_millionths(), 80_000);
@@ -1786,7 +1786,7 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
@@ -1794,7 +1794,7 @@ mod tests {
         // Return regression below threshold.
         let campaign = engine
             .run_campaign("c1", config, |_, _, _| Some(50_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(campaign.counterexample_count(), 0);
     }
 
@@ -1803,11 +1803,11 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let config = SynthesisConfig::minimal(epoch());
         engine
             .run_campaign("dup", config.clone(), |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = engine
             .run_campaign("dup", config, |_, _, _| None)
             .unwrap_err();
@@ -1826,16 +1826,16 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
         engine
             .run_campaign("c1", config, |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.verdict, SynthesisVerdict::Fortified);
         assert_eq!(report.total_counterexamples, 0);
         assert_eq!(report.worst_regression_millionths, 0);
@@ -1848,16 +1848,16 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
         engine
             .run_campaign("c1", config, |_, _, _| Some(150_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.verdict, SynthesisVerdict::Falsified);
         assert_eq!(report.total_counterexamples, 1);
         assert_eq!(report.worst_regression_millionths, 150_000);
@@ -1870,16 +1870,16 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
         engine
             .run_campaign("c1", config, |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(report.verify_integrity());
     }
 
@@ -1888,7 +1888,7 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
@@ -1896,15 +1896,15 @@ mod tests {
         // First campaign: no counterexamples.
         engine
             .run_campaign("c1", config.clone(), |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Second campaign: counterexample found.
         engine
             .run_campaign("c2", config, |_, _, _| Some(200_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Worst verdict wins: Falsified.
         assert_eq!(report.verdict, SynthesisVerdict::Falsified);
         assert_eq!(report.total_counterexamples, 1);
@@ -1917,10 +1917,10 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .add_input(make_input("s2", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
@@ -1936,10 +1936,10 @@ mod tests {
                     Some(300_000)
                 }
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.worst_regression_millionths, 300_000);
     }
 
@@ -1949,7 +1949,7 @@ mod tests {
         // Only add input for one domain.
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Config asks for two domains.
         let mut config = SynthesisConfig::minimal(epoch());
         config.domains.insert(WorkloadDomain::Vectorizable);
@@ -1964,18 +1964,18 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Require 100 iterations per domain but only 1 seed x 1 strategy = 1 iteration.
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 100;
         config.max_iterations = 10_000;
         let campaign = engine
             .run_campaign("c1", config, |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(campaign.verdict(), SynthesisVerdict::Incomplete);
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.verdict, SynthesisVerdict::Incomplete);
         assert!(!report.claim_survives());
     }
@@ -1985,12 +1985,12 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.max_iterations = 0;
         let campaign = engine
             .run_campaign("c1", config, |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(campaign.iterations_completed, 0);
         assert_eq!(campaign.verdict(), SynthesisVerdict::Incomplete);
     }
@@ -2000,20 +2000,20 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
 
         engine
             .run_campaign("c1", config.clone(), |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .run_campaign("c2", config, |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.total_iterations(), 2);
     }
 
@@ -2022,24 +2022,24 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
 
         engine
             .run_campaign("c1", config.clone(), |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .run_campaign("c2", config, |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cov = report
             .domain_coverage
             .get("branch_heavy")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cov.iterations, 2);
     }
 
@@ -2085,16 +2085,16 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
         engine
             .run_campaign("c1", config, |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.schema_version, SCHEMA_VERSION);
     }
 
@@ -2103,16 +2103,16 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
         engine
             .run_campaign("c1", config, |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let display = report.to_string();
         assert!(display.contains("r1"));
         assert!(display.contains("fortified"));
@@ -2123,7 +2123,7 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
@@ -2131,7 +2131,7 @@ mod tests {
         // First campaign: Fortified.
         engine
             .run_campaign("c1", config.clone(), |_, _, _| None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Manually add an infra-failed campaign.
         let mut failed_campaign = SynthesisCampaign::new("c_fail", config);
@@ -2140,7 +2140,7 @@ mod tests {
 
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.verdict, SynthesisVerdict::InfrastructureFailure);
     }
 
@@ -2149,7 +2149,7 @@ mod tests {
         let mut engine = SynthesisEngine::new(epoch());
         engine
             .add_input(make_input("s1", WorkloadDomain::BranchHeavy))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut config = SynthesisConfig::minimal(epoch());
         config.min_iterations_per_domain = 1;
         config.max_iterations = 100;
@@ -2157,7 +2157,7 @@ mod tests {
         // First campaign: counterexample found.
         engine
             .run_campaign("c1", config.clone(), |_, _, _| Some(100_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Manually add an infra-failed campaign.
         let mut failed_campaign = SynthesisCampaign::new("c_fail", config);
@@ -2166,7 +2166,7 @@ mod tests {
 
         let report = engine
             .evaluate("r1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Falsified is the worst — it wins.
         assert_eq!(report.verdict, SynthesisVerdict::Falsified);
     }

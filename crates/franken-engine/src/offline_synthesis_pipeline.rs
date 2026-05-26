@@ -1412,7 +1412,7 @@ mod tests {
         let spec = simple_spec();
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(output.spec_id, "test_spec");
         assert!(!output.decision_tables.is_empty());
@@ -1427,7 +1427,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let table = &output.decision_tables[0];
         // Look up a state in the table
         let state = ObservableState {
@@ -1442,7 +1442,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let table = &output.decision_tables[0];
         let state = ObservableState {
             values: BTreeMap::from([("risk".into(), 999_999_999), ("load".into(), 999_999_999)]),
@@ -1455,7 +1455,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
 
         // Start in "normal", with high risk value → should transition to "elevated"
@@ -1470,7 +1470,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
 
         // Low risk → stay in normal
@@ -1485,7 +1485,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
 
         // In elevated, high load → critical
@@ -1500,7 +1500,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
 
         // In recovery with low risk → normal
@@ -1515,7 +1515,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for cert in &output.certificates {
             assert!(!cert.evidence.is_empty());
             assert!(!cert.certificate_id.is_empty());
@@ -1529,7 +1529,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for cert in &output.certificates {
             assert!(cert.all_obligations_met);
             assert!(!cert.satisfied_obligations.is_empty());
@@ -1541,7 +1541,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for w in &output.stage_witnesses {
             assert!(matches!(w.status, StageStatus::Completed { .. }));
             assert!(!w.input_hash.is_empty());
@@ -1554,7 +1554,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let stages: Vec<PipelineStage> = output.stage_witnesses.iter().map(|w| w.stage).collect();
         assert_eq!(
             stages,
@@ -1573,7 +1573,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(output.threshold_bundles.len(), 1);
         let bundle = &output.threshold_bundles[0];
         assert!(!bundle.thresholds.is_empty());
@@ -1592,7 +1592,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bundle = &output.threshold_bundles[0];
         let conformal = bundle
             .thresholds
@@ -1601,7 +1601,7 @@ mod tests {
         assert!(conformal.is_some());
         assert_eq!(
             conformal
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_millionths,
             700_000
         );
@@ -1612,7 +1612,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(output.total_resource_usage.iterations > 0);
     }
 
@@ -1621,7 +1621,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let table = &output.decision_tables[0];
         assert!(table.entry_count() > 0);
     }
@@ -1631,7 +1631,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
         assert_eq!(automaton.state_count(), 5);
     }
@@ -1641,7 +1641,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
         assert!(automaton.transition_count() > 0);
     }
@@ -1684,7 +1684,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&output).expect("serialize derived Serialize");
         let back: SynthesisOutput =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1696,7 +1696,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let table = &output.decision_tables[0];
         let json = serde_json::to_string(table).expect("serialize derived Serialize");
         let back: DecisionTable =
@@ -1709,7 +1709,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
         let json = serde_json::to_string(automaton).expect("serialize derived Serialize");
         let back: TransitionAutomaton =
@@ -1722,7 +1722,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bundle = &output.threshold_bundles[0];
         let json = serde_json::to_string(bundle).expect("serialize derived Serialize");
         let back: ThresholdBundle =
@@ -1735,7 +1735,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &output.certificates[0];
         let json = serde_json::to_string(cert).expect("serialize derived Serialize");
         let back: ArtifactCertificate =
@@ -1792,7 +1792,7 @@ mod tests {
         // With very low budget, table generation may be budget-limited
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             output.total_resource_usage.budget_limited
                 || output.decision_tables[0].entry_count() <= 10
@@ -1823,7 +1823,7 @@ mod tests {
         };
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!output.decision_tables.is_empty());
     }
 
@@ -1851,7 +1851,7 @@ mod tests {
         };
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!output.decision_tables.is_empty());
     }
 
@@ -1879,7 +1879,7 @@ mod tests {
         };
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!output.decision_tables.is_empty());
     }
 
@@ -1921,7 +1921,7 @@ mod tests {
         };
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(output.decision_tables.len(), 2);
     }
 
@@ -1972,7 +1972,7 @@ mod tests {
         };
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(output.automata.len(), 2);
     }
 
@@ -2034,7 +2034,7 @@ mod tests {
         };
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let table = &output.decision_tables[0];
         // Multi-var constraint: x+y <= 1_000_000. Grid has points where x+y > 1_000_000.
         let blocked_count = table
@@ -2050,7 +2050,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut hashes = BTreeSet::new();
         for table in &output.decision_tables {
             assert!(hashes.insert(table.content_hash.clone()));
@@ -2163,7 +2163,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
         // Critical → Recovery (unconditional, priority 0)
         let bindings = BTreeMap::new();
@@ -2233,7 +2233,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let table = &output.decision_tables[0];
         for row in &table.rows {
             if row.entry.guardrail_blocked {
@@ -2339,10 +2339,10 @@ mod tests {
         let spec = simple_spec();
         let out1 = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let out2 = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json1 = serde_json::to_string(&out1).expect("serialize derived Serialize");
         let json2 = serde_json::to_string(&out2).expect("serialize derived Serialize");
         assert_eq!(
@@ -2370,7 +2370,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
         let bindings = BTreeMap::new();
         let (new_state, action) = automaton.step("nonexistent_state", &bindings);
@@ -2538,7 +2538,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let automaton = &output.automata[0];
         // normal, elevated, degraded should be accepting; critical, recovery should not
         assert!(automaton.states["normal"].accepting);
@@ -2553,7 +2553,7 @@ mod tests {
         let p = pipeline();
         let output = p
             .synthesize(&simple_spec())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for table in &output.decision_tables {
             for pair in table.rows.windows(2) {
                 assert!(
@@ -2600,7 +2600,7 @@ mod tests {
         };
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // With x constrained to exactly 500_000, the table should have a single row
         assert_eq!(output.decision_tables[0].entry_count(), 1);
     }
@@ -2641,7 +2641,7 @@ mod tests {
         };
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Ne does not tighten, so grid should have full 5 points (0, 250k, 500k, 750k, 1M)
         assert!(output.decision_tables[0].entry_count() >= 5);
     }
@@ -2652,7 +2652,7 @@ mod tests {
         let spec = simple_spec();
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bundle = &output.threshold_bundles[0];
         let fixed = bundle
             .thresholds
@@ -2990,7 +2990,7 @@ mod tests {
         };
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             output.decision_tables.is_empty(),
             "no objectives => no tables"
@@ -3006,7 +3006,7 @@ mod tests {
         let spec = simple_spec();
         let output = p
             .synthesize(&spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for cert in &output.certificates {
             assert_eq!(cert.epoch, spec.epoch);
         }

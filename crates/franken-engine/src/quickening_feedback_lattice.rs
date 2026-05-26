@@ -244,7 +244,7 @@ impl Default for QuickeningPolicy {
 
 impl QuickeningPolicy {
     pub fn policy_hash(&self) -> String {
-        let payload = serde_json::to_vec(self).expect("serde deserialization should succeed");
+        let payload = serde_json::to_vec(self).expect("serialization should succeed");
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }
@@ -417,7 +417,7 @@ impl SuperInstructionPattern {
     }
 
     pub fn pattern_hash(&self) -> String {
-        let payload = serde_json::to_vec(self).expect("serde deserialization should succeed");
+        let payload = serde_json::to_vec(self).expect("serialization should succeed");
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }
@@ -461,7 +461,7 @@ impl SuperInstructionCatalog {
     }
 
     fn compute_hash(patterns: &[SuperInstructionPattern]) -> String {
-        let payload = serde_json::to_vec(patterns).expect("serde deserialization should succeed");
+        let payload = serde_json::to_vec(patterns).expect("serialization should succeed");
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }
@@ -679,7 +679,7 @@ impl QuickeningProfile {
 
     /// Profile content hash for deterministic replay.
     pub fn profile_hash(&self) -> String {
-        let payload = serde_json::to_vec(&self).expect("serde deserialization should succeed");
+        let payload = serde_json::to_vec(&self).expect("serialization should succeed");
         let digest = Sha256::digest(payload);
         hex::encode(digest)
     }
@@ -822,7 +822,7 @@ impl QuickeningDecision {
             summary,
             decision_hash: String::new(),
         };
-        let payload = serde_json::to_vec(&decision).expect("serde deserialization should succeed");
+        let payload = serde_json::to_vec(&decision).expect("serialization should succeed");
         let digest = Sha256::digest(payload);
         decision.decision_hash = hex::encode(digest);
         decision
@@ -1137,7 +1137,7 @@ mod tests {
         assert_eq!(
             profile
                 .get(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Warm
         );
@@ -1148,7 +1148,7 @@ mod tests {
         assert_eq!(
             profile
                 .get(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Hot
         );
@@ -1159,7 +1159,7 @@ mod tests {
         assert_eq!(
             profile
                 .get(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Quickened
         );
@@ -1182,7 +1182,7 @@ mod tests {
         assert_eq!(
             profile
                 .get(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Hot
         );
@@ -1191,7 +1191,7 @@ mod tests {
         assert_eq!(
             profile
                 .get(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Cold
         );
@@ -1903,14 +1903,14 @@ mod tests {
         assert_eq!(
             profile
                 .get(4)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Hot
         );
         assert_eq!(
             profile
                 .get(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Warm
         );
@@ -1920,7 +1920,7 @@ mod tests {
         assert_eq!(
             profile
                 .get(4)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Quickened
         );
@@ -2265,7 +2265,7 @@ mod tests {
         for level in levels {
             let next = level
                 .advance()
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(
                 next.rank() > level.rank(),
                 "advance from {level} should produce a strictly higher rank"
@@ -2888,7 +2888,7 @@ mod tests {
         assert_eq!(
             profile
                 .get(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Quickened
         );
@@ -2896,7 +2896,7 @@ mod tests {
         assert_eq!(
             profile
                 .get(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .level,
             QuickeningLevel::Warm
         );

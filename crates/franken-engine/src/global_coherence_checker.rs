@@ -1159,7 +1159,7 @@ fn make_violation(
             &schema,
             b"fallback",
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     });
 
     CoherenceViolation {
@@ -1415,7 +1415,7 @@ mod tests {
         for c in components {
             graph
                 .add_component(c.to_string())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for (from, to, kind) in edges {
             graph
@@ -1425,7 +1425,7 @@ mod tests {
                     kind,
                     label: format!("{from}->{to}"),
                 })
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         graph
     }
@@ -1502,16 +1502,16 @@ mod tests {
     fn add_component_and_edge() {
         let mut g = CompositionGraph::new();
         g.add_component("A".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_component("B".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.add_edge(CompositionEdge {
             from_component: "A".to_string(),
             to_component: "B".to_string(),
             kind: CompositionEdgeKind::ParentChild,
             label: "A->B".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(g.component_count(), 2);
         assert_eq!(g.edge_count(), 1);
     }
@@ -1520,7 +1520,7 @@ mod tests {
     fn edge_to_unknown_component_fails() {
         let mut g = CompositionGraph::new();
         g.add_component("A".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = g.add_edge(CompositionEdge {
             from_component: "A".to_string(),
             to_component: "Z".to_string(),
@@ -1572,7 +1572,7 @@ mod tests {
         assert_eq!(
             parent_adj
                 .get("A")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );
@@ -1580,7 +1580,7 @@ mod tests {
         assert_eq!(
             ctx_adj
                 .get("A")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );
@@ -1693,7 +1693,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.outcome, CoherenceOutcome::Coherent);
         assert!(result.violations.is_empty());
     }
@@ -1704,7 +1704,7 @@ mod tests {
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_coherent());
     }
 
@@ -1714,7 +1714,7 @@ mod tests {
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.summary_line().contains("coherent"));
         assert!(result.summary_line().contains("0 violations"));
     }
@@ -1737,7 +1737,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.outcome, CoherenceOutcome::Incoherent);
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
@@ -1760,7 +1760,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::OrphanedProvider { context_key, .. }
@@ -1785,7 +1785,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_coherent());
     }
 
@@ -1802,7 +1802,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::DuplicateProvider { context_key, .. }
@@ -1823,7 +1823,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.context_pairs_checked, 2);
     }
 
@@ -1849,7 +1849,7 @@ mod tests {
             .insert("Boundary".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::CapabilityGap {
@@ -1876,7 +1876,7 @@ mod tests {
             .insert("Boundary".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::BoundaryCapabilityLeak {
@@ -1903,7 +1903,7 @@ mod tests {
             .insert("Boundary".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().all(|v| !matches!(
             &v.kind,
             CoherenceViolationKind::BoundaryCapabilityLeak { .. }
@@ -1926,7 +1926,7 @@ mod tests {
             .insert("B2".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.capability_boundaries_checked, 2);
     }
 
@@ -1948,7 +1948,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .violations
@@ -1970,7 +1970,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .violations
@@ -1999,7 +1999,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .violations
@@ -2028,7 +2028,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .violations
@@ -2076,7 +2076,7 @@ mod tests {
             .insert("SuspenseBoundary".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::SuspenseBoundaryConflict { .. }
@@ -2112,7 +2112,7 @@ mod tests {
             .insert("SuspenseBoundary".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().all(|v| !matches!(
             &v.kind,
             CoherenceViolationKind::SuspenseBoundaryConflict { .. }
@@ -2128,7 +2128,7 @@ mod tests {
         input.suspense_components.insert("S2".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.suspense_boundaries_checked, 2);
     }
 
@@ -2160,7 +2160,7 @@ mod tests {
             .insert("HydrationBoundary".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::HydrationBoundaryConflict { .. }
@@ -2187,7 +2187,7 @@ mod tests {
             .insert("HydrationBoundary".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().all(|v| !matches!(
             &v.kind,
             CoherenceViolationKind::HydrationBoundaryConflict { .. }
@@ -2203,7 +2203,7 @@ mod tests {
         input.hydration_components.insert("H2".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.hydration_boundaries_checked, 2);
     }
 
@@ -2227,7 +2227,7 @@ mod tests {
         let input = make_input(entries, vec!["CompA", "CompB"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::HookCleanupMismatch { hook_label, .. }
@@ -2251,7 +2251,7 @@ mod tests {
         let input = make_input(entries, vec!["CompA", "CompB"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .violations
@@ -2275,7 +2275,7 @@ mod tests {
         let input = make_input(entries, vec!["C1", "C2", "C3"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.outcome, CoherenceOutcome::BudgetExhausted);
         assert!(result.violations.len() <= 2);
     }
@@ -2297,7 +2297,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let blocking = result.blocking_violations();
         assert!(!blocking.is_empty());
         for v in &blocking {
@@ -2315,7 +2315,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let by_code = result.violations_by_debt_code();
         assert!(by_code.contains_key(DEBT_UNRESOLVED_CONTEXT));
     }
@@ -2330,10 +2330,10 @@ mod tests {
         );
         let r1 = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.result_hash, r2.result_hash);
     }
 
@@ -2508,7 +2508,7 @@ mod tests {
     fn parse_hook_signature_valid() {
         let parsed = parse_hook_signature("slot=0;kind=Effect;label=fetch;deps=1;cleanup=true");
         assert!(parsed.is_some());
-        let p = parsed.expect("serde deserialization should succeed");
+        let p = parsed.expect("operation should succeed for valid inputs");
         assert_eq!(p.label, "fetch");
         assert!(p.has_cleanup);
     }
@@ -2517,7 +2517,7 @@ mod tests {
     fn parse_hook_signature_no_cleanup() {
         let parsed = parse_hook_signature("slot=0;kind=State;label=count;deps=none;cleanup=false");
         assert!(parsed.is_some());
-        let p = parsed.expect("serde deserialization should succeed");
+        let p = parsed.expect("operation should succeed for valid inputs");
         assert_eq!(p.label, "count");
         assert!(!p.has_cleanup);
     }
@@ -2663,7 +2663,7 @@ mod tests {
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CoherenceCheckResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2694,7 +2694,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Body requires "data" which nobody provides
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
@@ -2721,7 +2721,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_coherent());
     }
 
@@ -2738,7 +2738,7 @@ mod tests {
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.check_epoch, 42);
     }
 
@@ -2752,7 +2752,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.component_count, 2);
         assert_eq!(result.edge_count, 1);
     }
@@ -2880,7 +2880,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.outcome, CoherenceOutcome::CoherentWithWarnings);
         assert!(result.is_coherent());
     }
@@ -2895,7 +2895,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.outcome, CoherenceOutcome::Incoherent);
         assert!(!result.is_coherent());
     }
@@ -2914,7 +2914,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let line = result.summary_line();
         assert!(line.contains("incoherent"));
         assert!(line.contains("1 violations"));
@@ -2931,7 +2931,7 @@ mod tests {
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.schema_version, GLOBAL_COHERENCE_SCHEMA_VERSION);
     }
 
@@ -2941,7 +2941,7 @@ mod tests {
         let input = make_input(vec![test_entry("A")], vec!["A"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.bead_id, GLOBAL_COHERENCE_BEAD_ID);
     }
 
@@ -2964,7 +2964,7 @@ mod tests {
         );
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.total_severity_millionths >= 2_000_000);
     }
 
@@ -2990,7 +2990,7 @@ mod tests {
         input.hydration_components.insert("HB".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
             CoherenceViolationKind::HydrationBoundaryConflict { .. }
@@ -3104,7 +3104,7 @@ mod tests {
     fn edge_from_unknown_source_fails() {
         let mut g = CompositionGraph::new();
         g.add_component("B".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = g.add_edge(CompositionEdge {
             from_component: "Z".to_string(),
             to_component: "B".to_string(),
@@ -3163,7 +3163,7 @@ mod tests {
         let input = make_input(entries, vec!["CompA", "CompB"], vec![]);
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Different labels → no mismatch
         assert!(
             result
@@ -3202,7 +3202,7 @@ mod tests {
         input.suspense_components.insert("SB".to_string());
         let result = checker
             .check(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Async2 is missing "auth" that Async1 has → info-level violation
         assert!(result.violations.iter().any(|v| matches!(
             &v.kind,
@@ -3226,10 +3226,10 @@ mod tests {
         );
         let r1 = checker
             .check(&input1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = checker
             .check(&input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.result_hash, r2.result_hash);
     }
 

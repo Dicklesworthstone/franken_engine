@@ -682,7 +682,7 @@ mod tests {
             &test_schema_id(),
             tag.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     fn cap_witness_proof(tag: &str, epoch: SecurityEpoch) -> SecurityProof {
@@ -1288,7 +1288,7 @@ mod tests {
         // SAFETY: Test just called evaluate() which should populate proof inputs
         let inputs = engine
             .last_applied_proof_inputs()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].proof_type, ProofType::CapabilityWitness);
         assert_eq!(inputs[0].validity_window_ticks, 1000);
@@ -1478,7 +1478,7 @@ mod tests {
         let last_event = engine
             .events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last_event.event, "epoch_change_invalidation");
         assert_eq!(
             last_event.error_code.as_deref(),
@@ -1897,7 +1897,7 @@ mod tests {
         // SAFETY: Test just inserted proof with this ID, so get() should succeed
         let retrieved = store
             .get(&pid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(retrieved.proof_id(), &pid);
         assert_eq!(retrieved.proof_type(), ProofType::CapabilityWitness);
     }
@@ -2704,7 +2704,7 @@ mod tests {
         engine.evaluate(&region_good, "t2", 1);
         let inputs = engine
             .last_applied_proof_inputs()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(inputs.len(), 1);
         assert_eq!(inputs[0].proof_type, ProofType::CapabilityWitness);
     }
@@ -2726,7 +2726,7 @@ mod tests {
         store.insert(proof);
         let removed = store
             .remove(&pid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(removed.proof_id(), &pid);
         assert!(store.is_empty());
     }
@@ -2756,7 +2756,7 @@ mod tests {
         assert_eq!(store.len(), 1);
         let retrieved = store
             .get(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(retrieved.validity_window_ticks(), 200);
     }
 

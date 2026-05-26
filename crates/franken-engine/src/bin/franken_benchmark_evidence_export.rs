@@ -123,19 +123,19 @@ fn main() {
     let input_path = Path::new(
         matches
             .get_one::<String>("input")
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
     );
     let output_path = Path::new(
         matches
             .get_one::<String>("output")
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
     );
     let format = matches
         .get_one::<String>("format")
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     let export_type = matches
         .get_one::<String>("type")
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     let verbose = matches.get_flag("verbose");
 
     if verbose {

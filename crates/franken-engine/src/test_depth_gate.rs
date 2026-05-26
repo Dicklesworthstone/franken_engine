@@ -975,11 +975,11 @@ mod tests {
         let sec_stmt = targets
             .iter()
             .find(|t| t.surface == TestSurface::Security && t.kind == CoverageKind::Statement)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let parser_stmt = targets
             .iter()
             .find(|t| t.surface == TestSurface::Parser && t.kind == CoverageKind::Statement)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(sec_stmt.min_coverage_millionths >= parser_stmt.min_coverage_millionths);
     }
 
@@ -1135,7 +1135,7 @@ mod tests {
         let sec = policies
             .iter()
             .find(|p| p.surface == TestSurface::Security)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sec.tier, MutationTier::Critical);
         assert!(sec.hard_gate);
     }
@@ -1560,10 +1560,10 @@ mod tests {
         let result = cfg.evaluate_surface(&metrics, None, None);
         let id1 = result
             .derive_id()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = result
             .derive_id()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2);
     }
 

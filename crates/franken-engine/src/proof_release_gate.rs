@@ -1519,7 +1519,7 @@ mod tests {
             assert_eq!(
                 log.proof_hash
                     .as_ref()
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .len(),
                 64
             );
@@ -1543,7 +1543,7 @@ mod tests {
         let summary = decision
             .logs
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.outcome, "fail");
         assert!(summary.error_code.is_some());
     }
@@ -1555,7 +1555,7 @@ mod tests {
         let summary = decision
             .logs
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.outcome, "pass");
         assert!(summary.error_code.is_none());
     }
@@ -1801,7 +1801,7 @@ mod tests {
         let evidence = input
             .test_evidence
             .as_mut()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         evidence.required_failure_mode_tests = 0;
         let decision = evaluate_release_gate(&input, &ReleaseGateThresholds::default());
         assert!(
@@ -1819,7 +1819,7 @@ mod tests {
         let evidence = input
             .test_evidence
             .as_mut()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         evidence.required_e2e_scenarios = 0;
         let decision = evaluate_release_gate(&input, &ReleaseGateThresholds::default());
         assert!(
@@ -1837,7 +1837,7 @@ mod tests {
         let evidence = input
             .test_evidence
             .as_mut()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         evidence.logging_artifact_count = 0;
         let decision = evaluate_release_gate(&input, &ReleaseGateThresholds::default());
         // Should trigger both TestEvidenceBelowThreshold (required fields)
@@ -1853,7 +1853,7 @@ mod tests {
         let evidence = input
             .test_evidence
             .as_mut()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         evidence.mutation_score_millionths = 100_000; // well below 850_000
         let decision = evaluate_release_gate(&input, &ReleaseGateThresholds::default());
         assert!(
@@ -1871,7 +1871,7 @@ mod tests {
         let evidence = input
             .test_evidence
             .as_mut()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         evidence.executed_failure_mode_tests = 5; // below required 12
         let decision = evaluate_release_gate(&input, &ReleaseGateThresholds::default());
         assert!(
@@ -1889,7 +1889,7 @@ mod tests {
         let evidence = input
             .test_evidence
             .as_mut()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         evidence.executed_e2e_scenarios = 3; // below required 9
         let decision = evaluate_release_gate(&input, &ReleaseGateThresholds::default());
         assert!(
@@ -1982,7 +1982,7 @@ mod tests {
         let evidence = input
             .test_evidence
             .as_mut()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         evidence.trace_correlated_logging = false;
         let thresholds = ReleaseGateThresholds {
             require_trace_correlated_logging: false,

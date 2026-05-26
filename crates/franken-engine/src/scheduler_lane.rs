@@ -1910,7 +1910,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         let id = sched
             .submit(cancel_label("t1"), 0, "payload-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id.0, 1);
         assert_eq!(sched.queue_depth(SchedulerLane::Cancel), 1);
     }
@@ -1955,10 +1955,10 @@ mod tests {
         let mut sched = LaneScheduler::new(config);
         sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t2"), 0, "p2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             sched.submit(cancel_label("t3"), 0, "p3", 0),
             Err(LaneError::LaneFull { .. })
@@ -1972,13 +1972,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(ready_label("t1"), 0, "ready-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t2"), 0, "cancel-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(timed_label("t3"), 100, "timed-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 200);
         // Cancel should be first.
@@ -1990,10 +1990,10 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(ready_label("t1"), 0, "ready-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(timed_label("t2"), 50, "timed-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 100);
         // Timed task (deadline 50 <= current 100) should be before ready.
@@ -2004,8 +2004,8 @@ mod tests {
             .iter()
             .position(|t| t.label.lane == SchedulerLane::Ready);
         assert!(
-            timed_pos.expect("serde deserialization should succeed")
-                < ready_pos.expect("serde deserialization should succeed")
+            timed_pos.expect("operation should succeed for valid inputs")
+                < ready_pos.expect("operation should succeed for valid inputs")
         );
     }
 
@@ -2014,10 +2014,10 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(timed_label("t1"), 500, "timed-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t2"), 0, "ready-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 100);
         // Timed task has deadline 500 > current 100, so it stays queued.
@@ -2041,13 +2041,13 @@ mod tests {
         for i in 0..5 {
             sched
                 .submit(cancel_label(&format!("t{i}")), 0, &format!("c{i}"), 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Add ready tasks.
         for i in 0..3 {
             sched
                 .submit(ready_label(&format!("rt{i}")), 0, &format!("r{i}"), 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let batch = sched.schedule_batch(5, 0);
@@ -2068,10 +2068,10 @@ mod tests {
         let mut sched = LaneScheduler::new(config);
         sched
             .submit(cancel_label("cancel-1"), 0, "c1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("ready-1"), 0, "r1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(0, 0);
         assert!(batch.is_empty());
@@ -2086,13 +2086,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(ready_label("t1"), 0, "first", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t2"), 0, "second", 10)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t3"), 0, "third", 20)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 30);
         assert_eq!(batch[0].payload_id, "first");
@@ -2107,13 +2107,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(timed_label("t1"), 300, "late", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(timed_label("t2"), 100, "early", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(timed_label("t3"), 200, "mid", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 500);
         let timed: Vec<_> = batch
@@ -2132,13 +2132,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t2"), 0, "p2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t3"), 0, "p3", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let m = sched.lane_metrics();
         assert_eq!(m["cancel"].tasks_submitted, 2);
@@ -2150,10 +2150,10 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t2"), 0, "p2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched.schedule_batch(10, 0);
 
         let m = sched.lane_metrics();
@@ -2166,7 +2166,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         let id = sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched.schedule_batch(10, 0);
         sched.complete_task(id, SchedulerLane::Cancel);
 
@@ -2181,7 +2181,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = sched.drain_events();
         assert_eq!(events.len(), 1);
@@ -2195,7 +2195,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched.drain_events();
 
         sched.schedule_batch(10, 0);
@@ -2209,10 +2209,10 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t2"), 0, "p2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched.schedule_batch(10, 0);
 
         assert_eq!(sched.event_counts().get("submit"), Some(&2));
@@ -2715,16 +2715,16 @@ mod tests {
             let mut sched = LaneScheduler::new(LaneConfig::default());
             sched
                 .submit(ready_label("t1"), 0, "r1", 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             sched
                 .submit(cancel_label("t2"), 0, "c1", 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             sched
                 .submit(timed_label("t3"), 50, "ti1", 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             sched
                 .submit(ready_label("t4"), 0, "r2", 10)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let batch = sched.schedule_batch(10, 100);
             batch.iter().map(|t| t.payload_id.clone()).collect()
         };
@@ -2869,13 +2869,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(timed_label("t2"), 100, "p2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t3"), 0, "p3", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sched.total_queue_depth(), 3);
     }
 
@@ -2896,7 +2896,7 @@ mod tests {
                 "cleanup",
                 0,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(
                 TaskLabel {
@@ -2909,7 +2909,7 @@ mod tests {
                 "quarantine",
                 0,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(
                 TaskLabel {
@@ -2922,7 +2922,7 @@ mod tests {
                 "drain",
                 0,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 0);
         assert_eq!(batch.len(), 3);
@@ -3017,13 +3017,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         let id1 = sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = sched
             .submit(ready_label("t2"), 0, "p2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = sched
             .submit(timed_label("t3"), 100, "p3", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(id1.0 < id2.0);
         assert!(id2.0 < id3.0);
     }
@@ -3048,7 +3048,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(timed_label("t1"), 100, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // current_ticks == deadline_tick
         let batch = sched.schedule_batch(10, 100);
@@ -3065,10 +3065,10 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(timed_label("t1"), 50, "early", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(timed_label("t2"), 200, "future", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Schedule at tick 100 with batch_size=0 → no tasks scheduled, but
         // t1 (deadline 50 < 100) should be timed out.
@@ -3089,7 +3089,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(timed_label("t1"), 10, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // The task deadline is 10. Schedule batch at tick 20 with batch_size=1.
         // It should be scheduled (deadline 10 <= 20), not timed out.
@@ -3103,10 +3103,10 @@ mod tests {
         let mut sched2 = LaneScheduler::new(LaneConfig::default());
         sched2
             .submit(timed_label("t1"), 10, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched2
             .submit(timed_label("t2"), 5, "p2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // batch_size=1, current=20. Both are due. Sort by deadline: t2(5), t1(10).
         // Take t2 (batch full). t1 stays but deadline 10 < 20 → timed out.
@@ -3137,7 +3137,7 @@ mod tests {
                 "lease",
                 0,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(
                 TaskLabel {
@@ -3150,7 +3150,7 @@ mod tests {
                 "probe",
                 0,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(
                 TaskLabel {
@@ -3163,7 +3163,7 @@ mod tests {
                 "flush",
                 0,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(
                 TaskLabel {
@@ -3176,7 +3176,7 @@ mod tests {
                 "barrier",
                 0,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 100);
         let timed: Vec<_> = batch
@@ -3218,7 +3218,7 @@ mod tests {
                     &format!("p{i}"),
                     i as u64,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let batch = sched.schedule_batch(10, 100);
         assert_eq!(batch.len(), 5);
@@ -3282,13 +3282,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "c1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t2"), 0, "c2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t3"), 0, "r1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(sched.queue_depth(SchedulerLane::Cancel), 2);
         assert_eq!(sched.queue_depth(SchedulerLane::Ready), 1);
@@ -3308,7 +3308,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         let id = sched
             .submit(ready_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched.schedule_batch(10, 0);
         sched.drain_events();
 
@@ -3514,13 +3514,13 @@ mod tests {
         });
         sched
             .submit(ready_label("t1"), 0, "ready-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(timed_label("t2"), 10, "timed-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t3"), 0, "cancel-1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(1, 100);
         assert_eq!(batch.len(), 1);
@@ -3717,13 +3717,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "first", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t2"), 0, "second", 10)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t3"), 0, "third", 20)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 30);
         let cancel_tasks: Vec<_> = batch
@@ -3744,13 +3744,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "c1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t2"), 0, "r1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t3"), 0, "r2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Round 1: take batch_size=2 → cancel + ready
         let batch1 = sched.schedule_batch(2, 0);
@@ -3770,13 +3770,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "c1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t2"), 0, "c2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t3"), 0, "r1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         sched.schedule_batch(1, 0); // schedules 1 cancel
         sched.schedule_batch(1, 0); // schedules 1 cancel
@@ -3799,13 +3799,13 @@ mod tests {
         let mut sched = LaneScheduler::new(config);
         sched
             .submit(cancel_label("t1"), 0, "c1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t2"), 0, "c2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t3"), 0, "r1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(sched.event_counts().get("submit"), Some(&3));
 
@@ -3834,7 +3834,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         let id = sched
             .submit(timed_label("t1"), 50, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched.schedule_batch(10, 100);
         sched.drain_events();
 
@@ -3857,7 +3857,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let first = sched.drain_events();
         assert_eq!(first.len(), 1);
@@ -3879,7 +3879,7 @@ mod tests {
         let mut sched = LaneScheduler::new(config);
         sched
             .submit(cancel_label("t1"), 0, "c1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 0);
         // Only the cancel task, no ready tasks available.
@@ -3903,7 +3903,7 @@ mod tests {
         for i in 0..3 {
             sched
                 .submit(timed_label(&format!("t{i}")), 100, &format!("p{i}"), 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(sched.queue_depth(SchedulerLane::Timed), 3);
 
@@ -3923,7 +3923,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(timed_label("t1"), 0, "zero-deadline", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // deadline_tick=0, current_ticks=0 → deadline <= current → scheduled.
         let batch = sched.schedule_batch(10, 0);
@@ -3964,10 +3964,10 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(cancel_label("t1"), 0, "c1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(cancel_label("t2"), 0, "c2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(1, 0);
         assert_eq!(sched.queue_depth(SchedulerLane::Cancel), 1);
@@ -4014,10 +4014,10 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(ready_label("t1"), 0, "p1", 42)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t2"), 0, "p2", 99)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let batch = sched.schedule_batch(10, 100);
         assert_eq!(batch[0].submitted_at, 42);
@@ -4090,7 +4090,7 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(timed_label("t1"), 1000, "future-task", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Round 1: not due at tick 100.
         let batch1 = sched.schedule_batch(10, 100);
@@ -4117,13 +4117,13 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         sched
             .submit(ready_label("t1"), 0, "p1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t2"), 0, "p2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .submit(ready_label("t3"), 0, "p3", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = sched.drain_events();
         assert_eq!(events[0].queue_position, 0);
@@ -4140,10 +4140,10 @@ mod tests {
         let mut sched = LaneScheduler::new(LaneConfig::default());
         let id1 = sched
             .submit(cancel_label("t1"), 0, "c1", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = sched
             .submit(cancel_label("t2"), 0, "c2", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched.schedule_batch(10, 0);
 
         sched.complete_task(id1, SchedulerLane::Cancel);
@@ -4163,7 +4163,7 @@ mod tests {
         for i in 0..3 {
             sched
                 .submit(cancel_label(&format!("c{i}")), 0, &format!("cancel-{i}"), 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for i in 0..3 {
             sched
@@ -4173,12 +4173,12 @@ mod tests {
                     &format!("timed-{i}"),
                     0,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for i in 0..3 {
             sched
                 .submit(ready_label(&format!("r{i}")), 0, &format!("ready-{i}"), 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert_eq!(sched.total_queue_depth(), 9);
@@ -4192,19 +4192,19 @@ mod tests {
         let cancel_end = lanes
             .iter()
             .rposition(|l| *l == SchedulerLane::Cancel)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let timed_start = lanes
             .iter()
             .position(|l| *l == SchedulerLane::Timed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let timed_end = lanes
             .iter()
             .rposition(|l| *l == SchedulerLane::Timed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ready_start = lanes
             .iter()
             .position(|l| *l == SchedulerLane::Ready)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(cancel_end < timed_start);
         assert!(timed_end < ready_start);
     }

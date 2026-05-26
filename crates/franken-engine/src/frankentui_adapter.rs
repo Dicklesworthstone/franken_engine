@@ -4054,7 +4054,7 @@ fn parse_timestamp_unix_ms(timestamp: &str) -> Option<u64> {
 }
 
 fn clamp_non_negative_i64_to_u64(value: i64) -> u64 {
-    u64::try_from(value).expect("serde deserialization should succeed")
+    u64::try_from(value).expect("operation should succeed for valid inputs")
 }
 
 fn compute_expected_value_score_millionths(input: &ReplacementOpportunityInput) -> i64 {
@@ -5817,10 +5817,10 @@ mod tests {
         );
         let enc1 = env
             .encode_json()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let enc2 = env
             .encode_json()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(enc1, enc2);
     }
 
@@ -5879,19 +5879,19 @@ mod tests {
     #[test]
     fn snake_case_serde_enum_values_are_lowercase() {
         let json = serde_json::to_string(&ReplayStatus::NoEvents)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"no_events\"");
 
         let json = serde_json::to_string(&UpdateKind::Heartbeat)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"heartbeat\"");
 
         let json = serde_json::to_string(&CancellationKind::Quarantine)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"quarantine\"");
 
         let json = serde_json::to_string(&DashboardAlertMetric::ObligationFailureRateMillionths)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"obligation_failure_rate_millionths\"");
     }
 
@@ -7548,7 +7548,7 @@ mod tests {
         let alert = alerts
             .iter()
             .find(|a| a.alert_id.contains("over-privilege"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(alert.severity, DashboardSeverity::Critical);
     }
 
@@ -7617,7 +7617,7 @@ mod tests {
         let alert = alerts
             .iter()
             .find(|a| a.alert_id == "expired-emergency-grants")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(alert.severity, DashboardSeverity::Critical);
     }
 
@@ -7690,7 +7690,7 @@ mod tests {
         let alert = alerts
             .iter()
             .find(|a| a.alert_id == "specialization-coverage-degraded")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 200k < 500k/2 = 250k, so Critical
         assert_eq!(alert.severity, DashboardSeverity::Critical);
     }
@@ -7749,7 +7749,7 @@ mod tests {
         let alert = alerts
             .iter()
             .find(|a| a.alert_id.contains("confinement"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(alert.severity, DashboardSeverity::Critical);
     }
 
@@ -7767,7 +7767,7 @@ mod tests {
         let alert = alerts
             .iter()
             .find(|a| a.alert_id.contains("confinement"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(alert.severity, DashboardSeverity::Warning);
     }
 

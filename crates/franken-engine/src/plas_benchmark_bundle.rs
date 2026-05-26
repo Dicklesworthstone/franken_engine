@@ -1544,7 +1544,7 @@ mod tests {
     fn build_passing_bundle() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(decision.publish_allowed);
         assert!(decision.blockers.is_empty());
         assert_eq!(decision.extension_results.len(), 4);
@@ -1560,7 +1560,7 @@ mod tests {
     fn build_passing_bundle_ids() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert_eq!(decision.benchmark_run_id, "run-1");
         assert_eq!(decision.generated_at_ns, 1_000_000);
         assert!(decision.bundle_id.starts_with("plas-bundle-"));
@@ -1569,8 +1569,8 @@ mod tests {
     #[test]
     fn build_bundle_deterministic() {
         let r = make_request();
-        let d1 = build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
-        let d2 = build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+        let d1 = build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
+        let d2 = build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert_eq!(d1.bundle_id, d2.bundle_id);
     }
 
@@ -1578,7 +1578,7 @@ mod tests {
     fn build_bundle_events_present() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(
             decision
                 .events
@@ -1612,7 +1612,7 @@ mod tests {
         let mut r = make_request();
         r.samples = vec![sample("ext-1", PlasBenchmarkCohort::Simple)];
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1633,7 +1633,7 @@ mod tests {
             s.empirically_required_capability_count = 5;
         }
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1654,7 +1654,7 @@ mod tests {
             s.manual_authoring_time_ms = 1000;
         }
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1673,7 +1673,7 @@ mod tests {
             s.benign_false_deny_count = 500; // 5% of 10000 = 50_000 millionths > 5_000
         }
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1692,7 +1692,7 @@ mod tests {
             s.witness_present = false;
         }
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(!decision.publish_allowed);
         assert!(
             decision
@@ -1708,7 +1708,7 @@ mod tests {
     fn build_escrow_rate_passes_when_no_threshold() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(decision.overall_summary.escrow_event_rate_threshold_pass);
     }
 
@@ -1720,7 +1720,7 @@ mod tests {
             ..PlasBenchmarkThresholds::default()
         });
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(!decision.overall_summary.escrow_event_rate_threshold_pass);
     }
 
@@ -1740,7 +1740,7 @@ mod tests {
             witness_coverage_millionths: 1_000_000, // same
         }];
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(decision.trend_regression_detected);
         // Default fail_on_trend_regression = false, so should still pass
         assert!(decision.publish_allowed);
@@ -1763,7 +1763,7 @@ mod tests {
             witness_coverage_millionths: 1_000_000,
         }];
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(decision.trend_regression_detected);
         assert!(!decision.publish_allowed);
         assert!(
@@ -1778,7 +1778,7 @@ mod tests {
     fn build_no_trend_regression_when_no_history() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(!decision.trend_regression_detected);
     }
 
@@ -1788,7 +1788,7 @@ mod tests {
     fn build_trend_includes_current_run() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert_eq!(decision.trend.len(), 1);
         assert_eq!(decision.trend[0].benchmark_run_id, "run-1");
     }
@@ -1799,7 +1799,7 @@ mod tests {
     fn markdown_report_contains_key_sections() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         let md = decision.to_markdown_report();
         assert!(md.contains("# PLAS Benchmark Bundle"));
         assert!(md.contains("## Overall Metrics"));
@@ -1814,7 +1814,7 @@ mod tests {
         let mut r = make_request();
         r.samples = vec![sample("ext-1", PlasBenchmarkCohort::Simple)];
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         let md = decision.to_markdown_report();
         assert!(md.contains("DENY"));
         assert!(md.contains("## Blockers"));
@@ -1826,10 +1826,10 @@ mod tests {
     fn to_json_pretty_roundtrips() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         let json = decision
             .to_json_pretty()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let back: PlasBenchmarkBundleDecision =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(decision, back);
@@ -1866,7 +1866,7 @@ mod tests {
     fn overall_summary_cohorts_present() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert!(decision.overall_summary.required_cohorts_present);
         assert_eq!(decision.overall_summary.cohorts_present.len(), 4);
     }
@@ -1877,7 +1877,7 @@ mod tests {
     fn cohort_summary_all_pass() {
         let r = make_request();
         let decision =
-            build_plas_benchmark_bundle(&r).expect("serde deserialization should succeed");
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         for summary in &decision.cohort_summaries {
             assert!(summary.pass);
         }

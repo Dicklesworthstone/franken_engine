@@ -1120,7 +1120,7 @@ mod tests {
             migration_required: false,
             migration_path: None,
         };
-        let json = serde_json::to_vec(&result).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&result).expect("serialization should succeed");
         let decoded: VersionNegotiationResult =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, decoded);
@@ -1183,7 +1183,7 @@ mod tests {
         assert!(entry.is_some());
         assert_eq!(
             entry
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .severity,
             FailureSeverity::Critical
         );
@@ -1199,7 +1199,7 @@ mod tests {
     #[test]
     fn failure_taxonomy_serde_round_trip() {
         let taxonomy = failure_taxonomy();
-        let json = serde_json::to_vec(&taxonomy).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&taxonomy).expect("serialization should succeed");
         let decoded: Vec<FailureTaxonomyEntry> =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(taxonomy, decoded);
@@ -1302,7 +1302,7 @@ mod tests {
             expected_output_hash: "deadbeef".to_string(),
             reproduction_command: "cargo test --lib".to_string(),
         };
-        let json = serde_json::to_vec(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&artifact).expect("serialization should succeed");
         let decoded: ReplayArtifact =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, decoded);
@@ -1364,7 +1364,7 @@ mod tests {
         assert!(entry.is_some());
         assert_eq!(
             entry
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .boundary
                 .sibling,
             SiblingRepo::Frankentui
@@ -1399,7 +1399,7 @@ mod tests {
     #[test]
     fn catalog_serde_round_trip() {
         let catalog = build_canonical_catalog();
-        let json = serde_json::to_vec(&catalog).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&catalog).expect("serialization should succeed");
         let decoded: ConformanceCatalog =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(catalog, decoded);
@@ -2574,7 +2574,7 @@ mod tests {
             assert!(entry.is_some(), "should find entry for {class:?}");
             assert_eq!(
                 entry
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .regression_class,
                 class
             );
@@ -2628,13 +2628,13 @@ mod tests {
         assert_eq!(
             *counts
                 .get(&RegressionClass::Breaking)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             2
         );
         assert_eq!(
             *counts
                 .get(&RegressionClass::Behavioral)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
     }
@@ -2658,7 +2658,7 @@ mod tests {
         let catalog = build_canonical_catalog();
         let entry = catalog.get_entry("frankensqlite/store_record");
         assert!(entry.is_some());
-        let e = entry.expect("serde deserialization should succeed");
+        let e = entry.expect("operation should succeed for valid inputs");
         assert_eq!(e.entry_id, "frankensqlite/store_record");
         assert_eq!(e.boundary.sibling, SiblingRepo::Frankensqlite);
         assert_eq!(e.boundary.surface_kind, SurfaceKind::PersistenceSemantics);
@@ -2772,7 +2772,7 @@ mod tests {
         let first = *set
             .iter()
             .next()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Asupersync should be first alphabetically
         assert_eq!(first, SiblingRepo::Asupersync);
     }

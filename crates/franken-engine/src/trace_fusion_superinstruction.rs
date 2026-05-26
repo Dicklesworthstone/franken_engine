@@ -120,7 +120,7 @@ impl FusionCandidate {
             data.extend_from_slice(seg.id.as_bytes());
             data.extend_from_slice(
                 serde_json::to_string(&seg.motif)
-                    .expect("serde deserialization should succeed")
+                    .expect("serialization should succeed")
                     .as_bytes(),
             );
             data.extend_from_slice(&seg.instruction_count.to_le_bytes());
@@ -577,7 +577,7 @@ pub fn certify_fusion(
     cert_data.extend_from_slice(candidate.fusion_hash.as_bytes());
     cert_data.extend_from_slice(
         serde_json::to_string(&decision)
-            .expect("serde deserialization should succeed")
+            .expect("serialization should succeed")
             .as_bytes(),
     );
     if let Some(ref p) = proof {
@@ -1258,7 +1258,7 @@ mod tests {
         assert!(si.disable_token.is_some());
         let token = si
             .disable_token
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(token.starts_with("disable-"));
     }
 

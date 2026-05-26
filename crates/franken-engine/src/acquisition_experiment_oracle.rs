@@ -1492,7 +1492,7 @@ mod tests {
         let w = default_weights();
         // SAFETY: Test with valid proposals and budget should produce valid experiment plan
         let plan = select_experiments(vec![p1, p2], 500_000, &w)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.proposals.len(), 2);
         assert_eq!(plan.total_expected_gain_millionths, 1_100_000);
         assert_eq!(plan.budget_remaining_millionths, 0);
@@ -1544,7 +1544,7 @@ mod tests {
         // Budget only fits the cheap one.
         // SAFETY: Test with budget sufficient for at least one proposal should succeed
         let plan = select_experiments(vec![p1, p2], 200_000, &w)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.proposals.len(), 1);
         assert_eq!(plan.proposals[0].proposal_id, "cheap");
         assert_eq!(plan.budget_remaining_millionths, 100_000);
@@ -1563,7 +1563,7 @@ mod tests {
         let w = default_weights();
         // SAFETY: Test with single proposal and maximum budget should succeed
         let plan = select_experiments(vec![p1], MILLIONTHS, &w)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(plan.content_hash, ContentHash::compute(b""));
     }
 
@@ -1588,7 +1588,7 @@ mod tests {
         let w = default_weights();
         // SAFETY: Test-only unwrap for select_experiments with valid proposals and sufficient budget
         let plan = select_experiments(vec![p1, p2], MILLIONTHS, &w)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let errors = validate_plan(&plan);
         assert!(errors.is_empty(), "validation errors: {errors:?}");
     }

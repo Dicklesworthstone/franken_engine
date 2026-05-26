@@ -645,7 +645,7 @@ mod tests {
 
     fn make_sk(seed: u8) -> SigningKey {
         // SAFETY: Test helper unwrap, valid 32-byte array for signing key
-        SigningKey::from_bytes([seed; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([seed; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -666,7 +666,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(keys)
         // SAFETY: Test helper builds valid genesis checkpoint with test keys, build should succeed
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     // -- Genesis creation --
@@ -717,7 +717,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
         // SAFETY: Test builds valid successor checkpoint with test keys, build should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(cp1.checkpoint_seq, 1);
         assert_eq!(cp1.prev_checkpoint, Some(genesis.checkpoint_id));
@@ -739,7 +739,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(std::slice::from_ref(&sk))
         // SAFETY: Test builds valid checkpoint with test keys, build should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let cp2 = CheckpointBuilder::after(
             &cp1,
@@ -751,7 +751,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 3))
         .build(&[sk])
         // SAFETY: Test builds valid checkpoint with test keys, build should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(cp2.checkpoint_seq, 2);
         assert_eq!(cp2.prev_checkpoint, Some(cp1.checkpoint_id));
@@ -848,7 +848,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_eq!(cp1.epoch_id, SecurityEpoch::from_raw(1));
     }
@@ -864,7 +864,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let err = CheckpointBuilder::after(
             &genesis,
@@ -895,7 +895,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert!(verify_chain_linkage(&genesis, &cp1).is_ok());
     }
@@ -915,7 +915,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let cp2 = CheckpointBuilder::after(
             &genesis,
@@ -926,7 +926,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 3))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         // cp2 chains to genesis, not to cp1.
         let err = verify_chain_linkage(&cp1, &cp2).unwrap_err();
@@ -962,7 +962,7 @@ mod tests {
         let sk1 = make_sk(1);
         let sk2 = make_sk(2);
         let wrong_vk =
-            VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
+            VerificationKey::from_bytes([0xFF; 32]).expect("operation should succeed for valid inputs");
         let cp = build_genesis(&[sk1, sk2]);
 
         let err = verify_checkpoint_quorum(&cp, 2, &[wrong_vk]).unwrap_err();
@@ -983,7 +983,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::CapabilityLattice, 1))
         .add_policy_head(make_policy_head(PolicyType::ExtensionTrust, 1))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_eq!(cp.policy_heads.len(), 3);
         // Should be sorted by policy type.
@@ -1225,14 +1225,14 @@ mod tests {
             &checkpoint_schema_id(),
             b"a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let id2 = crate::engine_object_id::derive_id(
             ObjectDomain::CheckpointArtifact,
             "z",
             &checkpoint_schema_id(),
             b"b",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let displays: std::collections::BTreeSet<String> = [
             CheckpointError::GenesisMustHaveNoPredecessor.to_string(),
             CheckpointError::MissingPredecessor.to_string(),
@@ -1333,7 +1333,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::EvidenceRetention, 1))
         .add_policy_head(make_policy_head(PolicyType::RevocationGovernance, 1))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
         assert_eq!(cp.policy_heads.len(), 5);
         // Verify sorted order
         for w in cp.policy_heads.windows(2) {
@@ -1454,7 +1454,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         // Manually build a checkpoint at epoch 3 (regression)
         let cp1 = CheckpointBuilder::after(
@@ -1466,7 +1466,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let cp2 = CheckpointBuilder::after(
             &cp1,
@@ -1477,7 +1477,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 3))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         // verify_chain_linkage with cp1 (epoch 5) → cp2 (epoch 5) is ok
         assert!(verify_chain_linkage(&cp1, &cp2).is_ok());
@@ -1501,7 +1501,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         // SAFETY: Test scenario with valid checkpoint parameters and signing key; build should succeed
         let cp2 = CheckpointBuilder::after(
@@ -1513,7 +1513,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 3))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         // Verify cp1→cp2 is fine (5→6)
         assert!(verify_chain_linkage(&cp1, &cp2).is_ok());
@@ -1543,7 +1543,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         // SAFETY: Test scenario with valid checkpoint parameters and signing key; build should succeed
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_eq!(cp.policy_heads.len(), 5);
         // Builder sorts by policy type
@@ -1572,7 +1572,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         // SAFETY: Test scenario with valid checkpoint parameters and signing key; build should succeed
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let cp2 = CheckpointBuilder::genesis(
             SecurityEpoch::GENESIS,
@@ -1581,7 +1581,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_ne!(cp1.checkpoint_id, cp2.checkpoint_id);
     }
@@ -1598,14 +1598,14 @@ mod tests {
             &checkpoint_schema_id(),
             b"x",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let id2 = crate::engine_object_id::derive_id(
             ObjectDomain::CheckpointArtifact,
             "z",
             &checkpoint_schema_id(),
             b"y",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let errors = [
             CheckpointError::ChainLinkageBroken {
@@ -1655,7 +1655,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_ne!(genesis.checkpoint_id, cp1.checkpoint_id);
     }
@@ -1688,7 +1688,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let cp1 = CheckpointBuilder::after(
             &genesis,
@@ -1699,7 +1699,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert!(verify_chain_linkage(&genesis, &cp1).is_ok());
     }
@@ -1719,7 +1719,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .add_policy_head(make_policy_head(PolicyType::CapabilityLattice, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         // Update only RuntimeExecution to v2
         let cp1 = CheckpointBuilder::after(
@@ -1732,7 +1732,7 @@ mod tests {
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .add_policy_head(make_policy_head(PolicyType::CapabilityLattice, 1))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert!(verify_chain_linkage(&genesis, &cp1).is_ok());
         assert_eq!(cp1.policy_heads.len(), 2);
@@ -1742,7 +1742,7 @@ mod tests {
             .policy_heads
             .iter()
             .find(|h| h.policy_type == PolicyType::RuntimeExecution)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(re_head.policy_version, 2);
     }
 
@@ -1831,51 +1831,51 @@ mod tests {
             &checkpoint_schema_id(),
             b"err-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let id2 = crate::engine_object_id::derive_id(
             ObjectDomain::CheckpointArtifact,
             "z",
             &checkpoint_schema_id(),
             b"err-b",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let errors = [
             serde_json::to_string(&CheckpointError::GenesisMustHaveNoPredecessor)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::MissingPredecessor)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::NonMonotonicSequence {
                 prev_seq: 1,
                 current_seq: 0,
             })
-            .expect("serde deserialization should succeed"),
+            .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::GenesisSequenceNotZero { actual: 5 })
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::ChainLinkageBroken {
                 expected: id1,
                 actual: id2,
             })
-            .expect("serde deserialization should succeed"),
+            .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::EmptyPolicyHeads)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::QuorumNotMet {
                 required: 3,
                 provided: 1,
             })
-            .expect("serde deserialization should succeed"),
+            .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::DuplicatePolicyType {
                 policy_type: PolicyType::RuntimeExecution,
             })
-            .expect("serde deserialization should succeed"),
+            .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::IdDerivationFailed { detail: "x".into() })
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::SignatureInvalid { detail: "y".into() })
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointError::EpochRegression {
                 prev_epoch: SecurityEpoch::from_raw(5),
                 current_epoch: SecurityEpoch::from_raw(3),
             })
-            .expect("serde deserialization should succeed"),
+            .expect("serialization should succeed"),
         ];
         let set: std::collections::BTreeSet<_> = errors.into_iter().collect();
         assert_eq!(set.len(), 11);
@@ -1885,21 +1885,21 @@ mod tests {
     fn checkpoint_event_type_serde_all_distinct() {
         let set: std::collections::BTreeSet<String> = [
             serde_json::to_string(&CheckpointEventType::GenesisCreated)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointEventType::ChainCheckpointCreated { prev_seq: 0 })
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointEventType::QuorumVerified {
                 valid: 1,
                 threshold: 1,
             })
-            .expect("serde deserialization should succeed"),
+            .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointEventType::ChainLinkageVerified)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointEventType::EpochTransition {
                 from: SecurityEpoch::from_raw(0),
                 to: SecurityEpoch::from_raw(1),
             })
-            .expect("serde deserialization should succeed"),
+            .expect("serialization should succeed"),
         ]
         .into_iter()
         .collect();
@@ -1958,10 +1958,10 @@ mod tests {
     fn policy_head_json_field_names() {
         let head = make_policy_head(PolicyType::RuntimeExecution, 1);
         let val: serde_json::Value =
-            serde_json::to_value(&head).expect("serde deserialization should succeed");
+            serde_json::to_value(&head).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in ["policy_type", "policy_hash", "policy_version"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1976,10 +1976,10 @@ mod tests {
             trace_id: "t".to_string(),
         };
         let val: serde_json::Value =
-            serde_json::to_value(&event).expect("serde deserialization should succeed");
+            serde_json::to_value(&event).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in ["event_type", "checkpoint_seq", "trace_id"] {
             assert!(obj.contains_key(key), "missing field: {key}");
         }
@@ -1991,10 +1991,10 @@ mod tests {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
         let val: serde_json::Value =
-            serde_json::to_value(&cp).expect("serde deserialization should succeed");
+            serde_json::to_value(&cp).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "checkpoint_id",
             "prev_checkpoint",
@@ -2141,7 +2141,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
         assert_eq!(cp.epoch_id, SecurityEpoch::from_raw(u64::MAX));
     }
 
@@ -2155,7 +2155,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
         assert_eq!(cp.created_at, DeterministicTimestamp(0));
     }
 
@@ -2172,7 +2172,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
         assert_eq!(cp.checkpoint_seq, 1_000_000);
     }
 
@@ -2254,7 +2254,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let cp2 = CheckpointBuilder::genesis(
             SecurityEpoch::GENESIS,
@@ -2263,7 +2263,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_ne!(cp1.checkpoint_id, cp2.checkpoint_id);
     }
@@ -2278,7 +2278,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let cp2 = CheckpointBuilder::genesis(
             SecurityEpoch::GENESIS,
@@ -2287,7 +2287,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_ne!(cp1.checkpoint_id, cp2.checkpoint_id);
     }
@@ -2302,7 +2302,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let cp2 = CheckpointBuilder::genesis(
             SecurityEpoch::from_raw(1),
@@ -2311,7 +2311,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         assert_ne!(cp1.checkpoint_id, cp2.checkpoint_id);
     }
@@ -2321,7 +2321,7 @@ mod tests {
         let sk = make_sk(1);
         let cp = build_genesis(&[sk]);
         let val: serde_json::Value =
-            serde_json::to_value(&cp).expect("serde deserialization should succeed");
+            serde_json::to_value(&cp).expect("serialization should succeed");
         assert!(val["prev_checkpoint"].is_null());
     }
 
@@ -2338,9 +2338,9 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
         let val: serde_json::Value =
-            serde_json::to_value(&cp1).expect("serde deserialization should succeed");
+            serde_json::to_value(&cp1).expect("serialization should succeed");
         assert!(!val["prev_checkpoint"].is_null());
     }
 
@@ -2435,7 +2435,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 2))
         .build(&[sk])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
         assert_eq!(cp1.epoch_id, SecurityEpoch::from_raw(5));
         assert!(verify_chain_linkage(&genesis, &cp1).is_ok());
     }

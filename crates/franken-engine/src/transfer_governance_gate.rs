@@ -872,7 +872,7 @@ mod tests {
             assert_eq!(
                 *d,
                 serde_json::from_str::<TransferDomain>(&j)
-                    .expect("serde deserialization should succeed")
+                    .expect("deserialization should succeed")
             );
         }
     }
@@ -899,7 +899,7 @@ mod tests {
             assert_eq!(
                 v,
                 serde_json::from_str::<TransferVerdict>(&j)
-                    .expect("serde deserialization should succeed")
+                    .expect("deserialization should succeed")
             );
         }
     }
@@ -927,7 +927,7 @@ mod tests {
             assert_eq!(
                 l,
                 serde_json::from_str::<CoverageLevel>(&j)
-                    .expect("serde deserialization should succeed")
+                    .expect("deserialization should succeed")
             );
         }
     }
@@ -960,7 +960,7 @@ mod tests {
             assert_eq!(
                 a,
                 serde_json::from_str::<GovernanceAction>(&j)
-                    .expect("serde deserialization should succeed")
+                    .expect("deserialization should succeed")
             );
         }
     }
@@ -996,7 +996,7 @@ mod tests {
         assert_eq!(
             e,
             serde_json::from_str::<TransferEvidence>(&j)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
     }
 
@@ -1160,7 +1160,7 @@ mod tests {
         let j = serde_json::to_string(&c).expect("serialize derived Serialize");
         assert_eq!(
             c,
-            serde_json::from_str::<GateConfig>(&j).expect("serde deserialization should succeed")
+            serde_json::from_str::<GateConfig>(&j).expect("deserialization should succeed")
         );
     }
     #[test]

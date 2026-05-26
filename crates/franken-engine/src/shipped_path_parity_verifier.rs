@@ -1169,7 +1169,7 @@ mod tests {
                 ParityInputLanguage::JavaScript,
                 ParityStatus::Identical,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(matrix.case_count(), 1);
         assert_eq!(matrix.covered_cell_count(), 1);
     }
@@ -1184,7 +1184,7 @@ mod tests {
                 ParityInputLanguage::JavaScript,
                 ParityStatus::Identical,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = matrix
             .add_case(make_case(
                 "c1",
@@ -1219,7 +1219,7 @@ mod tests {
             ParityInputLanguage::Jsx,
             ParityStatus::Identical,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(m1.content_hash(), m2.content_hash());
     }
 
@@ -1290,7 +1290,7 @@ mod tests {
                 ParityInputLanguage::JavaScript,
                 ParityStatus::Identical,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let verifier = ShippedPathParityVerifier::with_defaults();
         let report = verifier.verify(&matrix);
         assert!(!report.verdict.is_pass());
@@ -1306,7 +1306,7 @@ mod tests {
                 ParityInputLanguage::JavaScript,
                 ParityStatus::SuccessFailureSplit,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let config = VerifierConfig {
             min_coverage_ratio_millionths: 0,
             required_families: BTreeSet::new(),

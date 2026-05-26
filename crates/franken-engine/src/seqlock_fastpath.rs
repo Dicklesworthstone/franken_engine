@@ -730,7 +730,7 @@ mod tests {
         // This test controls the thread lifetime and only joins after worker completion.
         let total_fast: u64 = handles
             .into_iter()
-            .map(|h| h.join().expect("serde deserialization should succeed"))
+            .map(|h| h.join().expect("operation should succeed for valid inputs"))
             .sum();
         // With no concurrent writer, all reads should be fast-path.
         assert_eq!(total_fast, 200);
@@ -1021,7 +1021,7 @@ mod tests {
         // This test controls the thread lifetime and only joins after worker completion.
         let successes: Vec<bool> = handles
             .into_iter()
-            .map(|h| h.join().expect("serde deserialization should succeed"))
+            .map(|h| h.join().expect("operation should succeed for valid inputs"))
             .collect();
         // Exactly one thread should succeed.
         assert_eq!(successes.iter().filter(|&&s| s).count(), 1);
@@ -1054,9 +1054,9 @@ mod tests {
         });
 
         // SAFETY: Test thread without panic paths; join() will succeed
-        writer.join().expect("serde deserialization should succeed");
+        writer.join().expect("operation should succeed for valid inputs");
         // SAFETY: Test thread without panic paths; join() will succeed
-        let total_reads = reader.join().expect("serde deserialization should succeed");
+        let total_reads = reader.join().expect("operation should succeed for valid inputs");
         assert_eq!(total_reads, 200);
 
         let t = fast_path.telemetry();

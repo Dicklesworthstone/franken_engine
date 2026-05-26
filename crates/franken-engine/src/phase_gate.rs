@@ -1311,7 +1311,7 @@ mod tests {
         // Latest report should be the overwrite
         let stored = eval
             .report(GateId::DeterministicReplay)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(stored.status.is_passed());
         assert_eq!(stored.ci_run_id, "ci-2");
     }
@@ -1947,7 +1947,7 @@ mod tests {
         );
         let report = eval
             .report(GateId::DeterministicReplay)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(report.status.is_passed());
         assert_eq!(report.ci_run_id, "ci2");
     }

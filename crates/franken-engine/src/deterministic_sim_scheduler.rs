@@ -844,7 +844,7 @@ mod tests {
 
         let outcome = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             outcome.events_dispatched,
             vec![micro_id, normal_id, idle_id]
@@ -860,7 +860,7 @@ mod tests {
 
         let outcome = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.events_dispatched, vec![id_a, id_b, id_c]);
     }
 
@@ -885,7 +885,7 @@ mod tests {
 
         let outcome = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.microtasks_drained, 2);
         assert_eq!(outcome.events_dispatched.len(), 3);
     }
@@ -913,7 +913,7 @@ mod tests {
         sched.schedule(SimEventKind::ModuleLoad, SimPriority::Normal, 5, "m", 1);
         let outcome = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(outcome.events_dispatched.is_empty());
         assert_eq!(outcome.microtasks_drained, 0);
     }
@@ -930,17 +930,17 @@ mod tests {
 
         let o0 = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(o0.events_dispatched, vec![id0]);
 
         let o1 = sched
             .advance_tick()
-            .expect("serde deserialization should succeed"); // tick 1 — empty
+            .expect("operation should succeed for valid inputs"); // tick 1 — empty
         assert!(o1.events_dispatched.is_empty());
 
         let o2 = sched
             .advance_tick()
-            .expect("serde deserialization should succeed"); // tick 2
+            .expect("operation should succeed for valid inputs"); // tick 2
         assert_eq!(o2.events_dispatched, vec![id1]);
     }
 
@@ -1144,7 +1144,7 @@ mod tests {
 
         let outcome = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.events_dispatched.len(), 2);
         // The third event should be re-queued.
         assert_eq!(sched.pending_count(), 1);
@@ -1192,12 +1192,12 @@ mod tests {
 
         let o0 = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(o0.events_dispatched, vec![id_a, id_b]);
 
         let o1 = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(o1.events_dispatched, vec![id_c]);
         assert_eq!(sched.pending_count(), 0);
     }
@@ -1226,7 +1226,7 @@ mod tests {
 
         let outcome = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Microtask should come first
         assert_eq!(outcome.events_dispatched[0], micro_id);
         assert_eq!(outcome.events_dispatched[1], normal_id);
@@ -1252,7 +1252,7 @@ mod tests {
 
         let outcome = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Still priority-ordered (microtask first due to lower rank)
         assert_eq!(outcome.events_dispatched.len(), 2);
         assert_eq!(outcome.microtasks_drained, 1);
@@ -1292,7 +1292,7 @@ mod tests {
 
         let outcome = sched
             .advance_tick()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             outcome.events_dispatched,
             vec![micro, high, normal, low, idle]
@@ -1419,7 +1419,7 @@ mod tests {
 
         let o = sched
             .advance_tick()
-            .expect("serde deserialization should succeed"); // tick 0
+            .expect("operation should succeed for valid inputs"); // tick 0
         assert!(o.events_dispatched.is_empty());
         assert_eq!(sched.pending_count(), 1);
     }

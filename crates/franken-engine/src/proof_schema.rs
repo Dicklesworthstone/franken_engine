@@ -1338,9 +1338,9 @@ mod tests {
         let r2 = test_receipt();
         assert_eq!(
             r1.object_id("zone-a")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             r2.object_id("zone-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1350,10 +1350,10 @@ mod tests {
         assert_ne!(
             receipt
                 .object_id("zone-a")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             receipt
                 .object_id("zone-b")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1363,9 +1363,9 @@ mod tests {
         let t2 = test_rollback();
         assert_eq!(
             t1.object_id("zone-a")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             t2.object_id("zone-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1386,12 +1386,12 @@ mod tests {
         receipt.decision_impact = DecisionImpact::HighImpact;
         receipt.attestation_bindings = Some(test_attestation_bindings());
         let receipt = receipt.sign(TEST_KEY);
-        let encoded = serde_json::to_vec(&receipt).expect("serde deserialization should succeed");
+        let encoded = serde_json::to_vec(&receipt).expect("serialization should succeed");
         let restored: OptReceipt =
             serde_json::from_slice(&encoded).expect("deserialize known-valid JSON");
         assert_eq!(receipt, restored);
         assert_eq!(
-            serde_json::to_vec(&restored).expect("serde deserialization should succeed"),
+            serde_json::to_vec(&restored).expect("serialization should succeed"),
             encoded
         );
     }

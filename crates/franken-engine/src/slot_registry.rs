@@ -1848,7 +1848,7 @@ mod tests {
                 "sha256:abc123".into(),
                 "2026-02-20T00:00:00Z".into(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.kind, SlotKind::Parser);
         assert!(entry.status.is_delegate());
         assert_eq!(reg.len(), 1);
@@ -1865,7 +1865,7 @@ mod tests {
             "sha256:abc123".into(),
             "2026-02-20T00:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(matches!(
             reg.register_delegate(
                 id,
@@ -1910,7 +1910,7 @@ mod tests {
             "sha256:delegate-v1".into(),
             "2026-02-20T00:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Begin candidacy
         reg.begin_candidacy(
@@ -1918,8 +1918,8 @@ mod tests {
             "sha256:native-candidate".into(),
             "2026-02-20T01:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
-        let entry = reg.get(&id).expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
+        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
         assert!(matches!(
             entry.status,
             PromotionStatus::PromotionCandidate { .. }
@@ -1933,8 +1933,8 @@ mod tests {
             "receipt-001".into(),
             "2026-02-20T02:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
-        let entry = reg.get(&id).expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
+        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
         assert!(entry.status.is_native());
         assert_eq!(entry.implementation_digest, "sha256:native-v1");
         assert_eq!(reg.native_count(), 1);
@@ -1946,8 +1946,8 @@ mod tests {
             "regression detected".into(),
             "2026-02-20T03:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
-        let entry = reg.get(&id).expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
+        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
         assert!(entry.status.is_delegate());
         assert_eq!(reg.native_count(), 0);
         assert_eq!(reg.delegate_count(), 1);
@@ -1967,13 +1967,13 @@ mod tests {
             "sha256:delegate-v1".into(),
             "2026-02-20T00:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         reg.begin_candidacy(
             &id,
             "sha256:candidate".into(),
             "2026-02-20T01:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Try to promote with broader authority — must fail
         assert!(matches!(
@@ -1999,7 +1999,7 @@ mod tests {
             "sha256:delegate-v1".into(),
             "2026-02-20T00:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Skip candidacy — go straight to promote
         assert!(matches!(
@@ -2025,7 +2025,7 @@ mod tests {
             "sha256:delegate-v1".into(),
             "2026-02-20T00:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(matches!(
             reg.demote(&id, "no reason".into(), "2026-02-20T01:00:00Z".into()),
@@ -2062,9 +2062,9 @@ mod tests {
             "sha256:d".into(),
             "t0".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         reg.begin_candidacy(&id, "sha256:c".into(), "t1".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.promote(
             &id,
             "sha256:n".into(),
@@ -2072,7 +2072,7 @@ mod tests {
             "r1".into(),
             "t2".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(reg.is_ga_ready());
     }
 
@@ -2088,7 +2088,7 @@ mod tests {
             "sha256:d1".into(),
             "t0".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         reg.register_delegate(
             id2,
             SlotKind::Interpreter,
@@ -2096,11 +2096,11 @@ mod tests {
             "sha256:d2".into(),
             "t0".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!((reg.native_coverage() - 0.0).abs() < f64::EPSILON);
 
         reg.begin_candidacy(&id1, "sha256:c1".into(), "t1".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.promote(
             &id1,
             "sha256:n1".into(),
@@ -2108,7 +2108,7 @@ mod tests {
             "r1".into(),
             "t2".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!((reg.native_coverage() - 0.5).abs() < f64::EPSILON);
     }
 
@@ -2625,7 +2625,7 @@ mod tests {
                 format!("sha256:{name}"),
                 "t0".into(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         let ids: Vec<&str> = reg.iter().map(|(id, _)| id.as_str()).collect();
         assert_eq!(ids, vec!["aa-first", "mm-middle", "zz-last"]);
@@ -2644,7 +2644,7 @@ mod tests {
             "sha256:abc".into(),
             "2026-02-20T00:00:00Z".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let roundtrip: SlotRegistry =
@@ -2654,11 +2654,11 @@ mod tests {
         let orig_id = SlotId::new("parser").expect("constructor with valid inputs");
         assert_eq!(
             reg.get(&orig_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .kind,
             roundtrip
                 .get(&orig_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .kind
         );
     }
@@ -2935,9 +2935,9 @@ mod tests {
             SlotKind::HostcallDispatch,
             SlotKind::Builtins,
         ] {
-            let json = serde_json::to_value(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(kind).expect("serialization should succeed");
             let back: SlotKind =
-                serde_json::from_value(json).expect("serde deserialization should succeed");
+                serde_json::from_value(json).expect("deserialization should succeed");
             assert_eq!(kind, back);
         }
     }
@@ -2954,9 +2954,9 @@ mod tests {
             SlotCapability::TriggerGc,
             SlotCapability::EmitEvidence,
         ] {
-            let json = serde_json::to_value(cap).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(cap).expect("serialization should succeed");
             let back: SlotCapability =
-                serde_json::from_value(json).expect("serde deserialization should succeed");
+                serde_json::from_value(json).expect("deserialization should succeed");
             assert_eq!(cap, back);
         }
     }
@@ -2994,9 +2994,9 @@ mod tests {
             PromotionTransition::DemotedToDelegate,
             PromotionTransition::RolledBack,
         ] {
-            let json = serde_json::to_value(t).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(t).expect("serialization should succeed");
             let back: PromotionTransition =
-                serde_json::from_value(json).expect("serde deserialization should succeed");
+                serde_json::from_value(json).expect("deserialization should succeed");
             assert_eq!(t, back);
         }
     }
@@ -3072,9 +3072,9 @@ mod tests {
     #[test]
     fn release_slot_class_serde_roundtrip() {
         for class in [ReleaseSlotClass::Core, ReleaseSlotClass::NonCore] {
-            let json = serde_json::to_value(class).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(class).expect("serialization should succeed");
             let back: ReleaseSlotClass =
-                serde_json::from_value(json).expect("serde deserialization should succeed");
+                serde_json::from_value(json).expect("deserialization should succeed");
             assert_eq!(class, back);
         }
     }
@@ -3082,9 +3082,9 @@ mod tests {
     #[test]
     fn ga_release_guard_verdict_serde_roundtrip() {
         for v in [GaReleaseGuardVerdict::Pass, GaReleaseGuardVerdict::Blocked] {
-            let json = serde_json::to_value(v).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(v).expect("serialization should succeed");
             let back: GaReleaseGuardVerdict =
-                serde_json::from_value(json).expect("serde deserialization should succeed");
+                serde_json::from_value(json).expect("deserialization should succeed");
             assert_eq!(v, back);
         }
     }
@@ -3152,8 +3152,8 @@ mod tests {
             "sha256:d1".into(),
             "t0".into(),
         )
-        .expect("serde deserialization should succeed");
-        let entry = reg.get(&id).expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
+        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
         assert_eq!(entry.promotion_lineage.len(), 1);
         assert_eq!(
             entry.promotion_lineage[0].transition,
@@ -3162,8 +3162,8 @@ mod tests {
         assert!(entry.promotion_lineage[0].receipt_id.is_none());
 
         reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
-            .expect("serde deserialization should succeed");
-        let entry = reg.get(&id).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
         assert_eq!(entry.promotion_lineage.len(), 2);
         assert_eq!(
             entry.promotion_lineage[1].transition,
@@ -3217,9 +3217,9 @@ mod tests {
             "sha256:d1".into(),
             "t0".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.promote(
             &id,
             "sha256:n1".into(),
@@ -3227,11 +3227,11 @@ mod tests {
             "r1".into(),
             "t2".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         reg.demote(&id, "regression".into(), "t3".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
-        let entry = reg.get(&id).expect("serde deserialization should succeed");
+        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
         assert_eq!(entry.rollback_target.as_deref(), Some("sha256:d1"));
     }
 
@@ -3598,10 +3598,10 @@ mod tests {
         assert_eq!(reg.len(), back.len());
         assert_eq!(
             reg.get(&SlotId::new("parser").expect("constructor with valid inputs"))
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .kind,
             back.get(&SlotId::new("parser").expect("constructor with valid inputs"))
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .kind,
         );
     }
@@ -3651,9 +3651,9 @@ mod tests {
             "sha256:d1".into(),
             "t0".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         reg.begin_candidacy(&id, "sha256:candidate-1".into(), "t1".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.promote(
             &id,
             "sha256:native-1".into(),
@@ -3661,7 +3661,7 @@ mod tests {
             "receipt-1".into(),
             "t2".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(reg.native_coverage(), 1.0);
     }
 
@@ -3728,10 +3728,10 @@ mod tests {
             "sha256:d1".into(),
             "t0".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
-            .expect("serde deserialization should succeed");
-        let entry = reg.get(&id).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
         assert_eq!(entry.promotion_lineage.len(), 2);
         let json = serde_json::to_string(entry).expect("serialize derived Serialize");
         let back: SlotEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3848,7 +3848,7 @@ mod tests {
 
         let artifact = reg
             .evaluate_ga_release_guard(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
         assert_eq!(artifact.core_slots_lineage_mismatch, vec![parser]);
     }
@@ -3873,7 +3873,7 @@ mod tests {
 
         let artifact = reg
             .evaluate_ga_release_guard(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
         assert_eq!(artifact.core_slots_equivalence_failed, vec![parser]);
     }
@@ -3927,19 +3927,19 @@ mod tests {
         let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
         promote_slot(&mut reg, &id, "sha256:n1");
         reg.demote(&id, "regression".into(), "t3".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             reg.get(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status
                 .is_delegate()
         );
 
         reg.begin_candidacy(&id, "sha256:c2".into(), "t4".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             reg.get(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             PromotionStatus::PromotionCandidate { .. }
         ));
@@ -3950,16 +3950,16 @@ mod tests {
             "receipt-n2".into(),
             "t5".into(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(
             reg.get(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status
                 .is_native()
         );
         assert_eq!(
             reg.get(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .promotion_lineage
                 .len(),
             6
@@ -3973,15 +3973,15 @@ mod tests {
         promote_slot(&mut reg, &id, "sha256:native-v1");
         assert_eq!(
             reg.get(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .implementation_digest,
             "sha256:native-v1"
         );
         reg.demote(&id, "perf regression".into(), "t3".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             reg.get(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .implementation_digest,
             "sha256:delegate-v1",
             "implementation_digest should be restored to rollback_target"
@@ -4049,7 +4049,7 @@ mod tests {
         let mut reg = SlotRegistry::new();
         let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
         reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // broader_authority() includes HeapAlloc and InvokeHostcall which
         // are not in test_authority().permitted → AuthorityBroadening
         let err = reg
@@ -4069,7 +4069,7 @@ mod tests {
         let mut reg = SlotRegistry::new();
         let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
         reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bad_native_authority = AuthorityEnvelope {
             required: vec![SlotCapability::ReadSource, SlotCapability::EmitIr],
             permitted: vec![SlotCapability::ReadSource],
@@ -4103,7 +4103,7 @@ mod tests {
         promote_slot(&mut reg, &id, "sha256:n1");
         assert!(
             reg.get(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status
                 .is_native()
         );
@@ -4118,7 +4118,7 @@ mod tests {
         let mut reg = SlotRegistry::new();
         let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
         reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = reg
             .begin_candidacy(&id, "sha256:c2".into(), "t2".into())
@@ -4132,7 +4132,7 @@ mod tests {
         let id = register_slot(&mut reg, "parser", SlotKind::Parser, "sha256:d1");
         assert!(
             reg.get(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status
                 .is_delegate()
         );
@@ -4149,7 +4149,7 @@ mod tests {
         let input = guard_input(core_slots, None);
         let artifact = reg
             .evaluate_ga_release_guard(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
         assert_eq!(artifact.core_delegate_count, 1);
         assert!(!artifact.blocking_slots.is_empty());
@@ -4176,7 +4176,7 @@ mod tests {
 
         let artifact = reg
             .evaluate_ga_release_guard(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.verdict, GaReleaseGuardVerdict::Blocked);
         assert_eq!(artifact.core_slots_invalid_signature, vec![parser]);
     }
@@ -4212,7 +4212,7 @@ mod tests {
         );
         let snap = reg
             .snapshot_replacement_progress("t1", "d1", "p1", &signals)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(snap.total_slots, 2);
         assert_eq!(snap.native_slots, 1);
         assert_eq!(snap.delegate_slots, 1);

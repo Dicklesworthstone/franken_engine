@@ -278,7 +278,7 @@ impl InteropSpecimenEvidence {
         let mut canonical = self.clone();
         canonical.evidence_hash = None;
         let canonical_json =
-            serde_json::to_vec(&canonical).expect("serde deserialization should succeed");
+            serde_json::to_vec(&canonical).expect("serialization should succeed");
         hex_encode(ContentHash::compute(&canonical_json).as_bytes())
     }
 
@@ -2453,7 +2453,7 @@ fn run_single_specimen(specimen: &InteropSpecimen) -> InteropSpecimenEvidence {
         let deps = async_dependency_map
             .get(specifier)
             .cloned()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let promise = if sm.has_top_level_await {
             let pid: u32 = sm.specifier.as_bytes().iter().map(|&b| b as u32).sum();
             Some(crate::promise_model::PromiseHandle(pid))
@@ -3048,17 +3048,17 @@ mod tests {
     #[test]
     fn verdict_serde_roundtrip() {
         let json_pass = serde_json::to_string(&InteropVerdict::Pass)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let json_fail = serde_json::to_string(&InteropVerdict::Fail)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(
             serde_json::from_str::<InteropVerdict>(&json_pass)
-                .expect("serde deserialization should succeed"),
+                .expect("deserialization should succeed"),
             InteropVerdict::Pass
         );
         assert_eq!(
             serde_json::from_str::<InteropVerdict>(&json_fail)
-                .expect("serde deserialization should succeed"),
+                .expect("deserialization should succeed"),
             InteropVerdict::Fail
         );
     }
@@ -3137,7 +3137,7 @@ mod tests {
             .evidence
             .iter()
             .find(|ev| ev.specimen_id == "async_rejection_propagation")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             evidence.compatibility_disposition,
             InteropCompatibilityDisposition::Degraded
@@ -3155,7 +3155,7 @@ mod tests {
             .evidence
             .iter()
             .find(|ev| ev.specimen_id == "cycle_mixed_esm_cjs")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             evidence.compatibility_disposition,
             InteropCompatibilityDisposition::Supported
@@ -3249,7 +3249,7 @@ mod tests {
             let hash = ev
                 .evidence_hash
                 .as_ref()
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(
                 hash.len(),
                 64,
@@ -3793,7 +3793,7 @@ mod tests {
         let specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "esm_single_module")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = run_single_specimen(&specimen);
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
@@ -3822,7 +3822,7 @@ mod tests {
         let specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "cycle_esm_esm")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = run_single_specimen(&specimen);
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.actual_outcome, InteropActualOutcome::CycleDetected);
@@ -3848,7 +3848,7 @@ mod tests {
         let mut specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "cycle_esm_esm")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         specimen.specimen_id = "unexpected_cycle_detected_outside_cyclic_family".into();
         specimen.family = InteropFamily::MixedGraph;
 
@@ -3871,7 +3871,7 @@ mod tests {
         let specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "cycle_mixed_esm_cjs")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = run_single_specimen(&specimen);
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
@@ -3901,7 +3901,7 @@ mod tests {
         let mut specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "cycle_mixed_esm_cjs")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         specimen.specimen_id = "unexpected_success_cycle_outside_cyclic_family".into();
         specimen.family = InteropFamily::MixedGraph;
 
@@ -3925,7 +3925,7 @@ mod tests {
         let specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "async_rejection_propagation")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = run_single_specimen(&specimen);
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.actual_outcome, InteropActualOutcome::EvalFailure);
@@ -3950,7 +3950,7 @@ mod tests {
         let specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "mixed_diamond_graph")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = run_single_specimen(&specimen);
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.binding_verdicts.len(), 3);
@@ -4219,7 +4219,7 @@ mod tests {
             .find(|specimen| {
                 specimen.specimen_id == "package_type_module_extensionless_relative_native"
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let native_evidence = run_single_specimen(native);
         assert_eq!(
             native_evidence.compatibility_mode,
@@ -4236,7 +4236,7 @@ mod tests {
             .find(|specimen| {
                 specimen.specimen_id == "package_type_module_extensionless_relative_node_compat"
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let node_compat_evidence = run_single_specimen(node_compat);
         assert_eq!(
             node_compat_evidence.compatibility_mode,
@@ -4253,7 +4253,7 @@ mod tests {
             .find(|specimen| {
                 specimen.specimen_id == "package_type_module_extensionless_relative_bun_compat"
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bun_compat_evidence = run_single_specimen(bun_compat);
         assert_eq!(
             bun_compat_evidence.compatibility_mode,
@@ -4295,7 +4295,7 @@ mod tests {
         let native = corpus
             .iter()
             .find(|specimen| specimen.specimen_id == "cjs_requires_esm_named_native")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let native_evidence = run_single_specimen(native);
         assert_eq!(
             native_evidence.compatibility_mode,
@@ -4330,7 +4330,7 @@ mod tests {
         let node_compat = corpus
             .iter()
             .find(|specimen| specimen.specimen_id == "cjs_requires_esm_named_node_compat")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let node_compat_evidence = run_single_specimen(node_compat);
         assert_eq!(
             node_compat_evidence.compatibility_mode,
@@ -4365,7 +4365,7 @@ mod tests {
         let bun_compat = corpus
             .iter()
             .find(|specimen| specimen.specimen_id == "cjs_requires_esm_named_bun_compat")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bun_compat_evidence = run_single_specimen(bun_compat);
         assert_eq!(
             bun_compat_evidence.compatibility_mode,
@@ -4465,7 +4465,7 @@ mod tests {
             .find(|specimen| {
                 specimen.specimen_id == "scoped_package_type_module_extensionless_relative_native"
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let native_evidence = run_single_specimen(native);
         assert_eq!(
             native_evidence.compatibility_mode,
@@ -4483,7 +4483,7 @@ mod tests {
                 specimen.specimen_id
                     == "scoped_package_type_module_extensionless_relative_node_compat"
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let node_compat_evidence = run_single_specimen(node_compat);
         assert_eq!(
             node_compat_evidence.compatibility_mode,
@@ -4501,7 +4501,7 @@ mod tests {
                 specimen.specimen_id
                     == "scoped_package_type_module_extensionless_relative_bun_compat"
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bun_compat_evidence = run_single_specimen(bun_compat);
         assert_eq!(
             bun_compat_evidence.compatibility_mode,
@@ -4606,7 +4606,7 @@ mod tests {
             let specimen = corpus
                 .iter()
                 .find(|specimen| specimen.specimen_id == specimen_id)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let evidence = run_single_specimen(specimen);
             assert_eq!(evidence.compatibility_mode, compatibility_mode);
             assert_eq!(evidence.actual_outcome, InteropActualOutcome::Success);
@@ -4863,33 +4863,33 @@ mod tests {
     #[test]
     fn interop_family_serde_snake_case_format() {
         let json = serde_json::to_string(&InteropFamily::EsmImportsCjs)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"esm_imports_cjs\"");
         let json = serde_json::to_string(&InteropFamily::CjsRequiresEsm)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"cjs_requires_esm\"");
         let json = serde_json::to_string(&InteropFamily::DefaultNamespace)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"default_namespace\"");
     }
 
     #[test]
     fn interop_expected_outcome_serde_snake_case_format() {
         let json = serde_json::to_string(&InteropExpectedOutcome::LinkFailure)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"link_failure\"");
         let json = serde_json::to_string(&InteropExpectedOutcome::EvalFailure)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"eval_failure\"");
         let json = serde_json::to_string(&InteropExpectedOutcome::CycleDetected)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"cycle_detected\"");
     }
 
     #[test]
     fn interop_actual_outcome_serde_snake_case_format() {
         let json = serde_json::to_string(&InteropActualOutcome::GraphConstructionFailure)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"graph_construction_failure\"");
     }
 
@@ -4897,7 +4897,7 @@ mod tests {
     fn inventory_json_contains_expected_fields() {
         let inv = run_interop_parity_corpus();
         let json =
-            serde_json::to_string_pretty(&inv).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&inv).expect("serialization should succeed");
         assert!(json.contains("schema_version"));
         assert!(json.contains("component"));
         assert!(json.contains("specimen_count"));
@@ -4991,7 +4991,7 @@ mod tests {
         let specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "async_tla_single")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = run_single_specimen(&specimen);
         // async_tla_single has no expected_binding_states
         assert!(evidence.binding_verdicts.is_empty());
@@ -5173,7 +5173,7 @@ mod tests {
             assert!(
                 *inv.family_coverage
                     .get(f.as_str())
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     > 0,
                 "family {} has zero coverage",
                 f.as_str()
@@ -5188,7 +5188,7 @@ mod tests {
             .evidence
             .iter()
             .find(|e| e.specimen_id == "re_export_esm_through_cjs")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(re_export_ev.linked_count, 3);
         assert_eq!(re_export_ev.module_count, 3);
     }
@@ -5198,7 +5198,7 @@ mod tests {
         let specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "star_re_export_across_boundary")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = run_single_specimen(&specimen);
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.binding_verdicts.len(), 2);
@@ -5213,7 +5213,7 @@ mod tests {
         let specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "async_mixed_tla_chain")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = run_single_specimen(&specimen);
         assert_eq!(evidence.verdict, InteropVerdict::Pass);
         assert_eq!(evidence.async_phase_verdicts.len(), 2);
@@ -5221,7 +5221,7 @@ mod tests {
             .async_phase_verdicts
             .iter()
             .find(|v| v.module_specifier == "sync.cjs")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sync_verdict.actual_phase, AsyncModulePhase::Synchronous);
         assert!(sync_verdict.pass);
     }
@@ -5231,20 +5231,20 @@ mod tests {
         let specimen = interop_parity_corpus()
             .into_iter()
             .find(|s| s.specimen_id == "live_binding_esm_mutation")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = run_single_specimen(&specimen);
         assert_eq!(evidence.binding_verdicts.len(), 2);
         let count_bv = evidence
             .binding_verdicts
             .iter()
             .find(|v| v.export_name == "count")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(count_bv.pass);
         let increment_bv = evidence
             .binding_verdicts
             .iter()
             .find(|v| v.export_name == "increment")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(increment_bv.pass);
     }
 
@@ -5255,7 +5255,7 @@ mod tests {
             .evidence
             .iter()
             .find(|e| e.specimen_id == "default_export_esm_to_cjs")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.verdict, InteropVerdict::Pass);
         assert_eq!(
             ev.compatibility_disposition,

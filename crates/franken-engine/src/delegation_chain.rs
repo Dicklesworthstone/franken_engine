@@ -418,7 +418,7 @@ mod tests {
     use crate::signature_preimage::{Signature, SigningKey};
 
     fn make_sk(seed: u8) -> SigningKey {
-        SigningKey::from_bytes([seed; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([seed; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn make_principal(seed: u8) -> PrincipalId {
@@ -1029,7 +1029,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let proof2 = verify_chain(
             &chain,
             RuntimeCapability::VmDispatch,
@@ -1037,7 +1037,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(proof1.chain_hash, proof2.chain_hash);
     }
@@ -1059,7 +1059,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let proof_b = verify_chain(
             &DelegationChain::new(vec![link0_b]),
             RuntimeCapability::VmDispatch,
@@ -1067,7 +1067,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_ne!(proof_a.chain_hash, proof_b.chain_hash);
     }
@@ -1086,7 +1086,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(proof.verified_at_tick, 500);
         assert_eq!(proof.authorized_capability, RuntimeCapability::VmDispatch);
@@ -1309,7 +1309,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         let restored: AuthorizationProof =
@@ -1407,7 +1407,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         for (i, link_summary) in proof.chain_summary.iter().enumerate() {
             assert_eq!(link_summary.index, i);
@@ -1560,7 +1560,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let proof_both = verify_chain(
             &DelegationChain::new(vec![link_both]),
             RuntimeCapability::VmDispatch,
@@ -1568,7 +1568,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_ne!(proof_vm.chain_hash, proof_both.chain_hash);
     }
@@ -1636,7 +1636,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             proof.root_issuer,
@@ -1679,7 +1679,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let proof2 = verify_chain(
             &chain,
             RuntimeCapability::VmDispatch,
@@ -1687,7 +1687,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(proof1.chain_hash, proof2.chain_hash);
     }
 
@@ -1708,7 +1708,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let proof_b = verify_chain(
             &DelegationChain::new(vec![link_b]),
             RuntimeCapability::VmDispatch,
@@ -1716,7 +1716,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_ne!(proof_a.chain_hash, proof_b.chain_hash);
     }
@@ -1733,7 +1733,7 @@ mod tests {
                 &ctx,
                 &NoRevocationOracle,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(proof.verified_at_tick, 777);
     }
 
@@ -1748,7 +1748,7 @@ mod tests {
                 &ctx,
                 &NoRevocationOracle,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(proof.chain_summary.len(), chain.len());
     }
 
@@ -1763,7 +1763,7 @@ mod tests {
                 &ctx,
                 &NoRevocationOracle,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         let restored: AuthorizationProof =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1862,7 +1862,7 @@ mod tests {
                 &ctx,
                 &NoRevocationOracle,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for (i, summary) in proof.chain_summary.iter().enumerate() {
             assert_eq!(summary.index, i);
         }
@@ -1879,11 +1879,11 @@ mod tests {
                 &ctx,
                 &NoRevocationOracle,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let last = proof
             .chain_summary
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.delegate, leaf_delegate);
     }
 
@@ -1898,7 +1898,7 @@ mod tests {
                 &ctx,
                 &NoRevocationOracle,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let proof_fn = verify_chain(
             &chain,
             RuntimeCapability::VmDispatch,
@@ -1906,7 +1906,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(proof_method.chain_hash, proof_fn.chain_hash);
         assert_eq!(
             proof_method.authorized_capability,
@@ -1972,7 +1972,7 @@ mod tests {
                 &ctx,
                 &NoRevocationOracle,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for summary in &proof.chain_summary {
             assert_eq!(summary.zone, "zone-a");
         }
@@ -2040,7 +2040,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let cloned = proof.clone();
         assert_eq!(proof, cloned);
     }
@@ -2096,7 +2096,7 @@ mod tests {
             &ctx,
             &NoRevocationOracle,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"chain_hash\""));
         assert!(json.contains("\"authorized_capability\""));

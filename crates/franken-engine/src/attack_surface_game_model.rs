@@ -827,7 +827,7 @@ mod tests {
         let tensor = LossTensor::from_entries(Subsystem::Runtime, entries);
         let minimax = tensor
             .minimax_defender()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(minimax, atk("d2"));
     }
 
@@ -1633,7 +1633,7 @@ mod tests {
         assert!(result.is_some());
         // With identical losses, BTreeSet ordering gives d1 first
         assert_eq!(
-            result.expect("serde deserialization should succeed"),
+            result.expect("operation should succeed for valid inputs"),
             atk("d1")
         );
     }
@@ -1749,7 +1749,7 @@ mod tests {
         let summary = report
             .subsystem_summaries
             .get("runtime")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.minimax_recommendation, Some("d1".to_string()));
     }
 
@@ -1763,7 +1763,7 @@ mod tests {
         let summary = report
             .subsystem_summaries
             .get("compiler")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.minimax_recommendation, None);
     }
 
@@ -1779,17 +1779,17 @@ mod tests {
     fn subsystem_serde_rename_all_snake_case() {
         assert_eq!(
             serde_json::to_string(&Subsystem::ControlPlane)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"control_plane\""
         );
         assert_eq!(
             serde_json::to_string(&Subsystem::ExtensionHost)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"extension_host\""
         );
         assert_eq!(
             serde_json::to_string(&Subsystem::EvidencePipeline)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"evidence_pipeline\""
         );
     }
@@ -1798,17 +1798,17 @@ mod tests {
     fn loss_dimension_serde_rename_all_snake_case() {
         assert_eq!(
             serde_json::to_string(&LossDimension::UserHarm)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"user_harm\""
         );
         assert_eq!(
             serde_json::to_string(&LossDimension::FalsePositiveCost)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"false_positive_cost\""
         );
         assert_eq!(
             serde_json::to_string(&LossDimension::EvidenceIntegrityCost)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"evidence_integrity_cost\""
         );
     }

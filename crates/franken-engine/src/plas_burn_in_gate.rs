@@ -803,16 +803,16 @@ mod tests {
         config.shadow_start_timestamp_ns = 1_000;
 
         let mut session = BurnInSession::new(config, complete_rollback_artifacts())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for i in 0..10 {
             let obs = success_observation(&format!("obs-{i}"), 2_000 + i * 100);
             session
                 .record_shadow_observation(obs)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         session
     }
@@ -1317,7 +1317,7 @@ mod tests {
         c.policy_id = "  p1  ".to_string();
         c.extension_id = "  e1  ".to_string();
         let session = BurnInSession::new(c, RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let log = &session.logs()[0];
         assert_eq!(log.trace_id, "t1");
         assert_eq!(log.decision_id, "d1");
@@ -1338,7 +1338,7 @@ mod tests {
     #[test]
     fn session_new_starts_at_shadow_start() {
         let session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(session.lifecycle_state(), BurnInLifecycleState::ShadowStart);
         assert_eq!(session.logs().len(), 1);
         assert_eq!(session.logs()[0].event, "shadow_start");
@@ -1348,7 +1348,7 @@ mod tests {
     fn session_new_metrics_initialized() {
         let config = make_config();
         let session = BurnInSession::new(config.clone(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let m = session.metrics();
         assert_eq!(m.started_at_ns, config.shadow_start_timestamp_ns);
         assert_eq!(m.total_observations, 0);
@@ -1359,10 +1359,10 @@ mod tests {
     #[test]
     fn session_begin_shadow_evaluation() {
         let mut session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             session.lifecycle_state(),
             BurnInLifecycleState::ShadowEvaluation
@@ -1373,10 +1373,10 @@ mod tests {
     #[test]
     fn session_double_begin_shadow_evaluation_fails() {
         let mut session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = session.begin_shadow_evaluation().unwrap_err();
         assert!(matches!(err, BurnInError::InvalidTransition { .. }));
     }
@@ -1386,13 +1386,13 @@ mod tests {
     #[test]
     fn session_record_observation_success() {
         let mut session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = session
             .record_shadow_observation(success_observation("obs-1", 2_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none()); // no early termination
         assert_eq!(session.metrics().total_observations, 1);
         assert_eq!(session.metrics().successful_observations, 1);
@@ -1402,16 +1402,16 @@ mod tests {
     #[test]
     fn session_record_observation_false_deny() {
         let mut session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = session
             .record_shadow_observation(false_deny_observation("obs-1", 2_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // With 1 observation and 1 false_deny, rate = 1_000_000 > 5_000 threshold → early termination
         assert!(result.is_some());
-        let artifact = result.expect("serde deserialization should succeed");
+        let artifact = result.expect("operation should succeed for valid inputs");
         assert_eq!(artifact.lifecycle_state, BurnInLifecycleState::Rejection);
         assert!(
             artifact
@@ -1423,7 +1423,7 @@ mod tests {
     #[test]
     fn session_record_observation_wrong_state() {
         let mut session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Still in ShadowStart, not ShadowEvaluation
         let err = session
             .record_shadow_observation(success_observation("obs-1", 2_000_000))
@@ -1434,13 +1434,13 @@ mod tests {
     #[test]
     fn session_record_observation_non_monotonic_timestamp() {
         let mut session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .record_shadow_observation(success_observation("obs-1", 2_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = session
             .record_shadow_observation(success_observation("obs-2", 1_000_000))
             .unwrap_err();
@@ -1450,10 +1450,10 @@ mod tests {
     #[test]
     fn session_record_observation_empty_id() {
         let mut session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let obs = ShadowObservation {
             observation_id: "".to_string(),
             timestamp_ns: 2_000_000,
@@ -1471,7 +1471,7 @@ mod tests {
         let mut session = session_ready_for_promotion();
         let artifact = session
             .evaluate_promotion_gate(100_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.outcome, "pass");
         assert!(artifact.failure_codes.is_empty());
         assert_eq!(
@@ -1496,16 +1496,16 @@ mod tests {
         };
         config.shadow_start_timestamp_ns = 1_000;
         let mut session = BurnInSession::new(config, complete_rollback_artifacts())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .record_shadow_observation(success_observation("obs-1", 2_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = session
             .evaluate_promotion_gate(3_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.outcome, "fail");
         assert!(
             artifact
@@ -1525,16 +1525,16 @@ mod tests {
         };
         config.shadow_start_timestamp_ns = 1_000;
         let mut session = BurnInSession::new(config, complete_rollback_artifacts())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .record_shadow_observation(success_observation("obs-1", 2_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = session
             .evaluate_promotion_gate(3_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             artifact
                 .failure_codes
@@ -1553,14 +1553,14 @@ mod tests {
         };
         config.shadow_start_timestamp_ns = 1_000;
         let mut session = BurnInSession::new(config, complete_rollback_artifacts())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Record 1 failure out of 2 = 500_000 millionths success rate
         session
             .record_shadow_observation(success_observation("obs-1", 2_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .record_shadow_observation(ShadowObservation {
                 observation_id: "obs-2".to_string(),
@@ -1568,10 +1568,10 @@ mod tests {
                 success: false,
                 false_deny: false,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = session
             .evaluate_promotion_gate(4_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             artifact
                 .failure_codes
@@ -1590,16 +1590,16 @@ mod tests {
         };
         config.shadow_start_timestamp_ns = 1_000;
         let mut session = BurnInSession::new(config, RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .record_shadow_observation(success_observation("obs-1", 2_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = session
             .evaluate_promotion_gate(3_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             artifact
                 .failure_codes
@@ -1611,7 +1611,7 @@ mod tests {
     #[test]
     fn session_promotion_gate_wrong_state() {
         let session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut session = session;
         let err = session.evaluate_promotion_gate(5_000_000).unwrap_err();
         assert!(matches!(err, BurnInError::InvalidTransition { .. }));
@@ -1632,12 +1632,12 @@ mod tests {
         let a1 = {
             let mut s = session_ready_for_promotion();
             s.evaluate_promotion_gate(100_000)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         let a2 = {
             let mut s = session_ready_for_promotion();
             s.evaluate_promotion_gate(100_000)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         assert_eq!(a1.decision_hash, a2.decision_hash);
     }
@@ -1647,7 +1647,7 @@ mod tests {
         let pass_hash = {
             let mut s = session_ready_for_promotion();
             s.evaluate_promotion_gate(100_000)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .decision_hash
         };
         // Create a rejection by using incomplete rollback artifacts
@@ -1661,21 +1661,21 @@ mod tests {
         };
         config.shadow_start_timestamp_ns = 1_000;
         let mut session = BurnInSession::new(config, RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for i in 0..10 {
             session
                 .record_shadow_observation(success_observation(
                     &format!("obs-{i}"),
                     2_000 + i * 100,
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let reject_hash = session
             .evaluate_promotion_gate(100_000)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .decision_hash;
         assert_ne!(pass_hash, reject_hash);
     }
@@ -1685,7 +1685,7 @@ mod tests {
     #[test]
     fn scorecard_metrics_initial() {
         let session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let sc = session.scorecard_metrics();
         assert_eq!(sc.shadow_success_rate_millionths, 0);
         assert_eq!(sc.false_deny_rate_millionths, 0);
@@ -1698,7 +1698,7 @@ mod tests {
         let mut session = session_ready_for_promotion();
         session
             .evaluate_promotion_gate(100_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let sc = session.scorecard_metrics();
         assert_eq!(sc.shadow_success_rate_millionths, 1_000_000);
         assert_eq!(sc.false_deny_rate_millionths, 0);
@@ -1711,7 +1711,7 @@ mod tests {
     #[test]
     fn decision_artifact_none_before_gate() {
         let session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(session.decision_artifact().is_none());
     }
 
@@ -1720,7 +1720,7 @@ mod tests {
         let mut session = session_ready_for_promotion();
         session
             .evaluate_promotion_gate(100_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(session.decision_artifact().is_some());
     }
 
@@ -1762,7 +1762,7 @@ mod tests {
         let mut session = session_ready_for_promotion();
         let artifact = session
             .evaluate_promotion_gate(100_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: BurnInDecisionArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1790,13 +1790,13 @@ mod tests {
     #[test]
     fn early_termination_stores_decision_artifact() {
         let mut session = BurnInSession::new(make_config(), RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = session
             .record_shadow_observation(false_deny_observation("obs-1", 2_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(artifact.is_some());
         assert!(session.decision_artifact().is_some());
         assert_eq!(session.lifecycle_state(), BurnInLifecycleState::Rejection);
@@ -1815,16 +1815,16 @@ mod tests {
         };
         config.shadow_start_timestamp_ns = 1_000;
         let mut session = BurnInSession::new(config, RollbackProofArtifacts::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .begin_shadow_evaluation()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session
             .record_shadow_observation(success_observation("obs-1", 2_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = session
             .evaluate_promotion_gate(3_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should have at least: insufficient duration, insufficient observations, rollback missing
         assert!(artifact.failure_codes.len() >= 3);
         assert_eq!(artifact.lifecycle_state, BurnInLifecycleState::Rejection);

@@ -1042,14 +1042,14 @@ mod tests {
         let mut barrier = det_barrier(1);
         let guard = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         barrier
             .transition_now(
                 SecurityEpoch::from_raw(2),
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!barrier.release_guard(&guard));
     }
 
@@ -1237,7 +1237,7 @@ mod tests {
                     TransitionReason::PolicyKeyRotation,
                     &format!("t-{epoch}"),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(barrier.current_epoch(), SecurityEpoch::from_raw(10));
         assert_eq!(barrier.evidence().len(), 9);
@@ -1254,7 +1254,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t1",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(barrier.evidence().len(), 1);
 
         barrier
@@ -1263,7 +1263,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t2",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(barrier.evidence().len(), 2);
     }
 
@@ -1284,10 +1284,10 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cancelled = barrier
             .force_cancel_remaining()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cancelled, 0);
         assert_eq!(barrier.in_flight(), 0);
     }
@@ -1299,7 +1299,7 @@ mod tests {
         for i in 0..10 {
             let guard = barrier
                 .enter_critical(CriticalOpKind::DecisionEval, &format!("t-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(guard.guard_id > prev_id);
             prev_id = guard.guard_id;
         }
@@ -1319,7 +1319,7 @@ mod tests {
         for kind in &kinds {
             let guard = barrier
                 .enter_critical(*kind, "t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(guard.op_kind, *kind);
         }
         assert_eq!(barrier.in_flight(), 6);
@@ -1330,7 +1330,7 @@ mod tests {
         let mut barrier = det_barrier(1);
         let guard = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(barrier.release_guard(&guard));
         // Second release: in_flight is 0, returns false
         assert!(!barrier.release_guard(&guard));
@@ -1341,10 +1341,10 @@ mod tests {
         let mut barrier = det_barrier(1);
         let g1 = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let g2 = barrier
             .enter_critical(CriticalOpKind::KeyDerivation, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let duplicate = g1.clone();
 
         assert_eq!(barrier.in_flight(), 2);
@@ -1354,7 +1354,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "transition",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(barrier.release_guard(&g1));
         assert!(!barrier.release_guard(&duplicate));
@@ -1416,21 +1416,21 @@ mod tests {
             let mut barrier = det_barrier(1);
             let _g = barrier
                 .enter_critical(CriticalOpKind::EvidenceEmission, "t1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             barrier
                 .transition_now(
                     SecurityEpoch::from_raw(2),
                     TransitionReason::PolicyKeyRotation,
                     "trace-det",
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             barrier
                 .transition_now(
                     SecurityEpoch::from_raw(3),
                     TransitionReason::LossMatrixUpdate,
                     "trace-det-2",
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             barrier.evidence().to_vec()
         };
         assert_eq!(run(), run());
@@ -1452,13 +1452,13 @@ mod tests {
         let mut barrier = det_barrier(1);
         let g1 = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let g2 = barrier
             .enter_critical(CriticalOpKind::KeyDerivation, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let g3 = barrier
             .enter_critical(CriticalOpKind::RevocationCheck, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         barrier
             .begin_transition(
@@ -1466,7 +1466,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(barrier.in_flight(), 3);
         assert!(!barrier.can_complete());
 
@@ -1479,7 +1479,7 @@ mod tests {
 
         let evidence = barrier
             .complete_transition()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(evidence.in_flight_at_start, 3);
         assert_eq!(evidence.forced_cancellations, 0);
     }
@@ -1493,7 +1493,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "unique-trace-abc",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(barrier.evidence()[0].trace_id, "unique-trace-abc");
     }
 
@@ -1518,7 +1518,7 @@ mod tests {
         let mut barrier = det_barrier(1);
         let g1 = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         barrier.release_guard(&g1);
 
         barrier
@@ -1527,11 +1527,11 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let g2 = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Guard IDs should continue increasing
         assert!(g2.guard_id > g1.guard_id);
     }
@@ -1545,17 +1545,17 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(barrier.state(), BarrierState::Draining);
 
         barrier
             .complete_transition()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(barrier.state(), BarrierState::Open);
         // Should be able to acquire guards again
         let guard = barrier
             .enter_critical(CriticalOpKind::CapabilityCheck, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(guard.epoch, SecurityEpoch::from_raw(2));
     }
 
@@ -1566,21 +1566,21 @@ mod tests {
     #[test]
     fn barrier_state_json_field_names_open() {
         let json =
-            serde_json::to_value(BarrierState::Open).expect("serde deserialization should succeed");
+            serde_json::to_value(BarrierState::Open).expect("serialization should succeed");
         assert_eq!(json, serde_json::json!("Open"));
     }
 
     #[test]
     fn barrier_state_json_field_names_draining() {
         let json = serde_json::to_value(BarrierState::Draining)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, serde_json::json!("Draining"));
     }
 
     #[test]
     fn barrier_state_json_field_names_finalizing() {
         let json = serde_json::to_value(BarrierState::Finalizing)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, serde_json::json!("Finalizing"));
     }
 
@@ -1595,7 +1595,7 @@ mod tests {
             (CriticalOpKind::RemoteOperation, "RemoteOperation"),
         ];
         for (kind, name) in expected {
-            let json = serde_json::to_value(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(kind).expect("serialization should succeed");
             assert_eq!(json, serde_json::json!(name));
         }
     }
@@ -1608,10 +1608,10 @@ mod tests {
             op_kind: CriticalOpKind::DecisionEval,
             trace_id: "x".to_string(),
         };
-        let val = serde_json::to_value(&guard).expect("serde deserialization should succeed");
+        let val = serde_json::to_value(&guard).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("guard_id"));
         assert!(obj.contains_key("epoch"));
         assert!(obj.contains_key("op_kind"));
@@ -1631,10 +1631,10 @@ mod tests {
             duration_ms: 0,
             trace_id: "t".to_string(),
         };
-        let val = serde_json::to_value(&ev).expect("serde deserialization should succeed");
+        let val = serde_json::to_value(&ev).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for key in [
             "old_epoch",
             "new_epoch",
@@ -1653,10 +1653,10 @@ mod tests {
     #[test]
     fn barrier_config_json_field_names() {
         let cfg = BarrierConfig::default();
-        let val = serde_json::to_value(&cfg).expect("serde deserialization should succeed");
+        let val = serde_json::to_value(&cfg).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("drain_timeout_ms"));
         assert!(obj.contains_key("deterministic"));
         assert_eq!(obj.len(), 2);
@@ -1668,14 +1668,14 @@ mod tests {
             current_epoch: SecurityEpoch::from_raw(1),
             state: BarrierState::Draining,
         };
-        let val = serde_json::to_value(&err).expect("serde deserialization should succeed");
+        let val = serde_json::to_value(&err).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("EpochTransitioning"));
         let inner = obj["EpochTransitioning"]
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(inner.contains_key("current_epoch"));
         assert!(inner.contains_key("state"));
     }
@@ -1687,14 +1687,14 @@ mod tests {
             remaining_guards: 3,
             timeout_ms: 5000,
         };
-        let val = serde_json::to_value(&err).expect("serde deserialization should succeed");
+        let val = serde_json::to_value(&err).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("DrainTimeout"));
         let inner = obj["DrainTimeout"]
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(inner.contains_key("epoch"));
         assert!(inner.contains_key("remaining_guards"));
         assert!(inner.contains_key("timeout_ms"));
@@ -1706,14 +1706,14 @@ mod tests {
             current: SecurityEpoch::from_raw(5),
             attempted: SecurityEpoch::from_raw(3),
         };
-        let val = serde_json::to_value(&err).expect("serde deserialization should succeed");
+        let val = serde_json::to_value(&err).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("NonMonotonicTransition"));
         let inner = obj["NonMonotonicTransition"]
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(inner.contains_key("current"));
         assert!(inner.contains_key("attempted"));
     }
@@ -2035,7 +2035,7 @@ mod tests {
         assert_eq!(barrier.current_epoch(), SecurityEpoch::from_raw(0));
         let guard = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(guard.epoch, SecurityEpoch::from_raw(0));
         barrier.release_guard(&guard);
     }
@@ -2049,7 +2049,7 @@ mod tests {
                 TransitionReason::OperatorManualBump,
                 "t-zero-one",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.old_epoch, SecurityEpoch::from_raw(0));
         assert_eq!(ev.new_epoch, SecurityEpoch::from_raw(1));
     }
@@ -2065,7 +2065,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t-high",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.new_epoch, SecurityEpoch::from_raw(u64::MAX));
     }
 
@@ -2076,7 +2076,7 @@ mod tests {
         for i in 0..100 {
             let guard = barrier
                 .enter_critical(CriticalOpKind::EvidenceEmission, &format!("t-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             guards.push(guard);
         }
         assert_eq!(barrier.in_flight(), 100);
@@ -2092,7 +2092,7 @@ mod tests {
         for i in 0..50 {
             let _g = barrier
                 .enter_critical(CriticalOpKind::CapabilityCheck, &format!("t-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(barrier.in_flight(), 50);
 
@@ -2102,7 +2102,7 @@ mod tests {
                 TransitionReason::RevocationFrontierAdvance,
                 "t-mass-cancel",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.forced_cancellations, 50);
         assert_eq!(ev.in_flight_at_start, 50);
     }
@@ -2126,7 +2126,7 @@ mod tests {
                     reason.clone(),
                     &format!("t-reason-{i}"),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(ev.reason, *reason);
         }
         assert_eq!(barrier.evidence().len(), 6);
@@ -2156,7 +2156,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 trace,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(barrier.evidence()[0].trace_id, trace);
     }
 
@@ -2165,7 +2165,7 @@ mod tests {
         let mut barrier = det_barrier(1);
         let guard = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(guard.trace_id, "");
         barrier.release_guard(&guard);
     }
@@ -2212,13 +2212,13 @@ mod tests {
         let mut barrier = det_barrier(1);
         let _g1 = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _g2 = barrier
             .enter_critical(CriticalOpKind::KeyDerivation, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _g3 = barrier
             .enter_critical(CriticalOpKind::RemoteOperation, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let in_flight = barrier
             .begin_transition(
@@ -2226,7 +2226,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(in_flight, 3);
     }
 
@@ -2235,13 +2235,13 @@ mod tests {
         let mut barrier = det_barrier(1);
         let g1 = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _g2 = barrier
             .enter_critical(CriticalOpKind::KeyDerivation, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _g3 = barrier
             .enter_critical(CriticalOpKind::RemoteOperation, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         barrier
             .begin_transition(
@@ -2249,7 +2249,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Release one guard manually
         barrier.release_guard(&g1);
@@ -2258,13 +2258,13 @@ mod tests {
         // Force cancel the remaining 2
         let cancelled = barrier
             .force_cancel_remaining()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cancelled, 2);
         assert!(barrier.can_complete());
 
         let ev = barrier
             .complete_transition()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.in_flight_at_start, 3);
         assert_eq!(ev.forced_cancellations, 2);
     }
@@ -2287,7 +2287,7 @@ mod tests {
         let mut barrier = det_barrier(42);
         let guard = barrier
             .enter_critical(CriticalOpKind::EvidenceEmission, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(guard.epoch, barrier.current_epoch());
     }
 
@@ -2302,7 +2302,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(barrier.state(), BarrierState::Draining);
     }
 
@@ -2311,14 +2311,14 @@ mod tests {
         let mut barrier = det_barrier(1);
         let _g = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ev = barrier
             .transition_now(
                 SecurityEpoch::from_raw(2),
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.in_flight_at_complete, 0);
     }
 
@@ -2331,7 +2331,7 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.duration_ms, 0);
     }
 
@@ -2340,7 +2340,7 @@ mod tests {
         let mut barrier = det_barrier(1);
         let _g1 = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         barrier
             .begin_transition(
@@ -2348,23 +2348,23 @@ mod tests {
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // First force cancel: cancels the 1 in-flight guard
         let cancelled1 = barrier
             .force_cancel_remaining()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cancelled1, 1);
 
         // Second force cancel: nothing to cancel
         let cancelled2 = barrier
             .force_cancel_remaining()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cancelled2, 0);
 
         let ev = barrier
             .complete_transition()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // forced_cancellations accumulates: 1 + 0 = 1
         assert_eq!(ev.forced_cancellations, 1);
     }
@@ -2374,14 +2374,14 @@ mod tests {
         let mut barrier = det_barrier(1);
         let _g = barrier
             .enter_critical(CriticalOpKind::DecisionEval, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         barrier
             .begin_transition(
                 SecurityEpoch::from_raw(2),
                 TransitionReason::PolicyKeyRotation,
                 "t",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!barrier.can_complete());
     }
 
@@ -2394,7 +2394,7 @@ mod tests {
                 TransitionReason::OperatorManualBump,
                 "skip",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ev.old_epoch, SecurityEpoch::from_raw(1));
         assert_eq!(ev.new_epoch, SecurityEpoch::from_raw(100));
         assert_eq!(barrier.current_epoch(), SecurityEpoch::from_raw(100));

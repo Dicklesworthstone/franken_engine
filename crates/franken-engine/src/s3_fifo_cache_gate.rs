@@ -1766,7 +1766,7 @@ mod tests {
             small_ratio_millionths: 500_000, // 50%
             ..S3FifoCacheConfig::default()
         };
-        S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed")
+        S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs")
     }
 
     // -- Construction tests --
@@ -1825,7 +1825,7 @@ mod tests {
         let mut gate = default_gate();
         let decision = gate
             .insert(artifact("a"), 100, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.is_admit());
         assert_eq!(gate.total_cached(), 1);
         assert!(gate.contains(&key("a")));
@@ -1835,7 +1835,7 @@ mod tests {
     fn test_insert_starts_in_small() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 100, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate.entry_segment(&key("a")), Some(CacheSegment::Small));
     }
 
@@ -1843,10 +1843,10 @@ mod tests {
     fn test_duplicate_insert_is_hit() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 100, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d = gate
             .insert(artifact("a"), 100, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(d.is_admit());
         assert_eq!(gate.total_cached(), 1);
     }
@@ -1857,7 +1857,7 @@ mod tests {
         for i in 0..5 {
             let label = format!("item_{i}");
             gate.insert(artifact(&label), 100, payload(&label))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(gate.total_cached(), 5);
     }
@@ -1868,7 +1868,7 @@ mod tests {
     fn test_lookup_hit() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 100, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(gate.lookup(&key("a")));
         assert_eq!(gate.benchmark_evidence().hits, 1);
     }
@@ -1884,7 +1884,7 @@ mod tests {
     fn test_lookup_increments_frequency() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 100, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let k = key("a");
         assert_eq!(gate.entry_frequency(&k), Some(0));
         gate.lookup(&k);
@@ -1897,7 +1897,7 @@ mod tests {
     fn test_frequency_saturates_at_max() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 100, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let k = key("a");
         for _ in 0..10 {
             gate.lookup(&k);
@@ -1912,12 +1912,12 @@ mod tests {
         let mut gate = small_gate(4); // 50% small = 2, 50% main = 2
         // Insert enough to fill small and trigger eviction.
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.insert(artifact("b"), 10, payload("b"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Third insert should evict from small.
         gate.insert(artifact("c"), 10, payload("c"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 'a' had freq=0 so should be evicted to ghost.
         assert!(gate.is_ghost("a") || gate.total_cached() <= 4);
     }
@@ -1927,19 +1927,19 @@ mod tests {
         let mut gate = small_gate(4);
         let ka = key("a");
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Access 'a' to bump frequency.
         gate.lookup(&ka);
         assert!(
             gate.entry_frequency(&ka)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 > 0
         );
         // Fill to trigger eviction — 'a' should be promoted to main.
         gate.insert(artifact("b"), 10, payload("b"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.insert(artifact("c"), 10, payload("c"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if gate.contains(&ka) {
             assert_eq!(gate.entry_segment(&ka), Some(CacheSegment::Main));
         }
@@ -1949,9 +1949,9 @@ mod tests {
     fn test_ghost_queue_populated_on_eviction() {
         let mut gate = small_gate(2); // small=1, main=1
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.insert(artifact("b"), 10, payload("b"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 'a' should be evicted and appear in ghost.
         assert!(gate.is_ghost("a") || gate.total_cached() >= 1);
     }
@@ -1961,15 +1961,15 @@ mod tests {
         let mut gate = small_gate(4);
         // Fill and evict 'a'.
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.insert(artifact("b"), 10, payload("b"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.insert(artifact("c"), 10, payload("c"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // If 'a' is in ghost, re-insert should go to main.
         if gate.is_ghost("a") {
             gate.insert(artifact("a"), 10, payload("a"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             if gate.contains("a") {
                 assert_eq!(gate.entry_segment("a"), Some(CacheSegment::Main));
             }
@@ -1982,7 +1982,7 @@ mod tests {
     fn test_remove_existing() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let k = key("a");
         assert!(gate.remove(&k));
         assert!(!gate.contains(&k));
@@ -2000,7 +2000,7 @@ mod tests {
         for i in 0..10 {
             let label = format!("x{i}");
             gate.insert(artifact(&label), 10, payload(&label))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         gate.flush();
         assert_eq!(gate.total_cached(), 0);
@@ -2119,10 +2119,10 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         let d = gate
             .insert(artifact("new_item"), 100, payload("new_item"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!d.is_admit());
     }
 
@@ -2143,7 +2143,7 @@ mod tests {
         for i in 0..5 {
             let label = format!("p{i}");
             gate.insert(artifact(&label), 10, payload(&label))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for i in 0..5 {
             let label = format!("p{i}");
@@ -2164,7 +2164,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         let parity = gate.evaluate_parity();
         assert_eq!(parity.reference_policy, ReferencePolicyKind::Clock);
     }
@@ -2177,10 +2177,10 @@ mod tests {
             let label = format!("d{i}");
             gate1
                 .insert(artifact(&label), 10, payload(&label))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gate2
                 .insert(artifact(&label), 10, payload(&label))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gate1.lookup(&label);
             gate2.lookup(&label);
         }
@@ -2200,7 +2200,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         // Lots of misses.
         for i in 0..20 {
             let label = format!("miss{i}");
@@ -2226,7 +2226,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         // Lookups should tick down cooldown.
         for _ in 0..5 {
@@ -2242,7 +2242,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         let result = gate.re_enable();
         assert!(matches!(
@@ -2258,7 +2258,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         for _ in 0..3 {
             gate.lookup("tick");
@@ -2282,7 +2282,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         gate.lookup("tick"); // Expire cooldown.
         let _ = gate.re_enable();
@@ -2312,7 +2312,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         assert!(gate.adapt_split_ratio().is_none());
     }
 
@@ -2327,7 +2327,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         // Simulate high ghost hits.
         gate.benchmark.total_evictions = 10;
         gate.benchmark.ghost_hits = 8; // 80% ghost hit ratio.
@@ -2348,7 +2348,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         gate.benchmark.total_evictions = 100;
         gate.benchmark.ghost_hits = 5; // 5% ghost hit ratio.
         let old = gate.effective_small_ratio_millionths();
@@ -2368,7 +2368,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         gate.benchmark.total_evictions = 100;
         gate.benchmark.ghost_hits = 1;
         let result = gate.adapt_split_ratio();
@@ -2385,7 +2385,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         gate.active = false;
         gate.rollback_state = RollbackState::Completed;
         let _ = gate.re_enable();
@@ -2393,7 +2393,7 @@ mod tests {
         assert_eq!(
             gate.receipts()
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .decision_kind,
             DecisionKind::PolicyEnabled
         );
@@ -2407,7 +2407,7 @@ mod tests {
         assert_eq!(
             gate.receipts()
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .decision_kind,
             DecisionKind::GateFailRollback
         );
@@ -2442,7 +2442,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         let receipt = gate.emit_receipt(DecisionKind::GatePassContinue);
         assert!(receipt.admission_policy_label.contains("frequency_aware"));
     }
@@ -2474,7 +2474,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         for i in 0..20 {
             gate.lookup(&format!("miss{i}"));
         }
@@ -2539,7 +2539,7 @@ mod tests {
     fn test_advance_epoch() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.advance_epoch(epoch(2));
         assert_eq!(gate.current_epoch(), epoch(2));
     }
@@ -2548,13 +2548,13 @@ mod tests {
     fn test_epoch_updates_entry_validation() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.advance_epoch(epoch(5));
         // After advance, entry should be validated at the new epoch.
         let entry = gate
             .entries
             .get(&key("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.last_validated_epoch, epoch(5));
     }
 
@@ -2567,7 +2567,7 @@ mod tests {
         let last = gate
             .receipts()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.decision_kind, DecisionKind::AdmissionPolicyChanged);
     }
 
@@ -2579,7 +2579,7 @@ mod tests {
         for i in 0..3 {
             let label = format!("s{i}");
             gate.insert(artifact(&label), 10, payload(&label))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let snap = gate.segment_snapshot();
         assert!(snap.total_cached > 0);
@@ -2857,20 +2857,20 @@ mod tests {
         let mut gate = small_gate(4); // small=2, main=2
         // Fill small queue.
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.insert(artifact("b"), 10, payload("b"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Access 'a' to bump frequency.
         gate.lookup("a");
         // Insert 'c' triggers eviction from small.
         gate.insert(artifact("c"), 10, payload("c"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 'b' (freq=0) should be evicted; 'a' (freq>0) promoted.
         // Insert 'd' and 'e' to trigger more evictions.
         gate.insert(artifact("d"), 10, payload("d"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.insert(artifact("e"), 10, payload("e"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify cache is not larger than capacity.
         assert!(gate.total_cached() <= 4);
@@ -2889,12 +2889,12 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         // Insert and access items.
         for i in 0..10 {
             let label = format!("item{i}");
             gate.insert(artifact(&label), 10, payload(&label))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for i in 0..10 {
             let label = format!("item{i}");
@@ -2915,7 +2915,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
 
         // Trigger rollback.
         gate.operator_rollback("ops", "test");
@@ -2933,7 +2933,7 @@ mod tests {
         // Insert should work again.
         let d = gate
             .insert(artifact("recovery"), 10, payload("recovery"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(d.is_admit());
     }
 
@@ -2950,11 +2950,11 @@ mod tests {
     fn test_contains_and_is_ghost_after_eviction_cycle() {
         let mut gate = small_gate(2); // small=1, main=1
         gate.insert(artifact("x"), 10, payload("x"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.insert(artifact("y"), 10, payload("y"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.insert(artifact("z"), 10, payload("z"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // At least one of the earlier items should be evicted.
         let total_live = gate.total_cached();
         let total_ghost = gate.total_ghost();
@@ -2966,7 +2966,7 @@ mod tests {
     fn test_benchmark_evidence_accumulates() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ka = key("a");
         gate.lookup(&ka);
         gate.lookup(&ka);
@@ -2981,7 +2981,7 @@ mod tests {
     fn test_inactive_gate_lookup_misses() {
         let mut gate = default_gate();
         gate.insert(artifact("a"), 10, payload("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.active = false;
         assert!(!gate.lookup("a"));
     }
@@ -2993,7 +2993,7 @@ mod tests {
             ..S3FifoCacheConfig::default()
         };
         let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("serde deserialization should succeed");
+            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         let result = gate.insert(artifact("x"), 10, payload("x"));
         assert!(result.is_err());

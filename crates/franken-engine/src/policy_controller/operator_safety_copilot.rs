@@ -1858,7 +1858,7 @@ mod tests {
 
     fn build_test_surface() -> OperatorSafetyCopilotSurface {
         build_operator_safety_copilot_surface(&test_input())
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     // ── Enum serde round-trips ────────────────────────────────────
@@ -2050,17 +2050,17 @@ mod tests {
     // ── validate_probability ──────────────────────────────────────
     #[test]
     fn validate_probability_valid_zero() {
-        validate_probability("test", 0).expect("serde deserialization should succeed");
+        validate_probability("test", 0).expect("operation should succeed for valid inputs");
     }
 
     #[test]
     fn validate_probability_valid_million() {
-        validate_probability("test", MILLION).expect("serde deserialization should succeed");
+        validate_probability("test", MILLION).expect("operation should succeed for valid inputs");
     }
 
     #[test]
     fn validate_probability_valid_mid() {
-        validate_probability("test", 500_000).expect("serde deserialization should succeed");
+        validate_probability("test", 500_000).expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2076,7 +2076,7 @@ mod tests {
     // ── validate_non_empty ────────────────────────────────────────
     #[test]
     fn validate_non_empty_valid() {
-        validate_non_empty("f", "hello").expect("serde deserialization should succeed");
+        validate_non_empty("f", "hello").expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2219,7 +2219,7 @@ mod tests {
             confidence_level_bps: 9500,
         };
         band.validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2270,7 +2270,7 @@ mod tests {
             trigger_direction: BoundaryTriggerDirection::AtOrAbove,
         };
         hint.validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2365,7 +2365,7 @@ mod tests {
         input.recommendations[0].snapshot_id = None;
         input.recommendations[0].rollback_window_ms = None;
         build_operator_safety_copilot_surface(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2381,7 +2381,7 @@ mod tests {
             drilldown: TimelineDrilldownPointers::default(),
         });
         let surface = build_operator_safety_copilot_surface(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(surface.timeline[0].timestamp_ns, 500);
         assert_eq!(surface.timeline[1].timestamp_ns, 1000);
     }
@@ -2397,7 +2397,7 @@ mod tests {
             confidence_level_bps: 9000,
         });
         let surface = build_operator_safety_copilot_surface(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(surface.confidence_bands[0].metric, "aaa_metric");
     }
 
@@ -2407,7 +2407,7 @@ mod tests {
         let surface = build_test_surface();
         let identity = test_identity();
         let review = select_recommendation_for_review(&surface, &identity, 1, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(review.selected_rank, 1);
         assert_eq!(review.selected_recommendation.action_type, "throttle");
         assert_eq!(review.audit_event.event, "copilot_action_selected");
@@ -2418,7 +2418,7 @@ mod tests {
         let surface = build_test_surface();
         let identity = test_identity();
         let review = select_recommendation_for_review(&surface, &identity, 2, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(review.selected_rank, 2);
         assert_eq!(review.selected_recommendation.action_type, "isolate");
     }
@@ -2463,7 +2463,7 @@ mod tests {
             role: OperatorRole::Administrator,
         };
         select_recommendation_for_review(&surface, &identity, 1, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // ── confirm_selected_recommendation ───────────────────────────
@@ -2472,9 +2472,9 @@ mod tests {
         let surface = build_test_surface();
         let identity = test_identity();
         let review = select_recommendation_for_review(&surface, &identity, 1, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let confirmed = confirm_selected_recommendation(&review, &identity, "token-123", 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!confirmed.execution_command.is_empty());
         assert!(confirmed.receipt.receipt_id.starts_with("action-receipt-"));
         assert_eq!(confirmed.audit_event.event, "copilot_action_confirmed");
@@ -2486,7 +2486,7 @@ mod tests {
         let surface = build_test_surface();
         let identity = test_identity();
         let review = select_recommendation_for_review(&surface, &identity, 1, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let other = OperatorIdentity {
             operator_id: "op-other".to_string(),
             role: OperatorRole::Operator,
@@ -2500,7 +2500,7 @@ mod tests {
         let surface = build_test_surface();
         let identity = test_identity();
         let review = select_recommendation_for_review(&surface, &identity, 1, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = confirm_selected_recommendation(&review, &identity, "  ", 1000).unwrap_err();
         assert!(matches!(err, CopilotError::MissingConfirmationToken));
     }
@@ -2510,7 +2510,7 @@ mod tests {
         let surface = build_test_surface();
         let identity = test_identity();
         let review = select_recommendation_for_review(&surface, &identity, 1, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let viewer = OperatorIdentity {
             operator_id: "op-1".to_string(),
             role: OperatorRole::Viewer,
@@ -2524,11 +2524,11 @@ mod tests {
         let surface = build_test_surface();
         let identity = test_identity();
         let review = select_recommendation_for_review(&surface, &identity, 1, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let c1 = confirm_selected_recommendation(&review, &identity, "token", 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let c2 = confirm_selected_recommendation(&review, &identity, "token", 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c1.receipt.receipt_id, c2.receipt.receipt_id);
         assert_eq!(c1.receipt.signature, c2.receipt.signature);
     }
@@ -2547,7 +2547,7 @@ mod tests {
             executed_at_ns: 5000,
         };
         let receipt =
-            build_rollback_execution_receipt(&input).expect("serde deserialization should succeed");
+            build_rollback_execution_receipt(&input).expect("operation should succeed for valid inputs");
         assert!(receipt.receipt_id.starts_with("rollback-receipt-"));
         assert_eq!(receipt.action_receipt_id, "ar-1");
     }
@@ -2581,9 +2581,9 @@ mod tests {
             executed_at_ns: 5000,
         };
         let r1 =
-            build_rollback_execution_receipt(&input).expect("serde deserialization should succeed");
+            build_rollback_execution_receipt(&input).expect("operation should succeed for valid inputs");
         let r2 =
-            build_rollback_execution_receipt(&input).expect("serde deserialization should succeed");
+            build_rollback_execution_receipt(&input).expect("operation should succeed for valid inputs");
         assert_eq!(r1.receipt_id, r2.receipt_id);
         assert_eq!(r1.signature, r2.signature);
     }
@@ -2825,7 +2825,7 @@ mod tests {
             }],
         };
         let view =
-            build_policy_effectiveness_view(&input).expect("serde deserialization should succeed");
+            build_policy_effectiveness_view(&input).expect("operation should succeed for valid inputs");
         assert_eq!(view.detection_rate_by_category.len(), 1);
         assert_eq!(view.detection_rate_by_category[0].rate_millionths, 800_000);
         assert!(view.containment_latency_p50_ms > 0);
@@ -2844,7 +2844,7 @@ mod tests {
             calibration_history: vec![],
         };
         let view =
-            build_policy_effectiveness_view(&input).expect("serde deserialization should succeed");
+            build_policy_effectiveness_view(&input).expect("operation should succeed for valid inputs");
         assert_eq!(view.detection_rate_by_category[0].rate_millionths, 0);
     }
 
@@ -2879,7 +2879,7 @@ mod tests {
             calibration_history: vec![],
         };
         let view =
-            build_policy_effectiveness_view(&input).expect("serde deserialization should succeed");
+            build_policy_effectiveness_view(&input).expect("operation should succeed for valid inputs");
         assert_eq!(view.detection_rate_by_category[0].category, "aaa");
     }
 

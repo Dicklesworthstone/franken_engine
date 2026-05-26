@@ -312,7 +312,7 @@ impl TriageBundle {
                 .then_with(|| a.summary.cmp(&b.summary))
         });
         let content_bytes =
-            serde_json::to_vec(&sorted_for_hash).expect("serde deserialization should succeed");
+            serde_json::to_vec(&sorted_for_hash).expect("serialization should succeed");
         let content_hash = ContentHash::compute(&content_bytes);
 
         Self {
@@ -613,7 +613,7 @@ impl ReleaseGatePromotionRegistry {
         let mut sorted_gates = self.gates.clone();
         sorted_gates.sort_by_key(|a| a.gate);
         let content_bytes =
-            serde_json::to_vec(&sorted_gates).expect("serde deserialization should succeed");
+            serde_json::to_vec(&sorted_gates).expect("serialization should succeed");
         let content_hash = ContentHash::compute(&content_bytes);
 
         ReleaseGatePromotionReport {
@@ -1024,7 +1024,7 @@ mod tests {
     fn registry_serde_roundtrip() {
         let reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
         let json =
-            serde_json::to_string_pretty(&reg).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&reg).expect("serialization should succeed");
         let round: ReleaseGatePromotionRegistry =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, round);
@@ -1055,7 +1055,7 @@ mod tests {
         ] {
             let gate = reg
                 .gate_mut(gate_kind)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let mut invariants = BTreeSet::new();
             invariants.insert(format!("{gate_kind}_oracle"));
             gate.wire_oracles(invariants);
@@ -1076,7 +1076,7 @@ mod tests {
         let reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
         let report = reg.build_report();
         let json =
-            serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&report).expect("serialization should succeed");
         let round: ReleaseGatePromotionReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);
@@ -1128,7 +1128,7 @@ mod tests {
         let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
         let gate = reg
             .gate_mut(PromotedGateKind::LifecycleScenarios)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut invariants = BTreeSet::new();
         invariants.insert("safety".to_owned());
         gate.wire_oracles(invariants);
@@ -1145,7 +1145,7 @@ mod tests {
         let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
         let gate = reg
             .gate_mut(PromotedGateKind::LifecycleScenarios)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.status = PromotionStatus::OracleBacked;
         // No invariants wired
 
@@ -1342,7 +1342,7 @@ mod tests {
         let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
         let gate = reg
             .gate_mut(PromotedGateKind::LifecycleScenarios)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut inv = BTreeSet::new();
         inv.insert("inv_a".to_owned());
         gate.wire_oracles(inv);
@@ -1602,7 +1602,7 @@ mod tests {
         let mut reg2 = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
         let gate = reg2
             .gate_mut(PromotedGateKind::LifecycleScenarios)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.promote_to_oracle_backed();
         let r2 = reg2.build_report();
 
@@ -1621,7 +1621,7 @@ mod tests {
         ] {
             let gate = reg
                 .gate_mut(kind)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gate.promote_to_oracle_backed();
         }
         assert_eq!(reg.oracle_backed_count(), 2);
@@ -1635,7 +1635,7 @@ mod tests {
         for kind in PromotedGateKind::ALL {
             let gate = reg
                 .gate_mut(kind)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gate.promote_fully();
         }
         assert_eq!(reg.oracle_backed_count(), 8);
@@ -1649,7 +1649,7 @@ mod tests {
         for kind in &PromotedGateKind::ALL[..7] {
             let gate = reg
                 .gate_mut(*kind)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gate.promote_to_oracle_backed();
         }
         let report = reg.build_report();
@@ -1658,7 +1658,7 @@ mod tests {
         // Promote the last one
         let gate = reg
             .gate_mut(PromotedGateKind::ALL[7])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.promote_to_oracle_backed();
         let report = reg.build_report();
         assert!(report.fully_promoted());
@@ -1677,7 +1677,7 @@ mod tests {
         // Gate 1: 3 pass / 4 total
         let g1 = reg
             .gate_mut(PromotedGateKind::LifecycleScenarios)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for _ in 0..3 {
             g1.record_run(true);
         }
@@ -1686,7 +1686,7 @@ mod tests {
         // Gate 2: 2 pass / 2 total
         let g2 = reg
             .gate_mut(PromotedGateKind::ReplayDeterminism)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g2.record_run(true);
         g2.record_run(true);
 
@@ -1704,7 +1704,7 @@ mod tests {
         let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
         let gate = reg
             .gate_mut(PromotedGateKind::LifecycleScenarios)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // strict threshold: 0 failures allowed
         gate.record_run(true);
         gate.record_run(false);
@@ -1726,7 +1726,7 @@ mod tests {
         let mut reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
         let gate = reg
             .gate_mut(PromotedGateKind::EvidenceCompleteness)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Force oracle-backed without invariants and without runs
         gate.status = PromotionStatus::OracleBacked;
 
@@ -1756,10 +1756,10 @@ mod tests {
 
         // Promote 2 to different statuses
         reg.gate_mut(PromotedGateKind::LifecycleScenarios)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .promote_to_oracle_backed();
         reg.gate_mut(PromotedGateKind::ReplayDeterminism)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .promote_fully();
 
         let counts = reg.status_counts();
@@ -1876,7 +1876,7 @@ mod tests {
         for kind in PromotedGateKind::ALL {
             let gate = reg
                 .gate_mut(kind)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gate.threshold = BlockerThreshold::relaxed(kind);
             for _ in 0..10 {
                 gate.record_run(true);
@@ -1885,7 +1885,7 @@ mod tests {
         // Make one gate fail
         let gate = reg
             .gate_mut(PromotedGateKind::MockSeamAbsence)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.threshold = BlockerThreshold::strict(PromotedGateKind::MockSeamAbsence);
         gate.record_run(false);
 

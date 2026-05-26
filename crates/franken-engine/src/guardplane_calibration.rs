@@ -518,7 +518,7 @@ impl GuardplaneCalibrationEngine {
                     alert_id: alert_id.clone(),
                     severity: "critical".to_string(),
                     subsystem: serde_json::to_string(&subsystem)
-                        .expect("serde deserialization should succeed"),
+                        .expect("serialization should succeed"),
                     threat_category: "evasion".to_string(),
                     description: format!(
                         "evasion rate {:.1}% exceeds threshold {:.1}% for {subsystem:?}",
@@ -776,7 +776,7 @@ fn fnv1a64(data: &[u8]) -> u64 {
 }
 
 fn compute_state_digest(state: &GuardplaneCalibrationState) -> String {
-    let serialized = serde_json::to_vec(state).expect("serde deserialization should succeed");
+    let serialized = serde_json::to_vec(state).expect("serialization should succeed");
     format!("{:016x}", fnv1a64(&serialized))
 }
 
@@ -853,7 +853,7 @@ mod tests {
         let campaign = make_campaign(dim, total);
         let result = make_result(undetected, total, escaped, 200_000, 5, false);
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         CampaignOutcomeRecord {
             campaign,
             result,
@@ -904,7 +904,7 @@ mod tests {
 
         let result = engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.campaigns_ingested, 1);
         assert_eq!(
             result.calibration_epoch,
@@ -926,7 +926,7 @@ mod tests {
 
         let result = engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.campaigns_ingested, 3);
         assert!(!result.severity_counts.is_empty());
         assert!(!result.subsystem_counts.is_empty());
@@ -941,10 +941,10 @@ mod tests {
 
         let r1 = engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(r1.cycle_id, "gcal-0001");
         assert_eq!(r2.cycle_id, "gcal-0002");
@@ -959,13 +959,13 @@ mod tests {
         // Advisory: composite < 200K
         let low_result = make_result(0, 10, false, 50_000, 2, false);
         let low_score = ExploitObjectiveScore::from_result(&low_result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(classify_severity(&low_score), CampaignSeverity::Advisory);
 
         // Blocking: composite >= 800K (all evasions + escape + high evidence + novel)
         let high_result = make_result(10, 10, true, 900_000, 50, true);
         let high_score = ExploitObjectiveScore::from_result(&high_result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(classify_severity(&high_score), CampaignSeverity::Blocking);
     }
 
@@ -1031,7 +1031,7 @@ mod tests {
 
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let eff = engine.defense_effectiveness();
 
         assert_eq!(eff.total_campaigns, 2);
@@ -1057,7 +1057,7 @@ mod tests {
 
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!engine.alerts().is_empty());
         assert!(
@@ -1080,7 +1080,7 @@ mod tests {
 
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // No evasion alerts should fire (0% evasion < 90% threshold)
         let evasion_alerts: Vec<_> = engine
@@ -1103,7 +1103,7 @@ mod tests {
 
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(
             engine
@@ -1125,7 +1125,7 @@ mod tests {
 
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = engine.events();
         assert!(events.iter().any(|e| e.event == "campaigns_ingested"));
@@ -1142,7 +1142,7 @@ mod tests {
 
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let drained = engine.drain_events();
         assert!(!drained.is_empty());
         assert!(engine.events().is_empty());
@@ -1438,10 +1438,10 @@ mod tests {
 
         engine
             .run_calibration_cycle(&outcomes1, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .run_calibration_cycle(&outcomes2, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(engine.cycle_count(), 2);
         assert_eq!(engine.total_campaigns_ingested(), 3);
@@ -1503,12 +1503,12 @@ mod tests {
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 5, 10, false)];
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let alerts_after_first = engine.alerts().len();
 
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(engine.alerts().len() >= alerts_after_first);
     }
 
@@ -1579,10 +1579,10 @@ mod tests {
 
         let r1 = engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Digest is deterministic — same input produces same calibration state
         assert!(!r1.state_digest.is_empty());
@@ -1601,7 +1601,7 @@ mod tests {
 
         let result = engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let total_severity: usize = result.severity_counts.values().sum();
         assert_eq!(
             total_severity, 2,
@@ -1622,7 +1622,7 @@ mod tests {
 
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let eff = engine.defense_effectiveness();
         assert_eq!(eff.total_campaigns, 3);
         assert_eq!(eff.total_evasions, 0);
@@ -1661,7 +1661,7 @@ mod tests {
         ];
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let eff = engine.defense_effectiveness();
         // Evasions are counted per-campaign (not per-step)
         assert_eq!(eff.total_evasions, 2);
@@ -1676,7 +1676,7 @@ mod tests {
         let outcomes = vec![make_outcome(AttackDimension::PolicyEvasion, 1, 10, false)];
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // With threshold 0, any evasion should trigger alert
         assert!(!engine.alerts().is_empty());
     }
@@ -1689,7 +1689,7 @@ mod tests {
         let outcomes = vec![make_outcome(AttackDimension::PolicyEvasion, 10, 10, false)];
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Even 100% evasion rate shouldn't alert
         assert!(engine.alerts().is_empty());
     }
@@ -1702,11 +1702,11 @@ mod tests {
         let outcomes = vec![make_outcome(AttackDimension::PolicyEvasion, 0, 5, false)];
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.cycle_count(), 1);
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.cycle_count(), 2);
     }
 
@@ -1780,7 +1780,7 @@ mod tests {
         ];
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let eff = engine.defense_effectiveness();
         // Weakest dimension should be the one with higher evasion rate
         assert!(eff.weakest_dimension.is_some());
@@ -2559,7 +2559,7 @@ mod tests {
         // Score just below 200K => Advisory
         let r = make_result(0, 10, false, 100_000, 1, false);
         let s =
-            ExploitObjectiveScore::from_result(&r).expect("serde deserialization should succeed");
+            ExploitObjectiveScore::from_result(&r).expect("operation should succeed for valid inputs");
         assert_eq!(classify_severity(&s), CampaignSeverity::Advisory);
     }
 
@@ -2568,7 +2568,7 @@ mod tests {
         // Build a result with high evasion and damage to push composite >= 200K
         let r = make_result(7, 10, false, 600_000, 15, false);
         let s =
-            ExploitObjectiveScore::from_result(&r).expect("serde deserialization should succeed");
+            ExploitObjectiveScore::from_result(&r).expect("operation should succeed for valid inputs");
         let sev = classify_severity(&s);
         assert!(
             sev == CampaignSeverity::Moderate
@@ -2600,7 +2600,7 @@ mod tests {
         let campaign = make_campaign(AttackDimension::Exfiltration, 5);
         let result = make_result(0, 5, false, 100_000, 15, false);
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let outcome = CampaignOutcomeRecord {
             campaign,
             result,
@@ -2621,7 +2621,7 @@ mod tests {
         let campaign = make_campaign(AttackDimension::Exfiltration, 5);
         let result = make_result(0, 5, false, 100_000, 3, false);
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let outcome = CampaignOutcomeRecord {
             campaign,
             result,
@@ -2716,7 +2716,7 @@ mod tests {
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 0, 5, false)];
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let first_drain = engine.drain_events();
         assert!(!first_drain.is_empty());
@@ -2732,7 +2732,7 @@ mod tests {
         let campaign = make_campaign(AttackDimension::Exfiltration, 10);
         let result = make_result(10, 10, true, 900_000, 50, true);
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let outcome = CampaignOutcomeRecord {
             campaign,
             result,
@@ -2744,7 +2744,7 @@ mod tests {
 
         let r = engine
             .run_calibration_cycle(&[outcome], &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.regression_fixtures_added > 0);
     }
 
@@ -2756,7 +2756,7 @@ mod tests {
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 5, 10, false)];
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Even 100% per-subsystem evasion rate < 100.0001% threshold => no alert
         let evasion_alerts: Vec<_> = engine
             .alerts()
@@ -2774,7 +2774,7 @@ mod tests {
         let outcomes = vec![make_outcome(AttackDimension::Exfiltration, 5, 10, true)];
         engine
             .run_calibration_cycle(&outcomes, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 100% escape rate > 99.9999% => alert fires
         let escape_alerts: Vec<_> = engine
             .alerts()

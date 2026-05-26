@@ -2769,7 +2769,7 @@ pub fn write_evidence_artifacts(
     });
     fs::write(
         &env_manifest_path,
-        serde_json::to_string_pretty(&env_manifest).expect("serde deserialization should succeed"),
+        serde_json::to_string_pretty(&env_manifest).expect("serialization should succeed"),
     )?;
 
     let raw_results = serde_json::json!({
@@ -2829,7 +2829,7 @@ pub fn write_evidence_artifacts(
     });
     fs::write(
         &raw_results_archive_path,
-        serde_json::to_string_pretty(&raw_results).expect("serde deserialization should succeed"),
+        serde_json::to_string_pretty(&raw_results).expect("serialization should succeed"),
     )?;
 
     // Run manifest
@@ -2869,7 +2869,7 @@ pub fn write_evidence_artifacts(
     });
     fs::write(
         &manifest_path,
-        serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed"),
+        serde_json::to_string_pretty(&manifest).expect("serialization should succeed"),
     )?;
 
     // Evidence JSONL
@@ -3000,7 +3000,7 @@ pub fn write_evidence_artifacts(
     });
     fs::write(
         &summary_path,
-        serde_json::to_string_pretty(&summary).expect("serde deserialization should succeed"),
+        serde_json::to_string_pretty(&summary).expect("serialization should succeed"),
     )?;
 
     Ok(BenchmarkEvidenceArtifacts {
@@ -4509,7 +4509,7 @@ mod tests {
         let dir = std::env::temp_dir().join("franken_bench_test_evidence");
         let _ = fs::remove_dir_all(&dir);
         let artifacts =
-            write_evidence_artifacts(&result, &dir).expect("serde deserialization should succeed");
+            write_evidence_artifacts(&result, &dir).expect("operation should succeed for valid inputs");
         assert!(artifacts.run_manifest_path.exists());
         assert!(artifacts.evidence_path.exists());
         assert!(artifacts.events_path.exists());
@@ -4521,9 +4521,9 @@ mod tests {
         // Verify manifest is valid JSON
         let manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(&artifacts.run_manifest_path)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(manifest["schema_version"], BENCHMARK_E2E_SCHEMA_VERSION);
         assert_eq!(manifest["run_id"], "test-evidence");
         assert_eq!(manifest["seed"], 42);
@@ -4538,7 +4538,7 @@ mod tests {
 
         // Verify evidence JSONL has entries
         let evidence = fs::read_to_string(&artifacts.evidence_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!evidence.is_empty());
         let lines: Vec<&str> = evidence.lines().collect();
         assert!(!lines.is_empty());
@@ -4551,14 +4551,14 @@ mod tests {
         // Verify benchmark env manifest
         let env_manifest: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(&artifacts.benchmark_env_manifest_path)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(env_manifest["schema_version"], BENCHMARK_ENV_SCHEMA_VERSION);
         assert!(
             env_manifest["runtime_pins"]["franken_engine"]
                 .as_str()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .starts_with("franken-engine-")
         );
         assert!(
@@ -4584,9 +4584,9 @@ mod tests {
         // Verify raw archive has full measurement payload
         let raw_archive: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(&artifacts.raw_results_archive_path)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(
             raw_archive["schema_version"],
             "franken-engine.benchmark-e2e.raw-results.v1"
@@ -4600,15 +4600,15 @@ mod tests {
         // Verify summary is valid JSON
         let summary: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(&artifacts.summary_path)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(summary["schema_version"], BENCHMARK_E2E_SCHEMA_VERSION);
         assert_eq!(summary["run_id"], "test-evidence");
 
         // Verify structured events and command transcript were emitted
         let events = fs::read_to_string(&artifacts.events_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             events.lines().all(|line| {
                 serde_json::from_str::<serde_json::Value>(line)
@@ -4619,7 +4619,7 @@ mod tests {
             "all events must be valid structured JSON with trace_id"
         );
         let commands = fs::read_to_string(&artifacts.commands_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(commands.contains("rch exec -- scripts/run_benchmark_e2e_suite.sh report"));
 
         let _ = fs::remove_dir_all(&dir);
@@ -4641,10 +4641,10 @@ mod tests {
         let dir = std::env::temp_dir().join("franken_bench_test_reg_evidence");
         let _ = fs::remove_dir_all(&dir);
         let artifacts =
-            write_evidence_artifacts(&result, &dir).expect("serde deserialization should succeed");
+            write_evidence_artifacts(&result, &dir).expect("operation should succeed for valid inputs");
 
         let evidence = fs::read_to_string(&artifacts.evidence_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lines: Vec<&str> = evidence.lines().collect();
         // Should have measurement + regression + event lines
         assert!(lines.len() >= 3);
@@ -4666,16 +4666,16 @@ mod tests {
         let dir = std::env::temp_dir().join("franken_bench_test_fam_summary");
         let _ = fs::remove_dir_all(&dir);
         let artifacts =
-            write_evidence_artifacts(&result, &dir).expect("serde deserialization should succeed");
+            write_evidence_artifacts(&result, &dir).expect("operation should succeed for valid inputs");
 
         let summary: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(&artifacts.summary_path)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         let families = summary["families"]
             .as_array()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(families.len(), 2);
         assert_eq!(
             summary["configured_families"],

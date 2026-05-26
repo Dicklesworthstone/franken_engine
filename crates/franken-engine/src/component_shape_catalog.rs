@@ -1435,7 +1435,7 @@ mod tests {
         assert_eq!(catalog.component_count(), 1);
         let card = catalog
             .get("Card")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(card.observation_count > 1);
     }
 
@@ -1451,7 +1451,7 @@ mod tests {
         catalog.register_from_evidence("DataTable", &manifest, &analysis);
         let shape = catalog
             .get("DataTable")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(shape.hook_profile.state_hooks, 1);
         assert_eq!(shape.hook_profile.memo_hooks, 1);
     }
@@ -1558,7 +1558,7 @@ mod tests {
         assert_eq!(
             catalog
                 .get("Reclass")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .render_purity,
             RenderPurityClass::ConditionallyPure
         );
@@ -1569,7 +1569,7 @@ mod tests {
         assert_eq!(
             catalog
                 .get("Reclass")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .render_purity,
             RenderPurityClass::ConditionallyPure
         );
@@ -1588,7 +1588,7 @@ mod tests {
         assert_ne!(
             catalog
                 .get("Quick")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .render_purity,
             RenderPurityClass::Unknown
         );

@@ -2129,7 +2129,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 
     let mut tmp_name = path
         .file_name()
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
         .to_owned();
     tmp_name.push(".tmp");
     let tmp = parent.join(tmp_name);
@@ -2343,9 +2343,9 @@ mod tests {
                 }
             ]
         });
-        let bytes = serde_json::to_vec(&legacy).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(&legacy).expect("serialization should succeed");
         let migrated =
-            parse_fixture_with_migration(&bytes).expect("serde deserialization should succeed");
+            parse_fixture_with_migration(&bytes).expect("operation should succeed for valid inputs");
         assert_eq!(migrated.fixture_version, TestFixture::CURRENT_VERSION);
         assert_eq!(migrated.fixture_id, "legacy-fix");
         assert!(migrated.expected_events.is_empty());
@@ -2362,7 +2362,7 @@ mod tests {
             "policy_id": "policy",
             "steps": [{"component":"c","event":"e"}]
         });
-        let bytes = serde_json::to_vec(&payload).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(&payload).expect("serialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -2427,7 +2427,7 @@ mod tests {
         let fixture = valid_fixture();
         let result = runner
             .run_fixture(&fixture)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.fixture_id, "fix-001");
         assert_eq!(result.seed, 42);
         assert_eq!(result.events.len(), 1);
@@ -2442,10 +2442,10 @@ mod tests {
         let fixture = valid_fixture();
         let r1 = runner
             .run_fixture(&fixture)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = runner
             .run_fixture(&fixture)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.output_digest, r2.output_digest);
         assert_eq!(r1.events, r2.events);
         assert_eq!(r1.random_transcript, r2.random_transcript);
@@ -2468,7 +2468,7 @@ mod tests {
         };
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.events[0].trace_id.starts_with("custom-"));
     }
 
@@ -2481,7 +2481,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.events[0].outcome, "error");
         assert_eq!(result.events[0].error_code.as_deref(), Some("E_TEST"));
     }
@@ -2495,7 +2495,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.events[0].outcome, "warn");
     }
 
@@ -2511,7 +2511,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.events.len(), 2);
         assert_eq!(result.events[0].virtual_time_micros, 1100);
         assert_eq!(result.events[1].virtual_time_micros, 1300);
@@ -2864,10 +2864,10 @@ mod tests {
         let fixture = valid_fixture();
         let a = runner
             .run_fixture(&fixture)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = runner
             .run_fixture(&fixture)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let delta = compare_counterfactual(&a, &b);
         assert!(!delta.digest_changed);
         assert_eq!(delta.changed_events, 0);
@@ -2888,10 +2888,10 @@ mod tests {
         f2.fixture_id = "fix-002".into();
         let a = runner
             .run_fixture(&f1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = runner
             .run_fixture(&f2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let delta = compare_counterfactual(&a, &b);
         assert!(delta.digest_changed);
     }
@@ -2957,7 +2957,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = RunReport::from_result(&result);
         assert!(report.pass);
         assert_eq!(report.event_count, 1);
@@ -2973,7 +2973,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = RunReport::from_result(&result);
         assert!(!report.pass);
         assert_eq!(report.first_error_code.as_deref(), Some("E_BOOM"));
@@ -2984,7 +2984,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = RunReport::from_result(&result);
         let md = report.to_markdown();
         assert!(md.contains("status: `pass`"));
@@ -2996,7 +2996,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = RunReport::from_result(&result);
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: RunReport =
@@ -3271,7 +3271,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: RunResult =
             serde_json::from_str(&json).expect("serde roundtrip should succeed in tests");
@@ -3327,11 +3327,11 @@ mod tests {
         let fixture = valid_fixture();
         let path = store
             .save_fixture(&fixture)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(path.exists());
         let loaded = store
             .load_fixture(&path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(fixture, loaded);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3355,10 +3355,10 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .write_baseline(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(store.verify_run(&result).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3385,10 +3385,10 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .write_baseline(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut altered = result.clone();
         altered.output_digest = "tampered".into();
         let err = store.verify_run(&altered).unwrap_err();
@@ -3407,13 +3407,13 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .write_baseline(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let path = store
             .write_signed_update(&result, "alice", "sig123", "intentional update")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(path.exists());
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3426,10 +3426,10 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .write_baseline(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             store
                 .write_signed_update(&result, " ", "sig", "reason")
@@ -3456,10 +3456,10 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifacts = collector
             .collect(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(artifacts.manifest_path.exists());
         assert!(artifacts.events_path.exists());
         assert!(artifacts.evidence_linkage_path.exists());
@@ -3649,7 +3649,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(validate_replay_input(&result, Some("model://snapshot/fix-001")).is_ok());
     }
 
@@ -3838,7 +3838,7 @@ mod tests {
     #[test]
     fn parse_fixture_with_migration_missing_fixture_version() {
         let payload = serde_json::json!({"fixture_id": "x"});
-        let bytes = serde_json::to_vec(&payload).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(&payload).expect("serialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -3859,7 +3859,7 @@ mod tests {
             "policy_id": "pol",
             "steps": [{"component":"c","event":"e"}]
         });
-        let bytes = serde_json::to_vec(&payload).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(&payload).expect("serialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -4012,7 +4012,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = RunReport::from_result(&result);
         let md = report.to_markdown();
         assert!(md.contains("status: `fail`"));
@@ -4024,7 +4024,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = RunReport::from_result(&result);
         let md = report.to_markdown();
         assert!(md.contains(&format!("fixture_id: `{}`", report.fixture_id)));
@@ -4077,7 +4077,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = RunReport::from_result(&result);
         assert!(!report.pass);
         assert_eq!(report.first_error_code.as_deref(), Some("FE-FIRST"));
@@ -4261,7 +4261,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for val in &result.random_transcript {
             assert_ne!(*val, 0, "transcript values should be non-zero");
         }
@@ -4440,7 +4440,7 @@ mod tests {
         let runner = DeterministicRunner::default();
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.run_id.starts_with("run-"));
         assert!(result.run_id.contains("fix-001"));
     }
@@ -4482,7 +4482,7 @@ mod enrichment_tests {
         let runner = DeterministicRunner::default();
         runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     // ── verify_replay ────────────────────────────────────────────────
@@ -4503,10 +4503,10 @@ mod enrichment_tests {
         let f = valid_fixture();
         let r1 = DeterministicRunner::default()
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = DeterministicRunner::default()
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let v = verify_replay(&r1, &r2);
         assert!(v.matches, "same fixture should produce identical runs");
     }
@@ -4519,10 +4519,10 @@ mod enrichment_tests {
         f2.fixture_id = "fix-other".into();
         let r1 = DeterministicRunner::default()
             .run_fixture(&f1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = DeterministicRunner::default()
             .run_fixture(&f2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let v = verify_replay(&r1, &r2);
         assert!(!v.matches);
         assert!(v.mismatch_kind.is_some());
@@ -4628,7 +4628,7 @@ mod enrichment_tests {
     fn validate_replay_input_valid() {
         let result = run_valid_fixture();
         validate_replay_input(&result, Some("snapshot-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -4721,10 +4721,10 @@ mod enrichment_tests {
         f2.fixture_id = "fix-alt".into();
         let r1 = DeterministicRunner::default()
             .run_fixture(&f1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = DeterministicRunner::default()
             .run_fixture(&f2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let delta = compare_counterfactual(&r1, &r2);
         assert!(delta.digest_changed);
         assert!(delta.transcript_changed);
@@ -4738,10 +4738,10 @@ mod enrichment_tests {
         f2.fixture_id = "fix-short".into();
         let r1 = DeterministicRunner::default()
             .run_fixture(&f1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = DeterministicRunner::default()
             .run_fixture(&f2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let delta = compare_counterfactual(&r1, &r2);
         assert!(delta.changed_events > 0);
         assert!(
@@ -4780,10 +4780,10 @@ mod enrichment_tests {
         f1.fixture_id = "fix-many-base".into();
         let r1 = DeterministicRunner::default()
             .run_fixture(&f1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = DeterministicRunner::default()
             .run_fixture(&f2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let delta = compare_counterfactual(&r1, &r2);
         assert!(delta.divergence_samples.len() <= 8);
     }
@@ -4820,7 +4820,7 @@ mod enrichment_tests {
         let d = diag
             .diagnosis
             .as_deref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(d.contains("matched across environment"));
     }
 
@@ -4829,13 +4829,13 @@ mod enrichment_tests {
         let f = valid_fixture();
         let r1 = DeterministicRunner::default()
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut f2 = f.clone();
         f2.seed = 555;
         f2.fixture_id = "fix-cross-alt".into();
         let r2 = DeterministicRunner::default()
             .run_fixture(&f2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let env_a = ReplayEnvironmentFingerprint::local();
         let env_b = ReplayEnvironmentFingerprint {
             endian: "big".into(),
@@ -4846,7 +4846,7 @@ mod enrichment_tests {
         let d = diag
             .diagnosis
             .as_deref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(d.contains("mismatch"));
         assert!(d.contains("environment"));
     }
@@ -4903,7 +4903,7 @@ mod enrichment_tests {
             .insert("error_code".into(), "FE-TEST-001".into());
         let result = DeterministicRunner::default()
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = RunReport::from_result(&result);
         assert!(!report.pass);
         assert_eq!(report.first_error_code.as_deref(), Some("FE-TEST-001"));
@@ -5010,7 +5010,7 @@ mod enrichment_tests {
             error_code: None,
         }];
         assert_structured_logs(&result.events, &expectations)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -5030,7 +5030,7 @@ mod enrichment_tests {
     #[test]
     fn assert_logs_empty_expectations_pass() {
         let result = run_valid_fixture();
-        assert_structured_logs(&result.events, &[]).expect("serde deserialization should succeed");
+        assert_structured_logs(&result.events, &[]).expect("operation should succeed for valid inputs");
     }
 
     // ── parse_fixture_with_migration ────────────────────────────────
@@ -5038,9 +5038,9 @@ mod enrichment_tests {
     #[test]
     fn parse_migration_v1_fixture() {
         let f = valid_fixture();
-        let bytes = serde_json::to_vec(&f).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(&f).expect("serialization should succeed");
         let parsed =
-            parse_fixture_with_migration(&bytes).expect("serde deserialization should succeed");
+            parse_fixture_with_migration(&bytes).expect("operation should succeed for valid inputs");
         assert_eq!(parsed.fixture_id, f.fixture_id);
         assert_eq!(parsed.fixture_version, TestFixture::CURRENT_VERSION);
     }
@@ -5055,9 +5055,9 @@ mod enrichment_tests {
             "policy_id": "policy-legacy",
             "steps": [{"component": "c", "event": "e"}]
         });
-        let bytes = serde_json::to_vec(&json).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(&json).expect("serialization should succeed");
         let parsed =
-            parse_fixture_with_migration(&bytes).expect("serde deserialization should succeed");
+            parse_fixture_with_migration(&bytes).expect("operation should succeed for valid inputs");
         assert_eq!(parsed.fixture_id, "legacy-1");
         assert_eq!(parsed.fixture_version, TestFixture::CURRENT_VERSION);
         assert!(parsed.determinism_check);
@@ -5074,7 +5074,7 @@ mod enrichment_tests {
             "policy_id": "p",
             "steps": [{"component": "c", "event": "e"}]
         });
-        let bytes = serde_json::to_vec(&json).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(&json).expect("serialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -5094,7 +5094,7 @@ mod enrichment_tests {
     #[test]
     fn parse_migration_missing_version_field() {
         let json = serde_json::json!({"fixture_id": "x"});
-        let bytes = serde_json::to_vec(&json).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(&json).expect("serialization should succeed");
         let err = parse_fixture_with_migration(&bytes).unwrap_err();
         assert!(matches!(
             err,
@@ -5113,7 +5113,7 @@ mod enrichment_tests {
         };
         let result = runner
             .run_fixture(&valid_fixture())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.events[0].trace_id.starts_with("custom-prefix-"));
     }
 
@@ -5143,7 +5143,7 @@ mod enrichment_tests {
             .insert("error_code".into(), "ERR-1".into());
         let result = DeterministicRunner::default()
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.events[0].outcome, "error");
         assert_eq!(result.events[0].error_code.as_deref(), Some("ERR-1"));
     }
@@ -5154,7 +5154,7 @@ mod enrichment_tests {
         f.steps[0].metadata.insert("outcome".into(), "warn".into());
         let result = DeterministicRunner::default()
             .run_fixture(&f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.events[0].outcome, "warn");
     }
 

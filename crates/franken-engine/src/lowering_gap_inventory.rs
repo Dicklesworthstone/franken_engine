@@ -1232,11 +1232,11 @@ mod tests {
         let json0: String = serde_json::from_str(
             &serde_json::to_string(&ir0).expect("serialize derived Serialize"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         let json1: String = serde_json::from_str(
             &serde_json::to_string(&ir1).expect("serialize derived Serialize"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(json0, ir0.as_str());
         assert_eq!(json1, ir1.as_str());
     }
@@ -1251,7 +1251,7 @@ mod tests {
             let json: String = serde_json::from_str(
                 &serde_json::to_string(&status).expect("serialize derived Serialize"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
             assert_eq!(json, status.as_str());
         }
     }
@@ -1323,12 +1323,12 @@ mod tests {
         let artifacts_a = {
             let out_dir = unique_temp_dir("lowering-gap-hash-a");
             write_lowering_gap_inventory_bundle(&out_dir, &[])
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         let artifacts_b = {
             let out_dir = unique_temp_dir("lowering-gap-hash-b");
             write_lowering_gap_inventory_bundle(&out_dir, &[])
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         assert_eq!(artifacts_a.inventory_hash, artifacts_b.inventory_hash);
         assert_eq!(artifacts_a.site_count, artifacts_b.site_count);
@@ -1338,7 +1338,7 @@ mod tests {
     fn inventory_hash_is_64_hex_chars() {
         let out_dir = unique_temp_dir("lowering-gap-hash-len");
         let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifacts.inventory_hash.len(), 64);
         assert!(
             artifacts
@@ -1357,14 +1357,14 @@ mod tests {
         assert_eq!(
             events
                 .first()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .event,
             "inventory_started"
         );
         assert_eq!(
             events
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .event,
             "inventory_completed"
         );
@@ -1443,9 +1443,9 @@ mod tests {
     fn empty_commands_produce_empty_commands_txt() {
         let out_dir = unique_temp_dir("lowering-gap-empty-cmds");
         let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let commands_txt = fs::read_to_string(&artifacts.commands_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(commands_txt.is_empty());
     }
 
@@ -1453,11 +1453,11 @@ mod tests {
     fn manifest_trace_id_embeds_inventory_hash_prefix() {
         let out_dir = unique_temp_dir("lowering-gap-trace-prefix");
         let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let manifest: LoweringGapInventoryRunManifest = serde_json::from_slice(
-            &fs::read(&artifacts.run_manifest_path).expect("serde deserialization should succeed"),
+            &fs::read(&artifacts.run_manifest_path).expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         let short_hash = &artifacts.inventory_hash[..16];
         assert!(
             manifest.trace_id.contains(short_hash),
@@ -1473,11 +1473,11 @@ mod tests {
     fn artifact_paths_in_manifest_are_relative() {
         let out_dir = unique_temp_dir("lowering-gap-rel-paths");
         let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let manifest: LoweringGapInventoryRunManifest = serde_json::from_slice(
-            &fs::read(&artifacts.run_manifest_path).expect("serde deserialization should succeed"),
+            &fs::read(&artifacts.run_manifest_path).expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert!(!manifest.artifact_paths.lowering_gap_inventory.contains('/'));
         assert!(!manifest.artifact_paths.run_manifest.contains('/'));
         assert!(!manifest.artifact_paths.events_jsonl.contains('/'));
@@ -1525,7 +1525,7 @@ mod tests {
             serde_json::from_str("\"fail_closed\"").expect("deserialize known-valid JSON");
         assert_eq!(fc, LoweringGapStatus::FailClosed);
         let op: LoweringGapStatus = serde_json::from_str("\"open_placeholder\"")
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
         assert_eq!(op, LoweringGapStatus::OpenPlaceholder);
         let res: LoweringGapStatus =
             serde_json::from_str("\"resolved\"").expect("deserialize known-valid JSON");
@@ -1673,9 +1673,9 @@ mod tests {
         let temp = unique_temp_path(target);
         let name = temp
             .file_name()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .to_str()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(name.starts_with(".artifact"));
         assert!(name.ends_with(".tmp"));
     }
@@ -1685,7 +1685,7 @@ mod tests {
         let target = Path::new("/some/deep/path/inventory.json");
         let temp = unique_temp_path(target);
         assert_eq!(
-            temp.parent().expect("serde deserialization should succeed"),
+            temp.parent().expect("operation should succeed for valid inputs"),
             Path::new("/some/deep/path")
         );
     }
@@ -1696,9 +1696,9 @@ mod tests {
         let temp = unique_temp_path(target);
         let name = temp
             .file_name()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .to_str()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             name.starts_with(".result.json."),
             "temp name should start with dot + original filename: {name}"
@@ -1923,13 +1923,13 @@ mod tests {
         let inventory = lowering_gap_inventory();
         let report = lowering_gap_truth_consumer_parity_report(&inventory, "t", "d");
         let events = build_inventory_events(&inventory, &report, "t", "d");
-        let completed = events.last().expect("serde deserialization should succeed");
+        let completed = events.last().expect("operation should succeed for valid inputs");
         assert_eq!(completed.event, "inventory_completed");
         assert_eq!(completed.outcome, "completed");
         let detail = completed
             .detail
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(detail.contains("6 sites recorded"));
         assert!(detail.contains("0 fail-closed"));
         assert!(detail.contains("0 open placeholders"));
@@ -1949,14 +1949,14 @@ mod tests {
                 event
                     .site_id
                     .as_deref()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
                 inventory.sites[i].site_id,
             );
             assert_eq!(
                 event
                     .diagnostic_code
                     .as_deref()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
                 inventory.sites[i].diagnostic_code,
             );
             assert_eq!(event.outcome, inventory.sites[i].status.as_str());
@@ -1985,9 +1985,9 @@ mod tests {
         let out_dir = unique_temp_dir("lowering-gap-idempotent");
         let commands = vec!["cmd1".to_string()];
         let first = write_lowering_gap_inventory_bundle(&out_dir, &commands)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let second = write_lowering_gap_inventory_bundle(&out_dir, &commands)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(first.inventory_hash, second.inventory_hash);
         assert_eq!(first.site_count, second.site_count);
     }
@@ -2001,9 +2001,9 @@ mod tests {
             "line-with-newline-in-arg\ttab".to_string(),
         ];
         let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let content = fs::read_to_string(&artifacts.commands_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 3);
         assert_eq!(lines[0], commands[0]);

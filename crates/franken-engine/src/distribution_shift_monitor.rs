@@ -527,7 +527,7 @@ pub fn build_window(
 ) -> StreamWindow {
     let end = start + embeddings.len() as u64;
     // SAFETY: Vec<EmbeddingVector> derives Serialize and has no non-serializable fields
-    let hash_data = serde_json::to_vec(&embeddings).expect("serde deserialization should succeed");
+    let hash_data = serde_json::to_vec(&embeddings).expect("serialization should succeed");
     StreamWindow {
         stream_kind: kind,
         start_index: start,
@@ -551,7 +551,7 @@ pub fn detect_shift(
     config: &MonitorConfig,
 ) -> ShiftCertificate {
     // SAFETY: MonitorConfig derives Serialize and has no non-serializable fields
-    let config_bytes = serde_json::to_vec(config).expect("serde deserialization should succeed");
+    let config_bytes = serde_json::to_vec(config).expect("serialization should succeed");
     let config_hash = ContentHash::compute(&config_bytes);
 
     let total_samples = benchmark.embeddings.len() as u64 + live.embeddings.len() as u64;
@@ -566,7 +566,7 @@ pub fn detect_shift(
         };
         // SAFETY: Tuple of ContentHash and ShiftVerdict types derive Serialize
         let cert_bytes = serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         return ShiftCertificate {
             schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
             benchmark_window: benchmark.clone(),
@@ -588,7 +588,7 @@ pub fn detect_shift(
             required: config.window.min_samples,
         };
         let cert_bytes = serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         return ShiftCertificate {
             schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
             benchmark_window: benchmark.clone(),
@@ -619,7 +619,7 @@ pub fn detect_shift(
 
             let cert_bytes =
                 serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict, &mmd))
-                    .expect("serde deserialization should succeed");
+                    .expect("serialization should succeed");
             ShiftCertificate {
                 schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
                 benchmark_window: benchmark.clone(),
@@ -636,7 +636,7 @@ pub fn detect_shift(
             };
             let cert_bytes =
                 serde_json::to_vec(&(&benchmark.window_hash, &live.window_hash, &verdict))
-                    .expect("serde deserialization should succeed");
+                    .expect("serialization should succeed");
             ShiftCertificate {
                 schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
                 benchmark_window: benchmark.clone(),
@@ -713,7 +713,7 @@ pub fn run_shift_evidence() -> ShiftEvidenceManifest {
         .count() as u32;
 
     let hash_data =
-        serde_json::to_vec(&certificates).expect("serde deserialization should succeed");
+        serde_json::to_vec(&certificates).expect("serialization should succeed");
 
     ShiftEvidenceManifest {
         schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),
@@ -974,7 +974,7 @@ mod tests {
     fn test_mmd_identical_sets() {
         let vecs: Vec<EmbeddingVector> = (0..5).map(|_| emb(&[500_000, 500_000])).collect();
         let result = compute_mmd_squared(&vecs, &vecs, &KernelKind::Linear)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.mmd_squared_millionths, 0);
         assert_eq!(result.sample_count_left, 5);
         assert_eq!(result.sample_count_right, 5);
@@ -985,7 +985,7 @@ mod tests {
         let left: Vec<EmbeddingVector> = (0..3).map(|_| emb(&[200_000])).collect();
         let right: Vec<EmbeddingVector> = (0..3).map(|_| emb(&[800_000])).collect();
         let result = compute_mmd_squared(&left, &right, &KernelKind::Linear)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should be non-zero because distributions differ.
         assert!(result.mmd_squared_millionths > 0);
     }

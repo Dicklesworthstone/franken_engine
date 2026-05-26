@@ -921,7 +921,7 @@ mod tests {
         let mut inv = DocsAccuracyInventory::new();
         // SAFETY: Test helper creates valid surface; add_surface succeeds for new surface in controlled test.
         inv.add_surface(aligned_surface("s1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(inv.surface_count(), 1);
     }
 
@@ -929,7 +929,7 @@ mod tests {
     fn duplicate_surface_rejected() {
         let mut inv = DocsAccuracyInventory::new();
         inv.add_surface(aligned_surface("s1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = inv.add_surface(aligned_surface("s1")).unwrap_err();
         assert!(matches!(err, GateError::DuplicateSurface { .. }));
     }
@@ -938,9 +938,9 @@ mod tests {
     fn drifted_surfaces_filtered() {
         let mut inv = DocsAccuracyInventory::new();
         inv.add_surface(aligned_surface("s1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         inv.add_surface(drifted_surface("s2", DriftClass::AspirationalClaim))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(inv.drifted_surfaces().len(), 1);
     }
 
@@ -948,22 +948,22 @@ mod tests {
     fn surfaces_by_drift() {
         let mut inv = DocsAccuracyInventory::new();
         inv.add_surface(aligned_surface("s1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         inv.add_surface(aligned_surface("s2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         inv.add_surface(drifted_surface("s3", DriftClass::BrokenExample))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let dist = inv.surfaces_by_drift();
         assert_eq!(
             *dist
                 .get(&DriftClass::Aligned)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             2
         );
         assert_eq!(
             *dist
                 .get(&DriftClass::BrokenExample)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
     }
@@ -980,7 +980,7 @@ mod tests {
         let i1 = build_seed_inventory();
         let mut i2 = build_seed_inventory();
         i2.add_surface(aligned_surface("extra"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(i1.content_hash(), i2.content_hash());
     }
 
@@ -1065,9 +1065,9 @@ mod tests {
     fn aspirational_claim_fails_strict() {
         let mut inv = DocsAccuracyInventory::new();
         inv.add_surface(aligned_surface("s1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         inv.add_surface(drifted_surface("s2", DriftClass::AspirationalClaim))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let gate = DocsAccuracyGate::with_defaults();
         let report = gate.evaluate(&inv);
         assert!(!report.verdict.is_pass());
@@ -1077,9 +1077,9 @@ mod tests {
     fn contradictory_behavior_fails() {
         let mut inv = DocsAccuracyInventory::new();
         inv.add_surface(aligned_surface("s1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         inv.add_surface(drifted_surface("s2", DriftClass::ContradictoryBehavior))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let gate = DocsAccuracyGate::with_defaults();
         let report = gate.evaluate(&inv);
         assert!(!report.verdict.is_pass());

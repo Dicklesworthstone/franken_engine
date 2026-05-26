@@ -2250,7 +2250,7 @@ mod tests {
         let sec = ledgers
             .iter()
             .find(|l| l.family == PayloadFamily::Security)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sec.risk_at_distortion(0), 0);
         assert_eq!(sec.risk_at_distortion(1), MILLION);
     }
@@ -2301,7 +2301,7 @@ mod tests {
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         state
             .emit(spec, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.buffer_used, 1);
         state.drain_one();
         assert_eq!(state.buffer_used, 0);
@@ -2333,12 +2333,12 @@ mod tests {
         // Below threshold.
         state
             .emit(spec, 40_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.items_degraded, 0);
         // Above threshold.
         state
             .emit(spec, 60_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.items_degraded, 1);
     }
 
@@ -2440,7 +2440,7 @@ mod tests {
         for _ in 0..1000 {
             state
                 .emit(spec, 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             state.drain_one();
         }
         states.insert(spec.channel_id.clone(), state);
@@ -2450,7 +2450,7 @@ mod tests {
             .channels
             .iter()
             .find(|e| e.channel_id == "ch-decision-ledger")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.items_emitted, 1000);
         // 1000/100_000 = 10_000 millionths = 1%
         assert_eq!(entry.utilization_millionths, 10_000);
@@ -2501,7 +2501,7 @@ mod tests {
         let replay = specs
             .iter()
             .find(|s| s.family == PayloadFamily::Replay)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!replay.lossy_permitted);
     }
 
@@ -2653,7 +2653,7 @@ mod tests {
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         state
             .emit(spec, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.items_emitted, 1);
         state.epoch_reset(epoch(2));
         assert_eq!(state.items_emitted, 0);
@@ -3048,10 +3048,10 @@ mod tests {
         // Fill buffer.
         state
             .emit(&spec, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .emit(&spec, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Buffer full: next emit fails.
         assert!(state.emit(&spec, 0).is_err());
         // Drain one: relieves backpressure.
@@ -3069,7 +3069,7 @@ mod tests {
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         state
             .emit(spec, 50_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.items_degraded, 0);
     }
 
@@ -3082,7 +3082,7 @@ mod tests {
         for _ in 0..51 {
             state
                 .emit(spec, 150_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // 51 items degraded, budget is 50, but fail_closed=false so all Ok.
         assert_eq!(state.items_degraded, 51);
@@ -3092,7 +3092,7 @@ mod tests {
             state
                 .violations
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .violation_kind,
             ViolationKind::DegradationBudgetExceeded
         );
@@ -3107,7 +3107,7 @@ mod tests {
         for _ in 0..5 {
             state
                 .emit(spec, 60_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(state.items_degraded, 5);
         // 6th exceeds budget and fail_closed=true → error.
@@ -3128,7 +3128,7 @@ mod tests {
         // First violation: backpressure (emit fills buffer, second triggers overflow).
         state
             .emit(&spec, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = state.emit(&spec, 0); // BackpressureOverflow
         assert_eq!(state.violations.len(), 1);
         // Drain so we can try another violation.
@@ -3165,7 +3165,7 @@ mod tests {
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         state
             .emit(&spec, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = state.emit(&spec, 0).unwrap_err();
         assert!(err.detail.contains("rate cap"));
         assert!(err.detail.contains("1")); // the cap value
@@ -3219,7 +3219,7 @@ mod tests {
             .channels
             .iter()
             .find(|e| e.channel_id == specs[0].channel_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.utilization_millionths, 0);
     }
 
@@ -3257,7 +3257,7 @@ mod tests {
         let dec = ledgers
             .iter()
             .find(|l| l.family == PayloadFamily::Decision)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(dec.entries.len(), 3);
     }
 
@@ -3345,7 +3345,7 @@ mod tests {
         let opt = specs
             .iter()
             .find(|s| s.family == PayloadFamily::Optimization)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(opt.lossy_permitted);
     }
 
@@ -3368,7 +3368,7 @@ mod tests {
         let mut state = ChannelState::new(spec.channel_id.clone(), epoch(1));
         state
             .emit(&spec, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = state.emit(&spec, 0).unwrap_err();
         assert!(err.detail.contains("buffer full"));
         assert!(err.detail.contains("1")); // capacity

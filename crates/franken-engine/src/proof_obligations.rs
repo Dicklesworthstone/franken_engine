@@ -974,7 +974,7 @@ mod tests {
                 PassId("ir_transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(obl_id.0, "obl-1");
         assert_eq!(reg.binding_count(), 1);
     }
@@ -1015,7 +1015,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("test".into()), "behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ok = reg.evaluate(
             &obl_id,
             ObligationStatus::Satisfied,
@@ -1050,10 +1050,10 @@ mod tests {
                 PassId("transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, 999_500, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1065,10 +1065,10 @@ mod tests {
                 PassId("transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, 900_000, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::Violated);
     }
 
@@ -1080,11 +1080,11 @@ mod tests {
                 PassId("transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Template requires 1000 tests, provide only 10.
         let status = reg
             .auto_evaluate(&obl_id, MILLION, 10)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::InsufficientEvidence);
     }
 
@@ -1093,10 +1093,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("router".into()), "tail_risk/cvar_latency_bound")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, 30 * MILLION, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1105,10 +1105,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("router".into()), "tail_risk/cvar_latency_bound")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, 100 * MILLION, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::Violated);
     }
 
@@ -1120,10 +1120,10 @@ mod tests {
                 PassId("calibrator".into()),
                 "calibration/conformal_coverage",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, 950_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1143,7 +1143,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("timing".into()), "behavioral/effect_timing_contract")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reg.waive(&obl_id, "operator approved"));
     }
 
@@ -1152,7 +1152,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("safety".into()), "safety/ifc_label_propagation")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!reg.waive(&obl_id, "trying to waive"));
     }
 
@@ -1188,7 +1188,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("test".into()), "behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.auto_evaluate(&obl_id, 999_500, 2000);
         let report = reg.report();
         assert!(report.gate_pass);
@@ -1201,7 +1201,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("test".into()), "safety/ifc_label_propagation")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.evaluate(&obl_id, ObligationStatus::Violated, None, "failed");
         let report = reg.report();
         assert!(!report.gate_pass);
@@ -1213,7 +1213,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("timing".into()), "behavioral/effect_timing_contract")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.waive(&obl_id, "approved");
         let report = reg.report();
         assert!(report.gate_pass);
@@ -1225,7 +1225,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("test".into()), "behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.auto_evaluate(&obl_id, 999_500, 2000);
         let report = reg.report();
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
@@ -1369,10 +1369,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("sched".into()), "liveness/scheduler_progress")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, 995_000, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1381,10 +1381,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("sched".into()), "liveness/scheduler_progress")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, 995_000, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::InsufficientEvidence);
     }
 
@@ -1483,10 +1483,10 @@ mod tests {
                 PassId("transform".into()),
                 "behavioral/ir_transform_equivalence",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let obl_safe = reg
             .bind(PassId("safety".into()), "safety/ifc_label_propagation")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.auto_evaluate(&obl_beh, 999_500, 2000);
         reg.evaluate(
             &obl_safe,
@@ -1530,10 +1530,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("prover".into()), "safety/hash_chain_integrity")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, MILLION, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // HashLinkage evidence does not match DifferentialTest/StatisticalTest/CvarBound/CalibrationCoverage,
         // so auto-evaluate should be Satisfied or InsufficientEvidence depending on implementation.
         assert!(
@@ -1633,10 +1633,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let id1 = reg
             .bind(PassId("p1".into()), "behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = reg
             .bind(PassId("p2".into()), "behavioral/render_output_stability")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id1.0, "obl-1");
         assert_eq!(id2.0, "obl-2");
     }
@@ -1649,10 +1649,10 @@ mod tests {
         // min_pass_rate = 999_000, min_test_count = 1000
         let obl_id = reg
             .bind(PassId("pass".into()), "behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, 999_000, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::Satisfied);
     }
 
@@ -1661,10 +1661,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("pass".into()), "behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, 998_999, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::Violated);
     }
 
@@ -1673,10 +1673,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("pass".into()), "behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let status = reg
             .auto_evaluate(&obl_id, MILLION, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status, ObligationStatus::InsufficientEvidence);
     }
 
@@ -1795,10 +1795,10 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let _obl_id = reg
             .bind(PassId("pass".into()), "behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let template = reg
             .template("behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bindings = reg.bindings_for_pass(&PassId("pass".into()));
         assert_eq!(bindings.len(), 1);
         let b = &bindings[0];
@@ -1846,7 +1846,7 @@ mod tests {
         let mut reg = ObligationRegistry::new(epoch(1));
         let obl_id = reg
             .bind(PassId("p".into()), "behavioral/ir_transform_equivalence")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.auto_evaluate(&obl_id, MILLION, 10_000);
         let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: ObligationRegistry =

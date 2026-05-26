@@ -995,7 +995,7 @@ mod tests {
     fn art_insert_and_get_single_key() {
         let mut art = AdaptiveRadixTrie::new();
         art.insert(b"react", 42u32)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(art.get(b"react"), Some(&42));
         assert_eq!(art.get(b"reac"), None);
         assert_eq!(art.get(b"reactx"), None);
@@ -1005,11 +1005,11 @@ mod tests {
     fn art_insert_multiple_keys() {
         let mut art = AdaptiveRadixTrie::new();
         art.insert(b"react", 1u32)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"react-dom", 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"redux", 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(art.get(b"react"), Some(&1));
         assert_eq!(art.get(b"react-dom"), Some(&2));
         assert_eq!(art.get(b"redux"), Some(&3));
@@ -1020,11 +1020,11 @@ mod tests {
     fn art_prefix_sharing() {
         let mut art = AdaptiveRadixTrie::new();
         art.insert(b"@scope/foo", 1u32)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"@scope/bar", 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"@scope/baz", 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(art.get(b"@scope/foo"), Some(&1));
         assert_eq!(art.get(b"@scope/bar"), Some(&2));
         assert_eq!(art.get(b"@scope/baz"), Some(&3));
@@ -1035,19 +1035,19 @@ mod tests {
     fn art_longest_prefix_match() {
         let mut art = AdaptiveRadixTrie::new();
         art.insert(b"react", 1u32)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"react-dom", 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = art.longest_prefix_match(b"react-dom/server");
         assert!(result.is_some());
-        let (len, val) = result.expect("serde deserialization should succeed");
+        let (len, val) = result.expect("operation should succeed for valid inputs");
         assert_eq!(*val, 2);
         assert_eq!(len, 9); // "react-dom".len()
 
         let result2 = art.longest_prefix_match(b"react/jsx-runtime");
         assert!(result2.is_some());
-        let (len2, val2) = result2.expect("serde deserialization should succeed");
+        let (len2, val2) = result2.expect("operation should succeed for valid inputs");
         assert_eq!(*val2, 1);
         assert_eq!(len2, 5);
     }
@@ -1056,13 +1056,13 @@ mod tests {
     fn art_prefix_scan() {
         let mut art = AdaptiveRadixTrie::new();
         art.insert(b"@babel/core", 1u32)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"@babel/parser", 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"@babel/traverse", 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"lodash", 4)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = art.prefix_scan(b"@babel/");
         assert_eq!(results.len(), 3);
@@ -1079,7 +1079,7 @@ mod tests {
     fn art_empty_key() {
         let mut art = AdaptiveRadixTrie::new();
         art.insert(b"", 1u32)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(art.get(b""), Some(&1));
     }
 
@@ -1095,9 +1095,9 @@ mod tests {
     fn art_overwrite_value() {
         let mut art = AdaptiveRadixTrie::new();
         art.insert(b"key", 1u32)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"key", 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Both values exist but latest value_index wins
         assert!(art.get(b"key").is_some());
     }
@@ -1107,9 +1107,9 @@ mod tests {
         let mut art = AdaptiveRadixTrie::new();
         let initial = art.node_count();
         art.insert(b"abc", 1u32)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         art.insert(b"abd", 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(art.node_count() > initial);
     }
 
@@ -1122,7 +1122,7 @@ mod tests {
             (b"react-dom".to_vec(), 2),
             (b"redux".to_vec(), 3),
         ];
-        let index = MphfIndex::build(entries).expect("serde deserialization should succeed");
+        let index = MphfIndex::build(entries).expect("builder should produce a valid value");
         assert_eq!(index.get(b"react"), Some(&1));
         assert_eq!(index.get(b"react-dom"), Some(&2));
         assert_eq!(index.get(b"redux"), Some(&3));
@@ -1146,7 +1146,7 @@ mod tests {
     #[test]
     fn mphf_single_entry() {
         let entries = vec![(b"only".to_vec(), 42u32)];
-        let index = MphfIndex::build(entries).expect("serde deserialization should succeed");
+        let index = MphfIndex::build(entries).expect("builder should produce a valid value");
         assert_eq!(index.get(b"only"), Some(&42));
         assert_eq!(index.get(b"other"), None);
     }
@@ -1158,7 +1158,7 @@ mod tests {
             (b"b".to_vec(), 2),
             (b"c".to_vec(), 3),
         ];
-        let index = MphfIndex::build(entries).expect("serde deserialization should succeed");
+        let index = MphfIndex::build(entries).expect("builder should produce a valid value");
         // With slot padding, occupancy is < 100% but still high
         let occ = index.occupancy_millionths();
         assert!(occ > 250_000, "occupancy should be above 25%: {occ}");
@@ -1170,7 +1170,7 @@ mod tests {
         let entries: Vec<(Vec<u8>, u32)> = (0..200)
             .map(|i| (format!("pkg-{i:04}").into_bytes(), i))
             .collect();
-        let index = MphfIndex::build(entries).expect("serde deserialization should succeed");
+        let index = MphfIndex::build(entries).expect("builder should produce a valid value");
         for i in 0..200 {
             let key = format!("pkg-{i:04}");
             assert_eq!(index.get(key.as_bytes()), Some(&i));
@@ -1248,13 +1248,13 @@ mod tests {
         ];
 
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let pkg = index.lookup_package("react");
         assert_eq!(pkg.outcome, IndexLookupOutcome::Hit);
         assert_eq!(
             pkg.value
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .package_name,
             "react"
         );
@@ -1279,7 +1279,7 @@ mod tests {
             make_export("react", "./jsx-runtime", &[("import", "./esm/jsx.js")]),
         ];
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let r1 = index.resolve_subpath("react", &["import"]);
         assert_eq!(r1.outcome, IndexLookupOutcome::Hit);
@@ -1309,7 +1309,7 @@ mod tests {
             make_export("lodash", ".", &[("require", "./lodash.js")]),
         ];
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let scoped = index.packages_under_scope("@babel/");
         assert_eq!(scoped.len(), 3);
@@ -1330,7 +1330,7 @@ mod tests {
             make_export("lodash", ".", &[("require", "./lodash.js")]),
         ];
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let stats = index.stats();
         assert_eq!(stats.package_count, 2);
         assert_eq!(stats.export_count, 2);
@@ -1344,7 +1344,7 @@ mod tests {
             let packages = vec![make_package("react", vec!["."])];
             let exports = vec![make_export("react", ".", &[("import", "./esm.js")])];
             PackageIndex::build(config, packages, exports)
-                .expect("serde deserialization should succeed")
+                .expect("builder should produce a valid value")
         };
         let h1 = *make_idx().content_hash();
         let h2 = *make_idx().content_hash();
@@ -1356,7 +1356,7 @@ mod tests {
         let config = PackageIndexConfig::new("idx", test_epoch());
         let packages = vec![make_package("lodash", vec![])];
         let index = PackageIndex::build(config, packages, vec![])
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(index.package_count(), 1);
         assert_eq!(index.export_count(), 0);
     }
@@ -1369,7 +1369,7 @@ mod tests {
         let packages = vec![make_package("react", vec!["."])];
         let exports = vec![make_export("react", ".", &[("import", "./esm.js")])];
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let r1 = IndexBuildReceipt::from_index(&index, 1000);
         let r2 = IndexBuildReceipt::from_index(&index, 1000);
         assert_eq!(r1.evidence_hash(), r2.evidence_hash());
@@ -1381,7 +1381,7 @@ mod tests {
         let packages = vec![make_package("react", vec!["."])];
         let exports = vec![make_export("react", ".", &[("import", "./esm.js")])];
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let receipt = IndexBuildReceipt::from_index(&index, 5000);
         assert_eq!(receipt.index_id, "my-idx");
         assert_eq!(receipt.package_count, 1);
@@ -1399,7 +1399,7 @@ mod tests {
         let packages = vec![make_package("react", vec!["."])];
         let exports = vec![make_export("react", ".", &[("import", "./esm.js")])];
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let result = index.resolve_subpath("react", &["import"]);
         let receipt = SubpathResolutionReceipt::new(&index, "react", &result, &["import"]);
@@ -1414,7 +1414,7 @@ mod tests {
         let packages = vec![make_package("react", vec!["."])];
         let exports = vec![make_export("react", ".", &[("import", "./esm.js")])];
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
 
         let result = index.resolve_subpath("nonexist", &["import"]);
         let receipt = SubpathResolutionReceipt::new(&index, "nonexist", &result, &["import"]);
@@ -1455,7 +1455,7 @@ mod tests {
         let packages = vec![make_package("react", vec!["."])];
         let exports = vec![make_export("react", ".", &[("import", "./esm.js")])];
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let receipt = IndexBuildReceipt::from_index(&index, 1000);
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let decoded: IndexBuildReceipt =
@@ -1509,7 +1509,7 @@ mod tests {
         let packages = vec![make_package("react", vec!["."])];
         let exports = vec![make_export("react", ".", &[("import", "./esm.js")])];
         let index = PackageIndex::build(config, packages, exports)
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         assert_eq!(index.index_id(), "my-idx");
         assert_eq!(index.schema_version(), SCHEMA_VERSION);
         assert_eq!(index.build_epoch(), test_epoch());
@@ -1523,7 +1523,7 @@ mod tests {
         let packages = vec![make_package("lodash", vec![]).with_main_entry("./lodash.js")];
         // No exports registered — should fall back to main_entry
         let index = PackageIndex::build(config, packages, vec![])
-            .expect("serde deserialization should succeed");
+            .expect("builder should produce a valid value");
         let result = index.resolve_subpath("lodash", &["import"]);
         assert_eq!(result.outcome, IndexLookupOutcome::Hit);
         assert_eq!(result.value.as_deref(), Some("./lodash.js"));

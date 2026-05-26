@@ -1845,7 +1845,7 @@ mod tests {
         let request = mock_request(1);
         let verdict = mgr
             .validate_decision(&mut adapter, &request, "ext-good")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(verdict, DecisionVerdict::Allow);
     }
 
@@ -1858,7 +1858,7 @@ mod tests {
         let request = mock_request(1);
         let verdict = mgr
             .validate_decision(&mut adapter, &request, "ext-bad")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(verdict, DecisionVerdict::Deny);
     }
 
@@ -1871,7 +1871,7 @@ mod tests {
         let request = mock_request(1);
         let verdict = mgr
             .validate_decision(&mut adapter, &request, "ext-good")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(verdict, DecisionVerdict::Deny);
     }
 
@@ -1885,7 +1885,7 @@ mod tests {
         let request = mock_request(1);
         let verdict = mgr
             .validate_decision(&mut adapter, &request, "ext-flaky")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(verdict, DecisionVerdict::Deny);
         assert!(mgr.quarantined_extensions().contains_key("ext-flaky"));
     }
@@ -2186,7 +2186,7 @@ mod tests {
         // Adapter unavailable blocks everything, not just high-impact
         let reason = mgr
             .check_action_blocked(false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reason.contains("adapter unavailable"));
     }
 
@@ -2271,17 +2271,17 @@ mod tests {
         // First two calls succeed
         let v1 = mgr
             .validate_decision(&mut adapter, &mock_request(1), "ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(v1, DecisionVerdict::Allow);
         let v2 = mgr
             .validate_decision(&mut adapter, &mock_request(2), "ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(v2, DecisionVerdict::Allow);
 
         // Third call fails → auto-quarantine
         let v3 = mgr
             .validate_decision(&mut adapter, &mock_request(3), "ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(v3, DecisionVerdict::Deny);
         assert!(mgr.quarantined_extensions().contains_key("ext-1"));
     }
@@ -2321,7 +2321,7 @@ mod tests {
         let request = mock_request(2);
         let verdict = mgr
             .validate_decision(&mut adapter, &request, "ext-good")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(verdict, DecisionVerdict::Allow);
     }
 
@@ -2382,7 +2382,7 @@ mod tests {
     use crate::receipt_verifier_pipeline::LayerResult;
 
     fn make_signing_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn attestation_request(
@@ -2706,7 +2706,7 @@ mod tests {
         let req = attestation_request(AutonomousAction::MetricsEmission, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             decision,
             AttestationFallbackDecision::Execute { ref attestation_status, warning: None }
@@ -2720,7 +2720,7 @@ mod tests {
         let req = attestation_request(AutonomousAction::MetricsEmission, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::VerificationFailed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Low-impact: allowed regardless of health
         assert!(matches!(
             decision,
@@ -2736,7 +2736,7 @@ mod tests {
         let req = attestation_request(AutonomousAction::RoutineMonitoring, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             decision,
             AttestationFallbackDecision::Execute { ref attestation_status, warning: None }
@@ -2750,7 +2750,7 @@ mod tests {
         let req = attestation_request(AutonomousAction::EvidenceCollection, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::EvidenceExpired)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match decision {
             AttestationFallbackDecision::Execute {
                 attestation_status,
@@ -2760,7 +2760,7 @@ mod tests {
                 assert!(warning.is_some());
                 assert!(
                     warning
-                        .expect("serde deserialization should succeed")
+                        .expect("operation should succeed for valid inputs")
                         .contains("expired")
                 );
             }
@@ -2776,7 +2776,7 @@ mod tests {
         let req = attestation_request(AutonomousAction::Quarantine, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             decision,
             AttestationFallbackDecision::Execute { ref attestation_status, warning: None }
@@ -2790,7 +2790,7 @@ mod tests {
         let req = attestation_request(AutonomousAction::Terminate, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::VerificationFailed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match decision {
             AttestationFallbackDecision::Deferred {
                 queue_id,
@@ -2817,12 +2817,12 @@ mod tests {
         // First defer
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req1, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Second defer
         let req2 = attestation_request(AutonomousAction::Terminate, 200);
         let decision = mgr
             .evaluate_action(req2, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match decision {
             AttestationFallbackDecision::Deferred { queue_id, .. } => {
                 assert_eq!(queue_id, 1);
@@ -2842,13 +2842,13 @@ mod tests {
         // Degrade
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req1, AttestationHealth::VerificationFailed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.state(), AttestationFallbackState::Degraded);
 
         // Restore (healthy again, with a high-impact request)
         let req2 = attestation_request(AutonomousAction::Quarantine, 200);
         mgr.evaluate_action(req2, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.state(), AttestationFallbackState::Normal);
     }
 
@@ -2859,13 +2859,13 @@ mod tests {
         // Normal → Degraded
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req1, AttestationHealth::VerificationFailed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!mgr.transition_receipts().is_empty());
 
         // Degraded → Restoring → Normal (two transitions)
         let req2 = attestation_request(AutonomousAction::MetricsEmission, 200);
         mgr.evaluate_action(req2, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Normal→Degraded (1) + Degraded→Restoring (2) + Restoring→Normal (3) = 3
         assert_eq!(mgr.transition_receipts().len(), 3);
     }
@@ -2875,7 +2875,7 @@ mod tests {
         let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
         let req = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for receipt in mgr.transition_receipts() {
             receipt.verify().expect("receipt signature should be valid");
@@ -2891,13 +2891,13 @@ mod tests {
         // Degrade and defer
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req1, AttestationHealth::EvidenceExpired)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.pending_decisions().len(), 1);
 
         // Restore
         let req2 = attestation_request(AutonomousAction::MetricsEmission, 200);
         mgr.evaluate_action(req2, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(mgr.pending_decisions().is_empty());
         let backlog = mgr.take_recovery_backlog();
@@ -2918,13 +2918,13 @@ mod tests {
         // First request sets degraded_since_ns = 100
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req1, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!mgr.operator_review_required());
 
         // 500ns later: still under timeout
         let req2 = attestation_request(AutonomousAction::Quarantine, 600);
         mgr.evaluate_action(req2, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!mgr.operator_review_required());
     }
 
@@ -2938,12 +2938,12 @@ mod tests {
 
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req1, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 1100ns later: past timeout
         let req2 = attestation_request(AutonomousAction::Quarantine, 1200);
         mgr.evaluate_action(req2, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mgr.operator_review_required());
     }
 
@@ -2957,16 +2957,16 @@ mod tests {
 
         let req1 = attestation_request(AutonomousAction::Quarantine, 0);
         mgr.evaluate_action(req1, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let req2 = attestation_request(AutonomousAction::Quarantine, 200);
         mgr.evaluate_action(req2, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mgr.operator_review_required());
 
         // Recover
         let req3 = attestation_request(AutonomousAction::MetricsEmission, 300);
         mgr.evaluate_action(req3, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!mgr.operator_review_required());
     }
 
@@ -2983,10 +2983,10 @@ mod tests {
         // VerificationFailed past timeout does NOT trigger operator review
         let req1 = attestation_request(AutonomousAction::Quarantine, 0);
         mgr.evaluate_action(req1, AttestationHealth::VerificationFailed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let req2 = attestation_request(AutonomousAction::Quarantine, 500);
         mgr.evaluate_action(req2, AttestationHealth::VerificationFailed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!mgr.operator_review_required());
     }
 
@@ -2997,7 +2997,7 @@ mod tests {
         let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
         let req = attestation_request(AutonomousAction::MetricsEmission, 100);
         mgr.evaluate_action(req, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!mgr.events().is_empty());
         let event = &mgr.events()[0];
@@ -3079,7 +3079,7 @@ mod tests {
         let mut mgr = AttestationFallbackManager::with_default_signing_key(Default::default());
         let req = attestation_request(AutonomousAction::Quarantine, 100);
         mgr.evaluate_action(req, AttestationHealth::VerificationFailed)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = &mgr.transition_receipts()[0];
         let json = serde_json::to_string(receipt).expect("serialize derived Serialize");
@@ -3088,7 +3088,7 @@ mod tests {
         assert_eq!(receipt, &parsed);
         parsed
             .verify()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- attestation_health_from_verdict --
@@ -3190,7 +3190,7 @@ mod tests {
             let req = attestation_request(AutonomousAction::Quarantine, 100);
             let decision = mgr
                 .evaluate_action(req, AttestationHealth::VerificationFailed)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             results.push((mgr.state(), decision));
         }
         for r in &results[1..] {
@@ -3225,7 +3225,7 @@ mod tests {
         let req = attestation_request(AutonomousAction::Quarantine, 100);
         let decision = mgr
             .evaluate_action(req, AttestationHealth::EvidenceExpired)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match decision {
             AttestationFallbackDecision::Deferred {
                 challenge_required,
@@ -3253,7 +3253,7 @@ mod tests {
         let req1 = attestation_request(AutonomousAction::Quarantine, 100);
         let d1 = mgr
             .evaluate_action(req1, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(d1, AttestationFallbackDecision::Execute { .. }));
         assert_eq!(mgr.state(), AttestationFallbackState::Normal);
 
@@ -3261,7 +3261,7 @@ mod tests {
         let req2 = attestation_request(AutonomousAction::Terminate, 200);
         let d2 = mgr
             .evaluate_action(req2, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(d2, AttestationFallbackDecision::Deferred { .. }));
         assert_eq!(mgr.state(), AttestationFallbackState::Degraded);
 
@@ -3269,7 +3269,7 @@ mod tests {
         let req3 = attestation_request(AutonomousAction::RoutineMonitoring, 300);
         let d3 = mgr
             .evaluate_action(req3, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             d3,
             AttestationFallbackDecision::Execute {
@@ -3281,13 +3281,13 @@ mod tests {
         // 4. Timeout triggers operator review
         let req4 = attestation_request(AutonomousAction::Quarantine, 700);
         mgr.evaluate_action(req4, AttestationHealth::EvidenceUnavailable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mgr.operator_review_required());
 
         // 5. Recovery: restoring → normal
         let req5 = attestation_request(AutonomousAction::MetricsEmission, 800);
         mgr.evaluate_action(req5, AttestationHealth::Valid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.state(), AttestationFallbackState::Normal);
         assert!(!mgr.operator_review_required());
 

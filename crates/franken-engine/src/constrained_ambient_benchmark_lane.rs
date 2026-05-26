@@ -952,21 +952,21 @@ mod tests {
     #[test]
     fn delta_millionths_positive() {
         // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
-        let d = delta_millionths(2000, 1000).expect("serde deserialization should succeed");
+        let d = delta_millionths(2000, 1000).expect("operation should succeed for valid inputs");
         assert_eq!(d, 1_000_000); // 100% improvement
     }
 
     #[test]
     fn delta_millionths_negative() {
         // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
-        let d = delta_millionths(500, 1000).expect("serde deserialization should succeed");
+        let d = delta_millionths(500, 1000).expect("operation should succeed for valid inputs");
         assert_eq!(d, -500_000); // -50%
     }
 
     #[test]
     fn delta_millionths_equal() {
         // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
-        let d = delta_millionths(100, 100).expect("serde deserialization should succeed");
+        let d = delta_millionths(100, 100).expect("operation should succeed for valid inputs");
         assert_eq!(d, 0);
     }
 
@@ -980,7 +980,7 @@ mod tests {
         // improvement_millionths(baseline=1000, optimized=500) means
         // 500 is better than 1000 for latency → positive improvement
         // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
-        let i = improvement_millionths(1000, 500).expect("serde deserialization should succeed");
+        let i = improvement_millionths(1000, 500).expect("operation should succeed for valid inputs");
         assert_eq!(i, 500_000); // 50%
     }
 
@@ -1859,7 +1859,7 @@ mod tests {
         // Near u64::MAX / 2 to avoid overflow in i128 arithmetic
         let large = u64::MAX / 2;
         let half = large / 2;
-        let d = delta_millionths(large, half).expect("serde deserialization should succeed");
+        let d = delta_millionths(large, half).expect("operation should succeed for valid inputs");
         // large/half ~ 2.0, so delta ~ +1_000_000 (100% improvement)
         assert!(d > 900_000);
         assert!(d < 1_100_000);

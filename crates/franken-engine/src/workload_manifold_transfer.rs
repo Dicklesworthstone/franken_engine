@@ -612,7 +612,7 @@ mod tests {
         let mut m = TransferManifest::new();
         // SAFETY: Test with valid embedding should succeed adding to empty manifest
         m.add_embedding(test_embedding("a", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(m.embeddings.len(), 1);
     }
 
@@ -621,7 +621,7 @@ mod tests {
         let mut m = TransferManifest::new();
         // SAFETY: Test with valid embedding should succeed adding to empty manifest
         m.add_embedding(test_embedding("a", &[]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = m.add_embedding(test_embedding("a", &[])).unwrap_err();
         assert!(matches!(err, ManifoldError::DuplicateEmbedding { .. }));
     }
@@ -634,11 +634,11 @@ mod tests {
             "a",
             &[(EmbeddingFeature::IrNodeCount, 100_000)],
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // SAFETY: Test certificate computation with same workload ID should succeed
         let cert = m
             .compute_certificate("a", "a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(cert.is_neighbor);
     }
 
@@ -650,17 +650,17 @@ mod tests {
             "a",
             &[(EmbeddingFeature::IrNodeCount, 100_000)],
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // SAFETY: Test with valid embedding 'b' should succeed adding to manifest with one entry
         m.add_embedding(test_embedding(
             "b",
             &[(EmbeddingFeature::IrNodeCount, 100_000)],
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // SAFETY: Test certificate computation between different workloads 'a' and 'b' should succeed
         let cert = m
             .compute_certificate("a", "b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(cert.is_neighbor);
     }
 

@@ -2439,7 +2439,7 @@ mod tests {
             artifact_with_required_declassification("trace-allow", "obl-allow", "decision-allow");
         // SAFETY: from_bytes cannot fail on correctly sized byte array
         let signing_key =
-            SigningKey::from_bytes([17u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([17u8; 32]).expect("operation should succeed for valid inputs");
         let receipt = signed_receipt("trace-allow", "decision-allow", &signing_key);
 
         orch.trust_declassification_authorizer_for_contract(
@@ -2465,7 +2465,7 @@ mod tests {
             artifact_with_required_declassification("trace-block", "obl-block", "decision-block");
         // SAFETY: from_bytes cannot fail on correctly sized byte array
         let signing_key =
-            SigningKey::from_bytes([18u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([18u8; 32]).expect("operation should succeed for valid inputs");
         let receipt = signed_receipt("trace-other", "decision-block", &signing_key);
         let staged_key = ("trace-block".to_string(), "obl-block".to_string());
 
@@ -2544,7 +2544,7 @@ mod tests {
         );
         // SAFETY: from_bytes cannot fail on correctly sized byte array
         let signing_key =
-            SigningKey::from_bytes([19u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([19u8; 32]).expect("operation should succeed for valid inputs");
         let receipt = signed_receipt("trace-partial", "decision-partial", &signing_key);
         let staged_key = ("trace-partial".to_string(), "obl-partial".to_string());
 
@@ -2802,7 +2802,7 @@ mod tests {
         assert_eq!(
             back.metadata
                 .get("author")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "test"
         );
     }
@@ -3045,7 +3045,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.trace_id.starts_with("orch:"));
         assert!(result.trace_id.contains('0'));
     }
@@ -3055,7 +3055,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.decision_id.starts_with("orch:decision:"));
     }
 
@@ -3064,10 +3064,10 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let r0 = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r1 = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r0.trace_id, r1.trace_id);
         assert_ne!(r0.decision_id, r1.decision_id);
     }
@@ -3146,7 +3146,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::new(cfg);
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.posterior.is_valid());
     }
 
@@ -3159,7 +3159,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::new(cfg);
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.posterior.is_valid());
     }
 
@@ -3170,7 +3170,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.source_label.contains("test-ext-1"));
     }
 
@@ -3179,7 +3179,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.lowering_witnesses.is_empty());
     }
 
@@ -3237,7 +3237,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::new(cfg);
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.epoch, SecurityEpoch::from_raw(42));
     }
 
@@ -3246,7 +3246,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Cell close should produce at least one event.
         assert!(!result.cell_events.is_empty());
     }
@@ -3262,7 +3262,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::new(cfg);
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.trace_id.starts_with("myprefix:"));
         assert!(result.decision_id.starts_with("myprefix:decision:"));
     }
@@ -3291,14 +3291,14 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&pkg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.extension_id, "ext-cap");
         // Evidence metadata should contain capabilities count.
         let entry = &result.evidence_entries[0];
         let cap_count = entry
             .metadata
             .get("capabilities_count")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cap_count, "4");
         assert_eq!(
             entry
@@ -3393,13 +3393,13 @@ mod tests {
     #[test]
     fn loss_matrix_preset_serde_format() {
         let json = serde_json::to_string(&LossMatrixPreset::Balanced)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json.contains("alanced"));
         let json = serde_json::to_string(&LossMatrixPreset::Conservative)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json.contains("onservative"));
         let json = serde_json::to_string(&LossMatrixPreset::Permissive)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json.contains("ermissive"));
     }
 
@@ -3502,10 +3502,10 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         assert_eq!(orch.execution_count(), 0);
         orch.execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(orch.execution_count(), 1);
         orch.execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(orch.execution_count(), 2);
     }
 
@@ -3536,7 +3536,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             result.finalize_result.is_some(),
             "finalize_result should be populated"
@@ -3575,7 +3575,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for entry in &result.evidence_entries {
             assert_eq!(entry.trace_id, result.trace_id);
         }
@@ -3588,10 +3588,10 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let r1 = orch
             .execute(&package_with_id("ext-alpha"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = orch
             .execute(&package_with_id("ext-beta"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.trace_id, r2.trace_id);
         assert_ne!(r1.decision_id, r2.decision_id);
         assert_ne!(r1.extension_id, r2.extension_id);
@@ -4010,7 +4010,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::new(cfg);
         let r = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.trace_id.starts_with("custom:"));
         assert!(r.decision_id.starts_with("custom:decision:"));
     }
@@ -4026,7 +4026,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::new(cfg);
         let r = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r.epoch, SecurityEpoch::from_raw(999));
     }
 
@@ -4126,14 +4126,14 @@ mod tests {
             restored
                 .metadata
                 .get("key_0")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "value_0"
         );
         assert_eq!(
             restored
                 .metadata
                 .get("key_49")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "value_49"
         );
     }
@@ -4237,7 +4237,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::new(cfg);
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.lane, LaneChoice::QuickJs);
     }
 
@@ -4250,7 +4250,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::new(cfg);
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.lane, LaneChoice::V8);
     }
 
@@ -4267,13 +4267,13 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&pkg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = &result.evidence_entries[0];
         assert_eq!(
             entry
                 .metadata
                 .get("extension_version")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "7.3.1",
             "evidence must record exact extension version"
         );
@@ -4328,7 +4328,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = result
             .evidence_compression_certificate
             .as_ref()
@@ -4365,7 +4365,7 @@ mod tests {
         let mut orch = ExecutionOrchestrator::with_defaults();
         let result = orch
             .execute(&simple_package())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Lane should be one of the valid choices.
         assert!(
             result.lane == LaneChoice::QuickJs || result.lane == LaneChoice::V8,
@@ -4380,16 +4380,16 @@ mod tests {
         assert!(orch.stopping_policies.is_empty());
 
         orch.execute(&package_with_id("ext-stop-a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(orch.stopping_policies.len(), 1);
 
         orch.execute(&package_with_id("ext-stop-b"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(orch.stopping_policies.len(), 2);
 
         // Re-executing same extension should NOT add a new policy.
         orch.execute(&package_with_id("ext-stop-a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(orch.stopping_policies.len(), 2);
     }
 
@@ -4399,7 +4399,7 @@ mod tests {
         let mut prev_len = 0usize;
         for i in 0..5 {
             orch.execute(&package_with_id(&format!("ext-mono-{i}")))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let cur_len = orch.ledger().len();
             assert!(
                 cur_len > prev_len,

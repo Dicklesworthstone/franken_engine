@@ -1649,7 +1649,7 @@ mod tests {
         let cfg = RecoveryConfig::default(); // strict by default
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.recovered);
         assert_eq!(result.final_action, RecoveryAction::FailStrict);
         assert_eq!(result.mode, RecoveryMode::StrictDefault);
@@ -1660,7 +1660,7 @@ mod tests {
         let cfg = RecoveryConfig::default();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.events.is_empty());
     }
 
@@ -1671,7 +1671,7 @@ mod tests {
         let cfg = diagnostic_config();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Diagnostic mode: never reports recovered=true.
         assert!(!result.recovered);
     }
@@ -1681,7 +1681,7 @@ mod tests {
         let cfg = diagnostic_config();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.decisions.is_empty());
         assert!(!result.attempts.is_empty());
     }
@@ -1693,7 +1693,7 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Simple typo with single candidate should recover.
         assert!(result.recovered);
         assert_ne!(result.final_action, RecoveryAction::FailStrict);
@@ -1704,7 +1704,7 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.repair_diff.is_some());
     }
 
@@ -1713,7 +1713,7 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![no_candidate_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.recovered);
         assert_eq!(result.final_action, RecoveryAction::FailStrict);
     }
@@ -1749,7 +1749,7 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![simple_error_site(), simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.recovered);
         assert_eq!(result.decisions.len(), 2);
     }
@@ -1759,7 +1759,7 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![simple_error_site(), no_candidate_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.recovered);
     }
 
@@ -1770,9 +1770,9 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
         let r1 = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = evaluate(test_hash(), &sites, &cfg, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.result_digest, r2.result_digest);
         assert_eq!(r1.recovered, r2.recovered);
     }
@@ -1784,7 +1784,7 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = result.summary();
         assert!(summary.starts_with("RECOVERED:"));
     }
@@ -1794,7 +1794,7 @@ mod tests {
         let cfg = RecoveryConfig::default();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = result.summary();
         assert!(summary.starts_with("STRICT_FAIL:"));
     }
@@ -1806,7 +1806,7 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: RecoveryResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
@@ -1825,7 +1825,7 @@ mod tests {
         let cfg = RecoveryConfig::default();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 0, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.schema_version, SCHEMA_VERSION);
     }
 
@@ -1976,7 +1976,7 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![ambiguous_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.decisions.is_empty());
         // Ambiguous evidence: the action should reflect uncertainty.
         let decision = &result.decisions[0];
@@ -2028,7 +2028,7 @@ mod tests {
             context_hash: test_hash(),
         };
         let result = evaluate(test_hash(), &[site], &cfg, 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.recovered);
         assert_eq!(result.final_action, RecoveryAction::FailStrict);
     }
@@ -2061,7 +2061,7 @@ mod tests {
         let controller = RecoveryController::new(cfg, 42);
         let repair = controller
             .select_repair(&site)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(repair.description, "cheap");
     }
 
@@ -2072,7 +2072,7 @@ mod tests {
         let cfg = execution_config();
         let sites = vec![simple_error_site()];
         let result = evaluate(test_hash(), &sites, &cfg, 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for evt in &result.events {
             assert_eq!(evt.component, COMPONENT);
         }
@@ -2084,7 +2084,7 @@ mod tests {
     fn empty_sites_strict_mode() {
         let cfg = RecoveryConfig::default();
         let result = evaluate(test_hash(), &[], &cfg, 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.recovered);
     }
 
@@ -2092,7 +2092,7 @@ mod tests {
     fn empty_sites_execution_mode() {
         let cfg = execution_config();
         let result = evaluate(test_hash(), &[], &cfg, 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // No error sites = no decisions, not recovered.
         assert!(!result.recovered);
     }

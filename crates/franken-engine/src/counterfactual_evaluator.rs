@@ -1152,12 +1152,12 @@ mod tests {
             ..Default::default()
         };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let batch = make_batch(100, 600_000, 500_000);
         let target = make_target(100, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // When propensities match, IPS ≈ mean reward
         assert!(
             (result.candidate_envelope.estimate_millionths - 600_000).abs() < 10_000,
@@ -1173,13 +1173,13 @@ mod tests {
             ..Default::default()
         };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Logging at 250k, target at 500k → weight ≈ 2
         let batch = make_batch(100, 300_000, 250_000);
         let target = make_target(100, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Weighted estimate: 300k * 2 = 600k
         assert!(
             (result.candidate_envelope.estimate_millionths - 600_000).abs() < 10_000,
@@ -1195,7 +1195,7 @@ mod tests {
             ..Default::default()
         };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 0); // Target never takes this action
         let result = e.evaluate(&batch, &target);
@@ -1212,7 +1212,7 @@ mod tests {
         target.target_model_predictions_millionths = Some(vec![400_000; 50]);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // DR with equal propensities and perfect model → close to reward mean
         assert!(
             (result.candidate_envelope.estimate_millionths - 400_000).abs() < 20_000,
@@ -1228,7 +1228,7 @@ mod tests {
         let target = make_target(50, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             (result.candidate_envelope.estimate_millionths - 700_000).abs() < 20_000,
             "got {}",
@@ -1245,13 +1245,13 @@ mod tests {
             ..Default::default()
         };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let batch = make_batch(10, 100_000, 500_000);
         let mut target = make_target(10, 500_000);
         target.target_model_predictions_millionths = Some(vec![800_000; 10]);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.candidate_envelope.estimate_millionths, 800_000);
     }
 
@@ -1262,12 +1262,12 @@ mod tests {
             ..Default::default()
         };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.candidate_envelope.estimate_millionths, 0);
     }
 
@@ -1323,13 +1323,13 @@ mod tests {
             ..Default::default()
         };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Target propensity 2x logging → weights 2x → estimate 2x rewards
         let batch = make_batch(1000, 300_000, 250_000);
         let target = make_target(1000, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Improvement is large with tight CI on uniform data
         // Note: may be Inconclusive with small samples
         assert!(
@@ -1346,12 +1346,12 @@ mod tests {
             ..Default::default()
         }; // Very high threshold
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let batch = make_batch(100, 500_000, 500_000);
         let target = make_target(100, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Improvement is ~0 but threshold is 500k → unsafe
         assert_eq!(result.safety_status, EnvelopeStatus::Unsafe);
     }
@@ -1372,7 +1372,7 @@ mod tests {
         let target = make_target(6, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.regime_breakdown.contains_key("normal"));
         assert!(result.regime_breakdown.contains_key("elevated"));
         assert_eq!(result.regime_breakdown.len(), 2);
@@ -1385,12 +1385,12 @@ mod tests {
             ..Default::default()
         };
         let mut e = CounterfactualEvaluator::new(cfg, BaselinePolicy::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let batch = make_batch(10, 500_000, 500_000);
         let target = make_target(10, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.regime_breakdown.is_empty());
     }
 
@@ -1404,11 +1404,11 @@ mod tests {
         let target = make_target(5, 500_000);
         let _ = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(e.evaluation_count(), 1);
         let _ = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(e.evaluation_count(), 2);
     }
 
@@ -1421,7 +1421,7 @@ mod tests {
         let target = make_target(5, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.schema_version,
             COUNTERFACTUAL_EVALUATOR_SCHEMA_VERSION
@@ -1438,10 +1438,10 @@ mod tests {
         let target = make_target(20, 500_000);
         let r1 = e1
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = e2
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
     }
 
@@ -1453,10 +1453,10 @@ mod tests {
         let target = make_target(20, 500_000);
         let r1 = e
             .evaluate(&batch1, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = e
             .evaluate(&batch2, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.artifact_hash, r2.artifact_hash);
     }
 
@@ -1468,7 +1468,7 @@ mod tests {
         let batch = make_batch(20, 500_000, 500_000);
         let candidates = vec![make_target(20, 300_000), make_target(20, 700_000)];
         let results = compare_policies(&mut e, &batch, &candidates)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 2);
     }
 
@@ -1626,7 +1626,7 @@ mod tests {
         let target = make_target(10, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: EvaluationResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1890,7 +1890,7 @@ mod tests {
         let target = make_target(20, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bd = &result.regime_breakdown;
         assert!(bd.contains_key("normal"));
         assert!(bd.contains_key("degraded"));
@@ -1912,7 +1912,7 @@ mod tests {
         let target = make_target(1, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.candidate_envelope.effective_samples >= 1);
     }
 
@@ -1923,7 +1923,7 @@ mod tests {
         let target = make_target(10_000, 500_000);
         let result = e
             .evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.candidate_envelope.effective_samples > 0);
     }
 
@@ -2156,7 +2156,7 @@ mod tests {
             regime_breakdown: false,
         };
         let e = CounterfactualEvaluator::new(cfg.clone(), BaselinePolicy::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(*e.config(), cfg);
     }
 
@@ -2167,7 +2167,7 @@ mod tests {
             action: LaneAction::FallbackSafe,
         };
         let e = CounterfactualEvaluator::new(EvaluatorConfig::default(), bl.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(*e.baseline(), bl);
     }
 
@@ -2178,10 +2178,10 @@ mod tests {
         let batch = make_batch(5, 500_000, 500_000);
         let target = make_target(5, 500_000);
         e.evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(e.evaluation_count(), 1);
         e.evaluate(&batch, &target)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(e.evaluation_count(), 2);
     }
 

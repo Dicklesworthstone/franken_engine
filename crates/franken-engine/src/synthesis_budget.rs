@@ -1007,19 +1007,19 @@ mod tests {
         // SAFETY: beginning phase with valid phase should succeed
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: recording consumption with valid values should succeed
         monitor
             .record_consumption(100, 10, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: recording consumption with valid values should succeed
         monitor
             .record_consumption(200, 20, 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let pc = monitor
             .phase_consumption(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pc.time_ns, 300);
         assert_eq!(pc.compute, 30);
         assert_eq!(pc.depth, 3);
@@ -1034,7 +1034,7 @@ mod tests {
         let mut monitor = BudgetMonitor::new(c);
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Static analysis has time_cap_ns: 500.
         assert!(monitor.record_consumption(400, 10, 1).is_ok());
         let result = monitor.record_consumption(200, 10, 1); // 600 > 500
@@ -1044,7 +1044,7 @@ mod tests {
         // SAFETY: Test just verified monitor.is_exhausted() is true; exhaustion_reason() returns Some
         let reason = monitor
             .exhaustion_reason()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!reason.global_limit_hit);
         assert_eq!(reason.phase, SynthesisPhase::StaticAnalysis);
         assert!(reason.exceeded_dimensions.contains(&BudgetDimension::Time));
@@ -1056,18 +1056,18 @@ mod tests {
         let mut monitor = BudgetMonitor::new(c);
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(monitor.record_consumption(500, 10, 1).is_ok());
 
         monitor
             .begin_phase(SynthesisPhase::Ablation)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = monitor.record_consumption(600, 10, 1); // total 1100 > 1000
         assert!(matches!(result, Err(BudgetError::Exhausted(_))));
 
         let reason = monitor
             .exhaustion_reason()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reason.global_limit_hit);
     }
 
@@ -1077,7 +1077,7 @@ mod tests {
         let mut monitor = BudgetMonitor::new(c);
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = monitor.record_consumption(2000, 0, 0); // exhaust
 
         assert!(matches!(
@@ -1105,14 +1105,14 @@ mod tests {
         let mut monitor = BudgetMonitor::new(c);
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         monitor
             .record_consumption(300, 40, 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let remaining = monitor
             .remaining_for_current_phase()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(remaining.time_ns, 700);
         assert_eq!(remaining.compute, 60);
         assert_eq!(remaining.depth, 7);
@@ -1127,10 +1127,10 @@ mod tests {
         let mut monitor = BudgetMonitor::new(c);
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         monitor
             .record_consumption(500, 50, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let util = monitor.utilization();
         assert_eq!(util[&BudgetDimension::Time], 500_000); // 50%
@@ -1144,11 +1144,11 @@ mod tests {
         // SAFETY: beginning phase with valid phase should succeed
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: recording consumption with valid values should succeed
         monitor
             .record_consumption(100, 10, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&monitor).expect("serialize derived Serialize");
@@ -1425,37 +1425,37 @@ mod tests {
         // SAFETY: Test-only unwrap with valid synthesis phase transition
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test-only unwrap with valid consumption values
         monitor
             .record_consumption(200, 20, 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Phase 2: Ablation.
         // SAFETY: Test-only unwrap with valid synthesis phase transition
         monitor
             .begin_phase(SynthesisPhase::Ablation)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test-only unwrap with valid consumption values
         monitor
             .record_consumption(300, 30, 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Phase 3: Theorem Checking.
         monitor
             .begin_phase(SynthesisPhase::TheoremChecking)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         monitor
             .record_consumption(200, 20, 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Phase 4: Result Assembly.
         monitor
             .begin_phase(SynthesisPhase::ResultAssembly)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         monitor
             .record_consumption(100, 10, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!monitor.is_exhausted());
         let total = monitor.total_consumption();
@@ -1471,19 +1471,19 @@ mod tests {
 
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         monitor
             .record_consumption(100, 10, 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         monitor
             .begin_phase(SynthesisPhase::Ablation)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Each iteration adds depth.
         for _ in 0..7 {
             monitor
                 .record_consumption(10, 1, 1)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Next iteration exceeds depth cap (3 + 7 + 1 = 11 > 10).
         let result = monitor.record_consumption(10, 1, 1);
@@ -1491,7 +1491,7 @@ mod tests {
 
         let reason = monitor
             .exhaustion_reason()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reason.exceeded_dimensions.contains(&BudgetDimension::Depth));
     }
 
@@ -1664,16 +1664,16 @@ mod tests {
         let mut monitor = BudgetMonitor::new(c);
         monitor
             .begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         monitor
             .record_consumption(300, 20, 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         monitor
             .begin_phase(SynthesisPhase::Ablation)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         monitor
             .record_consumption(200, 30, 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let remaining = monitor.remaining_global();
         assert_eq!(remaining.time_ns, 500); // 1000 - 300 - 200
@@ -1764,10 +1764,10 @@ mod tests {
     fn monitor_phase_switching() {
         let mut m = BudgetMonitor::new(SynthesisBudgetContract::default());
         m.begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(m.current_phase(), Some(SynthesisPhase::StaticAnalysis));
         m.begin_phase(SynthesisPhase::Ablation)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(m.current_phase(), Some(SynthesisPhase::Ablation));
     }
 
@@ -1782,7 +1782,7 @@ mod tests {
         }
         let mut m = BudgetMonitor::new(contract);
         m.begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = m.record_consumption(100, 0, 0); // exceed
         assert!(m.is_exhausted());
         let err = m.begin_phase(SynthesisPhase::Ablation).unwrap_err();
@@ -1804,30 +1804,30 @@ mod tests {
         }
         let mut m = BudgetMonitor::new(contract);
         m.begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         m.record_consumption(500, 50, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let util = m.utilization();
         // SAFETY: Test-only unwrap, Time dimension always exists in utilization map
         assert_eq!(
             *util
                 .get(&BudgetDimension::Time)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             500_000
         ); // 50%
         // SAFETY: Test-only unwrap, Compute dimension always exists in utilization map
         assert_eq!(
             *util
                 .get(&BudgetDimension::Compute)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             500_000
         );
         // SAFETY: Test-only unwrap, Depth dimension always exists in utilization map
         assert_eq!(
             *util
                 .get(&BudgetDimension::Depth)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             500_000
         );
     }
@@ -1940,13 +1940,13 @@ mod tests {
         );
         let mut m = BudgetMonitor::new(contract);
         m.begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         m.record_consumption(1_000, 100, 10)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rem = m
             .remaining_for_current_phase()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(rem.time_ns, 4_000);
         assert_eq!(rem.compute, 400);
         assert_eq!(rem.depth, 40);
@@ -2157,14 +2157,14 @@ mod tests {
         let mut m = BudgetMonitor::new(contract);
         // SAFETY: Test-only unwrap with valid synthesis phase
         m.begin_phase(SynthesisPhase::StaticAnalysis)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test-only unwrap with valid consumption values
         m.record_consumption(u64::MAX - 1, 0, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Adding more should saturate at u64::MAX, not panic.
         // SAFETY: Test-only unwrap with valid consumption values
         m.record_consumption(10, 0, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(m.total_consumption().time_ns, u64::MAX);
     }
 

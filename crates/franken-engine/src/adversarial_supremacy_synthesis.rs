@@ -1417,7 +1417,7 @@ mod tests {
         let w = default_workload();
         // 10% gap => 100_000 millionths gap fraction => Minor.
         let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 900_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ce.severity, CounterexampleSeverity::Minor);
         assert_eq!(ce.claim_id, "claim-1");
         assert_eq!(ce.expected_millionths, 1_000_000);
@@ -1430,7 +1430,7 @@ mod tests {
         let w = default_workload();
         // 60% gap => 600_000 millionths gap fraction => Critical.
         let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 400_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ce.severity, CounterexampleSeverity::Critical);
         assert_eq!(ce.gap_fraction, 600_000);
     }
@@ -1446,7 +1446,7 @@ mod tests {
     fn counterexample_exceeds_threshold() {
         let w = default_workload();
         let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(ce.exceeds_threshold(CounterexampleSeverity::Minor));
         assert!(ce.exceeds_threshold(CounterexampleSeverity::Major));
         assert!(!ce.exceeds_threshold(CounterexampleSeverity::Critical));
@@ -1456,7 +1456,7 @@ mod tests {
     fn counterexample_display() {
         let w = default_workload();
         let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = ce.to_string();
         assert!(s.contains("counterexample["));
         assert!(s.contains("claim="));
@@ -1849,7 +1849,7 @@ mod tests {
     fn counterexample_serde_roundtrip() {
         let w = default_workload();
         let ce = evaluate_counterexample(&w, "claim-1", 1_000_000, 700_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&ce).expect("serialize derived Serialize");
         let back: Counterexample =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

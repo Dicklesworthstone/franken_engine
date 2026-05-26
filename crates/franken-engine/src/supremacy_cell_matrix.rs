@@ -883,7 +883,7 @@ mod tests {
     #[test]
     fn interference_index_is_symmetric() {
         let art = load_fixture();
-        let index = build_interference_index(&art).expect("serde deserialization should succeed");
+        let index = build_interference_index(&art).expect("operation should succeed for valid inputs");
         for (family, related) in &index {
             for other in related {
                 let reverse = index.get(other).expect("symmetric entry must exist");
@@ -898,7 +898,7 @@ mod tests {
     #[test]
     fn interference_index_keys_are_subset_of_rule_families() {
         let art = load_fixture();
-        let index = build_interference_index(&art).expect("serde deserialization should succeed");
+        let index = build_interference_index(&art).expect("operation should succeed for valid inputs");
         let rule_families: std::collections::BTreeSet<WorkloadFamily> = art
             .interference_rules
             .iter()
@@ -914,16 +914,16 @@ mod tests {
     #[test]
     fn artifact_hash_changes_with_content() {
         let mut art = load_fixture();
-        let h1 = artifact_hash(&art).expect("serde deserialization should succeed");
+        let h1 = artifact_hash(&art).expect("operation should succeed for valid inputs");
         art.contract_version = "changed".to_string();
-        let h2 = artifact_hash(&art).expect("serde deserialization should succeed");
+        let h2 = artifact_hash(&art).expect("operation should succeed for valid inputs");
         assert_ne!(h1, h2);
     }
 
     #[test]
     fn artifact_hash_is_hex_encoded_sha256() {
         let art = load_fixture();
-        let hash = artifact_hash(&art).expect("serde deserialization should succeed");
+        let hash = artifact_hash(&art).expect("operation should succeed for valid inputs");
         assert_eq!(hash.len(), 64);
         assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
     }

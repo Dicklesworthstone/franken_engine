@@ -2736,11 +2736,11 @@ mod tests {
             CampaignGeneratorConfig::default(),
             seed,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // SAFETY: Test helper campaign generation with valid generator should succeed
         generator
             .generate_campaign(complexity)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     fn outcome_record(
@@ -2752,7 +2752,7 @@ mod tests {
     ) -> CampaignOutcomeRecord {
         // SAFETY: Test helper with valid campaign execution result should produce valid score
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         CampaignOutcomeRecord {
             campaign,
             result,
@@ -2781,19 +2781,19 @@ mod tests {
 
         // SAFETY: Test creating generator with default grammar, config, and valid seed should succeed
         let mut a = CampaignGenerator::new(grammar.clone(), config.clone(), 0xA11CE)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test creating identical generator with same parameters should succeed
         let mut b = CampaignGenerator::new(grammar, config, 0xA11CE)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Generator created with valid parameters should successfully generate campaigns
         let first = a
             .generate_campaign(CampaignComplexity::MultiStage)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Generator created with valid parameters should successfully generate campaigns
         let second = b
             .generate_campaign(CampaignComplexity::MultiStage)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(first, second);
     }
 
@@ -2803,11 +2803,11 @@ mod tests {
         // SAFETY: Creating generator with default grammar, config, and valid seed should succeed
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xA11CE)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         // SAFETY: Generator created with valid parameters should successfully generate campaigns
         let base = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mutated = MutationEngine::mutate(
             &base,
@@ -2819,12 +2819,12 @@ mod tests {
             },
         )
         // SAFETY: MutationEngine with valid grammar and mutation request should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // SAFETY: Mutated campaign from valid base should pass validation
         mutated
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for (idx, step) in mutated.steps.iter().enumerate() {
             assert_eq!(step.step_id as usize, idx);
         }
@@ -2833,9 +2833,9 @@ mod tests {
     #[test]
     fn exploit_scoring_is_deterministic() {
         let score_a = ExploitObjectiveScore::from_result(&sample_result())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let score_b = ExploitObjectiveScore::from_result(&sample_result())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(score_a, score_b);
         assert_eq!(score_a.difficulty, ContainmentDifficulty::Easy);
     }
@@ -2847,15 +2847,15 @@ mod tests {
             CampaignGeneratorConfig::default(),
             0xA11CE,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let campaign = generator
             .generate_campaign(CampaignComplexity::Apt)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let original_len = campaign.steps.len();
 
         let (minimized, proof) =
             AutoMinimizer::minimize_with(&campaign, |candidate| candidate.steps.len() >= 3)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         assert!(minimized.steps.len() < original_len);
         assert!(minimized.steps.len() >= 3);
@@ -2874,7 +2874,7 @@ mod tests {
             },
             0xD00D,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let outputs = generator
             .run_cycle(CampaignComplexity::Probe, 0, |_campaign| {
@@ -2887,7 +2887,7 @@ mod tests {
                     novel_technique: true,
                 }
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(outputs.len(), 1);
         assert!(!generator.regression_corpus().is_empty());
@@ -2918,7 +2918,7 @@ mod tests {
             },
             0xFACE,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(generator.plan_campaign_count(5), 0);
         assert_eq!(generator.plan_campaign_count(4), 1);
@@ -2941,7 +2941,7 @@ mod tests {
             RedBlueLoopIntegrator::new(RedBlueCalibrationConfig::default(), Default::default());
         let classification = integrator
             .ingest_outcome(outcome)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(classification.severity, CampaignSeverity::Blocking);
         assert_eq!(classification.subsystem, DefenseSubsystem::Containment);
@@ -2983,7 +2983,7 @@ mod tests {
                     false,
                     1_700_000_000_200 + idx,
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let signing_key = [21u8; 32];
@@ -2992,8 +2992,8 @@ mod tests {
             .detection_threshold_millionths;
         let receipt = integrator
             .calibrate(&signing_key, 1_700_000_010_000)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         let new_threshold = integrator
             .calibration_state()
             .detection_threshold_millionths;
@@ -3034,7 +3034,7 @@ mod tests {
                     true,
                     1_700_000_000_300 + idx,
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let signing_key = [22u8; 32];
@@ -3043,8 +3043,8 @@ mod tests {
             .detection_threshold_millionths;
         let _receipt = integrator
             .calibrate(&signing_key, 1_700_000_020_000)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         let new_threshold = integrator
             .calibration_state()
             .detection_threshold_millionths;
@@ -3076,11 +3076,11 @@ mod tests {
                 false,
                 1_700_000_000_400,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let entry = integrator
             .promote_regression_fixture(&campaign_id, "containment", "late-detect", None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.campaign_id, campaign_id);
         assert_eq!(integrator.regression_suite().len(), 1);
 
@@ -3117,7 +3117,7 @@ mod tests {
                 false,
                 1_700_000_000_500,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let hints = integrator.critical_counterfactual_hints();
         assert_eq!(hints.len(), 1);
@@ -3740,7 +3740,7 @@ mod tests {
             novel_technique: true,
         };
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(score.difficulty, ContainmentDifficulty::Critical);
     }
 
@@ -3822,10 +3822,10 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xF00D)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let mut campaign = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         campaign.steps.truncate(1);
         campaign.steps[0].step_id = 0;
 
@@ -4547,7 +4547,7 @@ mod tests {
             novel_technique: false,
         };
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(score.difficulty, ContainmentDifficulty::Easy);
     }
 
@@ -4573,7 +4573,7 @@ mod tests {
         let campaign = sample_campaign(CampaignComplexity::Probe, 99);
         let result = sample_result();
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = CampaignOutcomeRecord {
             campaign,
             result,
@@ -4639,7 +4639,7 @@ mod tests {
             promotion_threshold_millionths: 700_000,
         };
         let generator = CampaignGenerator::new(grammar, config, 42)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(generator.plan_campaign_count(24), 0);
         assert_eq!(generator.plan_campaign_count(100), 0);
     }
@@ -4654,7 +4654,7 @@ mod tests {
             promotion_threshold_millionths: 700_000,
         };
         let generator = CampaignGenerator::new(grammar, config, 42)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // capacity = 24 - 20 = 4, min(12, 4) = 4
         assert_eq!(generator.plan_campaign_count(20), 4);
     }
@@ -4669,7 +4669,7 @@ mod tests {
             promotion_threshold_millionths: 700_000,
         };
         let generator = CampaignGenerator::new(grammar, config, 42)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // capacity = 24 - 0 = 24, min(12, 24) = 12
         assert_eq!(generator.plan_campaign_count(0), 12);
     }
@@ -4684,7 +4684,7 @@ mod tests {
             promotion_threshold_millionths: 700_000,
         };
         let err = CampaignGenerator::new(grammar, config, 42)
-            .expect_err("serde deserialization should succeed");
+            .expect_err("operation should return an error");
         assert!(err.to_string().contains("policy_id"));
     }
 
@@ -4698,7 +4698,7 @@ mod tests {
             promotion_threshold_millionths: 700_000,
         };
         let err = CampaignGenerator::new(grammar, config, 42)
-            .expect_err("serde deserialization should succeed");
+            .expect_err("operation should return an error");
         assert!(err.to_string().contains("campaigns_per_hour"));
     }
 
@@ -4716,7 +4716,7 @@ mod tests {
         let campaign = sample_campaign(CampaignComplexity::Probe, 99);
         let result = sample_result();
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = CampaignOutcomeRecord {
             campaign,
             result,
@@ -4760,7 +4760,7 @@ mod tests {
         assert_eq!(corpus.len(), 1);
         let retrieved = corpus
             .fixture(&campaign.campaign_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(retrieved.campaign_id, fixture.campaign_id);
     }
 
@@ -4859,7 +4859,7 @@ mod tests {
             novel_technique: true,
         };
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(score.difficulty, ContainmentDifficulty::Moderate);
         assert!(score.composite_score_millionths >= 400_000);
         assert!(score.composite_score_millionths < 650_000);
@@ -4877,7 +4877,7 @@ mod tests {
             novel_technique: false,
         };
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(score.difficulty, ContainmentDifficulty::Hard);
         assert!(score.composite_score_millionths >= 650_000);
         assert!(score.composite_score_millionths < 850_000);
@@ -4894,7 +4894,7 @@ mod tests {
             novel_technique: true,
         };
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // evasion = (3/5) * 1_000_000 = 600_000
         assert_eq!(score.evasion_score_millionths, 600_000);
         // no containment escape
@@ -4918,7 +4918,7 @@ mod tests {
             novel_technique: false,
         };
         let score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(score.containment_escape_score_millionths, 1_000_000);
         assert_eq!(score.novel_technique_bonus_millionths, 0);
     }
@@ -4964,7 +4964,7 @@ mod tests {
         assert!(result.is_err());
         assert!(
             result
-                .expect_err("serde deserialization should succeed")
+                .expect_err("operation should return an error")
                 .to_string()
                 .contains("seed")
         );
@@ -4975,13 +4975,13 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar, CampaignGeneratorConfig::default(), 0xBEEF)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let first = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let second = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(first.campaign_id, second.campaign_id);
         assert_ne!(first.seed, second.seed);
     }
@@ -4991,20 +4991,20 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar, CampaignGeneratorConfig::default(), 0xCAFE)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let campaign = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = sample_result();
         let score = generator
             .score_campaign(&campaign, &result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         generator
             .record_campaign_outcome(&campaign, &score)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let stored = generator
             .score(&campaign.campaign_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(*stored, score);
         assert!(generator.score("nonexistent-camp").is_none());
     }
@@ -5014,17 +5014,17 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar, CampaignGeneratorConfig::default(), 0xDAD)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let campaign = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = sample_result();
         let score = generator
             .score_campaign(&campaign, &result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         generator
             .record_campaign_outcome(&campaign, &score)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = generator.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "campaign_scored");
@@ -5037,10 +5037,10 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xA1)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let base = generator
             .generate_campaign(CampaignComplexity::MultiStage)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let original_len = base.steps.len();
         let mutated = MutationEngine::mutate(
             &base,
@@ -5051,11 +5051,11 @@ mod tests {
                 donor_campaign: None,
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(mutated.steps.len(), original_len);
         mutated
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -5063,13 +5063,13 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xA2)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let base = generator
             .generate_campaign(CampaignComplexity::Apt)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let donor = generator
             .generate_campaign(CampaignComplexity::MultiStage)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mutated = MutationEngine::mutate(
             &base,
             &grammar,
@@ -5079,10 +5079,10 @@ mod tests {
                 donor_campaign: Some(donor),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         mutated
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!mutated.steps.is_empty());
     }
 
@@ -5091,10 +5091,10 @@ mod tests {
         let grammar = AttackGrammar::default();
         let mut generator =
             CampaignGenerator::new(grammar.clone(), CampaignGeneratorConfig::default(), 0xA3)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let base = generator
             .generate_campaign(CampaignComplexity::Probe)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = MutationEngine::mutate(
             &base,
             &grammar,
@@ -5157,7 +5157,7 @@ mod tests {
             RedBlueLoopIntegrator::new(RedBlueCalibrationConfig::default(), Default::default());
         integrator
             .ingest_outcome(outcome_record(campaign.clone(), result, false, false, 1000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let effectiveness = integrator.technique_effectiveness();
         assert!(!effectiveness.is_empty());
@@ -5177,7 +5177,7 @@ mod tests {
         let signing_key = [0u8; 32];
         let result = integrator
             .calibrate(&signing_key, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none());
     }
 
@@ -5249,7 +5249,7 @@ mod tests {
         let campaign = sample_campaign(CampaignComplexity::Probe, 0x9999);
         let result = sample_result();
         let mut score = ExploitObjectiveScore::from_result(&result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Tamper with the score
         score.composite_score_millionths += 1;
         let record = CampaignOutcomeRecord {
@@ -5482,7 +5482,7 @@ mod tests {
         assert_eq!(suite.len(), 1);
         let entry = suite
             .get(&campaign.campaign_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.severity, CampaignSeverity::Critical);
         assert_eq!(entry.fixture.actual_defense_response, "actual_v2");
     }
@@ -5511,7 +5511,7 @@ mod tests {
             RedBlueLoopIntegrator::new(RedBlueCalibrationConfig::default(), Default::default());
         let classifications = integrator
             .ingest_outcomes(&[record1, record2])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(classifications.len(), 2);
         let events = integrator.drain_events();
         assert_eq!(events.len(), 2);
@@ -5552,7 +5552,7 @@ mod tests {
         };
         let result =
             evaluate_compromise_suppression_gate(&input, &SuppressionGateConfig::default())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert!(!result.passed);
         assert!(
             result

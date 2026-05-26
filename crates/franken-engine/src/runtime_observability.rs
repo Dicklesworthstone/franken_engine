@@ -1201,7 +1201,7 @@ mod tests {
             *obs.metrics()
                 .auth_failure_total
                 .get(&AuthFailureType::SignatureInvalid)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
         assert_eq!(obs.logs().len(), 1);
@@ -1219,11 +1219,11 @@ mod tests {
         let key_hash = event
             .metadata
             .get("key_material_hash")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let token_hash = event
             .metadata
             .get("token_content_hash")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(key_hash.starts_with("sha256:"));
         assert!(token_hash.starts_with("sha256:"));
         assert!(!key_hash.contains("my_secret"));
@@ -1244,14 +1244,14 @@ mod tests {
             event
                 .metadata
                 .get("requested_capability")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "fs_read"
         );
         assert_eq!(
             *obs.metrics()
                 .capability_denial_total
                 .get(&CapabilityDenialReason::InsufficientAuthority)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
     }
@@ -1272,21 +1272,21 @@ mod tests {
             event
                 .metadata
                 .get("received_seq")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "5"
         );
         assert_eq!(
             event
                 .metadata
                 .get("expected_seq")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "6"
         );
         // session_id is redacted
         let sid = event
             .metadata
             .get("session_id_hash")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(sid.starts_with("sha256:"));
     }
 
@@ -1305,7 +1305,7 @@ mod tests {
             *obs.metrics()
                 .checkpoint_violation_total
                 .get(&CheckpointViolationType::ForkDetected)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
     }
@@ -1382,7 +1382,7 @@ mod tests {
 
         let jsonl = render_security_logs_jsonl(obs.logs());
         let parsed =
-            parse_security_logs_jsonl(&jsonl).expect("serde deserialization should succeed");
+            parse_security_logs_jsonl(&jsonl).expect("operation should succeed for valid inputs");
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].event_type, "auth_failure");
         assert_eq!(parsed[1].event_type, "capability_denial");
@@ -1390,14 +1390,14 @@ mod tests {
 
     #[test]
     fn parse_jsonl_empty_input() {
-        let parsed = parse_security_logs_jsonl("").expect("serde deserialization should succeed");
+        let parsed = parse_security_logs_jsonl("").expect("operation should succeed for valid inputs");
         assert!(parsed.is_empty());
     }
 
     #[test]
     fn parse_jsonl_blank_lines_skipped() {
         let parsed =
-            parse_security_logs_jsonl("\n  \n").expect("serde deserialization should succeed");
+            parse_security_logs_jsonl("\n  \n").expect("operation should succeed for valid inputs");
         assert!(parsed.is_empty());
     }
 
@@ -1477,14 +1477,14 @@ mod tests {
             *obs.metrics()
                 .auth_failure_total
                 .get(&AuthFailureType::SignatureInvalid)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             2
         );
         assert_eq!(
             *obs.metrics()
                 .auth_failure_total
                 .get(&AuthFailureType::KeyRevoked)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
         assert_eq!(obs.logs().len(), 3);
@@ -1688,10 +1688,10 @@ mod tests {
     fn enrichment_security_event_context_json_field_names() {
         let ctx = test_context();
         let val: serde_json::Value =
-            serde_json::to_value(&ctx).expect("serde deserialization should succeed");
+            serde_json::to_value(&ctx).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("timestamp_ns"));
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("principal_id"));
@@ -1728,7 +1728,7 @@ mod tests {
         assert_eq!(
             back.metadata
                 .get("key1")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "val1"
         );
     }
@@ -1807,21 +1807,21 @@ mod tests {
             *obs.metrics()
                 .auth_failure_total
                 .get(&AuthFailureType::AttestationInvalid)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
         assert_eq!(
             *obs.metrics()
                 .capability_denial_total
                 .get(&CapabilityDenialReason::CeilingExceeded)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
         assert_eq!(
             *obs.metrics()
                 .checkpoint_violation_total
                 .get(&CheckpointViolationType::QuorumInsufficient)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
     }
@@ -1838,7 +1838,7 @@ mod tests {
             event
                 .metadata
                 .get("requested_capability")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "unspecified"
         );
     }
@@ -1856,14 +1856,14 @@ mod tests {
             event
                 .metadata
                 .get("source_zone")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "source-zone-missing"
         );
         assert_eq!(
             event
                 .metadata
                 .get("target_zone")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "target-zone-missing"
         );
     }
@@ -1885,14 +1885,14 @@ mod tests {
             event
                 .metadata
                 .get("staleness_gap")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "50"
         );
         assert_eq!(
             *obs.metrics()
                 .revocation_check_total
                 .get(&RevocationCheckOutcome::Revoked)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
     }
@@ -1913,7 +1913,7 @@ mod tests {
             event
                 .metadata
                 .get("staleness_gap")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "0"
         );
     }
@@ -1929,7 +1929,7 @@ mod tests {
                 *obs.metrics()
                     .replay_drop_total
                     .get(&reason)
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
                 1
             );
         }
@@ -1947,7 +1947,7 @@ mod tests {
                 *obs.metrics()
                     .checkpoint_violation_total
                     .get(&viol)
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
                 1
             );
         }
@@ -1978,7 +1978,7 @@ mod tests {
             *back
                 .auth_failure_total
                 .get(&AuthFailureType::SignatureInvalid)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
         assert_eq!(back.revocation_freshness_degraded_seconds, 42);
@@ -2031,7 +2031,7 @@ mod tests {
         }
         // Roundtrip through parse
         let parsed =
-            parse_security_logs_jsonl(&jsonl).expect("serde deserialization should succeed");
+            parse_security_logs_jsonl(&jsonl).expect("operation should succeed for valid inputs");
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0].event_type, "auth_failure");
         assert_eq!(parsed[1].event_type, "replay_drop");

@@ -1622,11 +1622,11 @@ mod tests {
         // SAFETY: Test embedding constructed with "lo" feature should contain that feature name
         let lo = emb
             .value_for("lo")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test embedding constructed with "hi" feature should contain that feature name
         let hi = emb
             .value_for("hi")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lo, 0);
         assert_eq!(hi, MILLION);
     }

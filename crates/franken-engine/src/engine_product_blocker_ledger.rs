@@ -1027,7 +1027,7 @@ mod tests {
                 BlockerSurface::Parser,
                 BlockerSeverity::Blocking,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ledger.blocker_count(), 1);
     }
 
@@ -1041,7 +1041,7 @@ mod tests {
                 BlockerSurface::Parser,
                 BlockerSeverity::Blocking,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ledger
             .add_blocker(make_blocker(
                 "b1",
@@ -1062,7 +1062,7 @@ mod tests {
                 BlockerSurface::Parser,
                 BlockerSeverity::Blocking,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test adding unique blocker b2 to ledger should succeed
         ledger
             .add_blocker(make_blocker(
@@ -1070,7 +1070,7 @@ mod tests {
                 BlockerSurface::Runtime,
                 BlockerSeverity::Cosmetic,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ledger.release_blockers().len(), 1);
     }
 
@@ -1082,7 +1082,7 @@ mod tests {
         // SAFETY: Test adding unique resolved blocker to empty ledger should succeed
         ledger
             .add_blocker(b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(ledger.release_blockers().is_empty());
     }
 
@@ -1095,32 +1095,32 @@ mod tests {
                 BlockerSurface::Parser,
                 BlockerSeverity::Blocking,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .add_blocker(make_blocker(
                 "b2",
                 BlockerSurface::Parser,
                 BlockerSeverity::Degraded,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .add_blocker(make_blocker(
                 "b3",
                 BlockerSurface::Runtime,
                 BlockerSeverity::Cosmetic,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let dist = ledger.blockers_by_surface();
         assert_eq!(
             *dist
                 .get(&BlockerSurface::Parser)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             2
         );
         assert_eq!(
             *dist
                 .get(&BlockerSurface::Runtime)
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
     }
@@ -1141,7 +1141,7 @@ mod tests {
             BlockerSurface::Gc,
             BlockerSeverity::Cosmetic,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(l1.content_hash(), l2.content_hash());
     }
 
@@ -1226,7 +1226,7 @@ mod tests {
         b.remediation = RemediationStatus::Verified;
         ledger
             .add_blocker(b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = ledger.add_cohort_rollup(CohortRollup {
             cohort_name: "test".to_string(),
             readiness: CohortReadiness::Ready,

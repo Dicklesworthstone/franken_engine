@@ -1038,36 +1038,36 @@ mod tests {
 
     #[test]
     fn matrix_identity_mul_is_identity() {
-        let id = TropicalMatrix::identity(3).expect("serde deserialization should succeed");
-        let m = TropicalMatrix::identity(3).expect("serde deserialization should succeed");
+        let id = TropicalMatrix::identity(3).expect("operation should succeed for valid inputs");
+        let m = TropicalMatrix::identity(3).expect("operation should succeed for valid inputs");
         let product = id
             .tropical_mul(&m)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(product, m);
     }
 
     #[test]
     fn matrix_infinity_is_additive_identity() {
-        let inf = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
-        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let inf = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
         let sum = m
             .tropical_add(&inf)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sum, m);
     }
 
     #[test]
     fn floyd_warshall_simple_chain() {
         // 0 --5--> 1 --3--> 2
-        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
 
         let apsp = m
             .floyd_warshall()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(apsp.get(0, 1), TropicalWeight::finite(5));
         assert_eq!(apsp.get(1, 2), TropicalWeight::finite(3));
         assert_eq!(apsp.get(0, 2), TropicalWeight::finite(8)); // 5 + 3
@@ -1078,7 +1078,7 @@ mod tests {
     fn floyd_warshall_diamond() {
         // 0 --2--> 1 --3--> 3
         // 0 --5--> 2 --1--> 3
-        let mut m = TropicalMatrix::new_infinity(4).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(4).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(2));
         m.set(0, 2, TropicalWeight::finite(5));
         m.set(1, 3, TropicalWeight::finite(3));
@@ -1086,13 +1086,13 @@ mod tests {
 
         let apsp = m
             .floyd_warshall()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(apsp.get(0, 3), TropicalWeight::finite(5)); // min(2+3, 5+1)
     }
 
     #[test]
     fn floyd_warshall_negative_cycle_detection() {
-        let mut m = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(-3));
         m.set(1, 0, TropicalWeight::finite(-3));
 
@@ -1111,8 +1111,8 @@ mod tests {
 
     #[test]
     fn matrix_dimension_mismatch() {
-        let a = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
-        let b = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let a = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
+        let b = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         assert!(matches!(
             a.tropical_mul(&b),
             Err(TropicalError::DimensionMismatch { .. })
@@ -1140,7 +1140,7 @@ mod tests {
         let graph = make_chain_graph(5);
         let cpr = graph
             .critical_path_length()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cpr.makespan, TropicalWeight::finite(5)); // 5 nodes × cost 1 each
     }
 
@@ -1176,7 +1176,7 @@ mod tests {
         let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let cpr = graph
             .critical_path_length()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cpr.critical_source, 0);
         assert_eq!(cpr.critical_sink, 2);
     }
@@ -1244,7 +1244,7 @@ mod tests {
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(schedule.order, vec![0, 1, 2, 3]);
         assert_eq!(schedule.quality, ScheduleQuality::Optimal);
@@ -1252,7 +1252,7 @@ mod tests {
             schedule
                 .certificate
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_exact
         );
     }
@@ -1298,7 +1298,7 @@ mod tests {
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Both chains are independent, makespan = max(2+1, 3+1) = 4
         assert_eq!(schedule.total_cost, TropicalWeight::finite(4));
@@ -1347,7 +1347,7 @@ mod tests {
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Critical path: 0(1) → 1(5) → 3(1) = 7
         assert_eq!(schedule.total_cost, TropicalWeight::finite(7));
@@ -1388,17 +1388,17 @@ mod tests {
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos_prod = schedule
             .order
             .iter()
             .position(|&i| i == 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos_cons = schedule
             .order
             .iter()
             .position(|&i| i == 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(pos_prod < pos_cons);
     }
 
@@ -1407,11 +1407,11 @@ mod tests {
     #[test]
     fn dead_code_elimination_identifies_unreachable() {
         // 0 → 1, 2 is isolated, output = {1}
-        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(1));
         let apsp = m
             .floyd_warshall()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let eliminator = DeadCodeEliminator {
             output_nodes: vec![1],
@@ -1427,12 +1427,12 @@ mod tests {
     #[test]
     fn dead_code_all_live() {
         // 0 → 1 → 2, output = {2}
-        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(1));
         m.set(1, 2, TropicalWeight::finite(1));
         let apsp = m
             .floyd_warshall()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let eliminator = DeadCodeEliminator {
             output_nodes: vec![2],
@@ -1492,7 +1492,7 @@ mod tests {
 
     #[test]
     fn tropical_matrix_serde_roundtrip() {
-        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
         let json = serde_json::to_string(&m).expect("serialize derived Serialize");
@@ -1507,7 +1507,7 @@ mod tests {
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&schedule).expect("serialize derived Serialize");
         let restored: Schedule = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(schedule, restored);
@@ -1548,7 +1548,7 @@ mod tests {
 
     #[test]
     fn matrix_content_hash_deterministic() {
-        let mut m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(5));
         let h1 = m.content_hash();
         let h2 = m.content_hash();
@@ -1557,9 +1557,9 @@ mod tests {
 
     #[test]
     fn different_matrices_different_hashes() {
-        let mut m1 = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
+        let mut m1 = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
         m1.set(0, 1, TropicalWeight::finite(1));
-        let mut m2 = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
+        let mut m2 = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
         m2.set(0, 1, TropicalWeight::finite(2));
         assert_ne!(m1.content_hash(), m2.content_hash());
     }
@@ -1624,22 +1624,22 @@ mod tests {
         let graph = InstructionCostGraph::new(nodes).expect("constructor with valid inputs");
         let schedule = ScheduleOptimizer::default()
             .schedule(&graph)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos0 = schedule
             .order
             .iter()
             .position(|&x| x == 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos1 = schedule
             .order
             .iter()
             .position(|&x| x == 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos2 = schedule
             .order
             .iter()
             .position(|&x| x == 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(pos0 < pos2);
         assert!(pos1 < pos2);
     }
@@ -1649,10 +1649,10 @@ mod tests {
         let graph = make_chain_graph(6);
         let cpr = graph
             .critical_path_length()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let apsp = graph
             .all_pairs_shortest_paths()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cpr.apsp_hash, apsp.content_hash());
     }
 
@@ -1675,14 +1675,14 @@ mod tests {
     #[test]
     fn floyd_warshall_larger_graph() {
         let n = 50;
-        let mut m = TropicalMatrix::new_infinity(n).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(n).expect("operation should succeed for valid inputs");
         // Build a chain 0→1→...→(n-1)
         for i in 0..n - 1 {
             m.set(i, i + 1, TropicalWeight::finite(1));
         }
         let apsp = m
             .floyd_warshall()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Distance 0→(n-1) should be n-1
         assert_eq!(apsp.get(0, n - 1), TropicalWeight::finite((n - 1) as i64));
     }
@@ -1704,7 +1704,7 @@ mod tests {
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // All independent → makespan = max single task = 1
         assert_eq!(schedule.total_cost, TropicalWeight::finite(1));
@@ -1781,7 +1781,7 @@ mod tests {
         let optimizer = ScheduleOptimizer::default();
         let schedule = optimizer
             .schedule(&graph)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(schedule.order, vec![0]);
         assert_eq!(schedule.total_cost, TropicalWeight::finite(5));
     }
@@ -1798,11 +1798,11 @@ mod tests {
 
     #[test]
     fn matrix_1x1() {
-        let mut m = TropicalMatrix::new_infinity(1).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(1).expect("operation should succeed for valid inputs");
         m.set(0, 0, TropicalWeight::ZERO);
         let apsp = m
             .floyd_warshall()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(apsp.get(0, 0), TropicalWeight::ZERO);
     }
 
@@ -1971,7 +1971,7 @@ mod tests {
 
     #[test]
     fn matrix_identity_has_zero_diagonal_infinity_off() {
-        let id = TropicalMatrix::identity(3).expect("serde deserialization should succeed");
+        let id = TropicalMatrix::identity(3).expect("operation should succeed for valid inputs");
         for i in 0..3 {
             assert_eq!(id.get(i, i), TropicalWeight::ZERO);
             for j in 0..3 {
@@ -1984,8 +1984,8 @@ mod tests {
 
     #[test]
     fn matrix_tropical_add_dimension_mismatch() {
-        let a = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
-        let b = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let a = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
+        let b = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         assert!(matches!(
             a.tropical_add(&b),
             Err(TropicalError::DimensionMismatch { left: 2, right: 3 })
@@ -1994,18 +1994,18 @@ mod tests {
 
     #[test]
     fn matrix_content_hash_sensitive_to_dimension() {
-        let m2 = TropicalMatrix::new_infinity(2).expect("serde deserialization should succeed");
-        let m3 = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let m2 = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
+        let m3 = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         assert_ne!(m2.content_hash(), m3.content_hash());
     }
 
     #[test]
     fn floyd_warshall_self_loop_zero_on_diagonal() {
         // No edges at all — FW should set diagonal to 0
-        let m = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         let apsp = m
             .floyd_warshall()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for i in 0..3 {
             assert_eq!(apsp.get(i, i), TropicalWeight::ZERO);
         }
@@ -2045,7 +2045,7 @@ mod tests {
 
     #[test]
     fn dead_code_zero_total_nodes() {
-        let apsp = TropicalMatrix::new_infinity(1).expect("serde deserialization should succeed");
+        let apsp = TropicalMatrix::new_infinity(1).expect("operation should succeed for valid inputs");
         let elim = DeadCodeEliminator {
             output_nodes: vec![],
         };
@@ -2159,14 +2159,14 @@ mod tests {
     #[test]
     fn floyd_warshall_triangle_inequality() {
         // For any APSP result: dist[i][j] <= dist[i][k] + dist[k][j]
-        let mut m = TropicalMatrix::new_infinity(4).expect("serde deserialization should succeed");
+        let mut m = TropicalMatrix::new_infinity(4).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(3));
         m.set(1, 2, TropicalWeight::finite(4));
         m.set(0, 2, TropicalWeight::finite(10)); // direct but longer
         m.set(2, 3, TropicalWeight::finite(2));
         let apsp = m
             .floyd_warshall()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // dist[0][2] should be min(10, 3+4) = 7
         assert_eq!(apsp.get(0, 2), TropicalWeight::finite(7));
         // Triangle: dist[0][3] = dist[0][2] + dist[2][3] = 7 + 2 = 9
@@ -2207,9 +2207,9 @@ mod tests {
     #[test]
     fn matrix_mul_associativity() {
         // (A ⊗ B) ⊗ C == A ⊗ (B ⊗ C) — semiring property
-        let mut a = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
-        let mut b = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
-        let mut c = TropicalMatrix::new_infinity(3).expect("serde deserialization should succeed");
+        let mut a = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut b = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut c = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         a.set(0, 1, TropicalWeight::finite(2));
         a.set(1, 2, TropicalWeight::finite(3));
         b.set(0, 1, TropicalWeight::finite(1));
@@ -2217,16 +2217,16 @@ mod tests {
         c.set(0, 2, TropicalWeight::finite(5));
         let ab = a
             .tropical_mul(&b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ab_c = ab
             .tropical_mul(&c)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bc = b
             .tropical_mul(&c)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let a_bc = a
             .tropical_mul(&bc)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ab_c, a_bc);
     }
 }

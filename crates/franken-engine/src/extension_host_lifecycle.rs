@@ -779,7 +779,7 @@ mod tests {
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mgr.is_extension_running("ext-a"));
         assert_eq!(mgr.loaded_extension_count(), 1);
         assert_eq!(mgr.cell_manager().active_count(), 1);
@@ -792,7 +792,7 @@ mod tests {
 
         // SAFETY: Test setup ensures first load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = mgr.load_extension("ext-a", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_extension_already_loaded");
     }
@@ -804,11 +804,11 @@ mod tests {
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Extension was just loaded successfully, so unload_extension will succeed
         let outcome = mgr
             .unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
         assert_eq!(mgr.loaded_extension_count(), 0);
@@ -830,10 +830,10 @@ mod tests {
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension name and context
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Extension was just loaded successfully, so unload_extension will succeed
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = mgr.unload_extension("ext-a", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_extension_not_running");
     }
@@ -849,17 +849,17 @@ mod tests {
 
         // SAFETY: Test setup ensures load_extension succeeds with valid extension names and context
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.load_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.load_extension("ext-c", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.loaded_extension_count(), 3);
 
         // Unload one; others unaffected.
         // SAFETY: Extension ext-b was just loaded successfully, so unload_extension will succeed
         mgr.unload_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mgr.is_extension_running("ext-a"));
         assert!(!mgr.is_extension_running("ext-b"));
         assert!(mgr.is_extension_running("ext-c"));
@@ -872,12 +872,12 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.load_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         mgr.cancel_extension("ext-a", &mut cx, LifecycleEvent::Terminate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!mgr.is_extension_running("ext-a"));
         assert!(mgr.is_extension_running("ext-b"));
@@ -893,9 +893,9 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "sess-1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.session_count("ext-a"), 1);
     }
 
@@ -905,9 +905,9 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "sess-1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = mgr.create_session("ext-a", "sess-1", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_session_already_exists");
     }
@@ -918,9 +918,9 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = mgr.create_session("ext-a", "sess-1", &mut cx).unwrap_err();
         assert_eq!(err.error_code(), "host_extension_not_running");
     }
@@ -943,16 +943,16 @@ mod tests {
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with loaded extension and valid session ID; session creation should succeed
         mgr.create_session("ext-a", "sess-1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.session_count("ext-a"), 1);
 
         // SAFETY: Test scenario with active session; session close should succeed
         let outcome = mgr
             .close_session("ext-a", "sess-1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(outcome.success);
         assert_eq!(mgr.session_count("ext-a"), 0);
     }
@@ -963,7 +963,7 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = mgr
             .close_session("ext-a", "sess-gone", &mut cx)
             .unwrap_err();
@@ -976,17 +976,17 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s2", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s3", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.session_count("ext-a"), 3);
 
         mgr.close_session("ext-a", "s2", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.session_count("ext-a"), 2);
     }
 
@@ -1000,15 +1000,15 @@ mod tests {
         let mut cx = real_cx(10000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s2", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let outcome = mgr
             .unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
         // Sessions should be gone from the record (extension is unloaded).
@@ -1020,9 +1020,9 @@ mod tests {
         let mut cx = real_cx(10000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let session_cell_id = mgr.session_cell_id("ext-a", "s1");
         mgr.cell_manager.archive_cell(
@@ -1059,10 +1059,10 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let outcome = mgr
             .cancel_extension("ext-a", &mut cx, LifecycleEvent::Quarantine)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
     }
@@ -1073,13 +1073,13 @@ mod tests {
         let mut cx = real_cx(10000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let outcome = mgr
             .cancel_extension("ext-a", &mut cx, LifecycleEvent::Terminate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
     }
@@ -1090,9 +1090,9 @@ mod tests {
         let mut setup_cx = real_cx(10000);
 
         mgr.load_extension("ext-a", &mut setup_cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s1", &mut setup_cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let session_cell_id = mgr.session_cell_id("ext-a", "s1");
         let mut cancel_cx = real_cx(0);
@@ -1130,13 +1130,13 @@ mod tests {
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with loaded extension and valid session ID; session creation should succeed
         mgr.create_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = mgr.shutdown(&mut cx);
         assert_eq!(results.len(), 2);
@@ -1154,7 +1154,7 @@ mod tests {
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.shutdown(&mut cx);
 
         let err = mgr.load_extension("ext-b", &mut cx).unwrap_err();
@@ -1175,16 +1175,16 @@ mod tests {
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with loaded extension and valid session ID; session creation should succeed
         mgr.create_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with active session; session close should succeed
         mgr.close_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with loaded extension and no active sessions; unload should succeed
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = mgr.events();
         assert!(events.len() >= 4); // load, session create, session close, unload
@@ -1203,7 +1203,7 @@ mod tests {
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = mgr.events();
         assert_eq!(events.len(), 1);
         assert!(!events[0].trace_id.is_empty());
@@ -1217,7 +1217,7 @@ mod tests {
 
         // SAFETY: Test scenario with valid extension ID and sufficient budget; load operation should succeed
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.events().len(), 1);
 
         let drained = mgr.drain_events();
@@ -1231,9 +1231,9 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cancel_events = mgr.drain_cancellation_events();
         // Cancellation manager emits events for each phase.
@@ -1250,11 +1250,11 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.load_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // All IDs (including unloaded).
         assert_eq!(mgr.extension_ids().len(), 2);
@@ -1269,10 +1269,10 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = mgr
             .extension_record("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.cell_id, "ext-a");
         assert!(!record.unloaded);
         assert!(record.sessions.is_empty());
@@ -1399,29 +1399,29 @@ mod tests {
 
         // Load two extensions.
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.load_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.loaded_extension_count(), 2);
 
         // Create sessions under ext-a.
         mgr.create_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s2", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.session_count("ext-a"), 2);
 
         // Close one session.
         let outcome = mgr
             .close_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(outcome.success);
         assert_eq!(mgr.session_count("ext-a"), 1);
 
         // Unload ext-a (session s2 should be closed automatically).
         let outcome = mgr
             .unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(outcome.success);
         assert!(!mgr.is_extension_running("ext-a"));
 
@@ -1431,7 +1431,7 @@ mod tests {
         // Unload ext-b.
         let outcome = mgr
             .unload_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(outcome.success);
         assert_eq!(mgr.loaded_extension_count(), 0);
 
@@ -1448,21 +1448,21 @@ mod tests {
         // Load multiple extensions.
         for i in 0..5 {
             mgr.load_extension(&format!("ext-{i}"), &mut cx)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(mgr.loaded_extension_count(), 5);
 
         // Create sessions in different extensions.
         mgr.create_session("ext-0", "s0", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-2", "s2a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-2", "s2b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Terminate ext-2 (with sessions).
         mgr.cancel_extension("ext-2", &mut cx, LifecycleEvent::Terminate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // ext-0 should still have its session.
         assert_eq!(mgr.session_count("ext-0"), 1);
@@ -1588,7 +1588,7 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.shutdown(&mut cx);
 
         // Extensions were torn down by shutdown, so operations on them fail
@@ -1637,11 +1637,11 @@ mod tests {
         let mut cx = real_cx(10000);
 
         mgr.load_extension("ext-c", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.load_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let ids = mgr.active_extension_ids();
         let mut sorted = ids.clone();
@@ -1660,7 +1660,7 @@ mod tests {
 
         // Trigger an error: load duplicate
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _err = mgr.load_extension("ext-a", &mut cx).unwrap_err();
 
         // The successful load emitted one event
@@ -1690,13 +1690,13 @@ mod tests {
         let mut cx = real_cx(5000);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let record = mgr
             .extension_record("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(record.unloaded);
     }
 
@@ -1707,7 +1707,7 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mgr.is_extension_running("ext-a"));
     }
 
@@ -1716,9 +1716,9 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!mgr.is_extension_running("ext-a"));
     }
 
@@ -1735,15 +1735,15 @@ mod tests {
         assert_eq!(mgr.loaded_extension_count(), 0);
 
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.loaded_extension_count(), 1);
 
         mgr.load_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.loaded_extension_count(), 2);
 
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.loaded_extension_count(), 1);
     }
 
@@ -1752,17 +1752,17 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(mgr.session_count("ext-a"), 0);
         mgr.create_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.session_count("ext-a"), 1);
         mgr.create_session("ext-a", "s2", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.session_count("ext-a"), 2);
         mgr.close_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.session_count("ext-a"), 1);
     }
 
@@ -1771,19 +1771,19 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s1", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.create_session("ext-a", "s2", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.session_count("ext-a"), 2);
 
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let record = mgr
             .extension_record("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(record.unloaded);
         assert!(record.sessions.is_empty());
         assert_eq!(mgr.session_count("ext-a"), 0);
@@ -1808,7 +1808,7 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // events() should return without clearing
         assert!(!mgr.events().is_empty());
         assert!(!mgr.events().is_empty()); // still there
@@ -1819,7 +1819,7 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // cell_manager() should expose the inner manager
         assert!(mgr.cell_manager().get("ext-a").is_some());
     }
@@ -1829,10 +1829,10 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-abc", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = mgr
             .extension_record("ext-abc")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.cell_id, "ext-abc");
         assert!(!record.unloaded);
         assert!(record.sessions.is_empty());
@@ -1843,10 +1843,10 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = mgr
             .extension_record("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!record.load_trace_id.is_empty());
     }
 
@@ -1996,11 +1996,11 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.load_extension("ext-b", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let active = mgr.active_extension_ids();
         assert_eq!(active.len(), 1);
@@ -2014,9 +2014,9 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // cancellation events should be produced
         let cancel_events = mgr.drain_cancellation_events();
         assert!(!cancel_events.is_empty());
@@ -2035,9 +2035,9 @@ mod tests {
         let mut mgr = ExtensionHostLifecycleManager::new();
         let mut cx = real_cx(5000);
         mgr.load_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.unload_extension("ext-a", &mut cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Cannot reload because the ID is still in extensions map
         let err = mgr.load_extension("ext-a", &mut cx).unwrap_err();
         assert!(matches!(

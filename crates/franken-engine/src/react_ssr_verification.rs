@@ -1655,7 +1655,7 @@ mod tests {
         let pair =
             DifferentialPair::new(ssr_evidence("ref", b"same"), ssr_evidence("cand", b"same"));
         let result = verify_path_pair(&pair, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.verdict, PathVerdict::Verified);
         assert!(result.divergence_report.is_none());
     }
@@ -1668,7 +1668,7 @@ mod tests {
             vec![make_mismatch(MismatchKind::OutputMismatch)],
         );
         let result = verify_path_pair(&pair, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.verdict, PathVerdict::Divergent);
         assert!(result.divergence_report.is_some());
     }
@@ -1712,7 +1712,7 @@ mod tests {
             ..default_config()
         };
         let result =
-            verify_path_pair(&pair, &config).expect("serde deserialization should succeed");
+            verify_path_pair(&pair, &config).expect("operation should succeed for valid inputs");
         assert_eq!(result.verdict, PathVerdict::Divergent);
     }
 
@@ -1728,7 +1728,7 @@ mod tests {
             ..default_config()
         };
         let result =
-            verify_path_pair(&pair, &config).expect("serde deserialization should succeed");
+            verify_path_pair(&pair, &config).expect("operation should succeed for valid inputs");
         assert_eq!(result.verdict, PathVerdict::Divergent);
     }
 
@@ -1745,7 +1745,7 @@ mod tests {
             ..default_config()
         };
         let result =
-            verify_path_pair(&pair, &config).expect("serde deserialization should succeed");
+            verify_path_pair(&pair, &config).expect("operation should succeed for valid inputs");
         assert_eq!(result.verdict, PathVerdict::Verified);
     }
 
@@ -1754,7 +1754,7 @@ mod tests {
         let pair =
             DifferentialPair::new(ssr_evidence("ref", b"same"), ssr_evidence("cand", b"same"));
         let result = verify_path_pair(&pair, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.receipt.schema_version, SCHEMA_VERSION);
         assert_eq!(result.receipt.component, COMPONENT);
         assert_eq!(result.receipt.bead_id, BEAD_ID);
@@ -1765,9 +1765,9 @@ mod tests {
     fn verify_pair_receipt_content_hash_deterministic() {
         let pair = DifferentialPair::new(ssr_evidence("ref", b"x"), ssr_evidence("cand", b"x"));
         let r1 = verify_path_pair(&pair, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = verify_path_pair(&pair, &default_config())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.receipt.content_hash(), r2.receipt.content_hash());
     }
 
@@ -1780,7 +1780,7 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r2", b"b"), ssr_evidence("c2", b"b")),
         ];
         let result =
-            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
         assert_eq!(result.overall_verdict, PathVerdict::Verified);
         assert_eq!(result.verified_count, 2);
         assert_eq!(result.divergent_count, 0);
@@ -1798,7 +1798,7 @@ mod tests {
             ),
         ];
         let result =
-            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
         assert_eq!(result.overall_verdict, PathVerdict::Divergent);
         assert_eq!(result.verified_count, 1);
         assert_eq!(result.divergent_count, 1);
@@ -1828,7 +1828,7 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r3", b"c"), ssr_evidence("c3", b"c")),
         ];
         let result =
-            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
         // First receipt has no previous hash.
         assert!(result.results[0].receipt.previous_hash.is_none());
         // Subsequent receipts chain to previous.
@@ -1836,7 +1836,7 @@ mod tests {
         assert!(result.results[2].receipt.previous_hash.is_some());
         // Chain is deterministic.
         let r2 =
-            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
         assert_eq!(
             result.results[2].receipt.previous_hash,
             r2.results[2].receipt.previous_hash
@@ -1858,7 +1858,7 @@ mod tests {
             ),
         ];
         let result =
-            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
         assert_eq!(result.pass_rate(), 0);
     }
 
@@ -1869,9 +1869,9 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r2", b"y"), ssr_evidence("c2", b"y")),
         ];
         let b1 =
-            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
         let b2 =
-            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
         assert_eq!(b1.content_hash, b2.content_hash);
     }
 
@@ -2005,7 +2005,7 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r2", b"b"), ssr_evidence("c2", b"b")),
         ];
         let bv =
-            verify_batch(&pairs, &default_config()).expect("serde deserialization should succeed");
+            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&bv).expect("serialize derived Serialize");
         let back: BatchVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bv, back);

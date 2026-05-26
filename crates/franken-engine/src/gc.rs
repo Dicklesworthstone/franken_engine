@@ -859,33 +859,33 @@ mod tests {
         // SAFETY: Test-only heap registration with unique identifier "ext-a".
         // register_heap only fails on duplicate heap IDs, which cannot happen in isolated test.
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Allocating on just-registered heap "ext-a" with valid size.
         // allocate only fails on unregistered heap or memory exhaustion (impossible in test).
         let obj1 = gc
             .allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let obj2 = gc
             .allocate("ext-a", 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Unroot both — they become garbage.
         gc.unroot("ext-a", obj1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", obj2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.swept_count, 2);
         assert_eq!(event.bytes_reclaimed, 300);
         assert_eq!(event.marked_count, 0);
 
         let heap = gc
             .get_heap("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(heap.object_count(), 0);
         assert_eq!(heap.total_bytes(), 0);
     }
@@ -894,29 +894,29 @@ mod tests {
     fn rooted_objects_survive_collection() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let obj1 = gc
             .allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _obj2 = gc
             .allocate("ext-a", 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Only unroot obj1.
         gc.unroot("ext-a", obj1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.swept_count, 1); // obj1 collected
         assert_eq!(event.bytes_reclaimed, 100);
         assert_eq!(event.marked_count, 1); // obj2 still alive
 
         let heap = gc
             .get_heap("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(heap.object_count(), 1);
     }
 
@@ -924,39 +924,39 @@ mod tests {
     fn referenced_objects_survive_collection() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let root = gc
             .allocate("ext-a", 50)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let child = gc
             .allocate("ext-a", 80)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let grandchild = gc
             .allocate("ext-a", 120)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // root -> child -> grandchild
         gc.add_reference("ext-a", root, child)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.add_reference("ext-a", child, grandchild)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Unroot child and grandchild — they're still reachable from root.
         gc.unroot("ext-a", child)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", grandchild)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.marked_count, 3);
         assert_eq!(event.swept_count, 0);
 
         let heap = gc
             .get_heap("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(heap.object_count(), 3);
     }
 
@@ -966,43 +966,43 @@ mod tests {
     fn circular_references_collected_when_unreachable() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let a = gc
             .allocate("ext-a", 64)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = gc
             .allocate("ext-a", 64)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let c = gc
             .allocate("ext-a", 64)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Create cycle: a -> b -> c -> a
         gc.add_reference("ext-a", a, b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.add_reference("ext-a", b, c)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.add_reference("ext-a", c, a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Unroot all — cycle is unreachable.
         gc.unroot("ext-a", a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", c)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.swept_count, 3);
         assert_eq!(event.bytes_reclaimed, 192);
 
         let heap = gc
             .get_heap("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(heap.object_count(), 0);
     }
 
@@ -1010,26 +1010,26 @@ mod tests {
     fn circular_references_survive_when_rooted() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let a = gc
             .allocate("ext-a", 64)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = gc
             .allocate("ext-a", 64)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // a -> b -> a (cycle), but a remains rooted.
         gc.add_reference("ext-a", a, b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.add_reference("ext-a", b, a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.marked_count, 2);
         assert_eq!(event.swept_count, 0);
     }
@@ -1040,25 +1040,25 @@ mod tests {
     fn dangling_references_do_not_crash() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let obj = gc
             .allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Add reference to a non-existent object ID.
         let phantom = GcObjectId(999);
         gc.get_heap_mut("ext-a")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .objects
             .get_mut(&obj)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .references
             .insert(phantom);
 
         // Collection should succeed without panic.
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.marked_count, 1); // obj is rooted
         assert_eq!(event.swept_count, 0);
     }
@@ -1069,23 +1069,23 @@ mod tests {
     fn per_extension_collection_isolation() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.register_heap("ext-b".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let a1 = gc
             .allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _b1 = gc
             .allocate("ext-b", 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Unroot a1 and collect ext-a only.
         gc.unroot("ext-a", a1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.swept_count, 1);
         assert_eq!(event.bytes_reclaimed, 100);
         assert_eq!(event.extension_id, "ext-a");
@@ -1093,7 +1093,7 @@ mod tests {
         // ext-b should be completely unaffected.
         let heap_b = gc
             .get_heap("ext-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(heap_b.object_count(), 1);
         assert_eq!(heap_b.total_bytes(), 200);
         assert_eq!(heap_b.collection_count(), 0);
@@ -1103,11 +1103,11 @@ mod tests {
     fn collect_all_processes_heaps_in_deterministic_order() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-c".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.register_heap("ext-b".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = gc.collect_all();
         assert_eq!(events.len(), 3);
@@ -1128,40 +1128,40 @@ mod tests {
         fn run_scenario() -> Vec<GcEvent> {
             let mut gc = GcCollector::new(GcConfig::deterministic());
             gc.register_heap("ext-a".into())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             let r = gc
                 .allocate("ext-a", 50)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let a = gc
                 .allocate("ext-a", 30)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let b = gc
                 .allocate("ext-a", 20)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             gc.add_reference("ext-a", r, a)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.add_reference("ext-a", a, b)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.unroot("ext-a", a)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.unroot("ext-a", b)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             gc.collect("ext-a")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             let c = gc
                 .allocate("ext-a", 40)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.unroot("ext-a", c)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.unroot("ext-a", r)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             gc.collect("ext-a")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.events().to_vec()
         }
 
@@ -1174,10 +1174,10 @@ mod tests {
     fn deterministic_mode_uses_fixed_pause_ns() {
         let mut gc = GcCollector::new(GcConfig::deterministic());
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.pause_ns, 1000);
     }
 
@@ -1185,10 +1185,10 @@ mod tests {
     fn non_deterministic_mode_uses_zero_pause_ns() {
         let mut gc = GcCollector::new(GcConfig::default());
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.pause_ns, 0);
     }
 
@@ -1198,13 +1198,13 @@ mod tests {
     fn pressure_check_reports_correct_utilization() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.allocate("ext-a", 750)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let util = gc
             .check_pressure("ext-a", 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!((util - 0.75).abs() < f64::EPSILON);
     }
 
@@ -1215,14 +1215,14 @@ mod tests {
             pressure_threshold_percent: 50,
         });
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         gc.allocate("ext-a", 400)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!gc.should_collect("ext-a", 1000)); // 40% < 50%
 
         gc.allocate("ext-a", 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(gc.should_collect("ext-a", 1000)); // 60% >= 50%
     }
 
@@ -1238,7 +1238,7 @@ mod tests {
     fn allocate_tracked_charges_domain_registry() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut reg = DomainRegistry::new();
         reg.register(
@@ -1246,16 +1246,16 @@ mod tests {
             crate::alloc_domain::LifetimeClass::SessionScoped,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let (obj_id, seq) = gc
             .allocate_tracked("ext-a", 400, &mut reg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(obj_id.as_u64(), 0);
         assert_eq!(seq, 1);
         assert_eq!(
             reg.get(&AllocationDomain::ExtensionHeap)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .budget
                 .used_bytes,
             400
@@ -1266,7 +1266,7 @@ mod tests {
     fn collect_tracked_releases_to_domain_registry() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut reg = DomainRegistry::new();
         reg.register(
@@ -1274,21 +1274,21 @@ mod tests {
             crate::alloc_domain::LifetimeClass::SessionScoped,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let (obj_id, _) = gc
             .allocate_tracked("ext-a", 400, &mut reg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", obj_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = gc
             .collect_tracked("ext-a", &mut reg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.bytes_reclaimed, 400);
         assert_eq!(
             reg.get(&AllocationDomain::ExtensionHeap)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .budget
                 .used_bytes,
             0
@@ -1299,13 +1299,13 @@ mod tests {
     fn collect_tracked_missing_registry_domain_fails_without_mutation() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let obj_id = gc
             .allocate("ext-a", 400)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", obj_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut reg = DomainRegistry::new();
         let result = gc.collect_tracked("ext-a", &mut reg);
@@ -1318,7 +1318,7 @@ mod tests {
 
         let heap = gc
             .get_heap("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(heap.object_count(), 1);
         assert_eq!(heap.total_bytes(), 400);
         assert_eq!(gc.events().len(), 0);
@@ -1329,7 +1329,7 @@ mod tests {
     fn allocate_tracked_rejects_when_budget_exceeded() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut reg = DomainRegistry::new();
         reg.register(
@@ -1337,7 +1337,7 @@ mod tests {
             crate::alloc_domain::LifetimeClass::SessionScoped,
             100,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let result = gc.allocate_tracked("ext-a", 200, &mut reg);
         assert!(matches!(result, Err(GcError::DomainError(_))));
@@ -1450,7 +1450,7 @@ mod tests {
     fn register_duplicate_heap_rejected() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             gc.register_heap("ext-a".into()),
             Err(GcError::DuplicateHeap { .. })
@@ -1461,13 +1461,13 @@ mod tests {
     fn remove_heap_returns_heap_data() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let heap = gc
             .remove_heap("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(heap.extension_id(), "ext-a");
         assert_eq!(heap.object_count(), 1);
         assert_eq!(gc.heap_count(), 0);
@@ -1497,16 +1497,16 @@ mod tests {
     fn events_accumulate_across_collections() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.register_heap("ext-b".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         gc.collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.collect("ext-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(gc.events().len(), 3);
         assert_eq!(gc.event_sequence(), 3);
@@ -1521,21 +1521,21 @@ mod tests {
     fn reroot_prevents_collection() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let obj = gc
             .allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", obj)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.get_heap_mut("ext-a")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .root(obj)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.swept_count, 0);
         assert_eq!(event.marked_count, 1);
     }
@@ -1546,11 +1546,11 @@ mod tests {
     fn collecting_empty_heap_is_noop() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.marked_count, 0);
         assert_eq!(event.swept_count, 0);
         assert_eq!(event.bytes_reclaimed, 0);
@@ -1562,18 +1562,18 @@ mod tests {
     fn collection_count_increments() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         gc.collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             gc.get_heap("ext-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .collection_count(),
             3
         );
@@ -1585,27 +1585,27 @@ mod tests {
     fn total_reclaimed_accumulates() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let a = gc
             .allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let b = gc
             .allocate("ext-a", 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             gc.get_heap("ext-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .total_reclaimed(),
             300
         );
@@ -1617,14 +1617,14 @@ mod tests {
     fn gc_collector_serialization_round_trip() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let obj = gc
             .allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", obj)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&gc).expect("serialize derived Serialize");
         let restored: GcCollector =
@@ -1635,11 +1635,11 @@ mod tests {
         assert_eq!(gc.events().len(), restored.events().len());
         assert_eq!(
             gc.get_heap("ext-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .object_count(),
             restored
                 .get_heap("ext-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .object_count()
         );
     }
@@ -1760,17 +1760,17 @@ mod tests {
     fn allocation_ids_are_monotonically_assigned() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let id1 = gc
             .allocate("ext-a", 10)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = gc
             .allocate("ext-a", 20)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = gc
             .allocate("ext-a", 30)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(id1.as_u64(), 0);
         assert_eq!(id2.as_u64(), 1);
@@ -1818,12 +1818,12 @@ mod tests {
     fn check_pressure_zero_budget_returns_zero() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pressure = gc
             .check_pressure("ext-a", 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // budget=0 with bytes>0 yields infinite pressure (f64::MAX).
         assert!((pressure - f64::MAX).abs() < f64::EPSILON);
     }
@@ -1842,11 +1842,11 @@ mod tests {
     fn iter_heaps_returns_deterministic_alphabetical_order() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-z".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.register_heap("ext-m".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let ids: Vec<&str> = gc.iter_heaps().map(|(id, _)| id).collect();
         assert_eq!(ids, vec!["ext-a", "ext-m", "ext-z"]);
@@ -1885,12 +1885,12 @@ mod tests {
     fn gc_event_serde_round_trip() {
         let mut gc = deterministic_collector();
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.allocate("ext-a", 50)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let decoded: GcEvent = serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1948,13 +1948,13 @@ mod tests {
         fn run_scenario() -> Vec<GcEvent> {
             let mut gc = GcCollector::new(GcConfig::deterministic());
             gc.register_heap("ext-b".into())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.register_heap("ext-a".into())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.allocate("ext-a", 100)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.allocate("ext-b", 200)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.collect_all()
         }
         let r1 = run_scenario();
@@ -1971,13 +1971,13 @@ mod tests {
         let mut gc = deterministic_collector();
         assert_eq!(gc.heap_count(), 0);
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gc.heap_count(), 1);
         gc.register_heap("ext-b".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gc.heap_count(), 2);
         gc.remove_heap("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gc.heap_count(), 1);
     }
 
@@ -2114,10 +2114,10 @@ mod tests {
         let a = heap.allocate(10);
         let b = heap.allocate(20);
         heap.add_reference(a, b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         heap.add_reference(a, b)
-            .expect("serde deserialization should succeed"); // duplicate
-        let obj = heap.get(a).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs"); // duplicate
+        let obj = heap.get(a).expect("operation should succeed for valid inputs");
         assert_eq!(obj.references.len(), 1); // BTreeSet deduplicates
     }
 
@@ -2125,8 +2125,8 @@ mod tests {
     fn extension_heap_root_already_rooted_object() {
         let mut heap = ExtensionHeap::new("ext".into());
         let id = heap.allocate(10); // starts rooted
-        heap.root(id).expect("serde deserialization should succeed"); // re-root is no-op
-        let obj = heap.get(id).expect("serde deserialization should succeed");
+        heap.root(id).expect("operation should succeed for valid inputs"); // re-root is no-op
+        let obj = heap.get(id).expect("operation should succeed for valid inputs");
         assert!(obj.rooted);
     }
 
@@ -2136,9 +2136,9 @@ mod tests {
         let a = heap.allocate(100);
         let b = heap.allocate(200);
         heap.add_reference(a, b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         heap.unroot(b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&heap).expect("serialize derived Serialize");
         let back: ExtensionHeap =
@@ -2176,15 +2176,15 @@ mod tests {
     fn collector_event_sequence_monotonic() {
         let mut gc = GcCollector::new(GcConfig::deterministic());
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.register_heap("ext-b".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let e1 = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let e2 = gc
             .collect("ext-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(e2.sequence > e1.sequence);
     }
 
@@ -2192,9 +2192,9 @@ mod tests {
     fn collect_all_events_have_complete_phase() {
         let mut gc = GcCollector::new(GcConfig::deterministic());
         gc.register_heap("a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.register_heap("b".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = gc.collect_all();
         assert_eq!(events.len(), 2);
         for ev in &events {
@@ -2288,15 +2288,15 @@ mod tests {
     fn self_referencing_object_survives_collection() {
         let mut gc = GcCollector::new(GcConfig::deterministic());
         gc.register_heap("ext".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id = gc
             .allocate("ext", 64)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.add_reference("ext", id, id)
-            .expect("serde deserialization should succeed"); // self-reference
+            .expect("operation should succeed for valid inputs"); // self-reference
         let ev = gc
             .collect("ext")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // rooted + self-referencing: survives collection
         assert_eq!(ev.swept_count, 0);
         assert_eq!(ev.marked_count, 1);
@@ -2321,9 +2321,9 @@ mod tests {
             pressure_threshold_percent: 50,
         });
         gc.register_heap("ext".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.allocate("ext", 50)
-            .expect("serde deserialization should succeed"); // 50 bytes out of budget 100
+            .expect("operation should succeed for valid inputs"); // 50 bytes out of budget 100
         assert!(gc.should_collect("ext", 100)); // 50% == threshold => true
     }
 

@@ -1218,15 +1218,15 @@ fn parse_pin_toml(content: &str) -> io::Result<Test262PinSet> {
         // SAFETY: source_repo is a required field in Test262 pin TOML format
         source_repo: values
             .remove("source_repo")
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
         // SAFETY: es_profile is a required field in Test262 pin TOML format
         es_profile: values
             .remove("es_profile")
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
         // SAFETY: test262_commit is a required field in Test262 pin TOML format
         test262_commit: values
             .remove("test262_commit")
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
     })
 }
 
@@ -2322,7 +2322,7 @@ source_repo = "tc39/test262"
 es_profile = "ES2020"
 test262_commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 "#;
-        let pin = parse_pin_toml(toml).expect("serde deserialization should succeed");
+        let pin = parse_pin_toml(toml).expect("operation should succeed for valid inputs");
         assert_eq!(pin.source_repo, "tc39/test262");
         assert_eq!(pin.es_profile, "ES2020");
         assert_eq!(pin.test262_commit, "a".repeat(40));
@@ -2336,7 +2336,7 @@ source_repo = "tc39/test262" # inline comment
 es_profile = "ES2020"
 test262_commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 "#;
-        let pin = parse_pin_toml(toml).expect("serde deserialization should succeed");
+        let pin = parse_pin_toml(toml).expect("operation should succeed for valid inputs");
         assert_eq!(pin.source_repo, "tc39/test262");
     }
 
@@ -2359,7 +2359,7 @@ pattern = "test/language/module-code/*"
 rationale = "modules not ready"
 normative_clause = "ECMA-262 §16"
 "#;
-        let profile = parse_profile_toml(toml).expect("serde deserialization should succeed");
+        let profile = parse_profile_toml(toml).expect("operation should succeed for valid inputs");
         assert_eq!(profile.includes.len(), 1);
         assert_eq!(profile.excludes.len(), 1);
         assert_eq!(profile.includes[0].pattern, "test/language/*");
@@ -2381,7 +2381,7 @@ tracking_bead = "bd-42"
 expiry_date = "2030-01-01"
 reviewer = "admin"
 "#;
-        let ws = parse_waiver_toml(toml).expect("serde deserialization should succeed");
+        let ws = parse_waiver_toml(toml).expect("operation should succeed for valid inputs");
         assert_eq!(ws.waivers.len(), 1);
         assert_eq!(ws.waivers[0].test_id, "test-001");
         assert_eq!(ws.waivers[0].reviewer, "admin");
@@ -2392,7 +2392,7 @@ reviewer = "admin"
         let toml = r#"
 schema_version = "franken-engine.test262-waiver.v1"
 "#;
-        let ws = parse_waiver_toml(toml).expect("serde deserialization should succeed");
+        let ws = parse_waiver_toml(toml).expect("operation should succeed for valid inputs");
         assert!(ws.waivers.is_empty());
     }
 
@@ -2538,7 +2538,7 @@ reason_code = "harness_gap"
                 &observed,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.blocked);
         assert_eq!(result.summary.passed, 2);
         assert_eq!(result.summary.failed, 0);
@@ -2572,7 +2572,7 @@ reason_code = "harness_gap"
                 &observed,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.blocked);
         assert_eq!(result.summary.passed, 1);
         assert_eq!(result.summary.failed, 1);
@@ -2600,7 +2600,7 @@ reason_code = "harness_gap"
         )];
         let result = runner
             .run(&valid_pin(), &valid_profile(), &ws, &observed, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.blocked);
         assert_eq!(result.summary.waived, 1);
         assert_eq!(result.summary.failed, 0);
@@ -2624,7 +2624,7 @@ reason_code = "harness_gap"
                 &observed,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.blocked);
         assert_eq!(result.summary.timed_out, 1);
     }
@@ -2650,7 +2650,7 @@ reason_code = "harness_gap"
         )];
         let result = runner
             .run(&valid_pin(), &valid_profile(), &ws, &observed, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.blocked);
         assert_eq!(result.summary.waived, 1);
         assert_eq!(result.summary.timed_out, 0);
@@ -2674,7 +2674,7 @@ reason_code = "harness_gap"
                 &observed,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.blocked);
         assert_eq!(result.summary.crashed, 1);
     }
@@ -2700,7 +2700,7 @@ reason_code = "harness_gap"
         )];
         let result = runner
             .run(&valid_pin(), &valid_profile(), &ws, &observed, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.blocked);
         assert_eq!(result.summary.waived, 1);
     }
@@ -2796,7 +2796,7 @@ reason_code = "harness_gap"
                 &observed,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.summary.total_profile_tests, 0);
         assert_eq!(result.summary.passed, 0);
         assert!(!result.blocked);
@@ -2820,7 +2820,7 @@ reason_code = "harness_gap"
                 &observed,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = runner
             .run(
                 &valid_pin(),
@@ -2829,7 +2829,7 @@ reason_code = "harness_gap"
                 &observed,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.run_id, r2.run_id);
     }
 
@@ -2851,7 +2851,7 @@ reason_code = "harness_gap"
                 &observed,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.logs.is_empty());
         let log = &result.logs[0];
         assert!(!log.trace_id.is_empty());
@@ -2879,7 +2879,7 @@ reason_code = "harness_gap"
                 &[obs],
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Pass outcome has no error_code from the gate logic, so the observed error_code is used
         assert_eq!(result.logs[0].error_code.as_deref(), Some("ERR-CUSTOM"));
     }
@@ -2910,13 +2910,13 @@ reason_code = "harness_gap"
                 &observed,
                 Some(&previous_hwm),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.blocked);
         let warning = result
             .summary
             .pass_regression_warning
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(warning.previous_high_water_mark, 10);
         assert_eq!(warning.current_pass_count, 1);
         assert!(warning.acknowledgement_required);
@@ -2947,7 +2947,7 @@ reason_code = "harness_gap"
                 &observed,
                 Some(&previous_hwm),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Acknowledged, so not blocked from regression
         assert!(!result.blocked);
     }
@@ -2983,7 +2983,7 @@ reason_code = "harness_gap"
                 &observed,
                 Some(&previous_hwm),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.blocked);
         assert!(result.summary.pass_regression_warning.is_none());
     }
@@ -3002,10 +3002,10 @@ reason_code = "harness_gap"
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("hwm.json");
         hwm.write_json(&path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let loaded = Test262HighWaterMark::load_json(&path)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(loaded, hwm);
         let _ = fs::remove_dir_all(&dir);
     }
@@ -3015,7 +3015,7 @@ reason_code = "harness_gap"
         let path = std::env::temp_dir().join("franken_t262_hwm_nonexistent.json");
         let _ = fs::remove_file(&path);
         let loaded =
-            Test262HighWaterMark::load_json(&path).expect("serde deserialization should succeed");
+            Test262HighWaterMark::load_json(&path).expect("operation should succeed for valid inputs");
         assert!(loaded.is_none());
     }
 
@@ -3039,7 +3039,7 @@ reason_code = "harness_gap"
                 &observed,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let hwm = next_high_water_mark(&result, None);
 
         let dir = std::env::temp_dir().join("franken_t262_evidence_test");
@@ -3047,7 +3047,7 @@ reason_code = "harness_gap"
         let collector = Test262EvidenceCollector::new(&dir).expect("constructor with valid inputs");
         let artifacts = collector
             .collect(&result, &hwm)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(artifacts.run_manifest_path.exists());
         assert!(artifacts.evidence_path.exists());
@@ -3055,7 +3055,7 @@ reason_code = "harness_gap"
 
         // Evidence JSONL should have summary + log lines
         let evidence = fs::read_to_string(&artifacts.evidence_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lines: Vec<&str> = evidence.lines().collect();
         assert!(lines.len() >= 2); // summary + at least 1 log
 
@@ -3159,7 +3159,7 @@ reason_code = "harness_gap"
     #[test]
     fn parse_quoted_valid() {
         assert_eq!(
-            parse_quoted(1, "\"hello\"").expect("serde deserialization should succeed"),
+            parse_quoted(1, "\"hello\"").expect("operation should succeed for valid inputs"),
             "hello"
         );
     }
@@ -3167,7 +3167,7 @@ reason_code = "harness_gap"
     #[test]
     fn parse_quoted_with_whitespace() {
         assert_eq!(
-            parse_quoted(1, "  \"hello\"  ").expect("serde deserialization should succeed"),
+            parse_quoted(1, "  \"hello\"  ").expect("operation should succeed for valid inputs"),
             "hello"
         );
     }
@@ -3185,7 +3185,7 @@ reason_code = "harness_gap"
     #[test]
     fn parse_quoted_empty_string_ok() {
         assert_eq!(
-            parse_quoted(1, "\"\"").expect("serde deserialization should succeed"),
+            parse_quoted(1, "\"\"").expect("operation should succeed for valid inputs"),
             ""
         );
     }
@@ -3200,7 +3200,7 @@ reason_code = "harness_gap"
     #[test]
     fn parse_key_value_valid() {
         let (k, v) =
-            parse_key_value(1, "name = \"value\"").expect("serde deserialization should succeed");
+            parse_key_value(1, "name = \"value\"").expect("operation should succeed for valid inputs");
         assert_eq!(k, "name");
         assert_eq!(v, "value");
     }
@@ -3217,9 +3217,9 @@ reason_code = "harness_gap"
         let dir = std::env::temp_dir().join("franken_t262_write_atomic");
         let _ = fs::create_dir_all(&dir);
         let path = dir.join("test_atomic.txt");
-        write_atomic(&path, b"hello world").expect("serde deserialization should succeed");
+        write_atomic(&path, b"hello world").expect("operation should succeed for valid inputs");
         assert_eq!(
-            fs::read_to_string(&path).expect("serde deserialization should succeed"),
+            fs::read_to_string(&path).expect("operation should succeed for valid inputs"),
             "hello world"
         );
         let _ = fs::remove_dir_all(&dir);
@@ -3300,7 +3300,7 @@ pattern = "test/built-ins/*"
 rationale = "built-in tests"
 normative_clause = "§18"
 "#;
-        let profile = parse_profile_toml(toml).expect("serde deserialization should succeed");
+        let profile = parse_profile_toml(toml).expect("operation should succeed for valid inputs");
         assert_eq!(profile.includes.len(), 2);
         assert_eq!(profile.includes[1].pattern, "test/built-ins/*");
     }
@@ -3328,7 +3328,7 @@ tracking_bead = "bd-2"
 expiry_date = "2030-06-01"
 reviewer = "dev"
 "#;
-        let ws = parse_waiver_toml(toml).expect("serde deserialization should succeed");
+        let ws = parse_waiver_toml(toml).expect("operation should succeed for valid inputs");
         assert_eq!(ws.waivers.len(), 2);
         assert_eq!(
             ws.waivers[1].reason_code,
@@ -3372,7 +3372,7 @@ unknown_field = "value"
     #[test]
     fn canonical_json_bytes_round_trip() {
         let pin = valid_pin();
-        let bytes = canonical_json_bytes(&pin).expect("serde deserialization should succeed");
+        let bytes = canonical_json_bytes(&pin).expect("operation should succeed for valid inputs");
         let back: Test262PinSet =
             serde_json::from_slice(&bytes).expect("deserialize known-valid JSON");
         assert_eq!(back, pin);

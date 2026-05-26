@@ -1407,7 +1407,7 @@ mod tests {
             *b = (i as u8).wrapping_mul(7).wrapping_add(3);
         }
         // SAFETY: Test helper with fixed 32-byte array should produce valid SigningKey
-        SigningKey::from_bytes(bytes).expect("serde deserialization should succeed")
+        SigningKey::from_bytes(bytes).expect("operation should succeed for valid inputs")
     }
 
     fn test_verification_key_from(sk: &SigningKey) -> VerificationKey {
@@ -1420,7 +1420,7 @@ mod tests {
             *b = (i as u8).wrapping_mul(13).wrapping_add(17);
         }
         // SAFETY: Test helper with fixed 32-byte array should produce valid SigningKey
-        SigningKey::from_bytes(bytes).expect("serde deserialization should succeed")
+        SigningKey::from_bytes(bytes).expect("operation should succeed for valid inputs")
     }
 
     fn test_build_descriptor() -> BuildDescriptor {
@@ -1500,10 +1500,10 @@ mod tests {
         // SAFETY: Test setup with valid organization name and verification key should succeed
         let pub_id = reg
             .register_publisher("TestOrg", vk.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test setup with valid publisher ID and scope should succeed
         reg.claim_scope(pub_id.clone(), "testorg")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         (reg, pub_id, sk, vk)
     }
 
@@ -1529,7 +1529,7 @@ mod tests {
         let result = reg.register_publisher("MyPublisher", vk);
         assert!(result.is_ok());
         // SAFETY: Just verified result.is_ok() above
-        let pub_id = result.expect("serde deserialization should succeed");
+        let pub_id = result.expect("operation should succeed for valid inputs");
         assert!(reg.is_publisher_active(&pub_id));
         assert_eq!(reg.publisher_count(), 1);
     }
@@ -1542,19 +1542,19 @@ mod tests {
         // SAFETY: Test setup with valid organization and verification key should succeed
         let pub_id = reg
             .register_publisher("Org", vk)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reg.is_publisher_active(&pub_id));
 
         reg.advance_tick(DeterministicTimestamp(10));
         // SAFETY: Test revocation of active publisher with valid reason should succeed
         reg.revoke_publisher(pub_id.clone(), "compromised key")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!reg.is_publisher_active(&pub_id));
 
         // SAFETY: Test retrieval of revoked publisher should succeed as publisher still exists
         let p = reg
             .get_publisher(&pub_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(p.revoked);
         assert_eq!(p.revoked_at, Some(DeterministicTimestamp(10)));
         assert_eq!(p.revocation_reason.as_deref(), Some("compromised key"));
@@ -1591,7 +1591,7 @@ mod tests {
         // SAFETY: Test setup with valid second organization and verification key should succeed
         let pub_id2 = reg
             .register_publisher("OtherOrg", vk2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = reg.claim_scope(pub_id2, "testorg");
         assert!(matches!(result, Err(RegistryError::ScopeNotOwned { .. })));
     }
@@ -1614,7 +1614,7 @@ mod tests {
         let (mut reg, pub_id, _, _) = setup_registry_with_publisher();
         // SAFETY: Test revocation of active publisher with valid reason should succeed
         reg.revoke_publisher(pub_id.clone(), "test")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = reg.claim_scope(pub_id, "newscope");
         assert!(matches!(
             result,
@@ -1632,11 +1632,11 @@ mod tests {
         let version = PackageVersion::new(1, 0, 0);
         let manifest = build_manifest("testorg", "weather-ext", version, &pub_id, &vk);
         let pkg_id = sign_and_publish(&mut reg, &manifest, &sk)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reg.package_count(), 1);
         let pkg = reg
             .get_package("testorg", "weather-ext", version)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pkg.package_id, pkg_id);
         assert!(!pkg.revoked);
     }
@@ -1646,7 +1646,7 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let version = PackageVersion::new(1, 0, 0);
         let manifest = build_manifest("testorg", "weather-ext", version, &pub_id, &vk);
-        sign_and_publish(&mut reg, &manifest, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &manifest, &sk).expect("operation should succeed for valid inputs");
         let result = sign_and_publish(&mut reg, &manifest, &sk);
         assert!(matches!(
             result,
@@ -1667,7 +1667,7 @@ mod tests {
     fn publish_revoked_publisher_fails() {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         reg.revoke_publisher(pub_id.clone(), "compromised")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let version = PackageVersion::new(1, 0, 0);
         let manifest = build_manifest("testorg", "ext", version, &pub_id, &vk);
         let result = sign_and_publish(&mut reg, &manifest, &sk);
@@ -1720,8 +1720,8 @@ mod tests {
         let v2 = PackageVersion::new(1, 1, 0);
         let m1 = build_manifest("testorg", "ext", v1, &pub_id, &vk);
         let m2 = build_manifest("testorg", "ext", v2, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m1, &sk).expect("serde deserialization should succeed");
-        sign_and_publish(&mut reg, &m2, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m1, &sk).expect("operation should succeed for valid inputs");
+        sign_and_publish(&mut reg, &m2, &sk).expect("operation should succeed for valid inputs");
 
         assert!(reg.get_package("testorg", "ext", v1).is_some());
         assert!(reg.get_package("testorg", "ext", v2).is_some());
@@ -1737,8 +1737,8 @@ mod tests {
         let v1 = PackageVersion::new(1, 0, 0);
         let m1 = build_manifest("testorg", "ext-a", v1, &pub_id, &vk);
         let m2 = build_manifest("testorg", "ext-b", v1, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m1, &sk).expect("serde deserialization should succeed");
-        sign_and_publish(&mut reg, &m2, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m1, &sk).expect("operation should succeed for valid inputs");
+        sign_and_publish(&mut reg, &m2, &sk).expect("operation should succeed for valid inputs");
 
         // Filter by scope.
         let results = reg.search(&PackageQuery {
@@ -1768,9 +1768,9 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v1 = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v1, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
         reg.revoke_package("testorg", "ext", v1, "bad")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = reg.search(&PackageQuery::default());
         assert!(results.is_empty());
@@ -1788,7 +1788,7 @@ mod tests {
         for patch in 0..3 {
             let v = PackageVersion::new(1, 0, patch);
             let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-            sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+            sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
         }
         let versions = reg.list_versions("testorg", "ext");
         assert_eq!(versions.len(), 3);
@@ -1803,11 +1803,11 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
 
         let result = reg
             .verify_package("testorg", "ext", v)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.valid);
         assert!(result.signature_valid);
         assert!(result.structure_valid);
@@ -1822,13 +1822,13 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
         reg.revoke_package("testorg", "ext", v, "vuln")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = reg
             .verify_package("testorg", "ext", v)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.valid);
         assert!(!result.package_active);
         assert!(result.signature_valid); // Signature is still valid.
@@ -1839,13 +1839,13 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
         reg.revoke_publisher(pub_id.clone(), "compromised")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = reg
             .verify_package("testorg", "ext", v)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.valid);
         assert!(!result.publisher_active);
     }
@@ -1867,16 +1867,16 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
 
         reg.advance_tick(DeterministicTimestamp(200));
         reg.revoke_package("testorg", "ext", v, "supply chain compromise")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(reg.is_package_revoked("testorg", "ext", v));
         let pkg = reg
             .get_package("testorg", "ext", v)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(pkg.revoked);
         assert_eq!(pkg.revoked_at, Some(DeterministicTimestamp(200)));
     }
@@ -1895,10 +1895,10 @@ mod tests {
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
         let pkg_id =
-            sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+            sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
 
         reg.revoke_package_by_id(pkg_id, "bad")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reg.is_package_revoked("testorg", "ext", v));
     }
 
@@ -1918,12 +1918,12 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
 
         // Package not directly revoked, but publisher is revoked.
         assert!(!reg.is_package_revoked("testorg", "ext", v));
         reg.revoke_publisher(pub_id.clone(), "key compromise")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reg.is_package_revoked("testorg", "ext", v));
     }
 
@@ -1933,7 +1933,7 @@ mod tests {
         for i in 0..3 {
             let v = PackageVersion::new(1, 0, i);
             let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-            sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+            sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
         }
         let affected = reg.packages_affected_by_publisher_revocation(&pub_id);
         assert_eq!(affected.len(), 3);
@@ -1950,11 +1950,11 @@ mod tests {
 
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
         reg.verify_package("testorg", "ext", v)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.revoke_package("testorg", "ext", v, "test")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should have events for: register_publisher, claim_scope, publish,
         // verify, revoke = at least 5.
@@ -2072,7 +2072,7 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let restored: ExtensionRegistry =
@@ -2086,10 +2086,10 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
         let pkg = reg
             .get_package("testorg", "ext", v)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(pkg).expect("serialize derived Serialize");
         let restored: SignedPackage =
@@ -2519,7 +2519,7 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
 
         let results = reg.search(&PackageQuery {
             publisher_id: Some(pub_id),
@@ -2540,7 +2540,7 @@ mod tests {
         for i in 0..5 {
             let v = PackageVersion::new(1, 0, i);
             let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-            sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+            sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
         }
         let results = reg.search(&PackageQuery {
             limit: 2,
@@ -2555,10 +2555,10 @@ mod tests {
         let v = PackageVersion::new(1, 0, 0);
 
         let later = build_manifest("testorg", "zz-top", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &later, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &later, &sk).expect("operation should succeed for valid inputs");
 
         let earlier = build_manifest("testorg", "aa-first", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &earlier, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &earlier, &sk).expect("operation should succeed for valid inputs");
 
         let results = reg.search(&PackageQuery {
             limit: 1,
@@ -2575,9 +2575,9 @@ mod tests {
         let v = PackageVersion::new(1, 0, 0);
         let manifest = build_manifest("testorg", "ext", v, &pub_id, &rogue_vk);
         let package_id = SignedPackage::derive_package_id(&manifest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let signature = sign_preimage(&sk, &manifest.unsigned_bytes())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         reg.package_index.push((
             package_id.clone(),
@@ -2599,7 +2599,7 @@ mod tests {
 
         let result = reg
             .verify_package("testorg", "ext", v)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.valid);
         // Signature is verified against the REGISTRY key (not the manifest's rogue key),
         // so signature_valid is true because we signed with the matching sk.
@@ -2614,7 +2614,7 @@ mod tests {
         let last_event = reg
             .export_audit_log()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last_event.event_type, RegistryEventType::VerificationFailed);
         assert_eq!(last_event.outcome, EventOutcome::Denied);
         assert_eq!(last_event.package_id, Some(package_id));
@@ -2631,9 +2631,9 @@ mod tests {
         let v = PackageVersion::new(1, 0, 0);
         let manifest = build_manifest("testorg", "ext", v, &fake_pub_id, &vk);
         let package_id = SignedPackage::derive_package_id(&manifest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let signature = sign_preimage(&sk, &manifest.unsigned_bytes())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         reg.package_index.push((
             package_id.clone(),
@@ -2655,7 +2655,7 @@ mod tests {
 
         let result = reg
             .verify_package("testorg", "ext", v)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.valid);
         assert!(!result.signature_valid);
         assert!(!result.publisher_active);
@@ -2681,7 +2681,7 @@ mod tests {
         let last_event = reg
             .export_audit_log()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last_event.event_type, RegistryEventType::VerificationFailed);
         assert_eq!(last_event.outcome, EventOutcome::Denied);
         assert_eq!(last_event.publisher_id, Some(fake_pub_id));
@@ -2693,11 +2693,11 @@ mod tests {
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
         let pkg_id =
-            sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+            sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
 
         let pkg = reg
             .get_package_by_id(&pkg_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pkg.manifest.name, "ext");
 
         assert!(reg.get_package_by_id(&EngineObjectId([77; 32])).is_none());
@@ -2783,7 +2783,7 @@ mod tests {
         let mut reg = ExtensionRegistry::new(DeterministicTimestamp(100));
         let pub_id = reg
             .register_publisher("TestOrg", vk.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let identity = PublisherIdentity {
             id: pub_id,
             display_name: "TestOrg".to_string(),
@@ -2811,7 +2811,7 @@ mod tests {
         let mut reg = ExtensionRegistry::new(DeterministicTimestamp(100));
         let pub_id = reg
             .register_publisher("Revoked", vk.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let identity = PublisherIdentity {
             id: pub_id,
             display_name: "Revoked".to_string(),
@@ -2836,7 +2836,7 @@ mod tests {
         let mut reg = ExtensionRegistry::new(DeterministicTimestamp(100));
         let pub_id = reg
             .register_publisher("TestOrg", vk.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let manifest = build_manifest(
             "testorg",
             "weather-ext",
@@ -2882,9 +2882,9 @@ mod tests {
         let (_, pub_id, _, vk) = setup_registry_with_publisher();
         let m = build_manifest("testorg", "ext", PackageVersion::new(1, 0, 0), &pub_id, &vk);
         let id1 =
-            SignedPackage::derive_package_id(&m).expect("serde deserialization should succeed");
+            SignedPackage::derive_package_id(&m).expect("operation should succeed for valid inputs");
         let id2 =
-            SignedPackage::derive_package_id(&m).expect("serde deserialization should succeed");
+            SignedPackage::derive_package_id(&m).expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2, "same manifest must produce same package ID");
     }
 
@@ -2914,8 +2914,8 @@ mod tests {
         let v = PackageVersion::new(1, 0, 0);
         let m_a = build_manifest("testorg", "ext-a", v, &pub_id, &vk);
         let m_b = build_manifest("testorg", "ext-b", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m_a, &sk).expect("serde deserialization should succeed");
-        sign_and_publish(&mut reg, &m_b, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m_a, &sk).expect("operation should succeed for valid inputs");
+        sign_and_publish(&mut reg, &m_b, &sk).expect("operation should succeed for valid inputs");
 
         let results = reg.search(&PackageQuery {
             scope: Some("testorg".to_string()),
@@ -2944,13 +2944,13 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let v = PackageVersion::new(1, 0, 0);
         let m = build_manifest("testorg", "ext", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &m, &sk).expect("serde deserialization should succeed");
+        sign_and_publish(&mut reg, &m, &sk).expect("operation should succeed for valid inputs");
 
         reg.revoke_package("testorg", "ext", v, "critical vulnerability CVE-2026-0001")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pkg = reg
             .get_package("testorg", "ext", v)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             pkg.revocation_reason.as_deref(),
             Some("critical vulnerability CVE-2026-0001")
@@ -2963,11 +2963,11 @@ mod tests {
 
         // Register publisher with multiple scopes
         reg.claim_scope(pub_id.clone(), "scope1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.claim_scope(pub_id.clone(), "scope2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.claim_scope(pub_id.clone(), "scope3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let test_scopes = ["scope1", "scope2", "scope4", "scope5"];
 

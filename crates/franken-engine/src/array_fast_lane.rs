@@ -580,19 +580,19 @@ impl TransitionReceipt {
         // SAFETY: FastLaneState derives Serialize and has no non-serializable fields
         data.extend_from_slice(
             serde_json::to_string(&transition.from)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         // SAFETY: FastLaneState derives Serialize and has no non-serializable fields
         data.extend_from_slice(
             serde_json::to_string(&transition.to)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(
             // SAFETY: StateTransitionReason derives Serialize and has no non-serializable fields
             serde_json::to_string(&transition.reason)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(&transition.trigger_offset.to_le_bytes());
@@ -1287,7 +1287,7 @@ mod tests {
         // SAFETY: Array arr-1 was just registered above, so get_array will succeed
         let lane = engine
             .get_array("arr-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lane.element_kind, ElementKind::PackedDouble);
     }
 
@@ -1305,7 +1305,7 @@ mod tests {
         // SAFETY: Array arr-1 was registered at start of test, so get_array will succeed
         let lane = engine
             .get_array("arr-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!lane.fast_lane_active);
     }
 
@@ -1339,7 +1339,7 @@ mod tests {
         assert!(
             !engine
                 .get_array("arr-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .fast_lane_active
         );
     }
@@ -1352,7 +1352,7 @@ mod tests {
         assert!(engine.record_store("arr-1"));
         let lane = engine
             .get_array("arr-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lane.access_count, 1);
         assert_eq!(lane.store_count, 1);
     }
@@ -1373,7 +1373,7 @@ mod tests {
 
         let lane = engine
             .get_array("arr-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!lane.fast_lane_active);
     }
 
@@ -1385,7 +1385,7 @@ mod tests {
         assert!(engine.record_bounds_elim("ta-1"));
         let ta = engine
             .get_typed_array("ta-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ta.access_count, 1);
         assert_eq!(ta.bounds_check_eliminated, 1);
     }
@@ -1397,7 +1397,7 @@ mod tests {
         assert!(engine.detach_typed_array("ta-1"));
         let ta = engine
             .get_typed_array("ta-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(ta.buffer_detached);
         assert!(!ta.fast_lane_active);
     }
@@ -1412,14 +1412,14 @@ mod tests {
         assert_eq!(
             by_kind
                 .get(&ElementKind::PackedSmi)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             2
         );
         assert_eq!(
             by_kind
                 .get(&ElementKind::PackedDouble)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );

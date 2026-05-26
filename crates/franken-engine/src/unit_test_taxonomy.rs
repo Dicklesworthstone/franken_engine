@@ -679,7 +679,7 @@ mod tests {
         // SAFETY: UnitTestClass derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&UnitTestClass::FaultInjection)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"fault_injection\"");
     }
 

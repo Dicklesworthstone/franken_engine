@@ -560,7 +560,7 @@ impl BifurcationBoundaryScanner {
                 buf.extend_from_slice(&bp.critical_value_millionths.to_le_bytes());
                 buf.extend_from_slice(
                     serde_json::to_string(&bp.bifurcation_type)
-                        .expect("serde deserialization should succeed")
+                        .expect("serialization should succeed")
                         .as_bytes(),
                 );
             }
@@ -576,7 +576,7 @@ impl BifurcationBoundaryScanner {
                 buf.extend_from_slice(pa.parameter_id.as_bytes());
                 buf.extend_from_slice(
                     serde_json::to_string(&pa.lane_action)
-                        .expect("serde deserialization should succeed")
+                        .expect("serialization should succeed")
                         .as_bytes(),
                 );
             }
@@ -925,7 +925,7 @@ mod tests {
             make_envelope("calibration-1", 200_000, 800_000, 500_000),
         ];
         BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     // ── Constructor tests ────────────────────────────────────────
@@ -1060,7 +1060,7 @@ mod tests {
         let mut scanner = default_scanner();
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.schema_version, BIFURCATION_SCHEMA_VERSION);
         assert_eq!(result.parameters_scanned, 2);
         assert!(result.stability_score_millionths > 0);
@@ -1072,11 +1072,11 @@ mod tests {
         assert_eq!(scanner.scan_count(), 0);
         scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(scanner.scan_count(), 1);
         scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(scanner.scan_count(), 2);
     }
 
@@ -1087,11 +1087,11 @@ mod tests {
         let envelopes = vec![make_envelope("threshold", 100_000, 900_000, 500_000)];
         let mut scanner =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should have a warning active
         assert!(result.has_active_warnings());
     }
@@ -1102,11 +1102,11 @@ mod tests {
         let envelopes = vec![make_envelope("threshold", 100_000, 900_000, 500_000)];
         let mut scanner =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.has_preemptive_actions());
     }
 
@@ -1116,11 +1116,11 @@ mod tests {
         let envelopes = vec![make_envelope("threshold", 100_000, 900_000, 500_000)];
         let mut scanner =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.has_active_warnings());
         assert!(!result.has_preemptive_actions());
     }
@@ -1130,7 +1130,7 @@ mod tests {
         let mut scanner = default_scanner();
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Scanning should find regime transitions
         assert!(!result.bifurcation_points.is_empty());
     }
@@ -1140,7 +1140,7 @@ mod tests {
         let mut scanner = default_scanner();
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(result.artifact_hash.as_bytes(), &[0u8; 32]);
     }
 
@@ -1149,7 +1149,7 @@ mod tests {
         let mut scanner = default_scanner();
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.regime_summary.is_empty());
     }
 
@@ -1174,7 +1174,7 @@ mod tests {
         // Scan should use updated value
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.parameters_scanned > 0);
     }
 
@@ -1192,13 +1192,13 @@ mod tests {
         }
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // With enough observations, warning should have trend computed
         let warning = result
             .warnings
             .iter()
             .find(|w| w.parameter_id == "threshold-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(warning.observation_count >= 10);
     }
 
@@ -1213,17 +1213,17 @@ mod tests {
         let params = vec![make_param("x", 500_000)];
         let envelopes = vec![make_envelope("x", 0, MILLION, 500_000)];
         let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!scanner.stability_maps().is_empty());
 
         let map = scanner
             .stability_maps()
             .get("x")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!map.is_empty());
     }
 
@@ -1232,7 +1232,7 @@ mod tests {
         let mut scanner = default_scanner();
         scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(scanner.stability_maps().is_empty());
     }
 
@@ -1244,11 +1244,11 @@ mod tests {
         let envelopes = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut scanner =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.has_preemptive_actions());
 
         let action = &result.preemptive_actions[0];
@@ -1262,11 +1262,11 @@ mod tests {
         let envelopes = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut scanner =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if result.has_preemptive_actions() {
             let action = &result.preemptive_actions[0];
             // Should be Demote or FallbackSafe depending on proximity
@@ -1291,10 +1291,10 @@ mod tests {
         ];
         let mut scanner =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_stable());
     }
 
@@ -1304,11 +1304,11 @@ mod tests {
         let envelopes = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut scanner =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.is_stable());
     }
 
@@ -1318,11 +1318,11 @@ mod tests {
         let envelopes = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut scanner =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let critical = result.critical_warning_count();
         // May or may not be critical depending on exact proximity calculation
         assert!(critical <= 1);
@@ -1344,7 +1344,7 @@ mod tests {
         let mut scanner = default_scanner();
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: ScanResult = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.artifact_hash, back.artifact_hash);
@@ -1522,12 +1522,12 @@ mod tests {
             params.clone(),
             envelopes.clone(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut s2 = BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
-        let r1 = s1.scan().expect("serde deserialization should succeed");
-        let r2 = s2.scan().expect("serde deserialization should succeed");
+        let r1 = s1.scan().expect("operation should succeed for valid inputs");
+        let r2 = s2.scan().expect("operation should succeed for valid inputs");
 
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
         assert_eq!(r1.stability_score_millionths, r2.stability_score_millionths);
@@ -1749,7 +1749,7 @@ mod tests {
         let mut scanner = default_scanner();
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let j = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(j.contains("\"schema_version\""));
         assert!(j.contains("\"stability_score_millionths\""));
@@ -2004,7 +2004,7 @@ mod tests {
         // Scan still works
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.parameters_scanned, 2);
     }
 
@@ -2022,10 +2022,10 @@ mod tests {
         let envelopes = vec![make_envelope("monitored", 100_000, 900_000, 500_000)];
         let mut scanner =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let result = scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.parameters_scanned, 2);
         assert!(result.regime_summary.contains_key("unmonitored"));
     }
@@ -2043,14 +2043,14 @@ mod tests {
         let params = vec![make_param("x", 500_000)];
         let envelopes = vec![make_envelope("x", 0, MILLION, 500_000)];
         let mut scanner = BifurcationBoundaryScanner::new(config, params, envelopes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scanner
             .scan()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let map = scanner
             .stability_maps()
             .get("x")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Entries should be in ascending order of value_millionths
         for w in map.windows(2) {
             assert!(w[0].value_millionths <= w[1].value_millionths);
@@ -2068,11 +2068,11 @@ mod tests {
         let envs = vec![make_envelope("x", 100_000, 900_000, 500_000)];
         let mut sa =
             BifurcationBoundaryScanner::new(ScannerConfig::default(), params_a, envs.clone())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let mut sb = BifurcationBoundaryScanner::new(ScannerConfig::default(), params_b, envs)
-            .expect("serde deserialization should succeed");
-        let ra = sa.scan().expect("serde deserialization should succeed");
-        let rb = sb.scan().expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        let ra = sa.scan().expect("operation should succeed for valid inputs");
+        let rb = sb.scan().expect("operation should succeed for valid inputs");
         // Different parameter states should produce different artifact hashes
         assert_ne!(ra.artifact_hash, rb.artifact_hash);
     }

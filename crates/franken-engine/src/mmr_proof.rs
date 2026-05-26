@@ -755,11 +755,11 @@ mod tests {
         // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root1 = build_mmr(10)
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root2 = build_mmr(10)
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(root1, root2);
     }
 
@@ -768,12 +768,12 @@ mod tests {
         // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root3 = build_mmr(3)
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let root4 = build_mmr(4)
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(root3, root4);
     }
 
@@ -783,7 +783,7 @@ mod tests {
         // SAFETY: MMR with 1 element has valid structure, root_hash should succeed
         assert_eq!(
             mmr.root_hash()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             leaf_hash(0)
         );
     }
@@ -824,11 +824,11 @@ mod tests {
         // SAFETY: MMR with 1 element has valid leaf at index 0, inclusion_proof should succeed
         let proof = mmr
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(proof.proof_type, ProofType::Inclusion);
         assert_eq!(proof.marker_index, 0);
         // SAFETY: Valid proof from inclusion_proof, verify_inclusion should succeed
-        verify_inclusion(&leaf_hash(0), 0, &proof).expect("serde deserialization should succeed");
+        verify_inclusion(&leaf_hash(0), 0, &proof).expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -838,10 +838,10 @@ mod tests {
             // SAFETY: MMR with 2 elements has valid leaf at index i, inclusion_proof should succeed
             let proof = mmr
                 .inclusion_proof(i)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Valid proof from inclusion_proof, verify_inclusion should succeed
             verify_inclusion(&leaf_hash(i), i, &proof)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
     }
 
@@ -852,10 +852,10 @@ mod tests {
             // SAFETY: MMR with 8 elements has valid leaf at index i, inclusion_proof should succeed
             let proof = mmr
                 .inclusion_proof(i)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Valid proof from inclusion_proof, verify_inclusion should succeed
             verify_inclusion(&leaf_hash(i), i, &proof)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
     }
 
@@ -867,7 +867,7 @@ mod tests {
                 // SAFETY: MMR with n elements has valid leaf at index i, inclusion_proof should succeed
                 let proof = mmr
                     .inclusion_proof(i)
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
                 // SAFETY: Test-only panic to validate MMR inclusion proof verification
                 // expects all proofs to verify successfully in consistency test
                 verify_inclusion(&leaf_hash(i), i, &proof)
@@ -890,7 +890,7 @@ mod tests {
         let mmr = build_mmr(8);
         let proof = mmr
             .inclusion_proof(3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let wrong_hash = leaf_hash(999);
         assert!(verify_inclusion(&wrong_hash, 3, &proof).is_err());
     }
@@ -900,7 +900,7 @@ mod tests {
         let mmr = build_mmr(8);
         let mut proof = mmr
             .inclusion_proof(3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if !proof.proof_hashes.is_empty() {
             proof.proof_hashes[0] = ContentHash([0xff; 32]);
         }
@@ -915,13 +915,13 @@ mod tests {
         // SAFETY: MMR with 8 elements has valid structure, root_hash should succeed
         let old_root = mmr
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: MMR consistency proof for same length should succeed
         let proof = mmr
             .consistency_proof(8)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Valid proof from consistency_proof, verify_consistency should succeed
-        verify_consistency(&old_root, &proof).expect("serde deserialization should succeed");
+        verify_consistency(&old_root, &proof).expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -930,15 +930,15 @@ mod tests {
         // SAFETY: MMR with 4 elements has valid structure, root_hash should succeed
         let old_root = old_mmr
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let new_mmr = build_mmr(8);
         // SAFETY: MMR with 8 elements has valid prefix of 4, consistency_proof should succeed
         let proof = new_mmr
             .consistency_proof(4)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Valid proof from consistency_proof, verify_consistency should succeed
-        verify_consistency(&old_root, &proof).expect("serde deserialization should succeed");
+        verify_consistency(&old_root, &proof).expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -946,11 +946,11 @@ mod tests {
         for (old_n, new_n) in [(3, 7), (5, 10), (1, 4), (6, 13)] {
             let old_root = build_mmr(old_n)
                 .root_hash()
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let new_mmr = build_mmr(new_n);
             let proof = new_mmr
                 .consistency_proof(old_n)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Test validates MMR consistency proof verification succeeds
             verify_consistency(&old_root, &proof)
                 .unwrap_or_else(|e| panic!("old={old_n}, new={new_n}: {e}"));
@@ -962,7 +962,7 @@ mod tests {
         let new_mmr = build_mmr(8);
         let proof = new_mmr
             .consistency_proof(4)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let wrong_root = ContentHash([0xaa; 32]);
         assert!(verify_consistency(&wrong_root, &proof).is_err());
     }
@@ -993,7 +993,7 @@ mod tests {
         let mmr = build_mmr(1024);
         let proof = mmr
             .inclusion_proof(500)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // log2(1024) = 10, plus a few for peak bagging.
         assert!(
             proof.proof_hashes.len() <= 15,
@@ -1010,7 +1010,7 @@ mod tests {
         // SAFETY: MMR with 8 elements has valid leaf at index 3, inclusion_proof should succeed
         let proof = mmr
             .inclusion_proof(3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
@@ -1065,10 +1065,10 @@ mod tests {
     fn mmr_construction_is_deterministic() {
         let root1 = build_mmr(100)
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let root2 = build_mmr(100)
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(root1, root2);
     }
 
@@ -1078,10 +1078,10 @@ mod tests {
         let mmr2 = build_mmr(20);
         let proof1 = mmr1
             .inclusion_proof(7)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let proof2 = mmr2
             .inclusion_proof(7)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(proof1, proof2);
     }
 
@@ -1200,7 +1200,7 @@ mod tests {
         // SAFETY: MMR with 8 elements has valid leaf at index 4, inclusion_proof should succeed
         let proof = mmr
             .inclusion_proof(4)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json1 = serde_json::to_string(&proof).expect("serialize derived Serialize");
@@ -1260,7 +1260,7 @@ mod tests {
             // SAFETY: MMR with n elements has valid leaf at index i, inclusion_proof should succeed
             let proof = mmr
                 .inclusion_proof(i)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Test validates MMR inclusion proof verification succeeds for all leaves
             verify_inclusion(&leaf_hash(i), i, &proof)
                 .unwrap_or_else(|e| panic!("n={n}, i={i}: {e}"));
@@ -1275,7 +1275,7 @@ mod tests {
         // SAFETY: MMR with 8 elements has valid leaf at index 0, inclusion_proof should succeed
         let mut proof = mmr
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         proof.proof_type = ProofType::Consistency;
         let err = verify_inclusion(&leaf_hash(0), 0, &proof).unwrap_err();
         assert!(matches!(err, ProofError::InvalidProof { .. }));
@@ -1289,11 +1289,11 @@ mod tests {
         // SAFETY: build_mmr creates valid MMR with elements, root_hash should succeed
         let old_root = build_mmr(4)
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: MMR with 8 elements and valid old_length=4, consistency_proof should succeed
         let mut proof = mmr
             .consistency_proof(4)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         proof.proof_type = ProofType::Inclusion;
         let err = verify_consistency(&old_root, &proof).unwrap_err();
         assert!(matches!(err, ProofError::InvalidProof { .. }));
@@ -1323,7 +1323,7 @@ mod tests {
         let mmr = build_mmr(8);
         let proof = mmr
             .inclusion_proof(3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cloned = proof.clone();
         assert_eq!(proof, cloned);
     }
@@ -1369,7 +1369,7 @@ mod tests {
         // SAFETY: MMR with 4 elements has valid leaf at index 1, inclusion_proof should succeed
         let proof = mmr
             .inclusion_proof(1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: MmrProof derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
@@ -1418,10 +1418,10 @@ mod tests {
         let mmr = build_mmr(16);
         let proof1 = mmr
             .consistency_proof(8)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let proof2 = mmr
             .consistency_proof(8)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(proof1, proof2);
     }
 
@@ -1430,7 +1430,7 @@ mod tests {
         let mmr = build_mmr(4);
         let root = mmr
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for i in 0..4 {
             assert_ne!(root, leaf_hash(i), "root should differ from leaf {i}");
         }
@@ -1441,7 +1441,7 @@ mod tests {
         let mmr = build_mmr(128);
         let proof = mmr
             .inclusion_proof(63)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // log2(128) = 7, proof should be at most ~7 hashes
         assert!(
             proof.proof_hashes.len() <= 10,
@@ -1528,7 +1528,7 @@ mod tests {
         let mmr = build_mmr(6);
         let proof = mmr
             .inclusion_proof(2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut cloned = proof.clone();
         cloned.epoch_id = 999;
         // Mutating clone does not affect original
@@ -1600,7 +1600,7 @@ mod tests {
         let mmr = build_mmr(4);
         let proof = mmr
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let dbg = format!("{:?}", proof);
         assert!(!dbg.is_empty());
         assert!(dbg.contains("MmrProof"));
@@ -1611,23 +1611,23 @@ mod tests {
     #[test]
     fn proof_type_serde_variants_produce_distinct_json() {
         let inc = serde_json::to_string(&ProofType::Inclusion)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let con = serde_json::to_string(&ProofType::Consistency)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_ne!(inc, con);
     }
 
     #[test]
     fn proof_error_serde_variants_produce_distinct_json() {
         let v1 = serde_json::to_string(&ProofError::EmptyStream)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let v2 = serde_json::to_string(&ProofError::InvalidProof { reason: "r".into() })
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let v3 = serde_json::to_string(&ProofError::IndexOutOfRange {
             index: 0,
             stream_length: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
         assert_ne!(v1, v2);
         assert_ne!(v2, v3);
         assert_ne!(v1, v3);
@@ -1640,7 +1640,7 @@ mod tests {
         let mmr = build_mmr(2);
         let proof = mmr
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"proof_type\""));
     }
@@ -1650,7 +1650,7 @@ mod tests {
         let mmr = build_mmr(2);
         let proof = mmr
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"epoch_id\""));
     }
@@ -1660,7 +1660,7 @@ mod tests {
         let mmr = build_mmr(3);
         let proof = mmr
             .inclusion_proof(1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"stream_length\""));
     }
@@ -1670,7 +1670,7 @@ mod tests {
         let mmr = build_mmr(3);
         let proof = mmr
             .inclusion_proof(1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"proof_hashes\""));
     }
@@ -1680,7 +1680,7 @@ mod tests {
         let mmr = build_mmr(3);
         let proof = mmr
             .inclusion_proof(1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"root_hash\""));
     }
@@ -1690,7 +1690,7 @@ mod tests {
         let mmr = build_mmr(3);
         let proof = mmr
             .inclusion_proof(1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         assert!(json.contains("\"marker_index\""));
     }
@@ -1772,9 +1772,9 @@ mod tests {
         mmr2.append(ContentHash::compute(b"leaf-B"));
         assert_ne!(
             mmr1.root_hash()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             mmr2.root_hash()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1783,7 +1783,7 @@ mod tests {
         let mmr = build_mmr(2);
         let root = mmr
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(root, leaf_hash(0));
         assert_ne!(root, leaf_hash(1));
     }
@@ -1808,23 +1808,23 @@ mod tests {
         let mmr = build_mmr(5);
         let root = mmr
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let proof = mmr
             .consistency_proof(5)
-            .expect("serde deserialization should succeed");
-        verify_consistency(&root, &proof).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        verify_consistency(&root, &proof).expect("operation should succeed for valid inputs");
     }
 
     #[test]
     fn consistency_proof_old_length_1() {
         let old_root = build_mmr(1)
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mmr = build_mmr(16);
         let proof = mmr
             .consistency_proof(1)
-            .expect("serde deserialization should succeed");
-        verify_consistency(&old_root, &proof).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        verify_consistency(&old_root, &proof).expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1874,12 +1874,12 @@ mod tests {
     fn consistency_proof_large_range() {
         let old_root = build_mmr(16)
             .root_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mmr = build_mmr(100);
         let proof = mmr
             .consistency_proof(16)
-            .expect("serde deserialization should succeed");
-        verify_consistency(&old_root, &proof).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        verify_consistency(&old_root, &proof).expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1903,7 +1903,7 @@ mod tests {
         let mmr = build_mmr(8);
         let proof = mmr
             .consistency_proof(4)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         let restored: MmrProof = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(proof, restored);
@@ -1915,7 +1915,7 @@ mod tests {
         mmr.append(leaf_hash(0));
         let proof = mmr
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(proof.epoch_id, 42);
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         let restored: MmrProof = serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1927,7 +1927,7 @@ mod tests {
         let mmr = build_mmr(13);
         let proof = mmr
             .inclusion_proof(7)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(proof.stream_length, 13);
         let json = serde_json::to_string(&proof).expect("serialize derived Serialize");
         let restored: MmrProof = serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2024,7 +2024,7 @@ mod tests {
             let mmr = build_mmr(n);
             let proof = mmr
                 .inclusion_proof(n - 1)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Test validates MMR inclusion proof succeeds for last leaf
             verify_inclusion(&leaf_hash(n - 1), n - 1, &proof)
                 .unwrap_or_else(|e| panic!("n={n}: {e}"));
@@ -2036,8 +2036,8 @@ mod tests {
         let mmr = build_mmr(256);
         let proof = mmr
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
-        verify_inclusion(&leaf_hash(0), 0, &proof).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        verify_inclusion(&leaf_hash(0), 0, &proof).expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2045,7 +2045,7 @@ mod tests {
         let mmr = build_mmr(4);
         let proof = mmr
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = verify_inclusion(&leaf_hash(0), 10, &proof).unwrap_err();
         assert!(matches!(err, ProofError::IndexOutOfRange { .. }));
     }
@@ -2061,9 +2061,9 @@ mod tests {
         // epoch_id does not affect root hash (only in proof metadata)
         assert_eq!(
             mmr1.root_hash()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             mmr2.root_hash()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -2075,10 +2075,10 @@ mod tests {
         mmr_b.append(leaf_hash(0));
         let proof_a = mmr_a
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let proof_b = mmr_b
             .inclusion_proof(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(proof_a.epoch_id, 11);
         assert_eq!(proof_b.epoch_id, 22);
         assert_ne!(proof_a.epoch_id, proof_b.epoch_id);
@@ -2105,11 +2105,11 @@ mod tests {
         for old_n in [2u64, 3, 5, 6, 7] {
             let old_root = build_mmr(old_n)
                 .root_hash()
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let new_mmr = build_mmr(old_n + 1);
             let proof = new_mmr
                 .consistency_proof(old_n)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Test validates MMR consistency proof succeeds for non-trivial old lengths
             verify_consistency(&old_root, &proof).unwrap_or_else(|e| panic!("old_n={old_n}: {e}"));
         }

@@ -1018,7 +1018,7 @@ impl FrirLoweringPipeline {
             let last = self
                 .witnesses
                 .last()
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             if !witness.chain_links_to(&last.output_hash) {
                 return Err(FrirPipelineError::BrokenChain {
                     pass_index: witness.pass_index,
@@ -1889,7 +1889,7 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w = make_witness(0, PassKind::Parse, b"source", b"ir0");
         p.record_pass(w)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.pass_count(), 1);
         assert!(!p.has_fallen_back());
     }
@@ -1899,9 +1899,9 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let (w0, w1) = make_chained_witnesses();
         p.record_pass(w0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         p.record_pass(w1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.pass_count(), 2);
     }
 
@@ -1911,7 +1911,7 @@ mod tests {
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let w1 = make_witness(1, PassKind::ScopeResolve, b"wrong", b"ir1");
         p.record_pass(w0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = p.record_pass(w1).unwrap_err();
         assert!(matches!(err, FrirPipelineError::BrokenChain { .. }));
     }
@@ -1923,7 +1923,7 @@ mod tests {
         let mut w0_dup = make_witness(0, PassKind::Parse, b"source2", b"ir0_2");
         w0_dup.input_hash = w0.output_hash;
         p.record_pass(w0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = p.record_pass(w0_dup).unwrap_err();
         assert!(matches!(err, FrirPipelineError::DuplicatePassIndex(0)));
     }
@@ -1967,7 +1967,7 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w = make_witness(0, PassKind::Parse, b"source", b"ir0");
         p.record_pass(w)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.obligations().len(), 1);
         assert!(p.all_obligations_discharged());
         assert!(p.undischarged_obligations().is_empty());
@@ -1980,7 +1980,7 @@ mod tests {
         w.obligations_touched
             .push(make_obligation("pending_ob", false));
         p.record_pass(w)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!p.all_obligations_discharged());
         assert_eq!(p.undischarged_obligations().len(), 1);
     }
@@ -1990,7 +1990,7 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w = make_witness(0, PassKind::Parse, b"source", b"ir0");
         p.record_pass(w)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.assumptions().len(), 1);
     }
 
@@ -2022,12 +2022,12 @@ mod tests {
         let (w0, w1) = make_chained_witnesses();
         let source_hash = w0.input_hash;
         p.record_pass(w0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         p.record_pass(w1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = p
             .finalize(source_hash)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(artifact.is_valid());
         assert_eq!(artifact.witness_chain.passes.len(), 2);
         assert_eq!(artifact.target_lane, LaneTarget::Js);
@@ -2039,7 +2039,7 @@ mod tests {
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let source_hash = w0.input_hash;
         p.record_pass(w0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ew = EquivalenceWitness {
             reference_hash: make_hash(b"ref"),
             optimized_hash: make_hash(b"opt"),
@@ -2053,7 +2053,7 @@ mod tests {
         p.record_equivalence_witness(ew);
         let artifact = p
             .finalize(source_hash)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.equivalence_witnesses.len(), 1);
         assert!(artifact.all_equivalences_proven());
     }
@@ -2064,9 +2064,9 @@ mod tests {
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let source_hash = w0.input_hash;
         p.record_pass(w0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         p.finalize(source_hash)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = p.events();
         // PipelineStarted, PassExecuted, WitnessProduced, PipelineCompleted
         assert!(events.len() >= 4);
@@ -2078,7 +2078,7 @@ mod tests {
         let mut p = FrirLoweringPipeline::new(PipelineConfig::production());
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         p.record_pass(w0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: FrirLoweringPipeline =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2093,10 +2093,10 @@ mod tests {
         let w0 = make_witness(0, PassKind::Parse, b"source", b"ir0");
         let source_hash = w0.input_hash;
         p.record_pass(w0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let artifact = p
             .finalize(source_hash)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: FrirArtifact = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);

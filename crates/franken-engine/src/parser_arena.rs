@@ -1206,7 +1206,7 @@ mod tests {
     fn from_syntax_tree_simple_expression() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(arena.statement_handles().len(), 1);
         assert!(arena.bytes_used() > 0);
     }
@@ -1215,7 +1215,7 @@ mod tests {
     fn from_syntax_tree_import() {
         let tree = import_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(arena.statement_handles().len(), 1);
     }
 
@@ -1223,7 +1223,7 @@ mod tests {
     fn from_syntax_tree_export_default() {
         let tree = export_default_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(arena.statement_handles().len(), 1);
     }
 
@@ -1231,7 +1231,7 @@ mod tests {
     fn from_syntax_tree_export_named() {
         let tree = export_named_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(arena.statement_handles().len(), 1);
     }
 
@@ -1239,11 +1239,11 @@ mod tests {
     fn from_syntax_tree_variable_declaration() {
         let tree = variable_declaration_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(arena.statement_handles().len(), 1);
         let node = arena
             .node(arena.statement_handles()[0])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match node {
             ArenaNode::VariableDeclaration {
                 kind, declarations, ..
@@ -1266,7 +1266,7 @@ mod tests {
             span: test_span(),
         };
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(arena.statement_handles().len(), 0);
     }
 
@@ -1296,7 +1296,7 @@ mod tests {
             span: test_span(),
         };
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(arena.statement_handles().len(), 8);
     }
 
@@ -1308,10 +1308,10 @@ mod tests {
     fn roundtrip_simple_expression() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recovered = arena
             .to_syntax_tree()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
     }
 
@@ -1319,10 +1319,10 @@ mod tests {
     fn roundtrip_import() {
         let tree = import_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recovered = arena
             .to_syntax_tree()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
     }
 
@@ -1330,10 +1330,10 @@ mod tests {
     fn roundtrip_export_default() {
         let tree = export_default_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recovered = arena
             .to_syntax_tree()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
     }
 
@@ -1341,10 +1341,10 @@ mod tests {
     fn roundtrip_export_named() {
         let tree = export_named_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recovered = arena
             .to_syntax_tree()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
     }
 
@@ -1352,10 +1352,10 @@ mod tests {
     fn roundtrip_variable_declaration() {
         let tree = variable_declaration_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recovered = arena
             .to_syntax_tree()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
     }
 
@@ -1372,10 +1372,10 @@ mod tests {
             span: test_span(),
         };
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recovered = arena
             .to_syntax_tree()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
     }
 
@@ -1387,13 +1387,13 @@ mod tests {
     fn canonical_hash_deterministic() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let hash1 = arena
             .canonical_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let hash2 = arena
             .canonical_hash()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(hash1, hash2);
         assert!(!hash1.is_empty());
     }
@@ -1403,16 +1403,16 @@ mod tests {
         let tree1 = simple_tree();
         let tree2 = import_tree();
         let arena1 = ParserArena::from_syntax_tree(&tree1, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let arena2 = ParserArena::from_syntax_tree(&tree2, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             arena1
                 .canonical_hash()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             arena2
                 .canonical_hash()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1424,11 +1424,11 @@ mod tests {
     fn node_lookup_valid() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let handle = arena.statement_handles()[0];
         let node = arena
             .node(handle)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         matches!(node, ArenaNode::ExpressionStatement { .. });
     }
 
@@ -1436,7 +1436,7 @@ mod tests {
     fn node_lookup_invalid_generation() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bad_handle = NodeHandle::from_parts(0, 999);
         let err = arena.node(bad_handle).unwrap_err();
         matches!(err, ArenaError::InvalidGeneration { .. });
@@ -1446,7 +1446,7 @@ mod tests {
     fn node_lookup_missing_index() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bad_handle = NodeHandle::from_parts(999, HANDLE_GENERATION);
         let err = arena.node(bad_handle).unwrap_err();
         matches!(err, ArenaError::MissingNode { .. });
@@ -1456,7 +1456,7 @@ mod tests {
     fn span_lookup_invalid_generation() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bad_handle = SpanHandle::from_parts(0, 999);
         let err = arena.span(bad_handle).unwrap_err();
         matches!(err, ArenaError::InvalidGeneration { .. });
@@ -1466,7 +1466,7 @@ mod tests {
     fn expression_lookup_invalid_generation() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let bad_handle = ExpressionHandle::from_parts(0, 999);
         let err = arena.expression(bad_handle).unwrap_err();
         matches!(err, ArenaError::InvalidGeneration { .. });
@@ -1552,7 +1552,7 @@ mod tests {
     fn handle_audit_entries_nonempty() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entries = arena.handle_audit_entries();
         assert!(!entries.is_empty());
         // Should have at least 1 node, 1 expression, 2 spans (tree + statement)
@@ -1591,10 +1591,10 @@ mod tests {
     fn handle_audit_jsonl_format() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let jsonl = arena
             .handle_audit_jsonl()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!jsonl.is_empty());
         for line in jsonl.lines() {
             let parsed: HandleAuditEntry =
@@ -1803,10 +1803,10 @@ mod tests {
             span: test_span(),
         };
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recovered = arena
             .to_syntax_tree()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
         assert_eq!(arena.statement_handles().len(), 3);
     }
@@ -1824,10 +1824,10 @@ mod tests {
             span: test_span(),
         };
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recovered = arena
             .to_syntax_tree()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
     }
 
@@ -1845,7 +1845,7 @@ mod tests {
             span: test_span(),
         };
         let arena = ParserArena::from_syntax_tree(&tree, budget)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(arena.budget().max_nodes, 10);
         assert_eq!(arena.budget().max_expressions, 20);
     }
@@ -1995,22 +1995,22 @@ mod tests {
     fn enrichment_arena_budget_kind_json_snake_case() {
         assert_eq!(
             serde_json::to_string(&ArenaBudgetKind::Nodes)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"nodes\""
         );
         assert_eq!(
             serde_json::to_string(&ArenaBudgetKind::Expressions)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"expressions\""
         );
         assert_eq!(
             serde_json::to_string(&ArenaBudgetKind::Spans)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"spans\""
         );
         assert_eq!(
             serde_json::to_string(&ArenaBudgetKind::Bytes)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"bytes\""
         );
     }
@@ -2118,17 +2118,17 @@ mod tests {
     fn enrichment_handle_audit_kind_json_snake_case() {
         assert_eq!(
             serde_json::to_string(&HandleAuditKind::Node)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"node\""
         );
         assert_eq!(
             serde_json::to_string(&HandleAuditKind::Expression)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"expression\""
         );
         assert_eq!(
             serde_json::to_string(&HandleAuditKind::Span)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"span\""
         );
     }
@@ -2158,9 +2158,9 @@ mod tests {
             span: test_span(),
         };
         let small = ParserArena::from_syntax_tree(&small_tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let big = ParserArena::from_syntax_tree(&big_tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(big.bytes_used() > small.bytes_used());
     }
 
@@ -2168,7 +2168,7 @@ mod tests {
     fn enrichment_parser_arena_clone_eq() {
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cloned = arena.clone();
         assert_eq!(arena, cloned);
     }
@@ -2181,7 +2181,7 @@ mod tests {
             span: test_span(),
         };
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entries = arena.handle_audit_entries();
         // Empty body means only the tree_span is allocated
         assert_eq!(entries.len(), 1);
@@ -2198,7 +2198,7 @@ mod tests {
         };
         let tree = simple_tree();
         let arena = ParserArena::from_syntax_tree(&tree, budget)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(arena.statement_handles().len(), 1);
     }
 
@@ -2256,10 +2256,10 @@ mod tests {
             span: test_span(),
         };
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recovered = arena
             .to_syntax_tree()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recovered, tree);
     }
 
@@ -2267,15 +2267,15 @@ mod tests {
     fn enrichment_canonical_hash_stable_across_clones() {
         let tree = import_tree();
         let arena = ParserArena::from_syntax_tree(&tree, ArenaBudget::default())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cloned = arena.clone();
         assert_eq!(
             arena
                 .canonical_hash()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             cloned
                 .canonical_hash()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 }

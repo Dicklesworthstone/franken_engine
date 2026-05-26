@@ -192,7 +192,7 @@ impl LifecycleEvent {
         data.extend_from_slice(self.law_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.kind)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         let mut sorted_targets = self.affected_targets.clone();
@@ -200,7 +200,7 @@ impl LifecycleEvent {
         for target in &sorted_targets {
             data.extend_from_slice(
                 serde_json::to_string(target)
-                    .expect("serde deserialization should succeed")
+                    .expect("serialization should succeed")
                     .as_bytes(),
             );
         }
@@ -285,7 +285,7 @@ impl RoutingDecision {
         data.extend_from_slice(self.law_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.candidate_kind)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         let mut sorted_selected = self.selected_targets.clone();
@@ -293,7 +293,7 @@ impl RoutingDecision {
         for target in &sorted_selected {
             data.extend_from_slice(
                 serde_json::to_string(target)
-                    .expect("serde deserialization should succeed")
+                    .expect("serialization should succeed")
                     .as_bytes(),
             );
         }
@@ -1333,7 +1333,7 @@ mod tests {
 
         let event = p.revoke_law("law-rev-1", "regression found");
         assert!(event.is_some());
-        let event = event.expect("serde deserialization should succeed");
+        let event = event.expect("operation should succeed for valid inputs");
         assert_eq!(event.kind, LifecycleEventKind::Revoked);
         assert!(p.revoked_law_ids.contains("law-rev-1"));
         assert!(p.active_law_ids().is_empty());
@@ -1365,7 +1365,7 @@ mod tests {
 
         let event = p.supersede_law("law-sup-old", "law-sup-new", "stronger law");
         assert!(event.is_some());
-        let event = event.expect("serde deserialization should succeed");
+        let event = event.expect("operation should succeed for valid inputs");
         assert_eq!(event.kind, LifecycleEventKind::Superseded);
         assert_eq!(event.superseding_law_id.as_deref(), Some("law-sup-new"));
         assert!(p.superseded_law_ids.contains("law-sup-old"));
@@ -1433,7 +1433,7 @@ mod tests {
 
         let routing = p.routing_for("law-rt-1");
         assert!(routing.is_some());
-        let routing = routing.expect("serde deserialization should succeed");
+        let routing = routing.expect("operation should succeed for valid inputs");
         assert_eq!(routing.selected_targets.len(), 2);
     }
 

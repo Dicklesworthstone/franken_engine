@@ -874,7 +874,7 @@ mod tests {
     #[test]
     fn trust_zone_class_snake_case_serde() {
         let json = serde_json::to_string(&TrustZoneClass::Community)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json.contains("community"));
     }
 
@@ -992,7 +992,7 @@ mod tests {
                 1,
                 "root",
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = hierarchy
             .add_zone(ZoneCreateRequest::new(
                 "owner",
@@ -1009,15 +1009,15 @@ mod tests {
     #[test]
     fn enforce_ceiling_passes_within_zone_capabilities() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let requested = capset(&[RuntimeCapability::VmDispatch, RuntimeCapability::GcInvoke]);
         hierarchy
             .enforce_ceiling("community", &requested, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let event = hierarchy
             .events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(event.outcome, ZoneEventOutcome::Pass);
     }
 
@@ -1037,23 +1037,23 @@ mod tests {
     #[test]
     fn zone_for_entity_returns_assigned_zone() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "team", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone_for_entity("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(zone.zone_name, "team");
     }
 
     #[test]
     fn zone_for_entity_returns_default_when_not_assigned() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone_for_entity("unassigned")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(zone.zone_name, "community");
     }
 
@@ -1062,10 +1062,10 @@ mod tests {
     #[test]
     fn transition_to_missing_zone_fails() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = hierarchy
             .transition_entity(ZoneTransitionRequest::new(
                 "ext-1",
@@ -1084,17 +1084,17 @@ mod tests {
     #[test]
     fn compute_effective_ceiling_for_known_zone() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let ceiling = hierarchy
             .compute_effective_ceiling("team")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!ceiling.is_empty());
     }
 
     #[test]
     fn compute_effective_ceiling_for_missing_zone_fails() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let err = hierarchy
             .compute_effective_ceiling("nonexistent")
             .unwrap_err();
@@ -1106,10 +1106,10 @@ mod tests {
     #[test]
     fn drain_events_empties_and_returns() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = hierarchy.drain_events();
         assert!(!events.is_empty());
         assert!(hierarchy.events().is_empty());
@@ -1154,10 +1154,10 @@ mod tests {
     #[test]
     fn zone_event_serde_roundtrip() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for event in hierarchy.events() {
             let json = serde_json::to_string(event).expect("serialize derived Serialize");
             let back: ZoneEvent =
@@ -1189,10 +1189,10 @@ mod tests {
     #[test]
     fn trust_zone_serde_roundtrip() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone("team")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(zone).expect("serialize derived Serialize");
         let back: TrustZone =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1203,28 +1203,28 @@ mod tests {
 
     #[test]
     fn zone_id_deterministic_for_same_inputs() {
-        let a = ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
-        let b = ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+        let a = ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
+        let b = ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         assert_eq!(
             a.zone("team")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .zone_id,
             b.zone("team")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .zone_id
         );
     }
 
     #[test]
     fn zone_id_changes_with_policy_version() {
-        let a = ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
-        let b = ZoneHierarchy::standard("m", 2).expect("serde deserialization should succeed");
+        let a = ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
+        let b = ZoneHierarchy::standard("m", 2).expect("operation should succeed for valid inputs");
         assert_ne!(
             a.zone("owner")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .zone_id,
             b.zone("owner")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .zone_id
         );
     }
@@ -1234,20 +1234,20 @@ mod tests {
     #[test]
     fn trust_zone_allows_subset() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let owner = hierarchy
             .zone("owner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(owner.allows(&capset(&[RuntimeCapability::VmDispatch])));
     }
 
     #[test]
     fn trust_zone_allows_empty() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let community = hierarchy
             .zone("community")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(community.allows(&BTreeSet::new()));
     }
 
@@ -1264,15 +1264,15 @@ mod tests {
     #[test]
     fn zone_scoped_id_deterministic() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone("team")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let schema = SchemaId::from_definition(b"test-schema-v1");
         let a = derive_zone_scoped_object_id(zone, ObjectDomain::EvidenceRecord, &schema, b"data")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = derive_zone_scoped_object_id(zone, ObjectDomain::EvidenceRecord, &schema, b"data")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(a, b);
     }
 
@@ -1401,7 +1401,7 @@ mod tests {
         let hierarchy = ZoneHierarchy::standard("admin", 1).expect("build hierarchy");
         let zone = hierarchy
             .zone("owner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(zone).expect("serialize derived Serialize");
         let back: TrustZone =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1641,10 +1641,10 @@ mod tests {
     #[test]
     fn trust_zone_clone_independence() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone("team")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut cloned = zone.clone();
         cloned.zone_name = "mutated".into();
         assert_eq!(zone.zone_name, "team");
@@ -1654,11 +1654,11 @@ mod tests {
     #[test]
     fn zone_hierarchy_clone_independence() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let mut cloned = hierarchy.clone();
         cloned
             .assign_entity("ext-clone-test", "owner", "trace-clone")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Original should have no events (beyond creation), clone has one
         assert!(hierarchy.events().is_empty());
         assert!(!cloned.events().is_empty());
@@ -1707,22 +1707,22 @@ mod tests {
     fn trust_zone_class_serde_snake_case_field_values() {
         assert_eq!(
             serde_json::to_string(&TrustZoneClass::Owner)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"owner\""
         );
         assert_eq!(
             serde_json::to_string(&TrustZoneClass::Private)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"private\""
         );
         assert_eq!(
             serde_json::to_string(&TrustZoneClass::Team)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"team\""
         );
         assert_eq!(
             serde_json::to_string(&TrustZoneClass::Community)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"community\""
         );
     }
@@ -1731,17 +1731,17 @@ mod tests {
     fn zone_event_type_serde_snake_case_field_values() {
         assert_eq!(
             serde_json::to_string(&ZoneEventType::Assignment)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"assignment\""
         );
         assert_eq!(
             serde_json::to_string(&ZoneEventType::CeilingCheck)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"ceiling_check\""
         );
         assert_eq!(
             serde_json::to_string(&ZoneEventType::ZoneTransition)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"zone_transition\""
         );
     }
@@ -1750,27 +1750,27 @@ mod tests {
     fn zone_event_outcome_serde_snake_case_field_values() {
         assert_eq!(
             serde_json::to_string(&ZoneEventOutcome::Pass)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"pass\""
         );
         assert_eq!(
             serde_json::to_string(&ZoneEventOutcome::Assigned)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"assigned\""
         );
         assert_eq!(
             serde_json::to_string(&ZoneEventOutcome::Migrated)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"migrated\""
         );
         assert_eq!(
             serde_json::to_string(&ZoneEventOutcome::CeilingExceeded)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"ceiling_exceeded\""
         );
         assert_eq!(
             serde_json::to_string(&ZoneEventOutcome::Denied)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"denied\""
         );
     }
@@ -1778,14 +1778,14 @@ mod tests {
     #[test]
     fn trust_zone_json_field_names() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone("owner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(zone).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("zone_id"));
         assert!(obj.contains_key("zone_name"));
         assert!(obj.contains_key("class"));
@@ -1805,7 +1805,7 @@ mod tests {
         let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("zone_name"));
         assert!(obj.contains_key("class"));
         assert!(obj.contains_key("parent_zone_name"));
@@ -1821,7 +1821,7 @@ mod tests {
         let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("entity_id"));
         assert!(obj.contains_key("to_zone_name"));
         assert!(obj.contains_key("trace_id"));
@@ -1841,7 +1841,7 @@ mod tests {
         let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -1862,7 +1862,7 @@ mod tests {
         let json = serde_json::to_string(&hierarchy).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("zones"));
         assert!(obj.contains_key("assignments"));
         assert!(obj.contains_key("default_zone"));
@@ -1981,17 +1981,17 @@ mod tests {
     #[test]
     fn enforce_ceiling_with_empty_requested_set() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         // Empty set should always pass (empty is subset of everything)
         hierarchy
             .enforce_ceiling("community", &BTreeSet::new(), "trace-empty")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
     fn enforce_ceiling_missing_zone() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let err = hierarchy
             .enforce_ceiling("nonexistent", &BTreeSet::new(), "t")
             .unwrap_err();
@@ -2001,36 +2001,36 @@ mod tests {
     #[test]
     fn assign_entity_empty_entity_id() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("", "community", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone_for_entity("")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(zone.zone_name, "community");
     }
 
     #[test]
     fn assign_entity_reassignment_updates_zone() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "team", "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone_for_entity("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(zone.zone_name, "team");
     }
 
     #[test]
     fn drain_events_returns_empty_when_no_events() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let events = hierarchy.drain_events();
         assert!(events.is_empty());
     }
@@ -2038,10 +2038,10 @@ mod tests {
     #[test]
     fn drain_events_twice_second_is_empty() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events1 = hierarchy.drain_events();
         assert!(!events1.is_empty());
         let events2 = hierarchy.drain_events();
@@ -2052,10 +2052,10 @@ mod tests {
     fn zone_allows_exact_ceiling() {
         // Requesting exactly the full ceiling should pass
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let community = hierarchy
             .zone("community")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let full_ceiling = community.effective_ceiling.clone();
         assert!(community.allows(&full_ceiling));
     }
@@ -2063,10 +2063,10 @@ mod tests {
     #[test]
     fn zone_allows_single_extra_beyond_ceiling_fails() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let community = hierarchy
             .zone("community")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut requested = community.effective_ceiling.clone();
         requested.insert(RuntimeCapability::FsWrite);
         assert!(!community.allows(&requested));
@@ -2077,16 +2077,16 @@ mod tests {
     #[test]
     fn zone_hierarchy_with_assignments_serde_roundtrip() {
         let mut hierarchy =
-            ZoneHierarchy::standard("admin", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("admin", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-2", "team", "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-3", "private", "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&hierarchy).expect("serialize derived Serialize");
         let back: ZoneHierarchy =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2096,13 +2096,13 @@ mod tests {
     #[test]
     fn zone_hierarchy_with_events_serde_roundtrip() {
         let mut hierarchy =
-            ZoneHierarchy::standard("admin", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("admin", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         hierarchy
             .enforce_ceiling("community", &capset(&[RuntimeCapability::VmDispatch]), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&hierarchy).expect("serialize derived Serialize");
         let back: ZoneHierarchy =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2180,12 +2180,12 @@ mod tests {
     #[test]
     fn zone_id_differs_per_zone_in_standard_hierarchy() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let mut zone_ids = BTreeSet::new();
         for class in TrustZoneClass::ORDERED {
             let zone = hierarchy
                 .zone(class.as_str())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             zone_ids.insert(zone.zone_id.clone());
         }
         assert_eq!(zone_ids.len(), 4, "all 4 zones should have distinct IDs");
@@ -2194,54 +2194,54 @@ mod tests {
     #[test]
     fn zone_scoped_id_differs_by_domain() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone("team")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let schema = SchemaId::from_definition(b"test-domain-v1");
         let id_a =
             derive_zone_scoped_object_id(zone, ObjectDomain::EvidenceRecord, &schema, b"data")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let id_b = derive_zone_scoped_object_id(zone, ObjectDomain::PolicyObject, &schema, b"data")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b);
     }
 
     #[test]
     fn zone_scoped_id_differs_by_canonical_bytes() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let zone = hierarchy
             .zone("owner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let schema = SchemaId::from_definition(b"test-schema-v1");
         let id_a =
             derive_zone_scoped_object_id(zone, ObjectDomain::EvidenceRecord, &schema, b"data-a")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let id_b =
             derive_zone_scoped_object_id(zone, ObjectDomain::EvidenceRecord, &schema, b"data-b")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b);
     }
 
     #[test]
     fn transition_approved_then_denied_preserves_first_move() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Approve transition to team
         hierarchy
             .transition_entity(ZoneTransitionRequest::new(
                 "ext-1", "team", "t2", "p", "d1", true,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             hierarchy
                 .zone_for_entity("ext-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .zone_name,
             "team"
         );
@@ -2257,7 +2257,7 @@ mod tests {
         assert_eq!(
             hierarchy
                 .zone_for_entity("ext-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .zone_name,
             "team"
         );
@@ -2266,34 +2266,34 @@ mod tests {
     #[test]
     fn multiple_entities_independent_assignments() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-2", "team", "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-3", "owner", "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             hierarchy
                 .zone_for_entity("ext-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .zone_name,
             "community"
         );
         assert_eq!(
             hierarchy
                 .zone_for_entity("ext-2")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .zone_name,
             "team"
         );
         assert_eq!(
             hierarchy
                 .zone_for_entity("ext-3")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .zone_name,
             "owner"
         );
@@ -2302,17 +2302,17 @@ mod tests {
     #[test]
     fn event_count_matches_operations() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         assert_eq!(hierarchy.events().len(), 0);
 
         hierarchy
             .assign_entity("ext-1", "community", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(hierarchy.events().len(), 1);
 
         hierarchy
             .enforce_ceiling("community", &capset(&[RuntimeCapability::VmDispatch]), "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(hierarchy.events().len(), 2);
 
         // Failed enforce should also emit an event
@@ -2331,7 +2331,7 @@ mod tests {
                 1,
                 "root",
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Child with empty declared ceiling => effective is intersection of empty + parent = empty
         hierarchy
             .add_zone(
@@ -2339,36 +2339,36 @@ mod tests {
                     .with_parent("owner")
                     .with_declared_ceiling(BTreeSet::new()),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let child = hierarchy
             .zone("child")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(child.effective_ceiling.is_empty());
     }
 
     #[test]
     fn parent_zone_field_set_correctly() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         let owner = hierarchy
             .zone("owner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(owner.parent_zone.is_none());
 
         let private = hierarchy
             .zone("private")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(private.parent_zone, Some(owner.zone_id.clone()));
     }
 
     #[test]
     fn created_by_preserved_in_zone() {
         let hierarchy = ZoneHierarchy::standard("test-creator", 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for class in TrustZoneClass::ORDERED {
             let zone = hierarchy
                 .zone(class.as_str())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(zone.created_by, "test-creator");
         }
     }
@@ -2376,10 +2376,10 @@ mod tests {
     #[test]
     fn zone_event_component_is_trust_zone() {
         let mut hierarchy =
-            ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         hierarchy
             .assign_entity("ext-1", "community", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for event in hierarchy.events() {
             assert_eq!(event.component, "trust_zone");
         }
@@ -2388,11 +2388,11 @@ mod tests {
     #[test]
     fn standard_hierarchy_policy_version_propagated() {
         let hierarchy =
-            ZoneHierarchy::standard("m", 42).expect("serde deserialization should succeed");
+            ZoneHierarchy::standard("m", 42).expect("operation should succeed for valid inputs");
         for class in TrustZoneClass::ORDERED {
             let zone = hierarchy
                 .zone(class.as_str())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(zone.policy_version, 42);
         }
     }
@@ -2406,12 +2406,12 @@ mod tests {
 
     #[test]
     fn zone_hierarchy_deterministic_serialization_with_events() {
-        let mut a = ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
-        let mut b = ZoneHierarchy::standard("m", 1).expect("serde deserialization should succeed");
+        let mut a = ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
+        let mut b = ZoneHierarchy::standard("m", 1).expect("operation should succeed for valid inputs");
         a.assign_entity("ext-1", "community", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         b.assign_entity("ext-1", "community", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json_a = serde_json::to_string(&a).expect("serialize derived Serialize");
         let json_b = serde_json::to_string(&b).expect("serialize derived Serialize");
         assert_eq!(json_a, json_b);

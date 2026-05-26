@@ -1031,7 +1031,7 @@ mod tests {
         bus.messages_delivered = u64::MAX;
 
         bus.send_message(test_fleet_message("deliver"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bus.current_timestamp, u64::MAX);
         assert_eq!(bus.delivery_stats().0, u64::MAX);
 
@@ -1041,19 +1041,19 @@ mod tests {
         bus.set_partition_mode(PartitionMode::Degraded(test_partition_info(2)), 0);
         bus.messages_dropped = u64::MAX;
         bus.send_message(test_fleet_message("drop"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bus.delivery_stats().1, u64::MAX);
 
         bus.set_partition_mode(PartitionMode::Healing(test_healing_info()), u8::MAX);
         bus.send_message(test_fleet_message("healing"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bus.delivery_success_rate, 100);
     }
 
     #[test]
     fn test_create_fleet() {
         let fleet = FleetSimulator::new(10, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(fleet.instances.len(), 10);
 
         // Check all instances start healthy
@@ -1066,7 +1066,7 @@ mod tests {
     #[test]
     fn test_message_delivery() {
         let mut fleet = FleetSimulator::new(5, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let instance_ids = fleet.instance_ids();
 
         // Send message from instance 0 to instance 1
@@ -1080,25 +1080,25 @@ mod tests {
                     reason: "Test state change".to_string(),
                 },
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Process the message
         let processed = fleet
             .process_next_message()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(processed);
 
         // Check that instance 1 state changed
         let instance = fleet
             .get_instance(&instance_ids[1])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(instance.state, InstanceState::Sandboxed);
     }
 
     #[test]
     fn test_broadcast_message() {
         let mut fleet = FleetSimulator::new(5, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let instance_ids = fleet.instance_ids();
 
         // Broadcast message from instance 0
@@ -1112,13 +1112,13 @@ mod tests {
                     reason: "Broadcast state change".to_string(),
                 },
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Process all messages (should be 4 messages, excluding sender)
         let mut processed_count = 0;
         while fleet
             .process_next_message()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
         {
             processed_count += 1;
         }
@@ -1128,7 +1128,7 @@ mod tests {
         for (i, instance_id) in instance_ids.iter().enumerate() {
             let instance = fleet
                 .get_instance(instance_id)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             if i == 0 {
                 // Sender remains unchanged
                 assert_eq!(instance.state, InstanceState::Healthy);
@@ -1142,7 +1142,7 @@ mod tests {
     #[test]
     fn test_partition_mode_affects_delivery() {
         let mut fleet = FleetSimulator::new(3, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let instance_ids = fleet.instance_ids();
 
         // Set degraded partition mode with 50% success rate
@@ -1166,7 +1166,7 @@ mod tests {
                         reason: format!("Test message {}", i),
                     },
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let _stats = fleet.simulation_stats();
@@ -1181,14 +1181,14 @@ mod tests {
     #[test]
     fn test_instance_state_transitions() {
         let mut fleet = FleetSimulator::new(2, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let instance_ids = fleet.instance_ids();
 
         let node_id = &instance_ids[0];
         assert_eq!(
             fleet
                 .get_instance(node_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             InstanceState::Healthy
         );
@@ -1200,11 +1200,11 @@ mod tests {
                 InstanceState::Sandboxed,
                 "Security concern".to_string(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             fleet
                 .get_instance(node_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             InstanceState::Sandboxed
         );
@@ -1215,11 +1215,11 @@ mod tests {
                 InstanceState::Terminated,
                 "Critical violation".to_string(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             fleet
                 .get_instance(node_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             InstanceState::Terminated
         );
@@ -1228,7 +1228,7 @@ mod tests {
     #[test]
     fn test_simulation_stats() {
         let mut fleet = FleetSimulator::new(5, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let instance_ids = fleet.instance_ids();
 
         // Change some instance states
@@ -1238,14 +1238,14 @@ mod tests {
                 InstanceState::Sandboxed,
                 "Test".to_string(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         fleet
             .transition_instance_state(
                 &instance_ids[1],
                 InstanceState::Terminated,
                 "Test".to_string(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stats = fleet.simulation_stats();
         assert_eq!(stats.total_instances, 5);
@@ -1257,7 +1257,7 @@ mod tests {
     #[test]
     fn test_event_logging() {
         let fleet = FleetSimulator::new(2, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should have creation events for both instances
         assert_eq!(fleet.event_log.len(), 2);
@@ -1285,7 +1285,7 @@ mod tests {
     #[test]
     fn test_instance_not_found_error() {
         let mut fleet = FleetSimulator::new(2, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let nonexistent_id = NodeId("nonexistent".to_string());
 
         let result = fleet.transition_instance_state(
@@ -1307,7 +1307,7 @@ mod tests {
     #[test]
     fn test_broadcast_reaches_all() {
         let mut fleet = FleetSimulator::new(3, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let originator = NodeId("instance-000".to_string());
         let extension_id = "malicious_ext".to_string();
         let evidence_hash = "evidence_123".to_string();
@@ -1320,7 +1320,7 @@ mod tests {
                 evidence_hash.clone(),
                 originator,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Check that quarantine record was created
         assert!(fleet.is_extension_quarantined(&evidence_hash));
@@ -1335,7 +1335,7 @@ mod tests {
     #[test]
     fn test_enforcement_blocks_extension() {
         let mut fleet = FleetSimulator::new(2, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let receiving_instance = NodeId("instance-001".to_string());
         let originator = NodeId("instance-000".to_string());
 
@@ -1349,12 +1349,12 @@ mod tests {
                 100, // timestamp
                 receiving_instance.clone(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Check that instance was quarantined
         let instance = fleet
             .get_instance(&receiving_instance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(instance.state, InstanceState::Quarantined);
 
         // Check that enforcement event was logged
@@ -1365,7 +1365,7 @@ mod tests {
     #[test]
     fn test_ack_sent_after_enforcement() {
         let mut fleet = FleetSimulator::new(2, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let receiving_instance = NodeId("instance-001".to_string());
         let originator = NodeId("instance-000".to_string());
 
@@ -1377,7 +1377,7 @@ mod tests {
                 "evidence_789".to_string(),
                 originator.clone(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Then process the decision
         fleet
@@ -1389,7 +1389,7 @@ mod tests {
                 1, // timestamp
                 receiving_instance,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Check message bus has acknowledgment
         assert!(fleet.message_bus.queue_length() > 0);
@@ -1398,7 +1398,7 @@ mod tests {
     #[test]
     fn test_convergence_detected() {
         let mut fleet = FleetSimulator::new(2, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let originator = NodeId("instance-000".to_string());
         let evidence_hash = "convergence_test".to_string();
 
@@ -1410,7 +1410,7 @@ mod tests {
                 evidence_hash.clone(),
                 originator.clone(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Simulate acknowledgments from all instances
         fleet
@@ -1420,7 +1420,7 @@ mod tests {
                 NodeId("instance-000".to_string()),
                 10,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         fleet
             .process_quarantine_ack(
@@ -1429,7 +1429,7 @@ mod tests {
                 NodeId("instance-001".to_string()),
                 11,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Check convergence
         assert!(fleet.is_quarantine_converged(&evidence_hash));
@@ -1442,7 +1442,7 @@ mod tests {
     #[test]
     fn test_duplicate_ignored() {
         let mut fleet = FleetSimulator::new(2, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let originator = NodeId("instance-000".to_string());
         let evidence_hash = "duplicate_test".to_string();
 
@@ -1454,7 +1454,7 @@ mod tests {
                 evidence_hash.clone(),
                 originator.clone(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stats_after_first = fleet.get_quarantine_stats();
         assert_eq!(stats_after_first.total_quarantine_decisions, 1);
@@ -1467,7 +1467,7 @@ mod tests {
                 evidence_hash.clone(),
                 originator,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stats_after_duplicate = fleet.get_quarantine_stats();
         assert_eq!(stats_after_duplicate.total_quarantine_decisions, 1); // No change
@@ -1476,7 +1476,7 @@ mod tests {
     #[test]
     fn test_lamport_ordering() {
         let mut fleet = FleetSimulator::new(2, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let originator = NodeId("node_0".to_string());
 
         // Get initial timestamp
@@ -1490,7 +1490,7 @@ mod tests {
                 "lamport_evidence".to_string(),
                 originator,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Timestamp should have incremented
         let after_broadcast = fleet.current_lamport_timestamp();
@@ -1504,7 +1504,7 @@ mod tests {
                 NodeId("node_1".to_string()),
                 after_broadcast + 5, // Higher timestamp from remote
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should adopt the higher timestamp + 1
         let final_ts = fleet.current_lamport_timestamp();
@@ -1514,7 +1514,7 @@ mod tests {
     #[test]
     fn test_fleet_lamport_and_partition_boundaries_saturate() {
         let mut fleet = FleetSimulator::new(2, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let instance_ids = fleet.instance_ids();
         let originator = instance_ids[0].clone();
         let receiver = instance_ids[1].clone();
@@ -1536,7 +1536,7 @@ mod tests {
                 "saturating_evidence".to_string(),
                 originator.clone(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(fleet.current_lamport_timestamp(), u64::MAX);
 
         fleet
@@ -1548,7 +1548,7 @@ mod tests {
                 u64::MAX,
                 receiver.clone(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(fleet.current_lamport_timestamp(), u64::MAX);
 
         fleet
@@ -1558,7 +1558,7 @@ mod tests {
                 receiver,
                 u64::MAX,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(fleet.current_lamport_timestamp(), u64::MAX);
     }
 
@@ -1568,7 +1568,7 @@ mod tests {
 
         // Create fleet with normal partition mode
         let mut fleet = FleetSimulator::new(3, thresholds.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Change to degraded partition mode
         let degraded_info = crate::fleet_convergence::PartitionInfo {
@@ -1594,7 +1594,7 @@ mod tests {
     #[test]
     fn test_quarantine_bus_dispatch_enforces_and_converges() {
         let mut fleet = FleetSimulator::new(3, test_thresholds())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let instance_ids = fleet.instance_ids();
         let originator = instance_ids[0].clone();
         let evidence_hash = "bus_dispatch_evidence".to_string();
@@ -1606,18 +1606,18 @@ mod tests {
                 evidence_hash.clone(),
                 originator.clone(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         fleet
             .run_simulation_steps(16)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(fleet.is_quarantine_converged(&evidence_hash));
         for instance_id in instance_ids {
             assert_eq!(
                 fleet
                     .get_instance(&instance_id)
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .state,
                 InstanceState::Quarantined,
                 "{instance_id} should enforce the queued quarantine decision"

@@ -1373,7 +1373,7 @@ mod tests {
     #[test]
     fn test_cell_verdict_serde() {
         let json = serde_json::to_string(&CellVerdict::Fail)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let back: CellVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, CellVerdict::Fail);
     }
@@ -1763,7 +1763,7 @@ mod tests {
             .map(|wc| passing_cell(*wc))
             .collect();
         let report = evaluate_matrix(&cells, &cfg, &epoch(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.overall_verdict, CellVerdict::Pass);
         assert_eq!(report.total_mismatches, 0);
         assert_eq!(report.critical_count, 0);
@@ -1778,7 +1778,7 @@ mod tests {
             failing_cell(WorkloadClass::PureTs),
         ];
         let report = evaluate_matrix(&cells, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.overall_verdict, CellVerdict::Fail);
         assert_eq!(report.critical_count, 1);
     }
@@ -1797,7 +1797,7 @@ mod tests {
             ),
         ];
         let report = evaluate_matrix(&cells, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.overall_verdict, CellVerdict::Inconclusive);
     }
 
@@ -1815,7 +1815,7 @@ mod tests {
             ),
         ];
         let report = evaluate_matrix(&cells, &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.overall_verdict, CellVerdict::Fail);
     }
 
@@ -1824,7 +1824,7 @@ mod tests {
         let cfg = relaxed_config();
         let cells = vec![passing_cell(WorkloadClass::PureJs)];
         let report = evaluate_matrix(&cells, &cfg, &epoch(), 42_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.receipt.timestamp_micros, 42_000);
         assert_eq!(report.receipt.schema_version, SCHEMA_VERSION);
     }
@@ -1834,7 +1834,7 @@ mod tests {
         let cfg = relaxed_config();
         let some_hash_report =
             evaluate_matrix(&[failing_cell(WorkloadClass::PureJs)], &cfg, &epoch(), 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let missing_hash_cell = MatrixCell::new(
             WorkloadClass::PureJs,
             vec![],
@@ -1852,7 +1852,7 @@ mod tests {
             CellVerdict::Fail,
         );
         let missing_hash_report = evaluate_matrix(&[missing_hash_cell], &cfg, &epoch(), 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             some_hash_report.receipt.input_hash, missing_hash_report.receipt.input_hash,
             "matrix input hash should encode whether mismatch content hashes are present"
@@ -1947,7 +1947,7 @@ mod tests {
         let cfg = relaxed_config();
         let cells = vec![passing_cell(WorkloadClass::PureJs)];
         let report = evaluate_matrix(&cells, &cfg, &epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: MatrixReport = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);

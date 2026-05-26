@@ -1800,7 +1800,7 @@ mod tests {
     fn test_gate_with_config() {
         let config = GateConfig::default();
         let gate = CompressionResidualGate::with_config(config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             gate.config().cold_start_decompression_budget_millionths,
             DEFAULT_COLD_START_DECOMPRESSION_BUDGET_MILLIONTHS
@@ -2203,7 +2203,7 @@ mod tests {
                 2,
                 true,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(seq, 0);
         assert_eq!(ledger.len(), 1);
         assert!(!ledger.is_empty());
@@ -2222,7 +2222,7 @@ mod tests {
                 2,
                 true,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .append(&LedgerAppendInput {
                 restoration_overhead_us: 200,
@@ -2236,7 +2236,7 @@ mod tests {
                     true,
                 )
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .append(&LedgerAppendInput {
                 restoration_overhead_us: 50,
@@ -2250,7 +2250,7 @@ mod tests {
                     true,
                 )
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let entries = ledger.entries_for_artifact("art-1");
         assert_eq!(entries.len(), 2);
@@ -2273,7 +2273,7 @@ mod tests {
                 2,
                 true,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .append(&LedgerAppendInput {
                 restoration_overhead_us: 200,
@@ -2287,7 +2287,7 @@ mod tests {
                     true,
                 )
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(ledger.total_original_bytes(), 3000);
         assert_eq!(ledger.total_compressed_bytes(), 1300);
@@ -2311,7 +2311,7 @@ mod tests {
                     true,
                 )
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ledger.aggregate_compression_ratio_millionths(), 500_000);
     }
 
@@ -2331,7 +2331,7 @@ mod tests {
                     true,
                 )
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 20 / (80+20) = 200_000
         assert_eq!(ledger.aggregate_duplicate_mass_millionths(), 200_000);
     }
@@ -2352,7 +2352,7 @@ mod tests {
                     true,
                 )
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!ledger.has_irreversible_entries());
         assert_eq!(ledger.irreversible_count(), 0);
 
@@ -2370,7 +2370,7 @@ mod tests {
                     false,
                 )
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(ledger.has_irreversible_entries());
         assert_eq!(ledger.irreversible_count(), 1);
     }
@@ -2388,7 +2388,7 @@ mod tests {
                 0,
                 true,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .append(&LedgerAppendInput {
                 restoration_overhead_us: 250,
@@ -2402,7 +2402,7 @@ mod tests {
                     true,
                 )
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ledger.total_restoration_overhead_us(), 350);
     }
 
@@ -2428,7 +2428,7 @@ mod tests {
         let input = cold_start_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Approved);
         assert!(receipt.blocking_reasons.is_empty());
     }
@@ -2452,7 +2452,7 @@ mod tests {
         let input = cold_start_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
         assert!(!receipt.blocking_reasons.is_empty());
     }
@@ -2476,7 +2476,7 @@ mod tests {
         let input = cold_start_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             receipt.verdict,
             CompressionClaimVerdict::ApprovedWithCaveats
@@ -2495,7 +2495,7 @@ mod tests {
         let input = memory_input(pass, expansions);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Approved);
     }
 
@@ -2508,7 +2508,7 @@ mod tests {
         let input = memory_input(pass, expansions);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2522,7 +2522,7 @@ mod tests {
         let input = memory_input(pass, expansions);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2543,7 +2543,7 @@ mod tests {
         });
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2557,7 +2557,7 @@ mod tests {
         let input = proof_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Approved);
     }
 
@@ -2572,7 +2572,7 @@ mod tests {
             .push(simple_reversibility_check("a1", false));
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2585,7 +2585,7 @@ mod tests {
         let input = proof_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2609,7 +2609,7 @@ mod tests {
         });
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2627,7 +2627,7 @@ mod tests {
             .push(simple_support_cost("s1", 1_000_000, 500_000));
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2648,7 +2648,7 @@ mod tests {
         });
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2672,7 +2672,7 @@ mod tests {
         let input = cold_start_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2694,7 +2694,7 @@ mod tests {
         };
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Insufficient);
         assert_eq!(gate.claims_insufficient, 1);
         assert_eq!(gate.claims_blocked, 0);
@@ -2717,7 +2717,7 @@ mod tests {
         let input = cold_start_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.verdict, CompressionClaimVerdict::Blocked);
     }
 
@@ -2728,13 +2728,13 @@ mod tests {
             ..GateConfig::default()
         };
         let mut gate = CompressionResidualGate::with_config(config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let arts = vec![simple_artifact("a1", 1000, 500, false)];
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Not blocked by irreversibility (other checks may still pass)
         let has_irreversible_block = receipt
             .blocking_reasons
@@ -2763,7 +2763,7 @@ mod tests {
         };
         let results = gate
             .evaluate_all_surfaces(&template)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 3);
         assert_eq!(results[0].surface, ClaimSurface::ColdStart);
         assert_eq!(results[1].surface, ClaimSurface::Memory);
@@ -2792,7 +2792,7 @@ mod tests {
 
         let results = gate
             .evaluate_all_surfaces(&template)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 3);
         assert_eq!(gate.receipts().len(), 3);
         assert_eq!(gate.ledger().len(), 2);
@@ -2810,7 +2810,7 @@ mod tests {
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
         gate.evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate.evaluations_run(), 1);
         assert_eq!(gate.claims_approved(), 1);
         assert_eq!(gate.claims_blocked(), 0);
@@ -2823,7 +2823,7 @@ mod tests {
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
         gate.evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = gate.summary();
         assert_eq!(summary.evaluations_run, 1);
         assert_eq!(summary.claims_approved, 1);
@@ -2843,10 +2843,10 @@ mod tests {
         let input2 = cold_start_input(pass2);
         let r1 = gate1
             .evaluate(&input1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = gate2
             .evaluate(&input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -2860,10 +2860,10 @@ mod tests {
         let input2 = proof_input(pass2);
         let r1 = gate
             .evaluate(&input1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = gate
             .evaluate(&input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -2879,7 +2879,7 @@ mod tests {
         let pass = simple_pass(arts);
         let input = cold_start_input(pass);
         gate.evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate.ledger().len(), 2);
         assert_eq!(gate.ledger().distinct_artifact_count(), 2);
     }
@@ -2930,7 +2930,7 @@ mod tests {
         let input = cold_start_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             receipt.schema_version,
             COMPRESSION_RESIDUAL_GATE_SCHEMA_VERSION
@@ -2975,7 +2975,7 @@ mod tests {
         let input = cold_start_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let receipt2: DecisionReceipt =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2995,7 +2995,7 @@ mod tests {
                 2,
                 true,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = &ledger.entries()[0];
         let json = serde_json::to_string(entry).expect("serialize derived Serialize");
         let entry2: ResidualLedgerEntry =
@@ -3041,7 +3041,7 @@ mod tests {
             let pass = simple_pass(arts);
             let input = cold_start_input(pass);
             gate.evaluate(&input)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(gate.evaluations_run(), 5);
         assert_eq!(gate.claims_approved(), 5);
@@ -3063,7 +3063,7 @@ mod tests {
                     2,
                     true,
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let pass = simple_pass(vec![simple_artifact("overflow", 1000, 500, true)]);
@@ -3099,7 +3099,7 @@ mod tests {
         let input = cold_start_input(pass);
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should not panic from overflow
         assert!(receipt.aggregate_compression_ratio_millionths > 0);
     }
@@ -3121,7 +3121,7 @@ mod tests {
         };
 
         let mut gate = CompressionResidualGate::with_config(config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let arts = vec![build_artifact_record(&BuildArtifactInput {
             artifact_id: "a1".to_string(),
             original_size: 1000,
@@ -3145,7 +3145,7 @@ mod tests {
         });
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Caveat expected: decompression ratio 999_999 > budget * 3/4 = 750_000.
         assert_eq!(
             receipt.verdict,
@@ -3177,13 +3177,13 @@ mod tests {
         let arts = vec![simple_artifact("a1", 1000, 500, true)];
         let pass = simple_pass(arts);
         gate.evaluate(&cold_start_input(pass))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Blocked (irreversible)
         let arts2 = vec![simple_artifact("a2", 1000, 500, false)];
         let pass2 = simple_pass(arts2);
         gate.evaluate(&cold_start_input(pass2))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(gate.evaluations_run(), 2);
         assert_eq!(gate.claims_approved(), 1);
@@ -3206,7 +3206,7 @@ mod tests {
         );
         let receipt = gate
             .evaluate(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // net = (500-10) + (300-5) = 490 + 295 = 785
         assert_eq!(receipt.net_memory_change_bytes, 785);
     }

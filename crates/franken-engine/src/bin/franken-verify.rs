@@ -416,7 +416,7 @@ fn validate_bundle_contract(
                 let env_obj = value
                     .as_object()
                     .cloned()
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
                 let env_ok = !env_obj.is_empty()
                     && env_obj.contains_key("toolchain")
                     && env_obj.contains_key("os")

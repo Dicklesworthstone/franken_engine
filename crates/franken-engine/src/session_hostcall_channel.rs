@@ -1449,7 +1449,7 @@ mod tests {
     use super::*;
 
     fn signing_key(byte: u8) -> SigningKey {
-        SigningKey::from_bytes([byte; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([byte; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn handshake(session_id: &str, trace_id: &str, tick: u64) -> SessionHandshake {
@@ -2435,7 +2435,7 @@ mod tests {
         let _ = channel.drain_events();
         channel
             .close_session(&handle, "trace-close", 200, Some("dec-c"), Some("pol-c"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = channel.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "session_closed");
@@ -2524,7 +2524,7 @@ mod tests {
         let handle = create_basic_session(&mut channel, "sess-closed-send");
         channel
             .close_session(&handle, "trace-close", 200, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = channel
             .send(&handle, b"x".to_vec(), "trace", 201, None, None)
             .unwrap_err();
@@ -2542,7 +2542,7 @@ mod tests {
         let handle = create_basic_session(&mut channel, "sess-bp-closed");
         channel
             .close_session(&handle, "trace-close", 200, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = channel
             .authenticated_backpressure_signal(&handle, 1, 1, "trace", 201)
             .unwrap_err();
@@ -2558,10 +2558,10 @@ mod tests {
         let handle = create_basic_session(&mut channel, "sess-verify-after-close");
         let signal = channel
             .authenticated_backpressure_signal(&handle, 1, 1, "trace", 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         channel
             .close_session(&handle, "trace-close", 200, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = channel
             .verify_authenticated_signal(&handle, &signal)
@@ -2581,7 +2581,7 @@ mod tests {
         let handle = create_basic_session(&mut channel, "sess-verify-replay");
         let signal = channel
             .authenticated_backpressure_signal(&handle, 1, 1, "trace", 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         channel
             .verify_authenticated_signal(&handle, &signal)
@@ -2598,7 +2598,7 @@ mod tests {
         let handle = create_basic_session(&mut channel, "sess-verify-principal");
         let mut signal = channel
             .authenticated_backpressure_signal(&handle, 1, 1, "trace", 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         signal.extension_id = "other-extension".to_string();
 
         let err = channel
@@ -2618,7 +2618,7 @@ mod tests {
         let handle = create_basic_session(&mut channel, "sess-verify-sig");
         let mut signal = channel
             .authenticated_backpressure_signal(&handle, 0, 1, "trace", 101)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         signal.session_id = "wrong-session".to_string();
         let err = channel
             .verify_authenticated_signal(&handle, &signal)
@@ -2914,30 +2914,30 @@ mod tests {
         );
         channel
             .send(&handle, b"first".to_vec(), "trace", 101, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let replay = {
             let session = channel
                 .sessions
                 .get(&handle.session_id)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             session
                 .inbound
                 .front()
                 .cloned()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
 
         let _ = channel
             .receive(&handle, "trace", 102, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // First drop at tick 103 (within window).
         {
             let session = channel
                 .sessions
                 .get_mut(&handle.session_id)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             session.inbound.push_back(replay.clone());
         }
         let _ = channel.receive(&handle, "trace", 103, None, None);
@@ -2945,27 +2945,27 @@ mod tests {
         // Second drop at tick 120 (outside window — resets counter).
         channel
             .send(&handle, b"second".to_vec(), "trace", 115, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let replay2 = {
             let session = channel
                 .sessions
                 .get(&handle.session_id)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             session
                 .inbound
                 .front()
                 .cloned()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         let _ = channel
             .receive(&handle, "trace", 116, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         {
             let session = channel
                 .sessions
                 .get_mut(&handle.session_id)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             session.inbound.push_back(replay2);
         }
         let err = channel
@@ -3000,7 +3000,7 @@ mod tests {
         let session = channel
             .sessions
             .get_mut(&handle.session_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         session.next_sequence = u64::MAX;
 
         let err = channel
@@ -3027,10 +3027,10 @@ mod tests {
         let handle = create_basic_session(&mut channel, "sess-multi");
         let seq1 = channel
             .send(&handle, b"a".to_vec(), "trace", 101, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let seq2 = channel
             .send(&handle, b"b".to_vec(), "trace", 102, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(seq1, 1);
         assert_eq!(seq2, 2);
         assert_eq!(channel.queue_len(&handle), Some(2));
@@ -3418,7 +3418,7 @@ mod tests {
 
     #[test]
     fn handshake_request_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([0xAA; 32]).expect("serde deserialization should succeed");
+        let sk = SigningKey::from_bytes([0xAA; 32]).expect("operation should succeed for valid inputs");
         let req = HandshakeRequest {
             session_id: "sess-1".into(),
             extension_id: "ext-1".into(),
@@ -3427,7 +3427,7 @@ mod tests {
             timestamp_ticks: 1000,
             extension_key: sk.verification_key(),
             signature: sign_preimage(&sk, b"test-preimage")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         };
         let json = serde_json::to_string(&req).expect("serialize derived Serialize");
         let restored: HandshakeRequest =
@@ -3439,14 +3439,14 @@ mod tests {
 
     #[test]
     fn handshake_response_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([0xAA; 32]).expect("serde deserialization should succeed");
+        let sk = SigningKey::from_bytes([0xAA; 32]).expect("operation should succeed for valid inputs");
         let resp = HandshakeResponse {
             session_id: "sess-1".into(),
             extension_nonce: 42,
             host_nonce: 99,
             host_key: sk.verification_key(),
             signature: sign_preimage(&sk, b"test-preimage")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         };
         let json = serde_json::to_string(&resp).expect("serialize derived Serialize");
         let restored: HandshakeResponse =
@@ -3555,7 +3555,7 @@ mod tests {
             0,
             AeadAlgorithm::ChaCha20Poly1305,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(nonce.as_bytes().len(), 12);
 
         let nonce_x = derive_deterministic_aead_nonce(
@@ -3564,7 +3564,7 @@ mod tests {
             0,
             AeadAlgorithm::XChaCha20Poly1305,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(nonce_x.as_bytes().len(), 24);
     }
 
@@ -3572,7 +3572,7 @@ mod tests {
 
     #[test]
     fn session_channel_error_from_signature_error() {
-        let sk = SigningKey::from_bytes([0xBB; 32]).expect("serde deserialization should succeed");
+        let sk = SigningKey::from_bytes([0xBB; 32]).expect("operation should succeed for valid inputs");
         let sig_err = SignatureError::VerificationFailed {
             signer: sk.verification_key(),
             reason: "test mismatch".into(),
@@ -3679,7 +3679,7 @@ mod tests {
 
     #[test]
     fn signature_failure_display_contains_inner_error() {
-        let sk = SigningKey::from_bytes([0xCC; 32]).expect("serde deserialization should succeed");
+        let sk = SigningKey::from_bytes([0xCC; 32]).expect("operation should succeed for valid inputs");
         let sig_err = SignatureError::VerificationFailed {
             signer: sk.verification_key(),
             reason: "mismatch detail".into(),
@@ -3698,7 +3698,7 @@ mod tests {
 
     #[test]
     fn signature_failure_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([0xDD; 32]).expect("serde deserialization should succeed");
+        let sk = SigningKey::from_bytes([0xDD; 32]).expect("operation should succeed for valid inputs");
         let sig_err = SignatureError::VerificationFailed {
             signer: sk.verification_key(),
             reason: "bad sig".into(),
@@ -3719,7 +3719,7 @@ mod tests {
             5,
             AeadAlgorithm::ChaCha20Poly1305,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&nonce).expect("serialize derived Serialize");
         let restored: DeterministicNonce =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3809,7 +3809,7 @@ mod tests {
                 Some("dec-se"),
                 Some("pol-se"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = channel.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "message_sent");
@@ -3835,7 +3835,7 @@ mod tests {
                     policy_id: None,
                 },
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = channel.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "shared_payload_sent");
@@ -3847,11 +3847,11 @@ mod tests {
         let handle = create_basic_session(&mut channel, "sess-recv-evt");
         channel
             .send(&handle, b"x".to_vec(), "trace", 101, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = channel.drain_events();
         channel
             .receive(&handle, "trace-recv", 102, None, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = channel.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "message_received");

@@ -811,7 +811,7 @@ impl SpecializationRollbackGate {
         // SAFETY: We just pushed a record, so rollback_history is non-empty and last() returns Some
         self.rollback_history
             .last()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     /// Reset rollback counter.
@@ -1241,7 +1241,7 @@ mod tests {
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             receipt
                 .blocking_reasons
@@ -1259,7 +1259,7 @@ mod tests {
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             receipt
                 .blocking_reasons
@@ -1295,7 +1295,7 @@ mod tests {
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             receipt
                 .blocking_reasons
@@ -1439,7 +1439,7 @@ mod tests {
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(receipt.blocking_reasons.is_empty());
         assert_eq!(receipt.verdict, GateVerdict::Approved);
     }
@@ -1452,7 +1452,7 @@ mod tests {
         // SAFETY: last_receipt() returns Some after evaluate() call in controlled test environment.
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!receipt.blocking_reasons.is_empty());
     }
 
@@ -1466,10 +1466,10 @@ mod tests {
         // SAFETY: last_receipt() returns Some after evaluate() calls in controlled test environment.
         assert_eq!(
             g1.last_receipt()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .content_hash,
             g2.last_receipt()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .content_hash,
         );
     }

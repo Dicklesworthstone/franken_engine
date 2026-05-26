@@ -1334,15 +1334,15 @@ mod tests {
         let mut ledger = BaselineLedger::default();
         ledger
             .record(1, base_snapshot())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .record(2, candidate_snapshot_pass())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ledger.entries.len(), 2);
         assert_eq!(
             ledger
                 .latest()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .epoch,
             2
         );
@@ -1404,7 +1404,7 @@ mod tests {
             candidate: candidate_snapshot_pass(),
         };
         let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
-        let last = d.logs.last().expect("serde deserialization should succeed");
+        let last = d.logs.last().expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "benchmark_gate_decision");
         assert_eq!(last.outcome, "pass");
         assert!(last.error_code.is_none());
@@ -1423,7 +1423,7 @@ mod tests {
             candidate,
         };
         let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
-        let last = d.logs.last().expect("serde deserialization should succeed");
+        let last = d.logs.last().expect("operation should succeed for valid inputs");
         assert_eq!(last.outcome, "fail");
         assert_eq!(last.error_code.as_deref(), Some("benchmark_gate_failed"));
     }
@@ -1738,10 +1738,10 @@ mod tests {
         let mut ledger = BaselineLedger::default();
         ledger
             .record(1, base_snapshot())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .record(2, candidate_snapshot_pass())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         let back: BaselineLedger =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

@@ -1326,7 +1326,7 @@ mod tests {
         // SAFETY: Test helper creates valid input; analyze succeeds in controlled test environment.
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.outcome, TransportAnalysisOutcome::FullyCompatible);
         assert_eq!(result.total_entries, 0);
         assert!(result.can_release());
@@ -1345,7 +1345,7 @@ mod tests {
         // SAFETY: Test helpers create valid spec and input; analyze succeeds in controlled test environment.
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result.outcome, TransportAnalysisOutcome::FullyCompatible);
         assert_eq!(result.unchanged_entries, 1);
@@ -1364,7 +1364,7 @@ mod tests {
         // SAFETY: Test helpers create valid spec with deltas and input; analyze succeeds in controlled test environment.
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             result.outcome,
@@ -1386,7 +1386,7 @@ mod tests {
         // SAFETY: Test helpers create valid spec with unbridgeable deltas; analyze succeeds in controlled test environment.
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             result.outcome,
@@ -1406,7 +1406,7 @@ mod tests {
         // SAFETY: Test creates valid spec with broken invariants; analyze succeeds in controlled test environment.
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             result.outcome,
@@ -1428,7 +1428,7 @@ mod tests {
         // SAFETY: Test helpers create valid multiple specs with mixed verdicts; analyze succeeds in controlled test environment.
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             result.outcome,
@@ -1471,7 +1471,7 @@ mod tests {
         // SAFETY: Test creates multiple valid specs; analyze succeeds despite budget exhaustion in controlled test.
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result.outcome, TransportAnalysisOutcome::BudgetExhausted);
         assert_eq!(result.total_entries, 2);
@@ -1502,7 +1502,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.ledger.morphisms.len(), 1);
         let m = &result.ledger.morphisms[0];
         assert!(m.is_safe());
@@ -1530,7 +1530,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let m = &result.ledger.morphisms[0];
         assert!(m.lossy);
         assert!(!m.is_safe());
@@ -1569,7 +1569,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             result.outcome,
@@ -1600,7 +1600,7 @@ mod tests {
         }]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should detect low-coverage mask.
         assert!(result.regression_mask_count > 0);
@@ -1621,7 +1621,7 @@ mod tests {
         }]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Unchanged verdict but unverified invariants → mask warning.
         assert!(result.regression_mask_count > 0);
@@ -1646,7 +1646,7 @@ mod tests {
         }]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.regression_mask_count, 0);
     }
 
@@ -1664,10 +1664,10 @@ mod tests {
 
         let r1 = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(r1.result_hash, r2.result_hash);
         assert_eq!(r1.ledger.ledger_hash, r2.ledger.ledger_hash);
@@ -1683,7 +1683,7 @@ mod tests {
         let input = simple_input(vec![simple_spec("frag1", vec![])]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: TransportAnalysisResult derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
@@ -1866,7 +1866,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.ledger.entries[0].is_blocking());
     }
 
@@ -1891,7 +1891,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = &result.ledger.entries[0];
         assert_eq!(entry.invariant_coverage_millionths(), 500_000);
         assert!(!entry.all_invariants_verified());
@@ -1904,7 +1904,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = &result.ledger.entries[0];
         assert_eq!(entry.invariant_coverage_millionths(), MILLION);
         assert!(entry.all_invariants_verified());
@@ -1926,7 +1926,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = &result.ledger.entries[0];
         assert_eq!(entry.invariant_coverage_millionths(), MILLION);
     }
@@ -1945,7 +1945,7 @@ mod tests {
         let input = simple_input(vec![s1, s2]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let hooks = result.ledger.entries_by_domain(&ContractDomain::Hook);
         assert_eq!(hooks.len(), 1);
@@ -1960,7 +1960,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pairs = result.ledger.version_pairs();
         assert_eq!(pairs.len(), 1);
     }
@@ -1973,7 +1973,7 @@ mod tests {
         let input = simple_input(vec![s1, s2]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let codes = result.ledger.all_debt_codes();
         assert!(codes.contains(DEBT_ADAPTER_REQUIRED));
     }
@@ -1988,7 +1988,7 @@ mod tests {
         let input = simple_input(vec![]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_transport_report(&result);
         assert!(report.contains("Nothing to analyze"));
     }
@@ -2002,7 +2002,7 @@ mod tests {
         ]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_transport_report(&result);
         assert!(report.contains("unchanged"));
         assert!(report.contains("adapter-required"));
@@ -2022,14 +2022,14 @@ mod tests {
                 &SchemaId::from_definition(b"test"),
                 b"test",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             entry_id: derive_id(
                 ObjectDomain::EvidenceRecord,
                 "test",
                 &SchemaId::from_definition(b"test"),
                 b"test2",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             morphism_id: None,
             masked_aspect: "timing".to_string(),
             reason: "test reason".to_string(),
@@ -2086,7 +2086,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = result.ledger.morphisms[0].summary_line();
         assert!(summary.contains("safe"));
         assert!(summary.contains("test-morph"));
@@ -2103,7 +2103,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = result.ledger.entries[0].summary_line();
         assert!(summary.contains("test-entry"));
         assert!(summary.contains("adapter-required"));
@@ -2131,7 +2131,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired
@@ -2145,7 +2145,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::Incompatible
@@ -2171,7 +2171,7 @@ mod tests {
         ]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.ledger.coverage_millionths(), MILLION);
     }
 
@@ -2208,7 +2208,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let high = result.ledger.high_risk_masks();
         assert!(!high.is_empty());
         assert!(high[0].is_high_risk());
@@ -2226,7 +2226,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].debt_code.as_deref(),
             Some(DEBT_TRANSPORT_INCOMPATIBLE),
@@ -2240,7 +2240,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].debt_code.as_deref(),
             Some(DEBT_ADAPTER_REQUIRED),
@@ -2254,7 +2254,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.ledger.entries[0].debt_code.is_none());
     }
 
@@ -2282,7 +2282,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let m = &result.ledger.morphisms[0];
         assert!(!m.is_safe());
         assert!(!m.lossy);
@@ -2309,7 +2309,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = result.ledger.morphisms[0].summary_line();
         assert!(summary.contains("UNVERIFIED"));
     }
@@ -2334,7 +2334,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = result.ledger.morphisms[0].summary_line();
         assert!(summary.contains("verified-lossy"));
     }
@@ -2352,14 +2352,14 @@ mod tests {
                 &SchemaId::from_definition(b"test"),
                 b"test",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             entry_id: derive_id(
                 ObjectDomain::EvidenceRecord,
                 "test",
                 &SchemaId::from_definition(b"test"),
                 b"test2",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             morphism_id: None,
             masked_aspect: "effect.timing".to_string(),
             reason: "lossy morphism detected".to_string(),
@@ -2393,7 +2393,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.ledger.entries[0].confidence_millionths, 500_000);
     }
 
@@ -2418,7 +2418,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.ledger.entries[0].confidence_millionths, 250_000);
     }
 
@@ -2433,7 +2433,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.outcome,
             TransportAnalysisOutcome::CompatibleWithAdapters,
@@ -2465,7 +2465,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_transport_report(&result);
         assert!(report.contains("Morphisms"));
         assert!(report.contains("report-morph"));
@@ -2490,7 +2490,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_transport_report(&result);
         assert!(report.contains("Regression Masks"));
     }
@@ -2604,7 +2604,7 @@ mod tests {
         let input = simple_input(vec![s1, s2, s3, s4]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result.ledger.unchanged_count(), 1);
         assert_eq!(result.ledger.adapter_required_count(), 1);
@@ -2625,7 +2625,7 @@ mod tests {
         ]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = result.summary_line();
         assert!(s.contains("compatible-with-adapters"));
         assert!(s.contains("2 entries"));
@@ -2684,7 +2684,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let m = &result.ledger.morphisms[0];
         assert_eq!(m.adapter_ref.as_deref(), Some("adapters::hydration_v2"));
     }
@@ -2701,7 +2701,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.can_release());
     }
 
@@ -2718,14 +2718,14 @@ mod tests {
                 &SchemaId::from_definition(b"test"),
                 b"low-risk",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             entry_id: derive_id(
                 ObjectDomain::EvidenceRecord,
                 "test",
                 &SchemaId::from_definition(b"test"),
                 b"low-entry",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             morphism_id: None,
             masked_aspect: "timing".to_string(),
             reason: "low risk".to_string(),
@@ -2771,7 +2771,7 @@ mod tests {
         let input = simple_input(specs);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.total_entries, 9);
         assert_eq!(result.outcome, TransportAnalysisOutcome::FullyCompatible);
         for d in &domains {
@@ -2788,10 +2788,10 @@ mod tests {
         let a = SemanticTransportAnalyzer::new();
         let r1 = a
             .analyze(&simple_input(vec![simple_spec("frag-a", vec![])]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = a
             .analyze(&simple_input(vec![simple_spec("frag-b", vec![])]))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.result_hash, r2.result_hash);
         assert_ne!(r1.ledger.ledger_hash, r2.ledger.ledger_hash);
     }
@@ -2836,7 +2836,7 @@ mod tests {
         let input = simple_input(specs);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.outcome, TransportAnalysisOutcome::BudgetExhausted);
         assert!(!result.can_release());
     }
@@ -2873,7 +2873,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.outcome,
             TransportAnalysisOutcome::RegressionMaskDetected
@@ -2893,7 +2893,7 @@ mod tests {
         let input = simple_input(vec![spec_known]);
         let mut result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Manually add an Unknown entry to test coverage calculation.
         let unknown_entry = TransportEntry {
             id: result.ledger.entries[0].id.clone(),
@@ -2957,7 +2957,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let codes = result.ledger.all_debt_codes();
         assert!(
             codes.contains(DEBT_REGRESSION_MASKED),
@@ -2987,7 +2987,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = &result.ledger.entries[0];
         assert!(
             !entry.all_invariants_verified(),
@@ -3010,7 +3010,7 @@ mod tests {
         let input = simple_input(specs);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_transport_report(&result);
         assert!(
             report.contains("incompatible"),
@@ -3048,7 +3048,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let m = &result.ledger.morphisms[0];
         assert!(m.is_safe());
         assert!(m.summary_line().contains("safe"));
@@ -3069,7 +3069,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired,
@@ -3084,7 +3084,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::Incompatible,
@@ -3102,7 +3102,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired,
@@ -3120,7 +3120,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::Incompatible,
@@ -3138,7 +3138,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired,
@@ -3157,7 +3157,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.ledger.entries[0].verdict,
             TransportVerdict::AdapterRequired,
@@ -3210,7 +3210,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Lossy morphism should trigger regression mask.
         assert_eq!(
             result.outcome,
@@ -3248,7 +3248,7 @@ mod tests {
         let input = simple_input(specs);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Budget limits masks to 1.
         assert_eq!(result.ledger.regression_masks.len(), 1);
     }
@@ -3323,7 +3323,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mask = &result.ledger.regression_masks[0];
         assert!(
             mask.morphism_id.is_some(),
@@ -3351,7 +3351,7 @@ mod tests {
         }]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Find the low-coverage mask (mask type 2 has no morphism_id).
         let low_cov_masks: Vec<_> = result
             .ledger
@@ -3401,7 +3401,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should have at least 2 masks: lossy morphism mask + low coverage mask.
         assert!(
             result.ledger.regression_masks.len() >= 2,
@@ -3430,7 +3430,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.ledger.entries[0].confidence_millionths, 0);
     }
 
@@ -3450,7 +3450,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.ledger.entries[0].confidence_millionths, MILLION);
     }
 
@@ -3513,7 +3513,7 @@ mod tests {
         let input = simple_input(specs);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pairs = result.ledger.version_pairs();
         assert_eq!(pairs.len(), 2);
     }
@@ -3529,7 +3529,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.ledger.entries[0].is_blocking());
     }
 
@@ -3540,7 +3540,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.ledger.entries[0].is_blocking());
     }
 
@@ -3564,7 +3564,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_transport_report(&result);
         assert!(report.contains("Delta:"), "report should show delta lines");
         assert!(
@@ -3603,10 +3603,10 @@ mod tests {
         };
         let r1 = a
             .analyze(&input1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = a
             .analyze(&input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             r1.ledger.morphisms[0].evidence_hash, r2.ledger.morphisms[0].evidence_hash,
             "morphism hash should be deterministic regardless of epoch"
@@ -3633,10 +3633,10 @@ mod tests {
         };
         let r1 = a
             .analyze(&make_input("morph-alpha"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = a
             .analyze(&make_input("morph-beta"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             r1.ledger.morphisms[0].evidence_hash,
             r2.ledger.morphisms[0].evidence_hash,
@@ -3673,7 +3673,7 @@ mod tests {
         let input = simple_input(vec![spec]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = &result.ledger.entries[0];
         let json = serde_json::to_string(entry).expect("serialize derived Serialize");
         let back: TransportEntry =
@@ -3705,7 +3705,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let morph = &result.ledger.morphisms[0];
         let json = serde_json::to_string(morph).expect("serialize derived Serialize");
         let back: CompatibilityMorphism =
@@ -3726,14 +3726,14 @@ mod tests {
                 &SchemaId::from_definition(b"mask-serde"),
                 b"mask-serde-data",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             entry_id: derive_id(
                 ObjectDomain::EvidenceRecord,
                 "mask-entry",
                 &SchemaId::from_definition(b"mask-entry"),
                 b"mask-entry-data",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             morphism_id: Some(
                 derive_id(
                     ObjectDomain::EvidenceRecord,
@@ -3741,7 +3741,7 @@ mod tests {
                     &SchemaId::from_definition(b"mask-morph"),
                     b"mask-morph-data",
                 )
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             ),
             masked_aspect: "serde-aspect".to_string(),
             reason: "serde test reason".to_string(),
@@ -3768,14 +3768,14 @@ mod tests {
                 &SchemaId::from_definition(b"exact"),
                 b"exact-500k",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             entry_id: derive_id(
                 ObjectDomain::EvidenceRecord,
                 "test",
                 &SchemaId::from_definition(b"exact"),
                 b"exact-500k-entry",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             morphism_id: None,
             masked_aspect: "boundary".to_string(),
             reason: "boundary test".to_string(),
@@ -3795,14 +3795,14 @@ mod tests {
                 &SchemaId::from_definition(b"below"),
                 b"below-500k",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             entry_id: derive_id(
                 ObjectDomain::EvidenceRecord,
                 "test",
                 &SchemaId::from_definition(b"below"),
                 b"below-500k-entry",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             morphism_id: None,
             masked_aspect: "boundary".to_string(),
             reason: "below boundary".to_string(),
@@ -3830,7 +3830,7 @@ mod tests {
         let input = simple_input(vec![s_unchanged, s_adapter, s_incompat]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ledger = &result.ledger;
 
         assert_eq!(
@@ -3871,7 +3871,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.analysis_epoch, 42_000);
         assert_eq!(result.ledger.compiled_epoch, 42_000);
     }
@@ -3890,7 +3890,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_transport_report(&result);
         assert!(
             report.contains("epoch 999"),
@@ -3984,7 +3984,7 @@ mod tests {
         };
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify structure.
         assert_eq!(result.total_entries, 3);
@@ -4027,7 +4027,7 @@ mod tests {
         let input = simple_input(specs);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = result.ledger.summary_line();
         assert!(s.contains("3 entries"));
         assert!(s.contains("1 unchanged"));
@@ -4045,7 +4045,7 @@ mod tests {
         let input = simple_input(vec![simple_spec("meta-test", vec![])]);
         let result = a
             .analyze(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.schema_version, TRANSPORT_LEDGER_SCHEMA_VERSION);
         assert_eq!(result.bead_id, TRANSPORT_LEDGER_BEAD_ID);
     }

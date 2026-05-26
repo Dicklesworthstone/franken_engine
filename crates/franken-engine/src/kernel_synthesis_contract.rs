@@ -540,7 +540,7 @@ pub fn run_kernel_synth_evidence() -> KernelSynthEvidenceManifest {
 // ---------------------------------------------------------------------------
 
 fn compute_structural_hash<T: Serialize>(value: &T) -> ContentHash {
-    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
+    let bytes = serde_json::to_vec(value).expect("serialization should succeed");
     ContentHash::compute(&bytes)
 }
 

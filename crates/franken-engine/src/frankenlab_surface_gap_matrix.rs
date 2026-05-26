@@ -1062,7 +1062,7 @@ mod tests {
         let m = build_canonical_gap_matrix();
         let a = m
             .for_surface(SurfaceId::LabRuntime)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(a.decision, MigrationDecision::MaintainedWrapper);
     }
 
@@ -1071,7 +1071,7 @@ mod tests {
         let m = build_canonical_gap_matrix();
         let a = m
             .for_surface(SurfaceId::ReleaseGate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(a.decision, MigrationDecision::ThinBridge);
     }
 

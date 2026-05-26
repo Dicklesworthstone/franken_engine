@@ -814,7 +814,7 @@ mod tests {
     fn contract_validates_ok() {
         test_contract()
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -880,7 +880,7 @@ mod tests {
     fn ev_model_validates_ok() {
         test_ev_model()
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -916,7 +916,7 @@ mod tests {
         // In millionths: 2_420_000
         let net = ev
             .net_ev_point_estimate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(net, 2_420_000);
     }
 
@@ -935,7 +935,7 @@ mod tests {
     fn risk_budget_validates_ok() {
         test_risk_budget()
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1586,11 +1586,11 @@ mod tests {
         let first = *set
             .iter()
             .next()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let last = *set
             .iter()
             .next_back()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(first < last);
     }
 
@@ -1667,7 +1667,7 @@ mod tests {
         let first = *set
             .iter()
             .next()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(first, ArtifactType::Proof);
     }
 
@@ -1700,7 +1700,7 @@ mod tests {
         let first = *set
             .iter()
             .next()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(first, KillTrigger::BudgetExhaustedNoSignal);
     }
 
@@ -1863,7 +1863,7 @@ mod tests {
         };
         let net = ev
             .net_ev_point_estimate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(net, -700_000);
     }
 
@@ -1880,7 +1880,7 @@ mod tests {
         };
         let net = ev
             .net_ev_point_estimate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(net, 4_500_000);
     }
 
@@ -1922,7 +1922,7 @@ mod tests {
             benefit_on_success_millionths: 1_000_000,
             harm_on_failure_millionths: -50_000,
         };
-        ev.validate().expect("serde deserialization should succeed");
+        ev.validate().expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1937,7 +1937,7 @@ mod tests {
             benefit_on_success_millionths: 1_000_000,
             harm_on_failure_millionths: -50_000,
         };
-        ev.validate().expect("serde deserialization should succeed");
+        ev.validate().expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1952,7 +1952,7 @@ mod tests {
             benefit_on_success_millionths: 1_000_000,
             harm_on_failure_millionths: -50_000,
         };
-        ev.validate().expect("serde deserialization should succeed");
+        ev.validate().expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2078,7 +2078,7 @@ mod tests {
     fn enrich_contract_no_governance_signature() {
         let mut c = test_contract();
         c.governance_signature = None;
-        c.validate().expect("serde deserialization should succeed");
+        c.validate().expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: MoonshotContract =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2184,7 +2184,7 @@ mod tests {
         };
         let _net = ev
             .net_ev_point_estimate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2201,7 +2201,7 @@ mod tests {
             description: "Canary conformance evidence".into(),
             blocking: true,
         });
-        let json = serde_json::to_string_pretty(&c).expect("serde deserialization should succeed");
+        let json = serde_json::to_string_pretty(&c).expect("serialization should succeed");
         let back: MoonshotContract =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(c, back);
@@ -2294,7 +2294,7 @@ mod tests {
                 blocking: (i % 2 == 0),
             });
         }
-        c.validate().expect("serde deserialization should succeed");
+        c.validate().expect("operation should succeed for valid inputs");
         let blocking_research: Vec<_> = c
             .artifact_obligations
             .iter()
@@ -2314,7 +2314,7 @@ mod tests {
         let rb = RiskBudget {
             dimension_caps: caps,
         };
-        rb.validate().expect("serde deserialization should succeed");
+        rb.validate().expect("operation should succeed for valid inputs");
         assert_eq!(rb.dimension_caps.len(), 4);
         let json = serde_json::to_string(&rb).expect("serialize derived Serialize");
         let back: RiskBudget = serde_json::from_str(&json).expect("deserialize known-valid JSON");

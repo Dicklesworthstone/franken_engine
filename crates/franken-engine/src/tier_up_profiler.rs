@@ -397,7 +397,7 @@ fn normalize_limit(value: usize) -> usize {
 
 fn sha256_hex<T: Serialize>(value: &T) -> String {
     // SAFETY: serde_json::to_vec only fails on writer errors, not possible with Vec<u8>
-    let payload = serde_json::to_vec(value).expect("serde deserialization should succeed");
+    let payload = serde_json::to_vec(value).expect("serialization should succeed");
     let digest = Sha256::digest(payload);
     hex::encode(digest)
 }
@@ -1242,7 +1242,7 @@ mod tests {
             .events
             .iter()
             .find(|e| e.event == "tier_up_completed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(completed.outcome, "deny");
         assert_eq!(completed.reason, "insufficient_total_steps");
     }
@@ -1353,7 +1353,7 @@ mod tests {
             .events
             .iter()
             .find(|e| e.event == "tier_up_completed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(completed.outcome, "allow");
     }
 

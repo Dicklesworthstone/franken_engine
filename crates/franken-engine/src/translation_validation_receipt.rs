@@ -1638,7 +1638,7 @@ mod tests {
         assert_eq!(
             ev.metadata
                 .get("solver")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "z3"
         );
     }
@@ -2130,7 +2130,7 @@ mod tests {
         );
         chain
             .append(r)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.receipts.len(), 1);
         assert_eq!(chain.next_sequence, 2);
     }
@@ -2152,11 +2152,11 @@ mod tests {
         );
         chain
             .append(r1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let parent = chain
             .last_receipt()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .content_hash;
         let r2 = TranslationValidationReceipt::new(
             2,
@@ -2172,7 +2172,7 @@ mod tests {
         );
         chain
             .append(r2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.receipts.len(), 2);
     }
 
@@ -2193,7 +2193,7 @@ mod tests {
         );
         chain
             .append(r1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let r2 = TranslationValidationReceipt::new(
             2,
@@ -2310,7 +2310,7 @@ mod tests {
             parent = Some(r.content_hash);
             chain
                 .append(r)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert_eq!(chain.receipts.len(), 3);
@@ -2336,11 +2336,11 @@ mod tests {
         );
         chain
             .append(r1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let parent = chain
             .last_receipt()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .content_hash;
         let r2 = TranslationValidationReceipt::new(
             2,
@@ -2356,7 +2356,7 @@ mod tests {
         );
         chain
             .append(r2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(chain.success_count(), 1);
         assert_eq!(chain.rejected_count(), 1);
@@ -2379,7 +2379,7 @@ mod tests {
         );
         chain
             .append(r)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.total_cost_improvement(), -500_000);
     }
 
@@ -2400,7 +2400,7 @@ mod tests {
         );
         chain
             .append(r)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = chain.verify_integrity();
         assert!(result.valid);
         assert_eq!(result.receipt_count, 1);
@@ -2423,7 +2423,7 @@ mod tests {
         );
         chain
             .append(r)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chain.receipts[0].optimization_id = "opt-tampered".into();
 
         let result = chain.verify_integrity();
@@ -2485,7 +2485,7 @@ mod tests {
         );
         chain
             .append(receipt)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chain.next_sequence = 99;
 
         let result = chain.verify_integrity();
@@ -2516,7 +2516,7 @@ mod tests {
         );
         chain
             .record_failure(f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.failure_count(), 1);
     }
 
@@ -2562,7 +2562,7 @@ mod tests {
         );
         chain
             .append(r)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let found = chain.receipts_for_optimization("target-opt");
         assert_eq!(found.len(), 1);
         assert!(chain.receipts_for_optimization("other").is_empty());
@@ -2585,7 +2585,7 @@ mod tests {
         );
         chain
             .append(r)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&chain).expect("serialize derived Serialize");
         let restored: ReceiptChain =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2663,7 +2663,7 @@ mod tests {
         let result = em.emit(make_input("opt-1", proven_verdict()));
         let receipt = result
             .receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(em.verify_receipt(receipt));
         assert_eq!(em.stats.total_verifications, 1);
         assert_eq!(em.stats.verification_failures, 0);
@@ -2675,7 +2675,7 @@ mod tests {
         let result = em.emit(make_input("opt-1", proven_verdict()));
         let mut receipt = result
             .receipt()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         // Tamper with signature
         receipt.signature = AuthenticityHash::compute_keyed(b"wrong", b"data");
@@ -2932,10 +2932,10 @@ mod tests {
         );
         chain
             .record_failure(f1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         chain
             .record_failure(f2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(chain.failures_for_pack("pack-alpha").len(), 1);
         assert_eq!(chain.failures_for_pack("pack-beta").len(), 1);
         assert_eq!(chain.failures_for_pack("pack-gamma").len(), 0);

@@ -1689,7 +1689,7 @@ mod tests {
         );
         fast_report
             .finalize()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut slow_report = EcosystemCompatibilityReport::new(epoch);
         slow_report.add_test_result(
@@ -1699,7 +1699,7 @@ mod tests {
         );
         slow_report
             .finalize()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(
             fast_report.total_execution_time_ms,

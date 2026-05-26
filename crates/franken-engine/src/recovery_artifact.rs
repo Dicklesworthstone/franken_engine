@@ -789,7 +789,7 @@ mod tests {
         // verify() only fails on malformed artifacts or signature errors (both impossible here).
         let verdict = store
             .verify(&artifact, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(verdict.is_valid());
     }
 
@@ -884,7 +884,7 @@ mod tests {
         // SAFETY: verify cannot fail with valid artifact from builder
         let verdict = store
             .verify(&artifact, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!verdict.is_valid());
         if let RecoveryVerdict::Invalid { reasons } = &verdict {
             assert!(reasons[0].contains("hash chain"));
@@ -916,7 +916,7 @@ mod tests {
         // SAFETY: verify cannot fail with valid artifact from builder
         let verdict = store
             .verify(&artifact, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!verdict.is_valid());
         if let RecoveryVerdict::Invalid { reasons } = &verdict {
             assert!(reasons[0].contains("quorum not met"));
@@ -938,7 +938,7 @@ mod tests {
         assert_eq!(
             store
                 .get(&hex_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .epoch_id,
             1
         );
@@ -969,7 +969,7 @@ mod tests {
         // SAFETY: verify cannot fail with valid artifact from helper
         store
             .verify(&artifact, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = store.drain_events();
         assert_eq!(events.len(), 2);
@@ -1509,7 +1509,7 @@ mod tests {
         store.record(a2, "t2");
         store
             .verify(&a1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let counts = store.event_counts();
         assert_eq!(counts.get("artifact_recorded"), Some(&2));
@@ -1792,7 +1792,7 @@ mod tests {
 
         let verdict = store
             .verify(&artifact, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!verdict.is_valid());
         if let RecoveryVerdict::Invalid { reasons } = &verdict {
             assert_eq!(reasons.len(), 2);
@@ -2047,7 +2047,7 @@ mod tests {
         let artifact = build_valid_artifact();
         store
             .verify(&artifact, "trace-v")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = store.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].event, "artifact_verified");
@@ -2071,7 +2071,7 @@ mod tests {
         let artifact = build_valid_artifact();
         store
             .verify(&artifact, "t-full")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = store.drain_events();
         let ev = &events[0];
         assert!(!ev.artifact_id.is_empty());

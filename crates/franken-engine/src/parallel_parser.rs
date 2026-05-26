@@ -2466,7 +2466,7 @@ mod tests {
         let config = default_config();
         let input = make_input("var x = 1;", &config);
         // SAFETY: Test-only unwrap expecting valid JS syntax to parse successfully
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(output.serial_reason.is_some());
     }
@@ -2480,7 +2480,7 @@ mod tests {
         };
         let input = make_input("identifier_without_any_delimiters", &config);
         // SAFETY: Test-only unwrap expecting valid JS identifier to parse successfully
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(matches!(
             output.serial_reason,
@@ -2497,7 +2497,7 @@ mod tests {
         };
         let input = make_input("only_one_boundary_at_eof\n", &config);
         // SAFETY: Test-only unwrap expecting valid JS code to parse successfully
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(matches!(
             output.serial_reason,
@@ -2514,7 +2514,7 @@ mod tests {
         };
         let input = make_input("var x = 1; var y = 2;", &config);
         // SAFETY: Test-only unwrap expecting valid JS variable declarations to parse successfully
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(matches!(
             output.serial_reason,
@@ -2597,7 +2597,7 @@ mod tests {
         assert_eq!(
             plan.chunks
                 .first()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .0,
             0
         );
@@ -2605,7 +2605,7 @@ mod tests {
         assert_eq!(
             plan.chunks
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .1,
             input.len() as u64
         );
@@ -2625,7 +2625,7 @@ mod tests {
         assert_eq!(
             plan.chunks
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .1,
             10
         );
@@ -2641,7 +2641,7 @@ mod tests {
         let split = plan.chunks[0].1 as usize;
         // SAFETY: Test input is valid UTF-8 JavaScript source code
         let first_chunk =
-            std::str::from_utf8(&source[..split]).expect("serde deserialization should succeed");
+            std::str::from_utf8(&source[..split]).expect("operation should succeed for valid inputs");
         assert!(
             first_chunk.contains("}\n"),
             "expected split to occur on/after a block boundary, got: {first_chunk:?}"
@@ -2901,7 +2901,7 @@ mod tests {
         let config = small_config();
         let input = make_input(&source, &config);
         // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         // Should attempt parallel and succeed (or fall back).
         assert!(output.token_count > 0);
         assert!(output.chunk_plan.is_some());
@@ -2916,9 +2916,9 @@ mod tests {
         let config = small_config();
         let input = make_input(&source, &config);
         // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
-        let o1 = parse(&input).expect("serde deserialization should succeed");
+        let o1 = parse(&input).expect("operation should succeed for valid inputs");
         // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
-        let o2 = parse(&input).expect("serde deserialization should succeed");
+        let o2 = parse(&input).expect("operation should succeed for valid inputs");
         assert_eq!(o1.output_hash, o2.output_hash);
         assert_eq!(o1.token_count, o2.token_count);
     }
@@ -2928,7 +2928,7 @@ mod tests {
         let config = default_config(); // default 4096 threshold
         let input = make_input("x + y", &config);
         // SAFETY: Simple valid JavaScript expression should parse successfully
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert_eq!(output.mode, ParserMode::Serial);
         assert!(output.chunk_plan.is_none());
     }
@@ -2942,7 +2942,7 @@ mod tests {
         let config = small_config();
         let input = make_input(&source, &config);
         // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
 
         // Also parse serially.
         let serial_config = ParallelConfig {
@@ -2952,7 +2952,7 @@ mod tests {
         };
         let serial_input = make_input(&source, &serial_config);
         // SAFETY: Test-only unwrap expecting valid JS parsing with known source
-        let serial_output = parse(&serial_input).expect("serde deserialization should succeed");
+        let serial_output = parse(&serial_input).expect("operation should succeed for valid inputs");
 
         // Token counts should match.
         assert_eq!(output.token_count, serial_output.token_count);
@@ -3063,7 +3063,7 @@ mod tests {
         let config = small_config();
         let input = make_input(&source, &config);
         // SAFETY: Test-only unwrap expecting valid JS parsing with known source
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert!(output.token_count > 0);
     }
 
@@ -3076,7 +3076,7 @@ mod tests {
         let config = small_config();
         let input = make_input(&source, &config);
         // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert!(output.token_count > 0);
     }
 
@@ -3137,7 +3137,7 @@ mod tests {
         let transcript = build_schedule_transcript(&chunk_plan, 1234);
         // SAFETY: Test-only unwrap with valid transcript and chunk plan
         let replay_order = replay_schedule_transcript(&transcript, &chunk_plan)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(replay_order, transcript.execution_order);
         assert_eq!(replay_order.len(), chunk_plan.chunks.len());
     }
@@ -3214,9 +3214,9 @@ mod tests {
         let config = small_config();
         let input = make_input(&source, &config);
         // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
-        let o1 = parse(&input).expect("serde deserialization should succeed");
+        let o1 = parse(&input).expect("operation should succeed for valid inputs");
         // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
-        let o2 = parse(&input).expect("serde deserialization should succeed");
+        let o2 = parse(&input).expect("operation should succeed for valid inputs");
 
         if let (Some(w1), Some(w2)) = (&o1.merge_witness, &o2.merge_witness) {
             assert_eq!(w1.witness_hash, w2.witness_hash);
@@ -3252,7 +3252,7 @@ mod tests {
         }
         let input = make_input(&source, &config);
         // SAFETY: Test generates valid JavaScript source that parse() should handle successfully
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&output).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
@@ -3267,7 +3267,7 @@ mod tests {
         let config = default_config();
         let input = make_input("x + y", &config);
         // SAFETY: parse cannot fail on valid test input
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &output);
         assert!(!entries.is_empty());
         assert!(entries.iter().any(|e| e.event == "parse_complete"));
@@ -3283,7 +3283,7 @@ mod tests {
         let config = small_config();
         let input = make_input(&source, &config);
         // SAFETY: parse cannot fail on valid test input
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &output);
         assert!(!entries.is_empty());
     }
@@ -3293,7 +3293,7 @@ mod tests {
         let config = default_config();
         let input = make_input("x + y", &config);
         // SAFETY: parse cannot fail on valid test input
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-42", &output);
         assert!(entries.iter().all(|e| e.trace_id == "trace-42"));
     }
@@ -3352,7 +3352,7 @@ mod tests {
         let config = default_config();
         let input = make_input("x", &config);
         // SAFETY: parse cannot fail on valid test input
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert_eq!(output.schema_version, SCHEMA_VERSION);
     }
 
@@ -3392,9 +3392,9 @@ mod tests {
         let input2 = make_input(&source, &config2);
         let input4 = make_input(&source, &config4);
         // SAFETY: Test scenario with valid generated source code; parsing should succeed
-        let o2 = parse(&input2).expect("serde deserialization should succeed");
+        let o2 = parse(&input2).expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with valid generated source code; parsing should succeed
-        let o4 = parse(&input4).expect("serde deserialization should succeed");
+        let o4 = parse(&input4).expect("operation should succeed for valid inputs");
         assert_eq!(o2.token_count, o4.token_count);
     }
 
@@ -3778,7 +3778,7 @@ mod tests {
     fn replay_envelope_from_serial_parse() {
         let config = default_config();
         let input = make_input("x + y", &config);
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         let digest = compute_routing_digest(input.source, &config);
         let envelope = build_replay_envelope(&input, &output, &digest);
         assert_eq!(envelope.schema_version, SCHEMA_VERSION);
@@ -3795,7 +3795,7 @@ mod tests {
             source.push_str(&format!("var x{} = {};\n", i, i));
         }
         let input = make_input(&source, &config);
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         let digest = compute_routing_digest(input.source, &config);
         let envelope = build_replay_envelope(&input, &output, &digest);
         assert!(envelope.input_bytes > 100);
@@ -3806,7 +3806,7 @@ mod tests {
     fn replay_envelope_serde_roundtrip() {
         let config = default_config();
         let input = make_input("x", &config);
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         let digest = compute_routing_digest(input.source, &config);
         let envelope = build_replay_envelope(&input, &output, &digest);
         // SAFETY: to_string cannot fail on derived Serialize struct
@@ -3822,7 +3822,7 @@ mod tests {
         let config = default_config();
         let input = make_input("var a = 1;", &config);
         // SAFETY: parse cannot fail on valid test input
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         let digest = compute_routing_digest(input.source, &config);
         let e1 = build_replay_envelope(&input, &output, &digest);
         let e2 = build_replay_envelope(&input, &output, &digest);
@@ -3858,7 +3858,7 @@ mod tests {
         assert!(
             rc.disable_reason
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("3 consecutive")
         );
         assert_eq!(rc.failure_trace_ids.len(), 3);
@@ -3931,7 +3931,7 @@ mod tests {
         assert_eq!(digest.decision, ParserMode::Serial);
 
         let input = make_input(source, &config);
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert_eq!(output.mode, ParserMode::Serial);
 
         let envelope = build_replay_envelope(&input, &output, &digest);
@@ -3949,7 +3949,7 @@ mod tests {
         assert_eq!(digest.decision, ParserMode::Parallel);
 
         let input = make_input(&source, &config);
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert!(output.token_count > 0);
 
         let envelope = build_replay_envelope(&input, &output, &digest);
@@ -3967,7 +3967,7 @@ mod tests {
         }
 
         let input = make_input(&source, &config);
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert!(output.token_count > 0);
         rc.record_success();
         assert!(!rc.parallel_disabled);
@@ -3994,8 +3994,8 @@ mod tests {
         };
         let i1 = make_input(&source, &config1);
         let i2 = make_input(&source, &config2);
-        let o1 = parse(&i1).expect("serde deserialization should succeed");
-        let o2 = parse(&i2).expect("serde deserialization should succeed");
+        let o1 = parse(&i1).expect("operation should succeed for valid inputs");
+        let o2 = parse(&i2).expect("operation should succeed for valid inputs");
         assert_eq!(o1.token_count, o2.token_count);
     }
 
@@ -4013,7 +4013,7 @@ mod tests {
         };
         let input = make_input(&source, &config);
         // SAFETY: Test scenario with valid generated source code; parsing should succeed
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert!(output.token_count > 0);
         if let Some(ref plan) = output.chunk_plan {
             assert!(plan.worker_count <= 8);
@@ -4038,7 +4038,7 @@ mod tests {
         };
         let input = make_input(source, &config);
         // SAFETY: Test scenario with valid newline-only source; parsing should succeed
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert_eq!(output.token_count, 0);
     }
 
@@ -4054,7 +4054,7 @@ mod tests {
         let config = small_config();
         let input = make_input(&source, &config);
         // SAFETY: Test scenario with valid generated source code; parsing should succeed
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert!(output.token_count > 0);
     }
 
@@ -4222,7 +4222,7 @@ mod tests {
             source.push_str(&format!("var log_{i} = {i};\n"));
         }
         let input = make_input(&source, &config);
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         assert!(output.fallback_cause.is_some(), "expected a fallback");
 
         let entries = generate_log_entries("trace-fb", &output);
@@ -4338,7 +4338,7 @@ mod tests {
         let last_end = plan
             .chunks
             .last()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .1;
         assert_eq!(first_start, 0);
         assert_eq!(last_end, 6);
@@ -4352,7 +4352,7 @@ mod tests {
             source.push_str(&format!("var env_{i} = {i};\n"));
         }
         let input = make_input(&source, &config);
-        let output = parse(&input).expect("serde deserialization should succeed");
+        let output = parse(&input).expect("operation should succeed for valid inputs");
         let digest = compute_routing_digest(&source, &config);
         let envelope = build_replay_envelope(&input, &output, &digest);
         // The replay command should include --transcript-hash when a transcript exists.

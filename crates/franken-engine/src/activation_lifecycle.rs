@@ -1116,16 +1116,16 @@ mod tests {
     fn activate_component(ctrl: &mut ActivationLifecycleController, id: &str, version: &str) {
         // SAFETY: Test helper with valid descriptor should succeed registration
         ctrl.register(test_descriptor(id, version), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test helper with passing validation should succeed activation begin
         ctrl.begin_activation(id, &passing_validation(id, version), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test helper secret injection should succeed with valid secrets
         ctrl.inject_secrets(id, &[EphemeralSecret::new("key1", vec![0xAA])], "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test helper activation completion should succeed after proper setup
         ctrl.complete_activation(id, 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- registration -------------------------------------------------------
@@ -1135,7 +1135,7 @@ mod tests {
         let mut ctrl = make_controller();
         // SAFETY: Test registering component with valid descriptor should succeed
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.component_count(), 1);
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Inactive));
     }
@@ -1145,7 +1145,7 @@ mod tests {
         let mut ctrl = make_controller();
         // SAFETY: Test first registration with valid descriptor should succeed
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ctrl
             .register(test_descriptor("comp-a", "2.0.0"), "trace-1")
             .unwrap_err();
@@ -1166,7 +1166,7 @@ mod tests {
         // SAFETY: Test just verified known_good("comp-a") is Some above
         assert_eq!(
             ctrl.known_good("comp-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "1.0.0"
         );
@@ -1177,7 +1177,7 @@ mod tests {
         let mut ctrl = make_controller();
         // SAFETY: Test registration with valid descriptor should succeed before testing validation failure
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ctrl
             .begin_activation("comp-a", &failing_validation("comp-a", "1.0.0"), "trace-1")
             .unwrap_err();
@@ -1202,7 +1202,7 @@ mod tests {
     fn complete_activation_requires_pending() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ctrl
             .complete_activation("comp-a", 1, "trace-1")
             .unwrap_err();
@@ -1215,9 +1215,9 @@ mod tests {
     fn inject_secrets_in_pending_state() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.begin_activation("comp-a", &passing_validation("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let secrets = vec![
             EphemeralSecret::new("session_key", vec![1, 2, 3]),
@@ -1225,7 +1225,7 @@ mod tests {
         ];
         let receipt = ctrl
             .inject_secrets("comp-a", &secrets, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.injected_keys.len(), 2);
         assert_eq!(receipt.component_id, "comp-a");
     }
@@ -1234,7 +1234,7 @@ mod tests {
     fn inject_secrets_requires_pending() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ctrl.inject_secrets("comp-a", &[], "trace-1").unwrap_err();
         assert!(matches!(err, LifecycleError::InvalidTransition { .. }));
     }
@@ -1275,7 +1275,7 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
 
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             ctrl.state("comp-a"),
             Some(LifecycleState::Updating(RolloutPhase::Shadow))
@@ -1283,28 +1283,28 @@ mod tests {
 
         let phase = ctrl
             .advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(phase, RolloutPhase::Canary);
 
         let phase = ctrl
             .advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(phase, RolloutPhase::Ramp);
 
         let phase = ctrl
             .advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(phase, RolloutPhase::Default);
 
         // Advancing past Default finalizes to Active.
         let phase = ctrl
             .advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(phase, RolloutPhase::Default);
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Active));
         assert_eq!(
             ctrl.known_good("comp-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "2.0.0"
         );
@@ -1314,7 +1314,7 @@ mod tests {
     fn update_requires_active_state() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ctrl
             .begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
             .unwrap_err();
@@ -1337,11 +1337,11 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
 
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let pin = ctrl
             .rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pin.version, "1.0.0");
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Active));
     }
@@ -1352,13 +1352,13 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
 
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // canary
+            .expect("operation should succeed for valid inputs"); // canary
 
         let pin = ctrl
             .rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pin.version, "1.0.0");
     }
 
@@ -1366,7 +1366,7 @@ mod tests {
     fn rollback_from_inactive_fails() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ctrl.rollback("comp-a", "trace-1").unwrap_err();
         assert!(matches!(err, LifecycleError::InvalidTransition { .. }));
     }
@@ -1375,9 +1375,9 @@ mod tests {
     fn rollback_without_known_good_fails() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.begin_activation("comp-a", &passing_validation("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // PendingActivation but no known_good yet.
         let err = ctrl.rollback("comp-a", "trace-1").unwrap_err();
         assert!(matches!(err, LifecycleError::NoKnownGoodVersion { .. }));
@@ -1388,30 +1388,30 @@ mod tests {
         let mut ctrl = make_controller();
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         ctrl.deactivate("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.begin_activation("comp-a", &passing_validation("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.inject_secrets(
             "comp-a",
             &[EphemeralSecret::new("stale_key", vec![0xCC])],
             "trace-1",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let entry = ctrl
             .find_component("comp-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.state, LifecycleState::PendingActivation);
         assert_eq!(entry.injected_secret_keys, vec!["stale_key"]);
 
         let pin = ctrl
             .rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pin.version, "1.0.0");
 
         let entry = ctrl
             .find_component("comp-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.state, LifecycleState::Active);
         assert!(entry.injected_secret_keys.is_empty());
     }
@@ -1424,28 +1424,28 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
 
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         ctrl.set_tick(10);
         assert!(
             ctrl.report_crash("comp-a", "trace-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
         ctrl.set_tick(11);
         assert!(
             ctrl.report_crash("comp-a", "trace-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
         ctrl.set_tick(12);
         let result = ctrl
             .report_crash("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_some());
         assert_eq!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "1.0.0"
         );
@@ -1458,19 +1458,19 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
 
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Crashes spread across different windows.
         ctrl.set_tick(10);
         ctrl.report_crash("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.set_tick(100); // Far beyond window.
         ctrl.report_crash("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.set_tick(200);
         let result = ctrl
             .report_crash("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none()); // No crash-loop because spread out.
     }
 
@@ -1482,11 +1482,11 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
 
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         ctrl.set_tick(10);
         ctrl.rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Try to update immediately after rollback.
         ctrl.set_tick(11);
@@ -1498,7 +1498,7 @@ mod tests {
         // After holdoff expires.
         ctrl.set_tick(10 + DEFAULT_ROLLBACK_HOLDOFF_TICKS);
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "3.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- checkpoint regression guard ----------------------------------------
@@ -1521,7 +1521,7 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
 
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 2, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             ctrl.state("comp-a"),
             Some(LifecycleState::Updating(RolloutPhase::Shadow))
@@ -1535,7 +1535,7 @@ mod tests {
         let mut ctrl = make_controller();
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         ctrl.deactivate("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Inactive));
     }
 
@@ -1543,7 +1543,7 @@ mod tests {
     fn deactivate_non_active_fails() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ctrl.deactivate("comp-a", "trace-1").unwrap_err();
         assert!(matches!(err, LifecycleError::InvalidTransition { .. }));
     }
@@ -1575,9 +1575,9 @@ mod tests {
         ctrl.drain_events();
 
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = ctrl.drain_events();
         assert!(
@@ -1597,18 +1597,18 @@ mod tests {
         let mut ctrl = make_controller();
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.drain_events();
 
         ctrl.set_tick(10);
         ctrl.report_crash("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.set_tick(11);
         ctrl.report_crash("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.set_tick(12);
         ctrl.report_crash("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = ctrl.drain_events();
         assert!(
@@ -1625,7 +1625,7 @@ mod tests {
         let mut ctrl = make_controller();
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         ctrl.register(test_descriptor("comp-b", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary = ctrl.summary();
         assert_eq!(summary.len(), 2);
@@ -1639,7 +1639,7 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         activate_component(&mut ctrl, "comp-b", "1.0.0");
         ctrl.register(test_descriptor("comp-c", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(ctrl.active_count(), 2);
     }
@@ -1978,43 +1978,43 @@ mod tests {
         // 2. Begin update to v2.0.0.
         ctrl.set_tick(100);
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 2, "trace-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.advance_rollout("comp-a", "trace-2")
-            .expect("serde deserialization should succeed"); // canary
+            .expect("operation should succeed for valid inputs"); // canary
 
         // 3. Crash 3 times -> auto-rollback.
         ctrl.set_tick(101);
         ctrl.report_crash("comp-a", "trace-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.set_tick(102);
         ctrl.report_crash("comp-a", "trace-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.set_tick(103);
         let pin = ctrl
             .report_crash("comp-a", "trace-2")
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pin.version, "1.0.0");
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Active));
 
         // 4. Wait for holdoff, then re-update.
         ctrl.set_tick(103 + DEFAULT_ROLLBACK_HOLDOFF_TICKS);
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "3.0.0"), 3, "trace-3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 5. Complete full rollout.
         ctrl.advance_rollout("comp-a", "trace-3")
-            .expect("serde deserialization should succeed"); // canary
+            .expect("operation should succeed for valid inputs"); // canary
         ctrl.advance_rollout("comp-a", "trace-3")
-            .expect("serde deserialization should succeed"); // ramp
+            .expect("operation should succeed for valid inputs"); // ramp
         ctrl.advance_rollout("comp-a", "trace-3")
-            .expect("serde deserialization should succeed"); // default
+            .expect("operation should succeed for valid inputs"); // default
         ctrl.advance_rollout("comp-a", "trace-3")
-            .expect("serde deserialization should succeed"); // finalize -> active
+            .expect("operation should succeed for valid inputs"); // finalize -> active
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Active));
         assert_eq!(
             ctrl.known_good("comp-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "3.0.0"
         );
@@ -2086,16 +2086,16 @@ mod tests {
         let mut ctrl = make_controller();
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // canary
+            .expect("operation should succeed for valid inputs"); // canary
         assert_eq!(
             ctrl.state("comp-a"),
             Some(LifecycleState::Updating(RolloutPhase::Canary))
         );
         let pin = ctrl
             .rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pin.version, "1.0.0");
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Active));
     }
@@ -2105,18 +2105,18 @@ mod tests {
         let mut ctrl = make_controller();
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // canary
+            .expect("operation should succeed for valid inputs"); // canary
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // ramp
+            .expect("operation should succeed for valid inputs"); // ramp
         assert_eq!(
             ctrl.state("comp-a"),
             Some(LifecycleState::Updating(RolloutPhase::Ramp))
         );
         let pin = ctrl
             .rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pin.version, "1.0.0");
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Active));
     }
@@ -2127,9 +2127,9 @@ mod tests {
     fn crash_during_pending_activation_no_known_good() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.begin_activation("comp-a", &passing_validation("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             ctrl.state("comp-a"),
             Some(LifecycleState::PendingActivation)
@@ -2139,10 +2139,10 @@ mod tests {
         // third triggers crash-loop but rollback fails (no known-good).
         ctrl.set_tick(1);
         ctrl.report_crash("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.set_tick(2);
         ctrl.report_crash("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.set_tick(3);
         let err = ctrl.report_crash("comp-a", "trace-1").unwrap_err();
         assert!(matches!(err, LifecycleError::NoKnownGoodVersion { .. }));
@@ -2152,7 +2152,7 @@ mod tests {
     fn crash_on_inactive_component_rejected() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ctrl.report_crash("comp-a", "trace-1").unwrap_err();
         assert!(matches!(err, LifecycleError::InvalidTransition { .. }));
     }
@@ -2167,7 +2167,7 @@ mod tests {
 
         // Update comp-a, comp-b stays active.
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             ctrl.state("comp-a"),
             Some(LifecycleState::Updating(RolloutPhase::Shadow))
@@ -2176,17 +2176,17 @@ mod tests {
 
         // Rollback comp-a, comp-b unaffected.
         ctrl.rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Active));
         assert_eq!(
             ctrl.known_good("comp-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "1.0.0"
         );
         assert_eq!(
             ctrl.known_good("comp-b")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "1.0.0"
         );
@@ -2199,18 +2199,18 @@ mod tests {
         let mut ctrl = make_controller();
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         ctrl.deactivate("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Re-activate to verify fresh secret state.
         ctrl.begin_activation("comp-a", &passing_validation("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let receipt = ctrl
             .inject_secrets(
                 "comp-a",
                 &[EphemeralSecret::new("new_key", vec![0xBB])],
                 "trace-1",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.injected_keys, vec!["new_key"]);
     }
 
@@ -2223,7 +2223,7 @@ mod tests {
         ctrl.drain_events();
 
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-u")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = ctrl.drain_events();
         let update_ev = events
             .iter()
@@ -2239,11 +2239,11 @@ mod tests {
     fn transition_events_have_from_to_states() {
         let mut ctrl = make_controller();
         ctrl.register(test_descriptor("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.begin_activation("comp-a", &passing_validation("comp-a", "1.0.0"), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.complete_activation("comp-a", 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = ctrl.drain_events();
         let transitions: Vec<_> = events
@@ -2268,18 +2268,18 @@ mod tests {
             activate_component(&mut ctrl, "comp-a", "1.0.0");
             ctrl.set_tick(200);
             ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 2, "trace-1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             ctrl.advance_rollout("comp-a", "trace-1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             ctrl.set_tick(201);
             ctrl.report_crash("comp-a", "trace-1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             ctrl.set_tick(202);
             ctrl.report_crash("comp-a", "trace-1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             ctrl.set_tick(203);
             ctrl.report_crash("comp-a", "trace-1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let events = ctrl.drain_events();
             // SAFETY: LifecycleEvent derives Serialize and has no non-serializable fields
             serde_json::to_string(&events).expect("serialize derived Serialize")
@@ -2298,25 +2298,25 @@ mod tests {
         // Update v2, rollback, wait holdoff, update v3, complete.
         ctrl.set_tick(10);
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 2, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         ctrl.set_tick(10 + DEFAULT_ROLLBACK_HOLDOFF_TICKS);
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "3.0.0"), 3, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // canary
+            .expect("operation should succeed for valid inputs"); // canary
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // ramp
+            .expect("operation should succeed for valid inputs"); // ramp
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // default
+            .expect("operation should succeed for valid inputs"); // default
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // finalize -> active
+            .expect("operation should succeed for valid inputs"); // finalize -> active
         assert_eq!(ctrl.state("comp-a"), Some(LifecycleState::Active));
         assert_eq!(
             ctrl.known_good("comp-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "3.0.0"
         );
@@ -2329,9 +2329,9 @@ mod tests {
         let mut ctrl = make_controller();
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 1, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.rollback("comp-a", "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // component_version helper should return the known-good version.
         assert_eq!(ctrl.component_version("comp-a"), "1.0.0");
     }
@@ -2494,43 +2494,43 @@ mod tests {
         activate_component(&mut ctrl, "comp-a", "1.0.0");
         assert_eq!(
             ctrl.known_good("comp-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "1.0.0"
         );
 
         // Update to v2, complete rollout (shadow->canary->ramp->default->active).
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "2.0.0"), 2, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // canary
+            .expect("operation should succeed for valid inputs"); // canary
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // ramp
+            .expect("operation should succeed for valid inputs"); // ramp
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // default
+            .expect("operation should succeed for valid inputs"); // default
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // finalize -> active
+            .expect("operation should succeed for valid inputs"); // finalize -> active
         assert_eq!(
             ctrl.known_good("comp-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "2.0.0"
         );
 
         // Update to v3, complete rollout.
         ctrl.begin_update("comp-a", test_descriptor("comp-a", "3.0.0"), 3, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // canary
+            .expect("operation should succeed for valid inputs"); // canary
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // ramp
+            .expect("operation should succeed for valid inputs"); // ramp
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // default
+            .expect("operation should succeed for valid inputs"); // default
         ctrl.advance_rollout("comp-a", "trace-1")
-            .expect("serde deserialization should succeed"); // finalize -> active
+            .expect("operation should succeed for valid inputs"); // finalize -> active
         assert_eq!(
             ctrl.known_good("comp-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             "3.0.0"
         );

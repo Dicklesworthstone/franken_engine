@@ -1030,7 +1030,7 @@ mod tests {
                 payload,
             );
             let json =
-                serde_json::to_value(&envelope).expect("serde deserialization should succeed");
+                serde_json::to_value(&envelope).expect("serialization should succeed");
             assert!(json["payload"].is_object(), "payload must be an object");
         }
     }
@@ -1045,9 +1045,9 @@ mod tests {
         ];
         let expected = ["running", "complete", "failed", "no_events"];
         for (status, expected_str) in statuses.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(status).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(status).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("serde deserialization should succeed"),
+                json.as_str().expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -1076,9 +1076,9 @@ mod tests {
             "proof_specialization_lineage_dashboard",
         ];
         for (stream, expected_str) in streams.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(stream).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(stream).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("serde deserialization should succeed"),
+                json.as_str().expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -1093,9 +1093,9 @@ mod tests {
         ];
         let expected = ["snapshot", "delta", "heartbeat"];
         for (kind, expected_str) in kinds.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(kind).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("serde deserialization should succeed"),
+                json.as_str().expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -1173,9 +1173,9 @@ mod tests {
             (StoreKind::SpecializationIndex, "SpecializationIndex"),
         ];
         for (kind, expected_json) in &kinds {
-            let json = serde_json::to_value(kind).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(kind).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("serde deserialization should succeed"),
+                json.as_str().expect("operation should succeed for valid inputs"),
                 *expected_json
             );
         }
@@ -1224,7 +1224,7 @@ mod tests {
             outcome: "ok".to_string(),
             error_code: None,
         };
-        let json = serde_json::to_value(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&event).expect("serialization should succeed");
         let violations = verify_structured_log(&json, "frankensqlite");
         assert!(violations.is_empty(), "violations: {violations:?}");
     }
@@ -1379,7 +1379,7 @@ mod tests {
     #[test]
     fn fastapi_endpoint_response_log_structured_compliance() {
         let response = sample_health_response();
-        let json = serde_json::to_value(&response).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&response).expect("serialization should succeed");
         let log_json = &json["log"];
         let violations = verify_structured_log(log_json, "fastapi_rust");
         assert!(violations.is_empty(), "violations: {violations:?}");
@@ -1394,7 +1394,7 @@ mod tests {
             component: "service.api".to_string(),
             details: BTreeMap::new(),
         };
-        let json = serde_json::to_value(&error).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&error).expect("serialization should succeed");
         let obj = json.as_object().expect("object");
         for field in ["error_code", "message", "trace_id", "component", "details"] {
             assert!(
@@ -1414,9 +1414,9 @@ mod tests {
         ];
         let expected = ["Start", "Stop", "Suspend", "Quarantine"];
         for (action, expected_str) in actions.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(action).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(action).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("serde deserialization should succeed"),
+                json.as_str().expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -1431,9 +1431,9 @@ mod tests {
         ];
         let expected = ["Start", "Stop", "Status"];
         for (cmd, expected_str) in commands.iter().zip(expected.iter()) {
-            let json = serde_json::to_value(cmd).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(cmd).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("serde deserialization should succeed"),
+                json.as_str().expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -1717,9 +1717,9 @@ mod tests {
 
         // Both should pass structured log verification
         let storage_json =
-            serde_json::to_value(&storage_event).expect("serde deserialization should succeed");
+            serde_json::to_value(&storage_event).expect("serialization should succeed");
         let service_json =
-            serde_json::to_value(&service_log).expect("serde deserialization should succeed");
+            serde_json::to_value(&service_log).expect("serialization should succeed");
 
         let v1 = verify_structured_log(&storage_json, "frankensqlite");
         let v2 = verify_structured_log(&service_json, "fastapi_rust");
@@ -2356,9 +2356,9 @@ mod tests {
             (RegressionClass::Performance, "Performance"),
         ];
         for (variant, expected_name) in &pairs {
-            let json = serde_json::to_value(variant).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(variant).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("serde deserialization should succeed"),
+                json.as_str().expect("operation should succeed for valid inputs"),
                 *expected_name
             );
         }
@@ -2408,23 +2408,23 @@ mod tests {
     fn enrichment_verify_deterministic_serde_all_core_types() {
         // Verify every module-defined type round-trips deterministically.
         verify_deterministic_serde(&RegressionClass::Observability)
-            .expect("serde deserialization should succeed");
-        verify_deterministic_serde(&FieldType::Bool).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        verify_deterministic_serde(&FieldType::Bool).expect("operation should succeed for valid inputs");
         verify_deterministic_serde(&ContractViolation {
             boundary: "b".to_string(),
             contract_name: "c".to_string(),
             regression_class: RegressionClass::Performance,
             detail: "d".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         verify_deterministic_serde(&frankentui_envelope_contract())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         verify_deterministic_serde(&VersionCompatibilityEntry {
             boundary: "x".to_string(),
             current_version: 1,
             minimum_compatible_version: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     }
 
     // ── enrichment: verify_schema_compliance serialization failure ──────

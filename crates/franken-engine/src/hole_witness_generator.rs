@@ -1310,7 +1310,7 @@ mod tests {
     fn generate_for_parser_hole() {
         let hole = make_hole("h1", HoleSurface::Parser, 200_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("serde deserialization should succeed");
+        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(batch.hole_id, "h1");
         assert!(!batch.witnesses.is_empty());
         assert!(batch.has_confident_witness);
@@ -1320,7 +1320,7 @@ mod tests {
     fn generate_for_react_hole() {
         let hole = make_hole("h2", HoleSurface::React, 300_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("serde deserialization should succeed");
+        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(batch.surface, HoleSurface::React);
         assert!(!batch.witnesses.is_empty());
     }
@@ -1329,7 +1329,7 @@ mod tests {
     fn generate_for_module_hole() {
         let hole = make_hole("h3", HoleSurface::Module, 400_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("serde deserialization should succeed");
+        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(batch.surface, HoleSurface::Module);
         // Module templates have 3 files
         for w in &batch.witnesses {
@@ -1341,7 +1341,7 @@ mod tests {
     fn generate_below_persistence_threshold_returns_empty() {
         let hole = make_hole("low", HoleSurface::Parser, 10_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("serde deserialization should succeed");
+        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert!(batch.witnesses.is_empty());
         assert!(!batch.has_confident_witness);
     }
@@ -1366,7 +1366,7 @@ mod tests {
         let hole = make_hole("h1", HoleSurface::Parser, 300_000);
         let mut cfg = default_config();
         cfg.max_witnesses_per_hole = 1;
-        let batch = generate_for_hole(&hole, &cfg).expect("serde deserialization should succeed");
+        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert!(batch.witnesses.len() <= 1);
     }
 
@@ -1388,7 +1388,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(report.holes_processed, 3);
         assert!(report.total_witnesses >= 3);
     }
@@ -1401,7 +1401,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(report.outcome, GenerationOutcome::Complete);
         assert_eq!(report.coverage_millionths, MILLION);
     }
@@ -1414,7 +1414,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         // One hole below threshold → empty batch → not confident
         assert_eq!(report.outcome, GenerationOutcome::Partial);
     }
@@ -1423,8 +1423,8 @@ mod tests {
     fn report_seal_deterministic() {
         let holes = vec![make_hole("h1", HoleSurface::Parser, 200_000)];
         let cfg = default_config();
-        let r1 = generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
-        let r2 = generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+        let r1 = generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
+        let r2 = generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -1434,7 +1434,7 @@ mod tests {
         let cfg = default_config();
         let epoch = SecurityEpoch::from_raw(42);
         let report = generate_witnesses_at_epoch(&holes, &cfg, epoch)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.epoch, epoch);
     }
 
@@ -1448,7 +1448,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         let ids = collect_witness_ids(&report);
         assert!(ids.len() >= 2);
         assert!(ids.iter().all(|id| id.starts_with("wt-")));
@@ -1462,7 +1462,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         let surfaces = covered_surfaces(&report);
         assert!(surfaces.contains(&HoleSurface::Parser));
         assert!(surfaces.contains(&HoleSurface::React));
@@ -1476,7 +1476,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         let cov = surface_coverage(&report);
         let parser_cov = cov.get(&HoleSurface::Parser).copied().unwrap_or(0);
         assert_eq!(parser_cov, 500_000); // 1/2 covered
@@ -1490,7 +1490,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         let uncov = uncovered_holes(&report);
         // "b" has no witnesses (below threshold), so it's an empty batch, not "uncovered"
         assert!(uncov.is_empty());
@@ -1504,7 +1504,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         let empty = empty_batches(&report);
         assert_eq!(empty.len(), 1);
         assert_eq!(empty[0].hole_id, "b");
@@ -1518,7 +1518,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         let max_c = max_confidence(&report);
         let min_c = min_confidence(&report);
         assert!(max_c > 0);
@@ -1534,7 +1534,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         let summary = report_summary(&report);
         assert_eq!(summary.holes_processed, 2);
         assert!(summary.surfaces_covered >= 1);
@@ -1660,7 +1660,7 @@ mod tests {
     fn interop_hole_generates_package_witness() {
         let hole = make_hole("int1", HoleSurface::Interop, 300_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("serde deserialization should succeed");
+        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         let has_pkg = batch
             .witnesses
             .iter()
@@ -1685,7 +1685,7 @@ mod tests {
         ];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(report.holes_processed, 9);
         assert!(report.total_witnesses >= 9);
         assert_eq!(report.outcome, GenerationOutcome::Complete);
@@ -1696,7 +1696,7 @@ mod tests {
         let holes = vec![make_hole("h", HoleSurface::Parser, 500_000)];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         let summary = report_summary(&report);
         let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: ReportSummary =
@@ -1709,7 +1709,7 @@ mod tests {
         let holes = vec![make_hole("h", HoleSurface::Parser, 500_000)];
         let cfg = default_config();
         let report =
-            generate_witnesses(&holes, &cfg).expect("serde deserialization should succeed");
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: GenerationReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

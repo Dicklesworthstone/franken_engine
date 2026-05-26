@@ -1072,7 +1072,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(child.context_id, "child-1");
         assert_eq!(child.origin, ContextOrigin::ChildDerivation);
         assert_eq!(child.budget_ms, 5000);
@@ -1094,7 +1094,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(child.trace_id.starts_with("trace-parent.child."));
     }
 
@@ -1171,7 +1171,7 @@ mod tests {
         let mut parent = root_ctx("parent", 10_000);
         let rule = default_rule();
         let (cleanup, event) = carve_cleanup_context(&mut parent, "cleanup-1".to_string(), &rule)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cleanup.origin, ContextOrigin::CleanupCarve);
         // 10% of 10_000 = 1000ms.
         assert_eq!(cleanup.budget_ms, 1000);
@@ -1192,7 +1192,7 @@ mod tests {
     #[test]
     fn consume_budget_basic() {
         let mut ctx = root_ctx("ctx", 1000);
-        consume_budget(&mut ctx, 500).expect("serde deserialization should succeed");
+        consume_budget(&mut ctx, 500).expect("operation should succeed for valid inputs");
         assert_eq!(ctx.consumed_ms, 500);
         assert_eq!(ctx.remaining_ms(), 500);
         assert_eq!(ctx.state, ContextState::Active);
@@ -1201,7 +1201,7 @@ mod tests {
     #[test]
     fn consume_budget_exhausts() {
         let mut ctx = root_ctx("ctx", 1000);
-        consume_budget(&mut ctx, 1000).expect("serde deserialization should succeed");
+        consume_budget(&mut ctx, 1000).expect("operation should succeed for valid inputs");
         assert_eq!(ctx.state, ContextState::Exhausted);
     }
 
@@ -1261,7 +1261,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let contexts = vec![parent, child];
         let events = vec![event];
         let report = validate_threading(&contexts, &events, &[], &rule, epoch(1));
@@ -1417,15 +1417,15 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Consume budget in child.
-        consume_budget(&mut child, 2000).expect("serde deserialization should succeed");
+        consume_budget(&mut child, 2000).expect("operation should succeed for valid inputs");
         assert_eq!(child.remaining_ms(), 2000);
 
         // Carve cleanup from remaining parent budget.
         let (mut cleanup, ev2) = carve_cleanup_context(&mut root, "cleanup-1".to_string(), &rule)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Release everything.
         release_context(&mut child);
@@ -1594,7 +1594,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&event).expect("serialize derived Serialize");
         let back: DerivationEvent =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1612,7 +1612,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let s = format!("{event}");
         assert!(s.contains("p"));
         assert!(s.contains("c"));
@@ -1714,7 +1714,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let (c2, _) = derive_child_context(
             &mut parent,
             "c2".to_string(),
@@ -1722,7 +1722,7 @@ mod tests {
             ContextOrigin::ChildDerivation,
             &rule,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(parent.consumed_ms, 6000);
         assert_eq!(c1.depth, 1);
         assert_eq!(c2.depth, 1);

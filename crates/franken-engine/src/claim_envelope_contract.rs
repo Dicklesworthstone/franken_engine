@@ -1030,38 +1030,38 @@ mod tests {
     #[test]
     fn tier_serde_uses_snake_case() {
         let json = serde_json::to_string(&ClaimEnvelopeTier::FrontierObjective)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"frontier_objective\"");
         let json = serde_json::to_string(&ClaimEnvelopeTier::PublishableUniversal)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"publishable_universal\"");
         let json = serde_json::to_string(&ClaimEnvelopeTier::PublishableScoped)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"publishable_scoped\"");
         let json = serde_json::to_string(&ClaimEnvelopeTier::Target)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"target\"");
         let json = serde_json::to_string(&ClaimEnvelopeTier::Hypothesis)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"hypothesis\"");
     }
 
     #[test]
     fn verdict_serde_uses_snake_case() {
         let json = serde_json::to_string(&ClaimEnvelopeVerdict::AllowRequested)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"allow_requested\"");
         let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToScoped)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"downgrade_to_scoped\"");
         let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToTarget)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"downgrade_to_target\"");
         let json = serde_json::to_string(&ClaimEnvelopeVerdict::DowngradeToHypothesis)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"downgrade_to_hypothesis\"");
         let json = serde_json::to_string(&ClaimEnvelopeVerdict::Forbid)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json, "\"forbid\"");
     }
 

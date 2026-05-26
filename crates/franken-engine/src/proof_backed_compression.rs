@@ -260,7 +260,7 @@ impl CompressionResult {
         data.extend_from_slice(self.artifact_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.strategy)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(&self.original_size_bytes.to_le_bytes());
@@ -315,12 +315,12 @@ impl CompressionReceipt {
         }
         data.extend_from_slice(
             serde_json::to_string(&self.strategy)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.domain)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.push(u8::from(self.restoration_verified));
@@ -1043,7 +1043,7 @@ mod tests {
         // Second artifact should be deduped
         let r2 = pipeline
             .result_for("a-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r2.strategy, CompressionStrategy::Dedup);
         assert!(r2.dedup_representative_id.is_some());
         assert_eq!(r2.compressed_size_bytes, 0);
@@ -1062,7 +1062,7 @@ mod tests {
         pipeline.process_artifact(&d);
         let result = pipeline
             .result_for("a-cache")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.strategy, CompressionStrategy::DictionaryCompression);
         assert!(result.compressed_size_bytes < result.original_size_bytes);
     }
@@ -1080,7 +1080,7 @@ mod tests {
         pipeline.process_artifact(&d);
         let result = pipeline
             .result_for("a-aot")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.strategy, CompressionStrategy::DeltaEncoding);
     }
 
@@ -1177,12 +1177,12 @@ mod tests {
         assert_eq!(pipeline.dedup_entries.len(), 4);
         let r0 = pipeline
             .result_for("dup-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r0.dedup_representative_id.is_none());
         for i in 1..5 {
             let r = pipeline
                 .result_for(&format!("dup-{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(r.compressed_size_bytes, 0);
         }
     }
@@ -1662,7 +1662,7 @@ mod tests {
         pipeline.process_artifact(&d);
         let result = pipeline
             .result_for("ev-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.strategy, CompressionStrategy::DictionaryCompression);
     }
 
@@ -1680,7 +1680,7 @@ mod tests {
             pipeline.process_artifact(&d);
             let result = pipeline
                 .result_for(&format!("canon-{domain}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(
                 result.strategy,
                 CompressionStrategy::Dedup,
@@ -1702,7 +1702,7 @@ mod tests {
         pipeline.process_artifact(&d);
         let result = pipeline
             .result_for("dict-test")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 350_000 millionths = 35% of original
         assert_eq!(result.compressed_size_bytes, 3500);
         assert_eq!(result.ratio_millionths, 350_000);
@@ -1721,7 +1721,7 @@ mod tests {
         pipeline.process_artifact(&d);
         let result = pipeline
             .result_for("delta-test")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 200_000 millionths = 20% of original
         assert_eq!(result.compressed_size_bytes, 2000);
         assert_eq!(result.ratio_millionths, 200_000);
@@ -1741,7 +1741,7 @@ mod tests {
         pipeline.process_artifact(&d);
         let result = pipeline
             .result_for("tiny-compress")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.compressed_size_bytes >= 1);
     }
 
@@ -1787,7 +1787,7 @@ mod tests {
         ));
         let r_second = pipeline
             .result_for("second")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r_second.dedup_representative_id.as_deref(), Some("first"));
     }
 
@@ -1803,7 +1803,7 @@ mod tests {
         ));
         let result = pipeline
             .result_for("only-one")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // First occurrence with canonical ID keeps full size (no dedup partner yet)
         assert_eq!(result.compressed_size_bytes, 5000);
         assert!(result.dedup_representative_id.is_none());
@@ -1882,14 +1882,14 @@ mod tests {
             .by_strategy
             .iter()
             .find(|b| b.strategy == CompressionStrategy::DictionaryCompression)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(dict_breakdown.artifact_count, 2);
         assert_eq!(dict_breakdown.original_bytes, 3000);
         let delta_breakdown = summary
             .by_strategy
             .iter()
             .find(|b| b.strategy == CompressionStrategy::DeltaEncoding)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(delta_breakdown.artifact_count, 1);
         assert_eq!(delta_breakdown.original_bytes, 3000);
     }
@@ -2034,7 +2034,7 @@ mod tests {
         pipeline.process_artifact(&d);
         let receipt = pipeline
             .receipt_for("linked")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.artifact_id, "linked");
         assert_eq!(receipt.receipt_id, "receipt-linked");
         assert_eq!(receipt.domain, ArtifactDomain::Evidence);
@@ -2057,7 +2057,7 @@ mod tests {
         pipeline.process_artifact(&d);
         let receipt = pipeline
             .receipt_for("hash-check")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.original_hash, original_hash);
     }
 
@@ -2166,7 +2166,7 @@ mod tests {
         pipeline.process_artifact(&d);
         let result = pipeline
             .result_for("huge")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should not panic from overflow; compressed_size uses saturating_mul
         assert!(result.compressed_size_bytes > 0);
     }
@@ -2220,21 +2220,21 @@ mod tests {
         assert_eq!(
             pipeline
                 .result_for("c1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .strategy,
             CompressionStrategy::Dedup
         );
         assert_eq!(
             pipeline
                 .result_for("c2")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .strategy,
             CompressionStrategy::Dedup
         );
         assert_eq!(
             pipeline
                 .result_for("nc1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .strategy,
             CompressionStrategy::DictionaryCompression
         );

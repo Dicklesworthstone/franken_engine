@@ -988,7 +988,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(detector.history_size("zone-a"), 1);
         assert!(!detector.is_safe_mode("zone-a"));
@@ -1010,7 +1010,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Record same checkpoint again (e.g., via gossip).
         detector
             .record_checkpoint(&RecordCheckpointInput {
@@ -1022,7 +1022,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(detector.history_size("zone-a"), 1);
         assert!(!detector.is_safe_mode("zone-a"));
@@ -1070,7 +1070,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Record first seq=1 checkpoint.
         detector
@@ -1083,7 +1083,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Record divergent seq=1 checkpoint — should trigger fork.
         let report = detector
@@ -1139,7 +1139,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1150,7 +1150,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1164,7 +1164,7 @@ mod tests {
         assert!(detector.is_safe_mode("zone-a"));
         let sm = detector
             .safe_mode_state("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(sm.active);
         assert_eq!(sm.trigger_seq, Some(1));
         assert_eq!(sm.unacknowledged_count, 1);
@@ -1206,7 +1206,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1217,7 +1217,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1241,7 +1241,7 @@ mod tests {
         // No fork detected — operations should be allowed.
         detector
             .enforce_safe_mode("zone-a", "capability_grant", "t-ok")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- Acknowledgment and safe-mode exit --
@@ -1280,7 +1280,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1291,7 +1291,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1317,7 +1317,7 @@ mod tests {
         // Now exit should work.
         let acked = detector
             .exit_safe_mode("zone-a", "t-exit")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(acked, 1);
         assert!(!detector.is_safe_mode("zone-a"));
     }
@@ -1356,7 +1356,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1367,7 +1367,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1a",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1425,7 +1425,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-a0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1436,7 +1436,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-a1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_a_fork,
@@ -1458,7 +1458,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-b0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Zone-a in safe mode, zone-b is not.
         assert!(detector.is_safe_mode("zone-a"));
@@ -1467,7 +1467,7 @@ mod tests {
         // Zone-b operations should be allowed.
         detector
             .enforce_safe_mode("zone-b", "grant", "t-b-ok")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- Retroactive detection --
@@ -1499,7 +1499,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1510,7 +1510,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Later, receive a divergent checkpoint via gossip (not accepted).
         let cp1_b = build_divergent_at_seq(
@@ -1558,7 +1558,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut prev = genesis;
         for i in 1..=10u64 {
@@ -1581,7 +1581,7 @@ mod tests {
                     tick: 100 + i * 100,
                     trace_id: &trace,
                 })
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             prev = cp;
         }
 
@@ -1625,7 +1625,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1636,7 +1636,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1687,7 +1687,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1698,7 +1698,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1839,7 +1839,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let exported = detector.export_state().clone();
 
@@ -1883,7 +1883,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -1894,7 +1894,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-a",
             checkpoint: &cp1_b,
@@ -1936,7 +1936,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-a",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-b",
@@ -1947,7 +1947,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-b",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let zones = detector.zones();
         assert_eq!(zones.len(), 2);
@@ -2237,7 +2237,7 @@ mod tests {
             environment: BTreeMap::new(),
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         assert!(!artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::NotRequested);
         assert!(!artifact.restrictions.all_extensions_sandboxed);
@@ -2311,7 +2311,7 @@ mod tests {
                 environment: env,
             };
             let artifact =
-                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
             assert!(
                 artifact.safe_mode_active,
                 "env value '{val}' should activate safe mode"
@@ -2332,7 +2332,7 @@ mod tests {
                 environment: env,
             };
             let artifact =
-                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
             assert!(
                 !artifact.safe_mode_active,
                 "env value '{val}' should NOT activate safe mode"
@@ -2373,7 +2373,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         detector
             .enforce_safe_mode("zone-a", "grant", "t-enforce")
@@ -2530,11 +2530,11 @@ mod tests {
                 tick: 100,
                 trace_id: "t",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let count = detector
             .exit_safe_mode("zone-a", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(count, 0);
     }
 
@@ -2796,7 +2796,7 @@ mod tests {
             environment: BTreeMap::new(),
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         assert!(!artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::NotRequested);
         assert!(artifact.restricted_features.is_empty());
@@ -2812,7 +2812,7 @@ mod tests {
             environment: BTreeMap::new(),
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         assert!(artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::CliFlag);
         assert!(!artifact.restricted_features.is_empty());
@@ -2830,7 +2830,7 @@ mod tests {
             environment: env,
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         assert!(artifact.safe_mode_active);
         assert_eq!(artifact.source, SafeModeStartupSource::EnvironmentVariable);
     }
@@ -2861,7 +2861,7 @@ mod tests {
             evidence_ledger_flushed: true,
         };
         let artifact =
-            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_exit(&input).expect("operation should succeed for valid inputs");
         assert!(artifact.can_exit);
         assert!(artifact.blocking_reasons.is_empty());
     }
@@ -2877,7 +2877,7 @@ mod tests {
             evidence_ledger_flushed: true,
         };
         let artifact =
-            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_exit(&input).expect("operation should succeed for valid inputs");
         assert!(!artifact.can_exit);
         assert!(
             artifact
@@ -2898,7 +2898,7 @@ mod tests {
             evidence_ledger_flushed: false,
         };
         let artifact =
-            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_exit(&input).expect("operation should succeed for valid inputs");
         assert!(!artifact.can_exit);
         assert!(
             artifact
@@ -2967,7 +2967,7 @@ mod tests {
                 environment: env,
             };
             let artifact =
-                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
             assert!(
                 artifact.safe_mode_active,
                 "'{val}' should activate safe mode"
@@ -2988,7 +2988,7 @@ mod tests {
                 environment: env,
             };
             let artifact =
-                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
             assert!(
                 !artifact.safe_mode_active,
                 "'{val}' should NOT activate safe mode"
@@ -3022,7 +3022,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3033,7 +3033,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Re-record the same checkpoint — should succeed (duplicate, not fork).
         detector
@@ -3046,7 +3046,7 @@ mod tests {
                 tick: 250,
                 trace_id: "t-1-dup",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!detector.is_safe_mode("zone-a"));
     }
@@ -3101,7 +3101,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3112,7 +3112,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3123,7 +3123,7 @@ mod tests {
                 tick: 300,
                 trace_id: "t-2",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // First fork at seq=1.
         let r1 = detector
@@ -3157,7 +3157,7 @@ mod tests {
         assert_eq!(detector.unacknowledged_incidents("zone-a").len(), 2);
         let sm = detector
             .safe_mode_state("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sm.unacknowledged_count, 2);
     }
 
@@ -3194,7 +3194,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3205,7 +3205,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3240,7 +3240,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = detector.drain_events();
         assert!(!events.is_empty());
@@ -3281,7 +3281,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3292,7 +3292,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3310,7 +3310,7 @@ mod tests {
         detector.acknowledge_incident("zone-a", &report.incident_id);
         detector
             .exit_safe_mode("zone-a", "t-exit")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let counts = detector.event_counts();
         assert_eq!(counts.get("safe_mode_exited"), Some(&1));
@@ -3340,7 +3340,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-a",
@@ -3351,11 +3351,11 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let hist = detector
             .history("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(hist.len(), 2);
         assert!(hist.contains_key(&0));
         assert!(hist.contains_key(&1));
@@ -3390,7 +3390,7 @@ mod tests {
             environment: BTreeMap::new(),
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: SafeModeStartupArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3408,7 +3408,7 @@ mod tests {
             evidence_ledger_flushed: false,
         };
         let artifact =
-            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_exit(&input).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&artifact).expect("serialize derived Serialize");
         let back: SafeModeExitCheckArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3475,7 +3475,7 @@ mod tests {
             environment: BTreeMap::new(),
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         assert!(artifact.evidence_preserved);
         assert!(artifact.logs_preserved);
         assert!(artifact.state_preserved);
@@ -3500,7 +3500,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut prev = genesis;
         for i in 1..=5u64 {
@@ -3522,7 +3522,7 @@ mod tests {
                     tick: 100 + i * 100,
                     trace_id: &format!("t-{i}"),
                 })
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             prev = cp;
         }
 
@@ -3545,7 +3545,7 @@ mod tests {
             evidence_ledger_flushed: true,
         };
         let artifact =
-            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_exit(&input).expect("operation should succeed for valid inputs");
         assert!(!artifact.can_exit);
         assert!(
             artifact
@@ -3651,7 +3651,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for i in 1..=2u64 {
             let cp = build_after(
                 &prev,
@@ -3671,7 +3671,7 @@ mod tests {
                     tick: 100 + i * 100,
                     trace_id: &format!("t-{i}"),
                 })
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             prev = cp;
         }
 
@@ -3713,7 +3713,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-x",
@@ -3724,7 +3724,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-x",
             checkpoint: &cp1_div,
@@ -3763,7 +3763,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-a",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "beta",
@@ -3774,7 +3774,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-b",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let zones = detector.zones();
         assert_eq!(zones.len(), 2);
@@ -3798,17 +3798,17 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should succeed — zone is not in safe mode.
         detector
             .enforce_safe_mode("zone-ok", "write", "trace-op")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Unknown zone should also pass.
         detector
             .enforce_safe_mode("unknown-zone", "read", "trace-op2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -3844,7 +3844,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-s",
@@ -3855,7 +3855,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-s",
             checkpoint: &cp1_div,
@@ -3868,7 +3868,7 @@ mod tests {
 
         let state = detector
             .safe_mode_state("zone-s")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(state.active);
         assert_eq!(state.trigger_seq, Some(1));
         assert_eq!(state.unacknowledged_count, 1);
@@ -3888,7 +3888,7 @@ mod tests {
             evidence_ledger_flushed: false,
         };
         let artifact =
-            evaluate_safe_mode_exit(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_exit(&input).expect("operation should succeed for valid inputs");
         assert!(!artifact.can_exit);
         assert_eq!(artifact.blocking_reasons.len(), 3);
         assert!(
@@ -3924,7 +3924,7 @@ mod tests {
                 environment: env,
             };
             let artifact =
-                evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
             assert!(
                 artifact.safe_mode_active,
                 "env value '{val}' should activate safe mode"
@@ -3966,7 +3966,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-exit",
@@ -3977,7 +3977,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-exit",
@@ -4005,7 +4005,7 @@ mod tests {
         assert!(detector.acknowledge_incident("zone-exit", &report.incident_id));
         let acked = detector
             .exit_safe_mode("zone-exit", "trace-exit")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(acked, 1);
         assert!(!detector.is_safe_mode("zone-exit"));
 
@@ -4054,7 +4054,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-z1",
@@ -4065,7 +4065,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-z1",
@@ -4114,7 +4114,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-tr",
@@ -4125,7 +4125,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-tr",
@@ -4174,7 +4174,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-tk",
@@ -4185,7 +4185,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-tk",
@@ -4234,7 +4234,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-fs",
@@ -4245,7 +4245,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-fs",
@@ -4298,7 +4298,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-fmt",
@@ -4309,7 +4309,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-fmt",
@@ -4362,7 +4362,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-op",
@@ -4373,7 +4373,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-op",
             checkpoint: &cp1_div,
@@ -4409,7 +4409,7 @@ mod tests {
             environment: BTreeMap::new(),
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         assert_eq!(
             artifact.events.len(),
             2,
@@ -4433,7 +4433,7 @@ mod tests {
             environment: env,
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         assert!(artifact.safe_mode_active);
         assert_eq!(
             artifact.source,
@@ -4503,7 +4503,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-a",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-j2",
@@ -4514,7 +4514,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-b",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let exported = detector.export_state();
         let json = serde_json::to_string(exported).expect("serialize derived Serialize");
@@ -4606,7 +4606,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -4626,7 +4626,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp2 = build_after(
             &cp1,
@@ -4646,12 +4646,12 @@ mod tests {
                 tick: 300,
                 trace_id: "t-2",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(detector.history_size("zone-h1"), 1);
         let hist = detector
             .history("zone-h1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(hist.contains_key(&2), "only the latest seq should remain");
     }
 
@@ -4688,7 +4688,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-wr",
@@ -4699,7 +4699,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = detector.record_checkpoint(&RecordCheckpointInput {
             zone: "zone-wr",
             checkpoint: &cp1_div,
@@ -4748,7 +4748,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-idem",
@@ -4759,7 +4759,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-idem",
@@ -4775,14 +4775,14 @@ mod tests {
         detector.acknowledge_incident("zone-idem", &report.incident_id);
         let first_exit = detector
             .exit_safe_mode("zone-idem", "t-exit1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(first_exit, 1);
         assert!(!detector.is_safe_mode("zone-idem"));
 
         // Calling exit again should return 0 (already exited).
         let second_exit = detector
             .exit_safe_mode("zone-idem", "t-exit2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(second_exit, 0);
     }
 
@@ -4796,7 +4796,7 @@ mod tests {
             environment: BTreeMap::new(),
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         for event in &artifact.events {
             assert!(
                 event.error_code.is_none(),
@@ -4830,7 +4830,7 @@ mod tests {
                 tick: 100,
                 trace_id: "t-0",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         detector
             .record_checkpoint(&RecordCheckpointInput {
                 zone: "zone-ord",
@@ -4841,7 +4841,7 @@ mod tests {
                 tick: 200,
                 trace_id: "t-1",
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = detector.drain_events();
         assert_eq!(events.len(), 2);
@@ -4873,7 +4873,7 @@ mod tests {
             environment: BTreeMap::new(),
         };
         let artifact =
-            evaluate_safe_mode_startup(&input).expect("serde deserialization should succeed");
+            evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
         assert!(
             artifact.exit_procedure.len() >= 3,
             "safe mode exit_procedure should have verification steps"

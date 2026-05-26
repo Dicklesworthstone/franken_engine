@@ -5618,7 +5618,7 @@ fn compute_ir2_flow_artifact_id(artifact: &Ir2FlowProofArtifact) -> String {
     let mut preimage = artifact.clone();
     preimage.artifact_id.clear();
     // SAFETY: to_vec cannot fail on derived Serialize struct
-    let encoded = serde_json::to_vec(&preimage).expect("serde deserialization should succeed");
+    let encoded = serde_json::to_vec(&preimage).expect("serialization should succeed");
     let hash = ContentHash::compute(&encoded);
     format!("sha256:{}", hex::encode(hash.as_bytes()))
 }
@@ -9203,7 +9203,7 @@ mod tests {
         assert_eq!(effect, EffectBoundary::ReadEffect);
         assert!(cap.is_some());
         assert_eq!(
-            cap.expect("serde deserialization should succeed").0,
+            cap.expect("operation should succeed for valid inputs").0,
             "module.import"
         );
         assert!(flow.is_some());
@@ -9233,7 +9233,7 @@ mod tests {
         assert_eq!(effect, EffectBoundary::HostcallEffect);
         assert!(cap.is_some());
         assert_eq!(
-            cap.expect("serde deserialization should succeed").0,
+            cap.expect("operation should succeed for valid inputs").0,
             "fs.read"
         );
     }
@@ -10384,7 +10384,7 @@ mod tests {
     fn lowering_pipeline_output_serde_roundtrip() {
         let ctx = LoweringContext::new("t", "d", "p");
         let ir0 = script_ir0();
-        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("serde deserialization should succeed");
+        let output = lower_ir0_to_ir3(&ir0, &ctx).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&output).expect("serialize derived Serialize");
         let back: LoweringPipelineOutput =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -13613,13 +13613,13 @@ mod tests {
         );
 
         let ir1 = ir1_result
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .module;
         let ir2_result = lower_ir1_to_ir2(&ir1);
         assert!(ir2_result.is_ok(), "IR1->IR2 lowering should succeed");
 
         let ir2 = ir2_result
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .module;
         let ir3_result = lower_ir2_to_ir3(&ir2);
         assert!(
@@ -13629,7 +13629,7 @@ mod tests {
 
         // Verify that IR3 contains proper instructions for the literal and return
         let ir3 = ir3_result
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .module;
         assert!(
             !ir3.instructions.is_empty(),

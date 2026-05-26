@@ -1138,7 +1138,7 @@ mod tests {
     fn advance_report_success() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             mech.advance_report("r1", ReportPhase::UnderReview, None)
                 .is_ok()
@@ -1159,9 +1159,9 @@ mod tests {
     fn advance_report_with_resolved_at() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.advance_report("r1", ReportPhase::Resolved, Some(test_ts(5000)))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.reports()[0].resolved_at, Some(test_ts(5000)));
     }
 
@@ -1171,7 +1171,7 @@ mod tests {
     fn submit_challenge_success() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let challenge = ChallengeRecord {
             challenge_id: "ch1".into(),
             report_id: "r1".into(),
@@ -1211,7 +1211,7 @@ mod tests {
     fn resolve_challenge_success() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let challenge = ChallengeRecord {
             challenge_id: "ch1".into(),
             report_id: "r1".into(),
@@ -1224,7 +1224,7 @@ mod tests {
             resolved_at: None,
         };
         mech.submit_challenge(challenge)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             mech.resolve_challenge("ch1", ChallengeOutcome::Upheld, test_ts(4000))
                 .is_ok()
@@ -1238,7 +1238,7 @@ mod tests {
     fn impose_quarantine_success() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let q = make_quarantine("q1", "pkg-a", "r1");
         assert!(mech.impose_quarantine(q).is_ok());
         assert_eq!(mech.active_quarantine_count(), 1);
@@ -1248,9 +1248,9 @@ mod tests {
     fn impose_duplicate_quarantine_fails() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             mech.impose_quarantine(make_quarantine("q2", "pkg-a", "r1")),
             Err(MechanismError::QuarantineConstraintViolated { .. })
@@ -1263,9 +1263,9 @@ mod tests {
     fn request_reinstate_success() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let req = ReinstateRequest {
             request_id: "req1".into(),
             quarantine_id: "q1".into(),
@@ -1298,9 +1298,9 @@ mod tests {
     fn approve_reinstate_lifts_quarantine() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let req = ReinstateRequest {
             request_id: "req1".into(),
             quarantine_id: "q1".into(),
@@ -1310,9 +1310,9 @@ mod tests {
             approved: None,
         };
         mech.request_reinstate(req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.approve_reinstate("req1", test_ts(6000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(mech.quarantines()[0].status, QuarantineStatus::Lifted);
         assert_eq!(mech.active_quarantine_count(), 0);
@@ -1362,7 +1362,7 @@ mod tests {
 
         let policy = mech
             .compile_enforcement_policy(Subsystem::ExtensionHost, "pol-1", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(policy.policy_id, "pol-1");
         assert!(!policy.action_set.is_empty());
     }
@@ -1387,10 +1387,10 @@ mod tests {
 
         let p1 = m1
             .compile_enforcement_policy(Subsystem::ControlPlane, "pol-x", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let p2 = m2
             .compile_enforcement_policy(Subsystem::ControlPlane, "pol-x", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p1.content_hash, p2.content_hash);
     }
 
@@ -1401,7 +1401,7 @@ mod tests {
         mech.analyze_incentive_compatibility(&model, test_ts(1000));
         let policy = mech
             .compile_enforcement_policy(Subsystem::EvidencePipeline, "pol-2", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: EnforcementPolicy =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1423,14 +1423,14 @@ mod tests {
     fn generate_report_with_data() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let model = make_game_model(Subsystem::ExtensionHost);
         mech.analyze_incentive_compatibility(&model, test_ts(1000));
         mech.compile_enforcement_policy(Subsystem::ExtensionHost, "pol-1", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = mech.generate_report();
         assert_eq!(report.total_reports, 1);
@@ -1467,15 +1467,15 @@ mod tests {
 
         // Submit report.
         mech.submit_report(make_report("r1", "pkg-a", 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Advance to review.
         mech.advance_report("r1", ReportPhase::UnderReview, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Impose quarantine.
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.active_quarantine_count(), 1);
 
         // Submit challenge.
@@ -1491,11 +1491,11 @@ mod tests {
             resolved_at: None,
         };
         mech.submit_challenge(ch)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Resolve challenge (upheld → quarantine stays).
         mech.resolve_challenge("ch1", ChallengeOutcome::Upheld, test_ts(4000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Request reinstatement.
         let req = ReinstateRequest {
@@ -1507,16 +1507,16 @@ mod tests {
             approved: None,
         };
         mech.request_reinstate(req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Approve reinstatement.
         mech.approve_reinstate("req1", test_ts(6000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.active_quarantine_count(), 0);
 
         // Resolve report.
         mech.advance_report("r1", ReportPhase::Resolved, Some(test_ts(6000)))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Check event log.
         assert!(mech.events().len() >= 6);
@@ -1543,7 +1543,7 @@ mod tests {
         // Compile enforcement for extension host.
         let policy = mech
             .compile_enforcement_policy(Subsystem::ExtensionHost, "pol-ext", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(policy.analysis_subsystem, Subsystem::ExtensionHost);
 
         // Report.
@@ -1589,7 +1589,7 @@ mod tests {
     fn mechanism_serde_roundtrip() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&mech).expect("serialize derived Serialize");
         let restored: GovernanceMechanism =
@@ -1604,9 +1604,9 @@ mod tests {
     fn reinstate_already_lifted_quarantine_fails() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Lift quarantine directly.
         let req = ReinstateRequest {
@@ -1618,9 +1618,9 @@ mod tests {
             approved: None,
         };
         mech.request_reinstate(req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.approve_reinstate("req1", test_ts(6000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Try to reinstate again — quarantine is Lifted, not Active.
         let req2 = ReinstateRequest {
@@ -1641,14 +1641,14 @@ mod tests {
     fn multiple_quarantines_different_packages() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.submit_report(make_report("r2", "pkg-b", 600_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.impose_quarantine(make_quarantine("q2", "pkg-b", "r2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.active_quarantine_count(), 2);
     }
 
@@ -1670,11 +1670,11 @@ mod tests {
         assert_eq!(mech.events().len(), 0);
 
         mech.submit_report(make_report("r1", "pkg-a", 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.events().len(), 1);
 
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.events().len(), 2);
 
         let model = make_game_model(Subsystem::ExtensionHost);
@@ -1820,10 +1820,10 @@ mod tests {
         assert_eq!(mech.active_quarantine_count(), 0);
         let report = make_report("r1", "pkg-a", 500_000);
         mech.submit_report(report)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let q = make_quarantine("q1", "pkg-a", "r1");
         mech.impose_quarantine(q)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.active_quarantine_count(), 1);
     }
 
@@ -1838,7 +1838,7 @@ mod tests {
         let mut mech = GovernanceMechanism::new(test_epoch());
         assert!(mech.reports().is_empty());
         mech.submit_report(make_report("r1", "pkg-a", 100_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.reports().len(), 1);
         assert_eq!(mech.reports()[0].report_id, "r1");
     }
@@ -1847,7 +1847,7 @@ mod tests {
     fn challenges_accessor_returns_submitted_challenges() {
         let mut mech = GovernanceMechanism::new(test_epoch());
         mech.submit_report(make_report("r1", "pkg-a", 100_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let challenge = ChallengeRecord {
             challenge_id: "c1".into(),
             report_id: "r1".into(),
@@ -1860,7 +1860,7 @@ mod tests {
             resolved_at: None,
         };
         mech.submit_challenge(challenge)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.challenges().len(), 1);
         assert_eq!(mech.challenges()[0].challenge_id, "c1");
     }
@@ -2095,10 +2095,10 @@ mod tests {
         m2.analyze_incentive_compatibility(&model, test_ts(1000));
         let p1 = m1
             .compile_enforcement_policy(Subsystem::Compiler, "pol-a", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let p2 = m2
             .compile_enforcement_policy(Subsystem::Compiler, "pol-b", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(p1.content_hash, p2.content_hash);
     }
 
@@ -2125,9 +2125,9 @@ mod tests {
         let mut mech = GovernanceMechanism::new(test_epoch());
         assert!(mech.reinstate_requests().is_empty());
         mech.submit_report(make_report("r1", "pkg-a", 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let req = ReinstateRequest {
             request_id: "req1".into(),
             quarantine_id: "q1".into(),
@@ -2137,7 +2137,7 @@ mod tests {
             approved: None,
         };
         mech.request_reinstate(req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.reinstate_requests().len(), 1);
         assert_eq!(mech.reinstate_requests()[0].request_id, "req1");
     }
@@ -2149,7 +2149,7 @@ mod tests {
         let model = make_game_model(Subsystem::Runtime);
         mech.analyze_incentive_compatibility(&model, test_ts(1000));
         mech.compile_enforcement_policy(Subsystem::Runtime, "pol-rt", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.policies().len(), 1);
         assert_eq!(mech.policies()[0].policy_id, "pol-rt");
     }
@@ -2169,9 +2169,9 @@ mod tests {
         let mut mech = GovernanceMechanism::new(test_epoch());
         assert!(mech.quarantines().is_empty());
         mech.submit_report(make_report("r1", "pkg-a", 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mech.impose_quarantine(make_quarantine("q1", "pkg-a", "r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mech.quarantines().len(), 1);
         assert_eq!(mech.quarantines()[0].quarantine_id, "q1");
     }
@@ -2181,7 +2181,7 @@ mod tests {
         let m1 = GovernanceMechanism::new(test_epoch());
         let mut m2 = GovernanceMechanism::new(test_epoch());
         m2.submit_report(make_report("r1", "pkg-a", 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             m1.generate_report().report_hash,
             m2.generate_report().report_hash,
@@ -2204,7 +2204,7 @@ mod tests {
         mech.analyze_incentive_compatibility(&model, test_ts(1000));
         let policy = mech
             .compile_enforcement_policy(Subsystem::ExtensionHost, "pol-e", test_ts(2000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(policy.epoch, epoch);
     }
 }

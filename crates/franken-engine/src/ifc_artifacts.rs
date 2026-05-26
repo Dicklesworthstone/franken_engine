@@ -621,7 +621,7 @@ impl FlowEnvelope {
 
     /// Content-addressable identity.
     pub fn content_hash(&self) -> ContentHash {
-        let bytes = serde_json::to_vec(self).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(self).expect("serialization should succeed");
         ContentHash::compute(&bytes)
     }
 }
@@ -795,7 +795,7 @@ impl SignaturePreimage for FlowPolicy {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+            serde_json::to_vec(&copy).expect("serialization should succeed"),
         )
     }
 }
@@ -916,7 +916,7 @@ impl SignaturePreimage for FlowProof {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+            serde_json::to_vec(&copy).expect("serialization should succeed"),
         )
     }
 }
@@ -1348,7 +1348,7 @@ impl SignaturePreimage for DeclassificationReceipt {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+            serde_json::to_vec(&copy).expect("serialization should succeed"),
         )
     }
 }
@@ -1464,7 +1464,7 @@ impl SignaturePreimage for ConfinementClaim {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serde deserialization should succeed"),
+            serde_json::to_vec(&copy).expect("serialization should succeed"),
         )
     }
 }
@@ -1618,7 +1618,7 @@ mod tests {
     const RECEIPT_ANCHOR_MS: u64 = 1_700_000_000_000;
 
     fn test_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn sentinel_sig() -> Signature {
@@ -1854,22 +1854,22 @@ mod tests {
         let mut policy = make_flow_policy();
         policy
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!policy.signature.is_sentinel());
         policy
             .verify(&key.verification_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
     fn flow_policy_verify_fails_wrong_key() {
         let key = test_key();
         let wrong_key =
-            SigningKey::from_bytes([99u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([99u8; 32]).expect("operation should succeed for valid inputs");
         let mut policy = make_flow_policy();
         policy
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(policy.verify(&wrong_key.verification_key()).is_err());
     }
 
@@ -2002,11 +2002,11 @@ mod tests {
         let mut proof = make_flow_proof();
         proof
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!proof.signature.is_sentinel());
         proof
             .verify(&key.verification_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- ProofMethod tests --
@@ -2059,11 +2059,11 @@ mod tests {
         let mut receipt = make_receipt();
         receipt
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!receipt.signature.is_sentinel());
         receipt
             .verify(&key.verification_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2071,7 +2071,7 @@ mod tests {
         let receipt = make_receipt();
         receipt
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2110,7 +2110,7 @@ mod tests {
         let mut receipt = make_receipt();
         receipt
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         receipt.replay_linkage = "\n".to_string();
 
         let err = receipt.verify(&key.verification_key()).unwrap_err();
@@ -2350,11 +2350,11 @@ mod tests {
         let mut claim = make_claim(ClaimStrength::Full);
         claim
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!claim.signature.is_sentinel());
         claim
             .verify(&key.verification_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2494,29 +2494,29 @@ mod tests {
         let mut policy = make_flow_policy();
         policy
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         policy
             .verify(&key.verification_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 2. Prove a flow
         let mut proof = make_flow_proof();
         proof.policy_ref = policy.policy_id.clone();
         proof
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         proof
             .verify(&key.verification_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 3. Issue declassification receipt
         let mut receipt = make_receipt();
         receipt
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         receipt
             .verify(&key.verification_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 4. Make confinement claim
         let mut claim = ConfinementClaim {
@@ -2532,13 +2532,13 @@ mod tests {
         };
         claim
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         claim
             .sign(&key)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         claim
             .verify(&key.verification_key())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(claim.is_full());
     }
 

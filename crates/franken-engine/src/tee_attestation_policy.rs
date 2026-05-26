@@ -1578,7 +1578,7 @@ impl MockTeeProvider {
     pub fn generate_valid_quote(&self, nonce: &str) -> MockAttestationQuote {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .as_secs();
 
         self.generate_quote_with_measurement(&self.approved_measurement, nonce, timestamp)
@@ -1588,7 +1588,7 @@ impl MockTeeProvider {
     pub fn generate_rejected_quote(&self, nonce: &str) -> MockAttestationQuote {
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .as_secs();
 
         self.generate_quote_with_measurement(&self.rejected_measurement, nonce, timestamp)
@@ -1598,7 +1598,7 @@ impl MockTeeProvider {
     pub fn generate_expired_quote(&self, nonce: &str) -> MockAttestationQuote {
         let old_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .as_secs()
             - 3600; // 1 hour ago
 
@@ -1812,7 +1812,7 @@ mod tests {
         let policy = sample_policy(7);
         let json = policy
             .to_canonical_json()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let parsed = TeeAttestationPolicy::from_json(&json).expect("parse");
         assert_eq!(policy, parsed);
     }
@@ -1949,7 +1949,7 @@ mod tests {
             .expect("policy load");
 
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -2008,7 +2008,7 @@ mod tests {
             .expect("policy load");
 
         let signing_key =
-            SigningKey::from_bytes([8u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([8u8; 32]).expect("operation should succeed for valid inputs");
         let verifier = signing_key.verification_key();
         let mut artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -2192,7 +2192,7 @@ mod tests {
         };
         digest
             .validate_for_platform(TeePlatform::ArmCca)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -----------------------------------------------------------------------
@@ -2230,7 +2230,7 @@ mod tests {
         };
         window
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -----------------------------------------------------------------------
@@ -2592,7 +2592,7 @@ mod tests {
         quote.quote_age_secs = 300; // exactly at standard max
         policy
             .evaluate_quote(&quote, DecisionImpact::Standard, SecurityEpoch::from_raw(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2641,7 +2641,7 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(10), "t-1", "d-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = store
             .load_policy(sample_policy(5), "t-2", "d-2")
             .unwrap_err();
@@ -2676,7 +2676,7 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(5), "t-load", "d-load")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let quote = quote_for_sgx();
         store
             .evaluate_quote(
@@ -2686,11 +2686,11 @@ mod tests {
                 "t-eval",
                 "d-eval",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let last = store
             .governance_ledger()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "quote_accepted");
         assert_eq!(last.outcome, "allow");
     }
@@ -2700,7 +2700,7 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(5), "t-load", "d-load")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut quote = quote_for_sgx();
         quote.quote_age_secs = 999; // too old for standard
         let err = store
@@ -2719,7 +2719,7 @@ mod tests {
         let last = store
             .governance_ledger()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "quote_rejected");
         assert_eq!(last.outcome, "deny");
     }
@@ -2752,10 +2752,10 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(7), "t-1", "d-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let epoch = emitter
             .sync_policy(&store)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(epoch, SecurityEpoch::from_raw(7));
         assert_eq!(
             emitter.last_synced_policy_epoch,
@@ -2769,7 +2769,7 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(5), "t-1", "d-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = emitter
             .can_emit(SecurityEpoch::from_raw(5), &store)
             .unwrap_err();
@@ -2785,14 +2785,14 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(5), "t-1", "d-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         emitter
             .sync_policy(&store)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Load a much newer policy
         store
             .load_policy(sample_policy(10), "t-2", "d-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = emitter
             .can_emit(SecurityEpoch::from_raw(10), &store)
             .unwrap_err();
@@ -2808,17 +2808,17 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(5), "t-1", "d-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         emitter
             .sync_policy(&store)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .load_policy(sample_policy(6), "t-2", "d-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Synced at 5, active is 6 — one epoch behind is OK
         emitter
             .can_emit(SecurityEpoch::from_raw(6), &store)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -----------------------------------------------------------------------
@@ -2964,7 +2964,7 @@ mod tests {
     #[test]
     fn override_artifact_empty_actor_rejected() {
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let err = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -2987,7 +2987,7 @@ mod tests {
     #[test]
     fn override_artifact_empty_justification_rejected() {
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let err = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -3010,7 +3010,7 @@ mod tests {
     #[test]
     fn override_artifact_expires_before_issued_rejected() {
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let err = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -3033,7 +3033,7 @@ mod tests {
     #[test]
     fn override_artifact_verify_expired_rejected() {
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -3047,7 +3047,7 @@ mod tests {
                 expires_epoch: SecurityEpoch::from_raw(5),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let err = artifact
             .verify(&verifier, SecurityEpoch::from_raw(6))
             .unwrap_err();
@@ -3131,9 +3131,9 @@ mod tests {
         let p2 = sample_policy(2);
         assert_ne!(
             p1.derive_policy_id()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             p2.derive_policy_id()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -3248,7 +3248,7 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(3), "t-1", "d-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&store).expect("serialize derived Serialize");
         let parsed: TeeAttestationPolicyStore =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3264,11 +3264,11 @@ mod tests {
         assert_eq!(
             store
                 .active_policy()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .policy_epoch,
             parsed
                 .active_policy()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .policy_epoch
         );
     }
@@ -3303,10 +3303,10 @@ mod tests {
         let policy = sample_policy(20);
         let json = policy
             .to_canonical_json()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let policy_id = store
             .load_policy_json(&json, "t-json", "d-json")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!store.receipt_emission_halted());
         assert!(store.last_error_code().is_none());
         // Policy ID should be deterministic
@@ -3314,14 +3314,14 @@ mod tests {
             policy_id,
             policy
                 .derive_policy_id()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
     #[test]
     fn override_empty_target_root_id_rejected() {
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let err = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -3346,9 +3346,9 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(10), "t-1", "d-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let signing_key =
-            SigningKey::from_bytes([9u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([9u8; 32]).expect("operation should succeed for valid inputs");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -3362,7 +3362,7 @@ mod tests {
                 expires_epoch: SecurityEpoch::from_raw(15),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let request = TemporaryTrustRootOverride {
             override_id: "ovr-mismatch".to_string(),
             trust_root: PlatformTrustRoot {
@@ -3400,7 +3400,7 @@ mod tests {
         };
 
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -3414,7 +3414,7 @@ mod tests {
                 expires_epoch: SecurityEpoch::from_raw(5),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let request = TemporaryTrustRootOverride {
             override_id: "ovr-no-policy".to_string(),
             trust_root: PlatformTrustRoot {
@@ -3473,10 +3473,10 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(5), "t-1", "d-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         emitter
             .sync_policy(&store)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Runtime epoch is 2 ahead of synced epoch (5) — should fail
         let err = emitter
             .can_emit(SecurityEpoch::from_raw(7), &store)
@@ -3497,7 +3497,7 @@ mod tests {
         policy
             .approved_measurements
             .get_mut(&TeePlatform::IntelSgx)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .push(upper_digest);
         // Before canonicalize: SGX has 2 entries (one lower, one upper)
         assert_eq!(
@@ -3515,7 +3515,7 @@ mod tests {
     #[test]
     fn override_artifact_evidence_refs_sorted_and_deduped() {
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -3532,7 +3532,7 @@ mod tests {
                 expires_epoch: SecurityEpoch::from_raw(5),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.evidence_refs, vec!["a-ref", "z-ref"]);
     }
 
@@ -3553,7 +3553,7 @@ mod tests {
     #[test]
     fn temporary_trust_root_override_serde_round_trip() {
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
             TrustRootOverrideArtifactInput {
@@ -3566,7 +3566,7 @@ mod tests {
                 expires_epoch: SecurityEpoch::from_raw(10),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let override_req = TemporaryTrustRootOverride {
             override_id: "ovr-serde".to_string(),
             trust_root: PlatformTrustRoot {
@@ -3593,9 +3593,9 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(10), "t-1", "d-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -3609,7 +3609,7 @@ mod tests {
                 expires_epoch: SecurityEpoch::from_raw(12),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let request = TemporaryTrustRootOverride {
             override_id: "".to_string(),
             trust_root: PlatformTrustRoot {
@@ -3643,7 +3643,7 @@ mod tests {
     #[test]
     fn verify_artifact_valid_signature_passes() {
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let verifier = signing_key.verification_key();
         let artifact = SignedTrustRootOverrideArtifact::create_signed(
             &signing_key,
@@ -3657,10 +3657,10 @@ mod tests {
                 expires_epoch: SecurityEpoch::from_raw(10),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         artifact
             .verify(&verifier, SecurityEpoch::from_raw(5))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -3803,7 +3803,7 @@ mod tests {
         let last = store
             .governance_ledger()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "quote_evaluation_failed");
         assert_eq!(last.outcome, "deny");
     }
@@ -3813,7 +3813,7 @@ mod tests {
         let mut store = TeeAttestationPolicyStore::default();
         store
             .load_policy(sample_policy(5), "t-meta", "d-meta")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let load_event = &store.governance_ledger()[0];
         assert_eq!(load_event.event, "policy_loaded");
         assert!(load_event.metadata.contains_key("policy_epoch"));
@@ -3846,7 +3846,7 @@ mod tests {
     #[test]
     fn signed_artifact_deterministic_id() {
         let signing_key =
-            SigningKey::from_bytes([7u8; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([7u8; 32]).expect("operation should succeed for valid inputs");
         let input = TrustRootOverrideArtifactInput {
             actor: "op".to_string(),
             justification: "determ test".to_string(),
@@ -3857,9 +3857,9 @@ mod tests {
             expires_epoch: SecurityEpoch::from_raw(5),
         };
         let a1 = SignedTrustRootOverrideArtifact::create_signed(&signing_key, input.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let a2 = SignedTrustRootOverrideArtifact::create_signed(&signing_key, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(a1.artifact_id, a2.artifact_id);
     }
 

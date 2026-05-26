@@ -667,7 +667,7 @@ mod tests {
                 test_witnesses(),
                 test_metadata(),
             )
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     // -----------------------------------------------------------------------
@@ -1006,7 +1006,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ctx2 = test_context(HighImpactAction::Terminate);
         ctx2.decision_id = "dec-002".to_string();
@@ -1021,7 +1021,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // 3rd should fail.
         let mut ctx3 = test_context(HighImpactAction::Suspend);
@@ -1119,7 +1119,7 @@ mod tests {
         // SAFETY: Test with valid evidence entry should successfully verify integrity
         let recomputed = emitter
             .verify_integrity(entry)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recomputed, receipt.artifact_hash);
     }
 
@@ -1134,7 +1134,7 @@ mod tests {
         // SAFETY: Test with tampered evidence entry should successfully compute hash (different from original)
         let recomputed = emitter
             .verify_integrity(&tampered)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(recomputed, receipt.artifact_hash);
     }
 
@@ -1157,7 +1157,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ctx2 = test_context(HighImpactAction::ExtensionLoad);
         ctx2.decision_id = "dec-002".to_string();
@@ -1170,7 +1170,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             emitter.entries_by_type(DecisionType::SecurityAction).len(),
@@ -1200,7 +1200,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ctx2 = test_context(HighImpactAction::Terminate);
         ctx2.trace_id = "trace-B".to_string();
@@ -1214,7 +1214,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(emitter.entries_by_trace("trace-A").len(), 1);
         assert_eq!(emitter.entries_by_trace("trace-B").len(), 1);
@@ -1242,7 +1242,7 @@ mod tests {
                 test_witnesses(), // 2 witnesses
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(emitter.ledger()[0].witnesses.len(), 1);
     }
@@ -1264,7 +1264,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(emitter.ledger()[0].candidates.len(), 2);
     }
@@ -1330,7 +1330,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert_eq!(emitter.ledger_len(), 5);
@@ -1360,7 +1360,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert_eq!(emitter.ledger_len(), 20);
@@ -1477,7 +1477,7 @@ mod tests {
                 vec![],
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(emitter.ledger_len(), 1);
         assert!(emitter.ledger()[0].candidates.is_empty());
@@ -1579,7 +1579,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(emitter.receipts().len(), 3);
     }
@@ -1609,7 +1609,7 @@ mod tests {
                 test_witnesses(),
                 metadata,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let entry = &emitter.ledger()[0];
         assert_eq!(entry.metadata.get("key"), Some(&"value".to_string()));
@@ -1749,7 +1749,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(emitter.ledger_len(), 1);
     }
 
@@ -1766,7 +1766,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Sandbox maps to SecurityAction; RemoteAuthorization entries should be empty.
         let filtered = emitter.entries_by_type(DecisionType::RemoteAuthorization);
         assert!(filtered.is_empty());
@@ -1785,7 +1785,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let filtered = emitter.entries_by_trace("nonexistent-trace");
         assert!(filtered.is_empty());
     }
@@ -1999,7 +1999,7 @@ mod tests {
         let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -2016,7 +2016,7 @@ mod tests {
         let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("mandatory_actions"));
         assert!(obj.contains_key("max_witnesses"));
         assert!(obj.contains_key("max_candidates"));
@@ -2032,7 +2032,7 @@ mod tests {
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("entry_id"));
         assert!(obj.contains_key("artifact_hash"));
         assert!(obj.contains_key("decision_type"));
@@ -2055,7 +2055,7 @@ mod tests {
         let json = serde_json::to_string(&log).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -2076,7 +2076,7 @@ mod tests {
         let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(
             obj.contains_key("MissingField"),
             "JSON should have MissingField key"
@@ -2089,7 +2089,7 @@ mod tests {
         let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("serde deserialization should succeed");
+        let obj = v.as_object().expect("operation should succeed for valid inputs");
         assert!(
             obj.contains_key("BufferFull"),
             "JSON should have BufferFull key"
@@ -2279,7 +2279,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(emitter.ledger()[0].witnesses.is_empty());
     }
 
@@ -2299,7 +2299,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(emitter.ledger()[0].candidates.is_empty());
     }
 
@@ -2319,7 +2319,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut ctx2 = test_context(HighImpactAction::Terminate);
         ctx2.decision_id = "dec-002".into();
         let err = emitter
@@ -2347,7 +2347,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Metadata still has injected fields (action, target_id, component).
         let entry = &emitter.ledger()[0];
         assert!(entry.metadata.contains_key("action"));
@@ -2371,7 +2371,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = &emitter.ledger()[0];
         // When include_metadata is false, injected fields should NOT be present.
         assert!(!entry.metadata.contains_key("action"));
@@ -2518,7 +2518,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let found = emitter.entries_by_trace("shared-trace");
         assert_eq!(found.len(), 3);
@@ -2539,7 +2539,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(emitter.receipts().len(), emitter.ledger_len());
         for (receipt, entry) in emitter.receipts().iter().zip(emitter.ledger().iter()) {
@@ -2563,12 +2563,12 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for (entry, receipt) in emitter.ledger().iter().zip(emitter.receipts().iter()) {
             let hash = emitter
                 .verify_integrity(entry)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(hash, receipt.artifact_hash);
         }
     }
@@ -2588,7 +2588,7 @@ mod tests {
                     test_witnesses(),
                     BTreeMap::new(),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Each successful emission produces one log event.
         assert_eq!(emitter.log_events().len(), 4);
@@ -2614,7 +2614,7 @@ mod tests {
                 test_witnesses(),
                 BTreeMap::new(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut ctx2 = test_context(HighImpactAction::Terminate);
         ctx2.decision_id = "dec-002".into();
         let _ = emitter.emit(
@@ -2630,7 +2630,7 @@ mod tests {
         let last = emitter
             .log_events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "buffer_full");
     }
 

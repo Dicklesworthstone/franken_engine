@@ -1436,7 +1436,7 @@ mod tests {
         assert_eq!(seq, 0);
         assert_eq!(log.len(), 1);
 
-        let entry = log.get(0).expect("serde deserialization should succeed");
+        let entry = log.get(0).expect("operation should succeed for valid inputs");
         assert_eq!(entry.source, NondeterminismSource::RandomValue);
         assert_eq!(entry.value, vec![1, 2, 3]);
         assert_eq!(entry.tick, 100);
@@ -2566,7 +2566,7 @@ mod tests {
         for (i, source) in sources.iter().enumerate() {
             let entry = log
                 .get(i as u64)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(&entry.source, source);
         }
     }
@@ -2903,7 +2903,7 @@ mod tests {
         };
         let report = engine
             .counterfactual_branch(&trace, config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // If counterfactual chose lower-cost action, is_improvement() should be true
         // when harm_prevented_delta_millionths > 0.
         assert_eq!(
@@ -3091,10 +3091,10 @@ mod tests {
         let trace = make_trace(&[("sandbox", 200_000)]);
         let id_a = trace
             .object_id("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = trace
             .object_id("zone-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b);
     }
 
@@ -3150,7 +3150,7 @@ mod tests {
         let trace = make_trace(&[("allow", 0)]);
         index
             .insert(trace)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let filter = TraceQuery {
             trace_id: Some("trace-001".into()),
@@ -3171,7 +3171,7 @@ mod tests {
         let trace = make_trace(&[("allow", 0)]);
         index
             .insert(trace)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let filter = TraceQuery {
             policy_version: Some(1),
@@ -3196,7 +3196,7 @@ mod tests {
         let trace = make_trace(&[("allow", 0)]);
         index
             .insert(trace)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let before = index.storage_estimate();
         assert!(before > 0);
 
@@ -3233,7 +3233,7 @@ mod tests {
         let engine = CausalReplayEngine::new();
         let report = engine
             .counterfactual_branch(&trace, config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count(), report.divergence_points.len());
     }
 
@@ -3252,13 +3252,13 @@ mod tests {
         let engine = CausalReplayEngine::new();
         let report = engine
             .counterfactual_branch(&trace, config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id1 = report
             .object_id("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = report
             .object_id("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2);
     }
 
@@ -3301,7 +3301,7 @@ mod tests {
         // First insert: evicts nothing (index empty), but storage > budget after insert
         index
             .insert(trace)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // The trace is inserted but next insert will evict
         assert!(index.len() <= 1);
     }

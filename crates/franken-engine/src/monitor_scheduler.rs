@@ -578,15 +578,15 @@ mod tests {
         // SAFETY: test helper with valid probe should succeed
         sched
             .register_probe(health_probe("health-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: test helper with valid probe should succeed
         sched
             .register_probe(deep_probe("deep-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: test helper with valid probe should succeed
         sched
             .register_probe(integrity_probe("integrity-1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
     }
 
@@ -643,7 +643,7 @@ mod tests {
         assert_eq!(sched.probe_count(), 0);
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sched.probe_count(), 1);
     }
 
@@ -652,7 +652,7 @@ mod tests {
         let mut sched = MonitorScheduler::new(test_config());
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = sched.register_probe(health_probe("h1")).unwrap_err();
         assert_eq!(
             err,
@@ -667,10 +667,10 @@ mod tests {
         let mut sched = MonitorScheduler::new(test_config());
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .unregister_probe("h1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sched.probe_count(), 0);
     }
 
@@ -777,14 +777,14 @@ mod tests {
         });
         sched
             .register_probe(deep_probe("deep-1"))
-            .expect("serde deserialization should succeed"); // costs 2.0, won't fit
+            .expect("operation should succeed for valid inputs"); // costs 2.0, won't fit
 
         sched.schedule(Regime::Normal);
         // SAFETY: Test-only unwrap, probe "deep-1" was just registered
         assert_eq!(
             sched
                 .probe("deep-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             1
         ); // not executed
@@ -794,7 +794,7 @@ mod tests {
         assert_eq!(
             sched
                 .probe("deep-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             2
         );
@@ -805,21 +805,21 @@ mod tests {
         let mut sched = MonitorScheduler::new(test_config());
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed"); // cheap
+            .expect("operation should succeed for valid inputs"); // cheap
 
         sched.schedule(Regime::Normal); // h1 should be scheduled
         // Scheduling alone must not pretend the probe executed.
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             1
         );
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             0
         );
@@ -864,19 +864,19 @@ mod tests {
         // SAFETY: recording execution for existing probe should succeed
         sched
             .record_execution("health-1", false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: probe lookup for known probe should succeed
         assert!(
             !sched
                 .probe("health-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .last_success
         );
         // SAFETY: probe lookup for known probe should succeed
         assert_eq!(
             sched
                 .probe("health-1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             1
         );
@@ -1179,7 +1179,7 @@ mod tests {
         // SAFETY: Test-only unwrap with valid probe configuration
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled, 0);
         assert_eq!(result.probes_deferred, 1);
@@ -1206,7 +1206,7 @@ mod tests {
         // SAFETY: Test scenario with valid health probe; registration should succeed
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled, 1);
         assert_eq!(result.budget_used, 100_000);
@@ -1230,11 +1230,11 @@ mod tests {
                 information_gain_millionths: 2_000_000,
                 base_relevance_millionths: 1_000_000,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with valid health probe; registration should succeed
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = sched.schedule(Regime::Normal);
         let neg = result
@@ -1293,19 +1293,19 @@ mod tests {
         // SAFETY: Test scenario with valid probe ID from test_scheduler; recording should succeed
         sched
             .record_execution("health-1", true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with valid probe ID from test_scheduler; recording should succeed
         sched
             .record_execution("health-1", false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with valid probe ID from test_scheduler; recording should succeed
         sched
             .record_execution("health-1", true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test scenario with valid probe ID from test_scheduler; probe lookup should succeed
         let state = sched
             .probe("health-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.execution_count, 3);
         assert!(state.last_success);
     }
@@ -1315,19 +1315,19 @@ mod tests {
         let mut sched = MonitorScheduler::new(test_config());
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .unregister_probe("h1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sched.probe_count(), 0);
         sched
             .register_probe(deep_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sched.probe_count(), 1);
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .config
                 .kind,
             ProbeKind::DeepDiagnostic
@@ -1366,7 +1366,7 @@ mod tests {
         let mut sched = MonitorScheduler::new(config);
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = sched.schedule(Regime::Normal);
         let decision = &result.decisions[0];
         assert!(!decision.scheduled);
@@ -1397,10 +1397,10 @@ mod tests {
         let mut sched = MonitorScheduler::new(config);
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .register_probe(integrity_probe("i1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = sched.schedule(Regime::Attack);
 
@@ -1458,14 +1458,14 @@ mod tests {
         let mut sched = MonitorScheduler::new(config);
         sched
             .register_probe(deep_probe("d1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for expected in 1..=5 {
             sched.schedule(Regime::Normal);
             assert_eq!(
                 sched
                     .probe("d1")
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .staleness,
                 expected
             );
@@ -1492,11 +1492,11 @@ mod tests {
         // SAFETY: registering valid probe should succeed
         sched
             .register_probe(low_info)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: registering valid probe should succeed
         sched
             .register_probe(high_info)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = sched.schedule(Regime::Normal);
         // high-info should be scheduled, low-info deferred
@@ -1505,7 +1505,7 @@ mod tests {
             .decisions
             .iter()
             .find(|d| d.probe_id == "high-info")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(high.scheduled);
     }
 
@@ -1577,11 +1577,11 @@ mod tests {
         // SAFETY: Test probes created by health_probe() helper have valid configurations
         sched
             .register_probe(health_probe("beta"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test probes created by health_probe() helper have valid configurations
         sched
             .register_probe(health_probe("alpha"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = sched.schedule(Regime::Normal);
         // Tie-break: alphabetical => "alpha" wins
@@ -1615,7 +1615,7 @@ mod tests {
         // SAFETY: Manually created ProbeConfig has valid fields for testing purposes
         sched
             .register_probe(zero_info)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = sched.schedule(Regime::Normal);
         let dec = &result.decisions[0];
         assert!(!dec.scheduled);
@@ -1634,7 +1634,7 @@ mod tests {
         // SAFETY: Test probes created by health_probe() helper have valid configurations
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed"); // cost 100_000
+            .expect("operation should succeed for valid inputs"); // cost 100_000
         let result = sched.schedule(Regime::Normal);
         let dec = &result.decisions[0];
         assert!(!dec.scheduled);
@@ -1642,7 +1642,7 @@ mod tests {
         let reason = dec
             .skip_reason
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reason.contains("budget exhausted"));
         assert!(reason.contains("remaining:"));
         assert!(reason.contains("cost:"));
@@ -1683,17 +1683,17 @@ mod tests {
         let mut sched = MonitorScheduler::new(config);
         sched
             .register_probe(health_probe("cheap"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .register_probe(deep_probe("expensive"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         sched.schedule(Regime::Normal);
         // cheap probe was selected, but only a completion record resets staleness.
         assert_eq!(
             sched
                 .probe("cheap")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             1
         );
@@ -1701,7 +1701,7 @@ mod tests {
         assert_eq!(
             sched
                 .probe("expensive")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             1
         );
@@ -1710,14 +1710,14 @@ mod tests {
         assert_eq!(
             sched
                 .probe("cheap")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             2
         );
         assert_eq!(
             sched
                 .probe("expensive")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             2
         );
@@ -1730,7 +1730,7 @@ mod tests {
         let mut sched = MonitorScheduler::new(test_config());
         sched
             .register_probe(deep_probe("d1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Manually tick staleness by scheduling with tiny budget won't help,
         // so directly schedule to accumulate staleness
         let config = SchedulerConfig {
@@ -1742,24 +1742,24 @@ mod tests {
         let mut sched2 = MonitorScheduler::new(config);
         sched2
             .register_probe(deep_probe("d1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched2.schedule(Regime::Normal); // staleness = 1 (deferred)
         sched2.schedule(Regime::Normal); // staleness = 2
         assert_eq!(
             sched2
                 .probe("d1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             2
         );
 
         sched2
             .record_execution("d1", true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             sched2
                 .probe("d1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             0
         );
@@ -1814,7 +1814,7 @@ mod tests {
         // SAFETY: registering valid probe should succeed
         sched
             .register_probe(cal)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.decisions.len(), 1);
         assert_eq!(result.decisions[0].kind, ProbeKind::CalibrationProbe);
@@ -1888,13 +1888,13 @@ mod tests {
         let mut sched = MonitorScheduler::new(config);
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .register_probe(deep_probe("d1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .register_probe(integrity_probe("i1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled + result.probes_deferred, 3);
@@ -1911,24 +1911,24 @@ mod tests {
         for i in 0..5 {
             sched
                 .register_probe(health_probe(&format!("h-{i}")))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(sched.probe_count(), 5);
 
         sched
             .unregister_probe("h-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .unregister_probe("h-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         sched
             .unregister_probe("h-4")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sched.probe_count(), 2);
 
         sched
             .register_probe(deep_probe("d-new"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sched.probe_count(), 3);
     }
 
@@ -1964,14 +1964,14 @@ mod tests {
         let mut sched = MonitorScheduler::new(test_config());
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Selection does not count as execution.
         sched.schedule(Regime::Normal);
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             0
         );
@@ -1979,11 +1979,11 @@ mod tests {
         // Completion count advances once when the worker reports completion.
         sched
             .record_execution("h1", true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             1
         );
@@ -1993,18 +1993,18 @@ mod tests {
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             1
         );
 
         sched
             .record_execution("h1", true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             2
         );
@@ -2015,39 +2015,39 @@ mod tests {
         let mut sched = MonitorScheduler::new(test_config());
         sched
             .register_probe(health_probe("h1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = sched.schedule(Regime::Normal);
         assert_eq!(result.probes_scheduled, 1);
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             1
         );
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             0
         );
 
         sched
             .record_execution("h1", true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .staleness,
             0
         );
         assert_eq!(
             sched
                 .probe("h1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             1
         );
@@ -2081,21 +2081,21 @@ mod tests {
             .decisions
             .iter()
             .find(|d| d.probe_id == "health-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(health_dec.kind, ProbeKind::HealthCheck);
 
         let deep_dec = result
             .decisions
             .iter()
             .find(|d| d.probe_id == "deep-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(deep_dec.kind, ProbeKind::DeepDiagnostic);
 
         let integrity_dec = result
             .decisions
             .iter()
             .find(|d| d.probe_id == "integrity-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(integrity_dec.kind, ProbeKind::IntegrityAudit);
     }
 

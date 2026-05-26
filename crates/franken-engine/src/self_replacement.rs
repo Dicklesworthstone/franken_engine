@@ -1263,11 +1263,11 @@ mod tests {
     }
 
     fn test_signing_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn test_signing_key_2() -> SigningKey {
-        SigningKey::from_bytes([99u8; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([99u8; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn test_behavior_hash() -> [u8; 32] {
@@ -1326,7 +1326,7 @@ mod tests {
                 zone: "test-zone",
             },
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     // -- SchemaVersion --
@@ -1339,7 +1339,7 @@ mod tests {
     #[test]
     fn schema_version_serde_roundtrip() {
         let json = serde_json::to_string(&SchemaVersion::V1)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let restored: SchemaVersion =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(SchemaVersion::V1, restored);
@@ -1430,7 +1430,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let id2 = DelegateCellManifest::derive_manifest_id(
             &test_slot_id(),
             DelegateType::QuickJsBacked,
@@ -1440,7 +1440,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2);
     }
 
@@ -1461,7 +1461,7 @@ mod tests {
             &hooks,
             "zone-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let id2 = DelegateCellManifest::derive_manifest_id(
             &test_slot_id(),
             DelegateType::QuickJsBacked,
@@ -1471,7 +1471,7 @@ mod tests {
             &hooks,
             "zone-b",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(id1, id2);
     }
 
@@ -1568,7 +1568,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 2,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(receipt.slot_id, test_slot_id());
         assert!(receipt.all_validations_passed());
@@ -1576,10 +1576,10 @@ mod tests {
         // Add two signatures.
         receipt
             .add_signature(&test_signing_key(), "gate-runner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         receipt
             .add_signature(&test_signing_key_2(), "governance-approver")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(receipt.verify_signatures().is_ok());
     }
@@ -1603,12 +1603,12 @@ mod tests {
             zone: "test-zone",
             required_signatures: 2,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Only one signature.
         receipt
             .add_signature(&test_signing_key(), "gate-runner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(matches!(
             receipt.verify_signatures(),
@@ -1633,7 +1633,7 @@ mod tests {
                 1000,
                 "zone-a"
             )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let id2 =
             ReplacementReceipt::derive_receipt_id(
                 &test_slot_id(),
@@ -1646,7 +1646,7 @@ mod tests {
                 1000,
                 "zone-a"
             )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2);
     }
 
@@ -1664,7 +1664,7 @@ mod tests {
                 1000,
                 "zone-a"
             )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let id2 =
             ReplacementReceipt::derive_receipt_id(
                 &test_slot_id(),
@@ -1677,7 +1677,7 @@ mod tests {
                 2000,
                 "zone-a"
             )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_ne!(id1, id2);
     }
 
@@ -1700,7 +1700,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: ReplacementReceipt =
@@ -1727,7 +1727,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let p1 = receipt.preimage_bytes();
         let p2 = receipt.preimage_bytes();
         assert_eq!(p1, p2);
@@ -1751,7 +1751,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(decision.is_approved());
         assert_eq!(decision.verdict, GateVerdict::Approved);
@@ -1786,7 +1786,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 2,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(!decision.is_approved());
         assert_eq!(decision.verdict, GateVerdict::Denied);
@@ -1808,11 +1808,11 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         decision
             .add_signature(&test_signing_key(), "gate-runner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decision.verify_signatures().is_ok());
     }
 
@@ -1820,10 +1820,10 @@ mod tests {
     fn decision_id_deterministic() {
         let id1 =
             PromotionDecision::derive_decision_id(&test_slot_id(), "candidate", 1000, "zone-a")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let id2 =
             PromotionDecision::derive_decision_id(&test_slot_id(), "candidate", 1000, "zone-a")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2);
     }
 
@@ -1843,7 +1843,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&decision).expect("serialize derived Serialize");
         let restored: PromotionDecision =
@@ -1867,7 +1867,7 @@ mod tests {
             zone: "test",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let p1 = d.preimage_bytes();
         let p2 = d.preimage_bytes();
         assert_eq!(p1, p2);
@@ -1978,12 +1978,12 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         r1.add_signature(&test_signing_key(), "gate-runner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lifecycle
             .record_receipt(r1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lifecycle.current_stage, ReplacementStage::Shadow);
         assert_eq!(lifecycle.completed_stages(), 1);
 
@@ -2004,12 +2004,12 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         r2.add_signature(&test_signing_key(), "gate-runner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lifecycle
             .record_receipt(r2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lifecycle.current_stage, ReplacementStage::Canary);
 
         // Stage 3: Canary -> Production.
@@ -2029,12 +2029,12 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         r3.add_signature(&test_signing_key(), "gate-runner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lifecycle
             .record_receipt(r3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(lifecycle.is_production());
         assert_eq!(lifecycle.completed_stages(), 3);
     }
@@ -2066,7 +2066,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(matches!(
             lifecycle.record_receipt(receipt),
@@ -2099,7 +2099,7 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(matches!(
             lifecycle.record_receipt(receipt),
@@ -2126,11 +2126,11 @@ mod tests {
             zone: "test-zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         lifecycle
             .record_decision(decision)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lifecycle.decisions.len(), 1);
     }
 
@@ -2270,7 +2270,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let id_b = DelegateCellManifest::derive_manifest_id(
             &test_slot_id(),
             DelegateType::QuickJsBacked,
@@ -2280,7 +2280,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b, "different content must yield different IDs");
 
         let id_c =
@@ -2295,7 +2295,7 @@ mod tests {
                 1000,
                 "zone"
             )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let id_d =
             ReplacementReceipt::derive_receipt_id(
                 &test_slot_id(),
@@ -2308,13 +2308,13 @@ mod tests {
                 1000,
                 "zone"
             )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_ne!(id_c, id_d);
 
         let id_e = PromotionDecision::derive_decision_id(&test_slot_id(), "cand-a", 1000, "zone")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_f = PromotionDecision::derive_decision_id(&test_slot_id(), "cand-b", 1000, "zone")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(id_e, id_f);
     }
 
@@ -2339,17 +2339,17 @@ mod tests {
             zone: "zone",
             required_signatures: 2,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let sk1 = test_signing_key();
         let sk2 = test_signing_key_2();
 
         receipt
             .add_signature(&sk1, "gate-runner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         receipt
             .add_signature(&sk2, "governance-approver")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Both signatures should verify.
         assert!(receipt.verify_signatures().is_ok());
@@ -2469,7 +2469,7 @@ mod tests {
 
     #[test]
     fn signer_entry_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed");
+        let sk = SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
         let entry = SignerEntry {
             role: "admin".to_string(),
             verification_key: sk.verification_key(),
@@ -2604,7 +2604,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let id_wasm = DelegateCellManifest::derive_manifest_id(
             &test_slot_id(),
             DelegateType::WasmBacked,
@@ -2614,7 +2614,7 @@ mod tests {
             &test_monitoring_hooks(),
             "zone",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(id_quickjs, id_wasm);
     }
 
@@ -2650,7 +2650,7 @@ mod tests {
             zone: "zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(!receipt.all_validations_passed());
     }
 
@@ -2669,7 +2669,7 @@ mod tests {
             zone: "zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Inconclusive);
         assert!(!decision.is_approved());
     }
@@ -2695,7 +2695,7 @@ mod tests {
             zone: "zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(decision.verdict, GateVerdict::Denied);
         assert!(!decision.is_approved());
     }
@@ -2714,7 +2714,7 @@ mod tests {
                 1000,
                 "zone-a"
             )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         let id_b =
             ReplacementReceipt::derive_receipt_id(
                 &test_slot_id(),
@@ -2727,16 +2727,16 @@ mod tests {
                 1000,
                 "zone-b"
             )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b);
     }
 
     #[test]
     fn decision_id_differs_by_zone() {
         let id_a = PromotionDecision::derive_decision_id(&test_slot_id(), "cand", 1000, "zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id_b = PromotionDecision::derive_decision_id(&test_slot_id(), "cand", 1000, "zone-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b);
     }
 
@@ -2763,13 +2763,13 @@ mod tests {
                 zone: "zone",
                 required_signatures: 1,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             receipt
                 .add_signature(&test_signing_key(), "gate-runner")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             lifecycle
                 .record_receipt(receipt)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert!(lifecycle.is_production());
         assert_eq!(lifecycle.completed_stages(), 3);
@@ -2791,13 +2791,13 @@ mod tests {
             zone: "zone",
             required_signatures: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         receipt
             .add_signature(&test_signing_key(), "gate-runner")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lifecycle
             .record_receipt(receipt)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(lifecycle.is_production());
         assert_eq!(lifecycle.completed_stages(), 4);
     }

@@ -624,7 +624,7 @@ impl PortfolioGovernor {
         let state = self
             .moonshots
             .get_mut(moonshot_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state.contract.current_stage = next_stage;
 
         // If promoted to Production, mark completed.
@@ -687,7 +687,7 @@ impl PortfolioGovernor {
         let state = self
             .moonshots
             .get_mut(moonshot_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state.status = MoonshotStatus::Killed {
             reason: rationale,
             killed_at_ns: now_ns,
@@ -1108,7 +1108,7 @@ mod tests {
 
     fn register_test_moonshot(gov: &mut PortfolioGovernor) {
         gov.register_moonshot(test_contract(), 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- Registration tests --
@@ -1154,7 +1154,7 @@ mod tests {
             content_hash: "hash-abc".into(),
         };
         gov.submit_artifact("mc-test-001", evidence)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gov.moonshots["mc-test-001"].completed_artifacts.len(), 1);
     }
 
@@ -1184,7 +1184,7 @@ mod tests {
             observed_at_ns: 3_000_000_000,
         };
         gov.record_metric("mc-test-001", obs)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gov.moonshots["mc-test-001"].metric_history.len(), 1);
     }
 
@@ -1194,7 +1194,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
@@ -1216,7 +1216,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         let sc = gov
             .compute_scorecard("mc-test-001", 5_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sc.moonshot_id, "mc-test-001");
         assert!(sc.ev_millionths > 0);
         assert_eq!(sc.confidence_millionths, 0); // no metrics yet
@@ -1236,11 +1236,11 @@ mod tests {
                     observed_at_ns: (i + 1) * 1_000_000_000,
                 },
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         let sc = gov
             .compute_scorecard("mc-test-001", 11_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sc.confidence_millionths, 1_000_000); // 10 * 100_000 = 1M
     }
 
@@ -1286,11 +1286,11 @@ mod tests {
                     observed_at_ns: (i + 1) * 1_000_000_000,
                 },
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         let decision = gov
             .evaluate_gate("mc-test-001", 11_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(decision.kind, GovernorDecisionKind::Hold { .. }));
         assert!(decision.rationale.contains("obligation"));
     }
@@ -1310,7 +1310,7 @@ mod tests {
                 content_hash: "hash-1".into(),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Only 2 metrics = 200_000 confidence (below 500K hold threshold).
         for i in 0..2 {
             gov.record_metric(
@@ -1321,11 +1321,11 @@ mod tests {
                     observed_at_ns: (i + 1) * 1_000_000_000,
                 },
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         let decision = gov
             .evaluate_gate("mc-test-001", 3_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(decision.kind, GovernorDecisionKind::Hold { .. }));
         assert!(decision.rationale.contains("Confidence"));
     }
@@ -1345,7 +1345,7 @@ mod tests {
                 content_hash: "hash-1".into(),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Add 8 metrics for high confidence (800K > 750K threshold).
         for i in 0..8 {
             gov.record_metric(
@@ -1356,11 +1356,11 @@ mod tests {
                     observed_at_ns: (i + 1) * 1_000_000_000,
                 },
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         let decision = gov
             .evaluate_gate("mc-test-001", 9_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             decision.kind,
             GovernorDecisionKind::Promote {
@@ -1381,12 +1381,12 @@ mod tests {
         register_test_moonshot(&mut gov);
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .contract
             .current_stage = MoonshotStage::Production;
         let decision = gov
             .evaluate_gate("mc-test-001", 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(decision.kind, GovernorDecisionKind::Hold { .. }));
         assert!(decision.rationale.contains("production"));
     }
@@ -1402,7 +1402,7 @@ mod tests {
         let now = gov.moonshots["mc-test-001"].started_at_ns + elapsed;
         let decision = gov
             .check_kill_criteria("mc-test-001", now)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .expect("should trigger kill");
         assert!(matches!(decision.kind, GovernorDecisionKind::Kill { .. }));
         assert!(matches!(
@@ -1417,7 +1417,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         // Set high budget consumption with metrics above threshold (bad).
         gov.update_budget("mc-test-001", 950_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gov.record_metric(
             "mc-test-001",
             MetricObservation {
@@ -1426,10 +1426,10 @@ mod tests {
                 observed_at_ns: 2_000_000_000,
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let decision = gov
             .check_kill_criteria("mc-test-001", 3_000_000_000)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .expect("should trigger kill");
         assert!(matches!(decision.kind, GovernorDecisionKind::Kill { .. }));
     }
@@ -1440,7 +1440,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         let result = gov
             .check_kill_criteria("mc-test-001", 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none());
     }
 
@@ -1452,7 +1452,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         let pd = gov
             .pause_moonshot("mc-test-001", "resource reallocation", 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(pd.kind, GovernorDecisionKind::Pause { .. }));
         assert!(matches!(
             gov.moonshots["mc-test-001"].status,
@@ -1461,7 +1461,7 @@ mod tests {
 
         let rd = gov
             .resume_moonshot("mc-test-001", 3_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(rd.kind, GovernorDecisionKind::Resume));
         assert!(gov.moonshots["mc-test-001"].is_active());
     }
@@ -1472,7 +1472,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
@@ -1510,7 +1510,7 @@ mod tests {
         c2.contract_id = "mc-test-002".into();
         c2.ev_model.benefit_on_success_millionths = 10_000_000; // higher benefit
         gov.register_moonshot(c2, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Add metrics to both so confidence is non-zero (EV * conf / 1M).
         for id in ["mc-test-001", "mc-test-002"] {
@@ -1523,7 +1523,7 @@ mod tests {
                         observed_at_ns: (i + 1) * 1_000_000_000,
                     },
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             }
         }
 
@@ -1540,7 +1540,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
@@ -1556,7 +1556,7 @@ mod tests {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
         gov.update_budget("mc-test-001", 500_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             gov.moonshots["mc-test-001"].budget_spent_fraction_millionths,
             500_000
@@ -1577,10 +1577,10 @@ mod tests {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
         gov.evaluate_gate("mc-test-001", 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let decisions = gov
             .decisions("mc-test-001")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decisions.len(), 1);
         assert_eq!(decisions[0].decision_id, "gov-1");
     }
@@ -1600,7 +1600,7 @@ mod tests {
         register_test_moonshot(&mut gov);
 
         gov.evaluate_gate("mc-test-001", 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ledger = gov.governance_audit_ledger().expect("ledger configured");
         assert_eq!(ledger.entries().len(), 1);
         assert_eq!(ledger.entries()[0].decision_id, "gov-1");
@@ -1646,7 +1646,7 @@ mod tests {
                 content_hash: "hash-proof".into(),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Step 2: Record enough metrics with good values.
         for i in 0..8 {
@@ -1658,13 +1658,13 @@ mod tests {
                     observed_at_ns: (i + 3) * 1_000_000_000,
                 },
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
 
         // Step 3: Evaluate gate — should promote.
         let decision = gov
             .evaluate_gate("mc-test-001", 12_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             decision.kind,
             GovernorDecisionKind::Promote {
@@ -1858,10 +1858,10 @@ mod tests {
         let mut gov = test_governor();
         register_test_moonshot(&mut gov);
         gov.evaluate_gate("mc-test-001", 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let sc = gov
             .latest_scorecard("mc-test-001")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sc.moonshot_id, "mc-test-001");
     }
 
@@ -1879,7 +1879,7 @@ mod tests {
                 observed_at_ns: 1_000_000_000,
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gov.record_metric(
             "mc-test-001",
             MetricObservation {
@@ -1888,10 +1888,10 @@ mod tests {
                 observed_at_ns: 2_000_000_000,
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let latest = gov.moonshots["mc-test-001"]
             .latest_metric("latency_p50")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(latest.value_millionths, 180_000_000);
     }
 
@@ -1903,7 +1903,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         let sc1 = gov
             .compute_scorecard("mc-test-001", 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Submit one of two obligations.
         gov.submit_artifact(
             "mc-test-001",
@@ -1915,10 +1915,10 @@ mod tests {
                 content_hash: "hash".into(),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let sc2 = gov
             .compute_scorecard("mc-test-001", 3_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(sc2.implementation_friction_millionths < sc1.implementation_friction_millionths);
     }
 
@@ -2106,7 +2106,7 @@ mod tests {
                 content_hash: "h".into(),
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let ids = gov.moonshots["mc-test-001"].completed_obligation_ids();
         assert_eq!(ids, vec!["proof-research".to_string()]);
     }
@@ -2123,7 +2123,7 @@ mod tests {
                 observed_at_ns: 1_000,
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gov.record_metric(
             "mc-test-001",
             MetricObservation {
@@ -2132,7 +2132,7 @@ mod tests {
                 observed_at_ns: 2_000,
             },
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let snapshot = gov.moonshots["mc-test-001"].metric_snapshot();
         assert_eq!(snapshot.len(), 2);
         assert_eq!(snapshot["throughput"], 500_000);
@@ -2146,7 +2146,7 @@ mod tests {
 
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .status = MoonshotStatus::Paused {
             reason: "test".into(),
             paused_at_ns: 0,
@@ -2155,7 +2155,7 @@ mod tests {
 
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
@@ -2164,7 +2164,7 @@ mod tests {
 
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .status = MoonshotStatus::Completed { completed_at_ns: 0 };
         assert!(!gov.moonshots["mc-test-001"].is_active());
     }
@@ -2262,7 +2262,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
@@ -2288,7 +2288,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,
@@ -2314,7 +2314,7 @@ mod tests {
         register_test_moonshot(&mut gov);
         gov.moonshots
             .get_mut("mc-test-001")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .status = MoonshotStatus::Killed {
             reason: "test".into(),
             killed_at_ns: 0,

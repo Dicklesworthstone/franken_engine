@@ -1724,7 +1724,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: result verified to be Ok above
-        let instance = result.expect("serde deserialization should succeed");
+        let instance = result.expect("operation should succeed for valid inputs");
         assert_eq!(instance.substrate_kind, SubstrateKind::FlatArray);
         assert_eq!(selector.overridden_count(), 1);
     }
@@ -2083,7 +2083,7 @@ mod tests {
         // SAFETY: test setup guarantees instance exists for ShapeTable
         let instance = selector
             .instance_for_mut(MetadataStructureKind::ShapeTable)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         instance.activate();
         instance.record_entries(5000);
         let snapshot = instance.take_snapshot(epoch);
@@ -2114,7 +2114,7 @@ mod tests {
         );
         assert!(result.is_ok());
         // SAFETY: result verified to be Ok above
-        let mut instance = result.expect("serde deserialization should succeed");
+        let mut instance = result.expect("operation should succeed for valid inputs");
         instance.activate();
         instance.fallback(OverrideReason::CorruptionDetected);
         assert_eq!(instance.status, SubstrateInstanceStatus::FallenBack);

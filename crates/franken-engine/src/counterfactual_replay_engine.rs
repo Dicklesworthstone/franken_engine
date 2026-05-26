@@ -1692,7 +1692,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result.schema_version, REPLAY_ENGINE_SCHEMA_VERSION);
         assert_eq!(result.trace_count, 1);
@@ -1715,11 +1715,11 @@ mod tests {
                 &default_scope(),
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.replay_count(), 1);
         engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.replay_count(), 2);
     }
 
@@ -1738,7 +1738,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &alts, &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result.policy_reports.len(), 3);
         assert_eq!(result.ranked_recommendations.len(), 3);
@@ -1760,7 +1760,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         assert_eq!(report.divergence_count, 5);
@@ -1790,7 +1790,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         // With threshold override of 600k vs original 500k, the decision
@@ -1817,7 +1817,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &scope, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.total_decisions, 2);
     }
 
@@ -1839,7 +1839,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &scope, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.total_decisions, 2);
     }
 
@@ -1871,7 +1871,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace_with_incident, trace_without], &[alt], &scope, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Only the incident trace should be included
         assert_eq!(result.trace_count, 1);
         assert_eq!(result.total_decisions, 1);
@@ -1886,7 +1886,7 @@ mod tests {
         let alt = make_alternate_policy("alt-1", "test");
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.schema_version, REPLAY_ENGINE_SCHEMA_VERSION);
         assert_eq!(
             result.policy_reports[0].schema_version,
@@ -1901,7 +1901,7 @@ mod tests {
         let alt = make_alternate_policy("alt-1", "test");
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Hashes should be non-zero
         assert_ne!(result.artifact_hash.as_bytes(), &[0u8; 32]);
         assert_ne!(
@@ -1929,10 +1929,10 @@ mod tests {
                 &scope,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = e2
             .compare(&[trace], &[alt], &scope, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
         assert_eq!(
@@ -1956,10 +1956,10 @@ mod tests {
                 &default_scope(),
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result_b = engine_b
             .compare(&[trace], &[alt_b], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(
             result_a.policy_reports[0].alternate_description,
@@ -1991,10 +1991,10 @@ mod tests {
                 &scope_a,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result_b = engine_b
             .compare(&[trace], &[alt], &scope_b, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result_a.total_decisions, result_b.total_decisions);
         assert_eq!(result_a.trace_count, result_b.trace_count);
@@ -2016,7 +2016,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let env = &result.policy_reports[0].confidence_envelope;
         assert!(env.lower_millionths <= env.estimate_millionths);
@@ -2036,7 +2036,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         match report.safety_status {
@@ -2085,7 +2085,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &alts, &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result.ranked_recommendations.len(), 2);
         assert_eq!(result.ranked_recommendations[0].rank, 1);
@@ -2122,7 +2122,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!result.global_assumptions.is_empty());
         let categories: Vec<_> = result
@@ -2139,11 +2139,11 @@ mod tests {
         let mut engine = default_engine();
         let trace = make_trace(vec![make_decision(0, "native", 500_000)]);
         let alt = make_alternate_policy("alt-1", "test");
-        let model = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let model = build_lane_decision_dag().expect("operation should succeed for valid inputs");
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), Some(&model))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let has_confounding = result
             .global_assumptions
@@ -2160,7 +2160,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         assert!(!report.assumptions.is_empty());
@@ -2184,7 +2184,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         assert!(!report.regime_breakdown.is_empty());
@@ -2207,7 +2207,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace1, trace2], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Both traces have same trace_id so trace_count may count both
         assert!(result.total_decisions >= 4);
@@ -2223,11 +2223,11 @@ mod tests {
             .collect();
         let trace = make_trace(decisions);
         let alt = make_alternate_policy("alt-1", "test");
-        let model = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let model = build_lane_decision_dag().expect("operation should succeed for valid inputs");
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), Some(&model))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Causal effects may or may not be empty depending on observation data
         // but the field should exist
@@ -2242,7 +2242,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(result.causal_effects.is_empty());
     }
@@ -2264,7 +2264,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         assert!(report.divergent_decisions.len() <= 3);
@@ -2287,7 +2287,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         assert!(report.divergent_decisions.is_empty());
@@ -2324,7 +2324,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         let rate = report.divergence_rate_millionths();
@@ -2420,7 +2420,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: ReplayComparisonResult =
@@ -2541,7 +2541,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         assert_eq!(report.divergence_count, 5);
@@ -2577,7 +2577,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should complete without error
         assert_eq!(result.policy_reports.len(), 1);
@@ -2879,7 +2879,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let temporal = result
             .global_assumptions
@@ -2899,7 +2899,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let report = &result.policy_reports[0];
         let has_model_spec = report
@@ -3071,7 +3071,7 @@ mod tests {
 
         let result = engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // At least verify the rationale is non-empty
         for rec in &result.ranked_recommendations {
@@ -3142,10 +3142,10 @@ mod tests {
                 &default_scope(),
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .compare(&[trace], &[alt], &default_scope(), None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.replay_count(), 2);
 
         let json = serde_json::to_string(&engine).expect("serialize derived Serialize");

@@ -1149,12 +1149,12 @@ mod tests {
     fn flake_severity_serde_snake_case() {
         assert_eq!(
             serde_json::to_string(&FlakeSeverity::Warning)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"warning\""
         );
         assert_eq!(
             serde_json::to_string(&FlakeSeverity::High)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"high\""
         );
     }
@@ -1199,12 +1199,12 @@ mod tests {
     fn quarantine_action_serde_kebab_case() {
         assert_eq!(
             serde_json::to_string(&super::QuarantineAction::Observe)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"observe\""
         );
         assert_eq!(
             serde_json::to_string(&super::QuarantineAction::QuarantineImmediate)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"quarantine-immediate\""
         );
     }
@@ -1231,17 +1231,17 @@ mod tests {
     fn quarantine_status_serde_snake_case() {
         assert_eq!(
             serde_json::to_string(&super::QuarantineStatus::Active)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"active\""
         );
         assert_eq!(
             serde_json::to_string(&super::QuarantineStatus::Expired)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"expired\""
         );
         assert_eq!(
             serde_json::to_string(&super::QuarantineStatus::Lifted)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"lifted\""
         );
     }
@@ -1841,7 +1841,7 @@ mod tests {
             &report,
         );
         assert_eq!(events.len(), classifications.len() + 1);
-        let gate_event = events.last().expect("serde deserialization should succeed");
+        let gate_event = events.last().expect("operation should succeed for valid inputs");
         assert_eq!(gate_event.event, "gate_confidence_evaluated");
         assert_eq!(gate_event.suite_kind, "gate");
         assert_eq!(gate_event.scenario_id, "__gate__");
@@ -2010,7 +2010,7 @@ mod tests {
         let classifications = classify_flakes(&sample_runs(), &policy);
         assert!(!classifications.is_empty());
         let json = serde_json::to_string(&classifications[0])
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let back: super::FlakeClassification =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(classifications[0], back);

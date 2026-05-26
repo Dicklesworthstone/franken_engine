@@ -704,7 +704,7 @@ mod tests {
             .events
             .iter()
             .find(|e| e.action == "run_task")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(run_event.virtual_time, 100);
     }
 
@@ -1293,7 +1293,7 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("seed"));
         assert!(obj.contains_key("transcript"));
         assert!(obj.contains_key("events"));
@@ -1346,7 +1346,7 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("virtual_time"));
         assert!(obj.contains_key("step_index"));
         assert!(obj.contains_key("action"));

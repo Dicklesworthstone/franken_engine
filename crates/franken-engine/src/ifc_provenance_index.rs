@@ -1841,11 +1841,11 @@ mod tests {
             FlowDecision::Allowed,
         );
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = idx
             .flow_events_by_extension("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].event_id, "ev1");
     }
@@ -1856,11 +1856,11 @@ mod tests {
         let ctx = test_ctx();
         let proof = flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1);
         idx.insert_flow_proof(&proof, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = idx
             .flow_proofs_by_extension("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].proof_id, "p1");
     }
@@ -1877,11 +1877,11 @@ mod tests {
             DeclassificationDecision::Allow,
         );
         idx.insert_declass_receipt(&receipt, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = idx
             .declass_receipts_by_extension("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].receipt_id, "r1");
         assert_eq!(results[0].declassification_route_ref, "route-r1");
@@ -2053,11 +2053,11 @@ mod tests {
         let ctx = test_ctx();
         let claim = confinement_claim("c1", "ext-a", ClaimStrength::Full, 1);
         idx.insert_confinement_claim(&claim, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = idx
             .confinement_claims_by_extension("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].claim_id, "c1");
     }
@@ -2191,15 +2191,15 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stored = idx
             .get_flow_event("ev1", &ctx)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stored.receipt_ref.as_deref(), Some("r1"));
     }
 
@@ -2216,22 +2216,22 @@ mod tests {
         );
 
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stored = idx
             .get_flow_event("ev1", &ctx)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stored.extension_id, "ext-a");
         assert_eq!(
             idx.flow_events_by_extension("ext-a", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );
         assert_eq!(
             idx.flow_events_by_extension("  ext-a  ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );
@@ -2250,16 +2250,16 @@ mod tests {
         );
 
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stored = idx
             .get_flow_event("ev1", &ctx)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stored.event_id, "ev1");
         assert!(
             idx.get_flow_event("  ev1  ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_some()
         );
     }
@@ -2289,16 +2289,16 @@ mod tests {
         let proof = flow_proof("  p1  ", "ext-a", Label::Public, Label::Internal, 1);
 
         idx.insert_flow_proof(&proof, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stored = idx
             .get_flow_proof("p1", &ctx)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stored.proof_id, "p1");
         assert!(
             idx.get_flow_proof("  p1  ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_some()
         );
     }
@@ -2389,16 +2389,16 @@ mod tests {
         let claim = confinement_claim("  c1  ", "ext-a", ClaimStrength::Full, 1);
 
         idx.insert_confinement_claim(&claim, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stored = idx
             .get_confinement_claim("c1", &ctx)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stored.claim_id, "c1");
         assert!(
             idx.get_confinement_claim("  c1  ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_some()
         );
     }
@@ -2419,7 +2419,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "ev2",
@@ -2430,17 +2430,17 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let a = idx
             .flow_events_by_extension("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].event_id, "ev1");
 
         let b = idx
             .flow_events_by_extension("ext-b", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(b.len(), 1);
         assert_eq!(b[0].event_id, "ev2");
     }
@@ -2602,7 +2602,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "ev2",
@@ -2613,7 +2613,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "ev3",
@@ -2624,11 +2624,11 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let paths = idx
             .source_to_sink_lineage("ext-a", &Label::Public, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Multi-hop: Public→Internal (ev1), Public→Confidential (ev2),
         // and transitive Public→Internal→Confidential (ev1+ev3).
         assert_eq!(paths.len(), 3);
@@ -2648,11 +2648,11 @@ mod tests {
             &flow_proof("p1", "ext-a", Label::Internal, Label::Confidential, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let paths = idx
             .source_to_sink_lineage("ext-a", &Label::Internal, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(paths.len(), 1);
         assert_eq!(
             paths[0].hops[0].evidence_type,
@@ -2674,7 +2674,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Deny receipt should not appear in lineage.
         idx.insert_declass_receipt(
             &declass_receipt(
@@ -2686,11 +2686,11 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let paths = idx
             .source_to_sink_lineage("ext-a", &Label::Secret, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(paths.len(), 1); // Only the Allow receipt.
         assert_eq!(
             paths[0].hops[0].evidence_type,
@@ -2704,7 +2704,7 @@ mod tests {
         let ctx = test_ctx();
         let paths = idx
             .source_to_sink_lineage("ext-a", &Label::Secret, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(paths.is_empty());
     }
 
@@ -2724,7 +2724,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "ev2",
@@ -2735,11 +2735,11 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let sources = idx
             .sink_provenance("ext-a", &Label::Internal, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sources.len(), 2);
         assert!(sources.contains(&Label::Public));
         assert!(sources.contains(&Label::Confidential));
@@ -2751,7 +2751,7 @@ mod tests {
         let ctx = test_ctx();
         let sources = idx
             .sink_provenance("ext-a", &Label::Secret, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(sources.is_empty());
     }
 
@@ -2773,7 +2773,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "ev2",
@@ -2784,25 +2784,25 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // 1 proof covering the first flow.
         idx.insert_flow_proof(
             &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // 1 claim.
         idx.insert_confinement_claim(
             &confinement_claim("c1", "ext-a", ClaimStrength::Partial, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let status = idx
             .confinement_status("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status.extension_id, "ext-a");
         assert_eq!(status.proven_flows, 1);
         assert_eq!(status.unproven_flows, 1);
@@ -2825,21 +2825,21 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 2),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_confinement_claim(
             &confinement_claim("c1", "ext-a", ClaimStrength::Full, 2),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let status = idx
             .confinement_status("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status.proven_flows, 1);
         assert_eq!(status.unproven_flows, 0);
         assert_eq!(status.strongest_claim, Some(ClaimStrength::Full));
@@ -2852,7 +2852,7 @@ mod tests {
         let ctx = test_ctx();
         let status = idx
             .confinement_status("ext-empty", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(status.proven_flows, 0);
         assert_eq!(status.unproven_flows, 0);
         assert!(status.strongest_claim.is_none());
@@ -2885,20 +2885,20 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let joined = idx
             .join_events_with_receipts("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(joined.len(), 1);
         assert!(joined[0].1.is_some());
         assert_eq!(
             joined[0]
                 .1
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .receipt_id,
             "r1"
         );
@@ -2906,7 +2906,7 @@ mod tests {
             joined[0]
                 .1
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .declassification_route_ref,
             "route-r1"
         );
@@ -2914,7 +2914,7 @@ mod tests {
             joined[0]
                 .1
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .decision_contract_id,
             "decision-r1"
         );
@@ -2933,11 +2933,11 @@ mod tests {
             FlowDecision::Allowed,
         );
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let joined = idx
             .join_events_with_receipts("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(joined.len(), 1);
         assert!(joined[0].1.is_none());
     }
@@ -2992,17 +2992,17 @@ mod tests {
             Label::Public,
             DeclassificationDecision::Allow,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
         value
             .as_object_mut()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .remove("declassification_route_ref");
         value
             .as_object_mut()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .remove("decision_contract_id");
         let deser: DeclassReceiptRecord =
-            serde_json::from_value(value).expect("serde deserialization should succeed");
+            serde_json::from_value(value).expect("deserialization should succeed");
         assert_eq!(deser.receipt_id, "r1");
         assert!(deser.declassification_route_ref.is_empty());
         assert!(deser.decision_contract_id.is_empty());
@@ -3185,7 +3185,7 @@ mod tests {
             FlowDecision::Allowed,
         );
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(idx.events().len(), 1);
         assert_eq!(idx.events()[0].event, "flow_event_inserted");
     }
@@ -3195,7 +3195,7 @@ mod tests {
         let mut idx = make_index();
         let ctx = test_ctx();
         idx.source_to_sink_lineage("ext-a", &Label::Public, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(idx.events().iter().any(|e| e.event == "lineage_query"));
     }
 
@@ -3217,23 +3217,23 @@ mod tests {
                 ),
                 &ctx,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         for i in 0..3 {
             idx.insert_flow_proof(
                 &flow_proof(&format!("p{i}"), "ext-a", Label::Public, Label::Internal, 1),
                 &ctx,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
 
         let events = idx
             .flow_events_by_extension("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(events.len(), 5);
         let proofs = idx
             .flow_proofs_by_extension("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(proofs.len(), 3);
     }
 
@@ -3254,7 +3254,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "e2",
@@ -3265,7 +3265,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "e3",
@@ -3276,18 +3276,18 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let paths = idx
             .source_to_sink_lineage("ext-a", &Label::Public, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should include: 1-hop (Public→Internal), 2-hop (Public→Internal→Confidential),
         // 3-hop (Public→Internal→Confidential→Secret).
         let max_hops = paths
             .iter()
             .map(|p| p.hops.len())
             .max()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(max_hops, 3);
         assert!(paths.len() >= 3);
         // The 3-hop path should trace Public→Internal→Confidential→Secret.
@@ -3313,7 +3313,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "e2",
@@ -3324,11 +3324,11 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let paths = idx
             .source_to_sink_lineage("ext-a", &Label::Public, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should terminate without infinite loop.
         assert!(!paths.is_empty());
         // No path should have more than 2 hops in this scenario.
@@ -3350,7 +3350,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "e2",
@@ -3361,11 +3361,11 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let sources = idx
             .sink_provenance("ext-a", &Label::Confidential, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Both Internal (direct) and Public (transitive) should appear.
         assert_eq!(sources.len(), 2);
         assert!(sources.contains(&Label::Internal));
@@ -3386,7 +3386,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Deny receipts should not contribute sources.
         idx.insert_declass_receipt(
             &declass_receipt(
@@ -3398,11 +3398,11 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let sources = idx
             .sink_provenance("ext-a", &Label::Public, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sources.len(), 1);
         assert!(sources.contains(&Label::Secret));
     }
@@ -3439,15 +3439,15 @@ mod tests {
         ev3.timestamp_ms = 300;
 
         idx.insert_flow_event(&ev1, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(&ev2, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(&ev3, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = idx
             .flow_events_by_time_range("ext-a", 150, 250, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].event_id, "e2");
     }
@@ -3465,12 +3465,12 @@ mod tests {
         );
         ev.timestamp_ms = 500;
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Exact boundaries should be inclusive.
         let results = idx
             .flow_events_by_time_range("ext-a", 500, 500, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
     }
 
@@ -3486,11 +3486,11 @@ mod tests {
             FlowDecision::Allowed,
         );
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let results = idx
             .flow_events_by_time_range("ext-a", 5000, 6000, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(results.is_empty());
     }
 
@@ -3504,25 +3504,25 @@ mod tests {
             &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p2", "ext-a", Label::Internal, Label::Confidential, 2),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p3", "ext-a", Label::Public, Label::Secret, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let epoch1 = idx
             .flow_proofs_by_epoch("ext-a", 1, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(epoch1.len(), 2);
         let epoch2 = idx
             .flow_proofs_by_epoch("ext-a", 2, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(epoch2.len(), 1);
         assert_eq!(epoch2[0].proof_id, "p2");
     }
@@ -3535,11 +3535,11 @@ mod tests {
             &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let results = idx
             .flow_proofs_by_epoch("ext-a", 99, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(results.is_empty());
     }
 
@@ -3557,15 +3557,15 @@ mod tests {
             FlowDecision::Allowed,
         );
         idx.insert_flow_event(&ev, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = idx
             .get_flow_event("e1", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_some());
         assert_eq!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .event_id,
             "e1"
         );
@@ -3577,7 +3577,7 @@ mod tests {
         let ctx = test_ctx();
         let result = idx
             .get_flow_event("nonexistent", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none());
     }
 
@@ -3587,15 +3587,15 @@ mod tests {
         let ctx = test_ctx();
         let proof = flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1);
         idx.insert_flow_proof(&proof, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = idx
             .get_flow_proof("p1", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_some());
         assert_eq!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .proof_id,
             "p1"
         );
@@ -3607,7 +3607,7 @@ mod tests {
         let ctx = test_ctx();
         let result = idx
             .get_flow_proof("nonexistent", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none());
     }
 
@@ -3623,15 +3623,15 @@ mod tests {
             DeclassificationDecision::Allow,
         );
         idx.insert_declass_receipt(&receipt, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = idx
             .get_declass_receipt("r1", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_some());
         assert_eq!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .receipt_id,
             "r1"
         );
@@ -3643,7 +3643,7 @@ mod tests {
         let ctx = test_ctx();
         let result = idx
             .get_declass_receipt("nonexistent", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none());
     }
 
@@ -3653,15 +3653,15 @@ mod tests {
         let ctx = test_ctx();
         let claim = confinement_claim("c1", "ext-a", ClaimStrength::Full, 1);
         idx.insert_confinement_claim(&claim, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = idx
             .get_confinement_claim("c1", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_some());
         assert_eq!(
             result
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .claim_id,
             "c1"
         );
@@ -3673,7 +3673,7 @@ mod tests {
         let ctx = test_ctx();
         let result = idx
             .get_confinement_claim("nonexistent", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none());
     }
 
@@ -3684,22 +3684,22 @@ mod tests {
 
         assert!(
             idx.get_flow_event("   ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
         assert!(
             idx.get_flow_proof("   ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
         assert!(
             idx.get_declass_receipt("   ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
         assert!(
             idx.get_confinement_claim("   ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
     }
@@ -3721,7 +3721,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "e2",
@@ -3732,12 +3732,12 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_declass_receipt(
             &declass_receipt(
                 "r1",
@@ -3748,16 +3748,16 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_confinement_claim(
             &confinement_claim("c1", "ext-a", ClaimStrength::Full, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let counts = idx
             .record_counts("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(counts.flow_events, 2);
         assert_eq!(counts.flow_proofs, 1);
         assert_eq!(counts.declass_receipts, 1);
@@ -3772,7 +3772,7 @@ mod tests {
 
         let counts = idx
             .record_counts("ext-none", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(counts.flow_events, 0);
         assert_eq!(counts.flow_proofs, 0);
         assert_eq!(counts.declass_receipts, 0);
@@ -3795,7 +3795,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "e2",
@@ -3806,15 +3806,15 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let counts_a = idx
             .record_counts("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(counts_a.flow_events, 1);
         let counts_b = idx
             .record_counts("ext-b", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(counts_b.flow_events, 1);
     }
 
@@ -3835,12 +3835,12 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(idx.events().len(), 2);
         let drained = idx.drain_events();
@@ -3890,7 +3890,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &flow_event(
                 "ev-a",
@@ -3901,7 +3901,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_declass_receipt(
             &declass_receipt(
                 "r-ev-m",
@@ -3912,7 +3912,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(
             &{
                 let mut ev = flow_event(
@@ -3927,11 +3927,11 @@ mod tests {
             },
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let results = idx
             .flow_events_by_extension("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 3);
         // Results should be sorted by Ord (event_id is first field in struct).
         for i in 1..results.len() {
@@ -3954,19 +3954,19 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p1", "ext-a", Label::Public, Label::Confidential, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let paths1 = idx
             .source_to_sink_lineage("ext-a", &Label::Public, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let paths2 = idx
             .source_to_sink_lineage("ext-a", &Label::Public, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(paths1, paths2);
     }
 
@@ -4027,13 +4027,13 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Proof: Internal → Confidential
         idx.insert_flow_proof(
             &flow_proof("p1", "ext-a", Label::Internal, Label::Confidential, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Declass receipt: Confidential → Secret (Allow)
         idx.insert_declass_receipt(
             &declass_receipt(
@@ -4045,11 +4045,11 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let paths = idx
             .source_to_sink_lineage("ext-a", &Label::Public, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should have paths including the 3-hop chain Public→Internal→Confidential→Secret.
         let three_hop: Vec<_> = paths.iter().filter(|p| p.hops.len() == 3).collect();
         assert_eq!(three_hop.len(), 1);
@@ -4086,16 +4086,16 @@ mod tests {
             &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p2", "ext-a", Label::Confidential, Label::Internal, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let sources = idx
             .sink_provenance("ext-a", &Label::Internal, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sources.len(), 2);
         assert!(sources.contains(&Label::Public));
         assert!(sources.contains(&Label::Confidential));
@@ -4134,7 +4134,7 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_declass_receipt(
             &declass_receipt(
                 "r2",
@@ -4145,15 +4145,15 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(&ev1, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         idx.insert_flow_event(&ev2, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let joined = idx
             .join_events_with_receipts("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(joined.len(), 2);
         assert!(joined.iter().all(|(_, receipt)| receipt.is_some()));
     }
@@ -4453,26 +4453,26 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_confinement_claim(
             &confinement_claim("c1", "ext-a", ClaimStrength::Partial, 1),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_confinement_claim(
             &confinement_claim("c2", "ext-a", ClaimStrength::Full, 2),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let status = idx
             .confinement_status("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             status.strongest_claim,
             Some(ClaimStrength::Full),
@@ -4563,12 +4563,12 @@ mod tests {
         receipt.decision_contract_id = "  decision-r1  ".to_string();
 
         idx.insert_declass_receipt(&receipt, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stored = idx
             .get_declass_receipt("r1", &ctx)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stored.receipt_id, "r1");
         assert_eq!(stored.extension_id, "ext-a");
         assert_eq!(stored.declassification_route_ref, "route-r1");
@@ -4582,22 +4582,22 @@ mod tests {
         let proof = flow_proof("p1", "  ext-a  ", Label::Public, Label::Internal, 1);
 
         idx.insert_flow_proof(&proof, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stored = idx
             .get_flow_proof("p1", &ctx)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stored.extension_id, "ext-a");
         assert_eq!(
             idx.flow_proofs_by_extension("ext-a", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );
         assert_eq!(
             idx.flow_proofs_by_extension("  ext-a  ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );
@@ -4610,22 +4610,22 @@ mod tests {
         let claim = confinement_claim("c1", "  ext-a  ", ClaimStrength::Full, 1);
 
         idx.insert_confinement_claim(&claim, &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let stored = idx
             .get_confinement_claim("c1", &ctx)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stored.extension_id, "ext-a");
         assert_eq!(
             idx.confinement_claims_by_extension("ext-a", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );
         assert_eq!(
             idx.confinement_claims_by_extension("  ext-a  ", &ctx)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );
@@ -4663,26 +4663,26 @@ mod tests {
             ),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p1", "ext-a", Label::Public, Label::Internal, 3),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p2", "ext-a", Label::Public, Label::Internal, 7),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         idx.insert_flow_proof(
             &flow_proof("p3", "ext-a", Label::Public, Label::Internal, 5),
             &ctx,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let status = idx
             .confinement_status("ext-a", &ctx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             status.latest_proof_epoch,
             Some(7),

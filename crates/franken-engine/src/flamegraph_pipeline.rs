@@ -770,7 +770,7 @@ fn parse_folded_stacks(
         let count_token = tokens
             .last()
             .copied()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let stack_token = tokens[..tokens.len() - 1].join(" ");
         let sample_count = count_token.parse::<u64>().map_err(|_| {
             FlamegraphPipelineError::InvalidFoldedStack {
@@ -1054,7 +1054,7 @@ fn build_svg(
             match diff_by_stack
                 .get(&sample.stack)
                 .copied()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .cmp(&0)
             {
                 std::cmp::Ordering::Greater => "#d9534f",
@@ -1541,7 +1541,7 @@ mod tests {
     #[test]
     fn parse_folded_stacks_basic() {
         let result = parse_folded_stacks("test", "main;foo 100\nmain;bar 200\n")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.len(), 2);
         let total: u64 = result.iter().map(|s| s.sample_count).sum();
         assert_eq!(total, 300);
@@ -1550,7 +1550,7 @@ mod tests {
     #[test]
     fn parse_folded_stacks_merges_duplicates() {
         let result = parse_folded_stacks("test", "main;foo 100\nmain;foo 50\n")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].sample_count, 150);
     }
@@ -1558,7 +1558,7 @@ mod tests {
     #[test]
     fn parse_folded_stacks_skips_blank_lines() {
         let result = parse_folded_stacks("test", "\nmain;foo 10\n\nmain;bar 20\n\n")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.len(), 2);
     }
 
@@ -1717,7 +1717,7 @@ mod tests {
             sample_count: 120,
         }];
         let entries = build_diff_entries(&baseline, &candidate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].delta_samples, 20);
     }
@@ -1729,7 +1729,7 @@ mod tests {
             sample_count: 100,
         }];
         let entries =
-            build_diff_entries(&samples, &samples).expect("serde deserialization should succeed");
+            build_diff_entries(&samples, &samples).expect("operation should succeed for valid inputs");
         assert!(entries.is_empty());
     }
 
@@ -1741,7 +1741,7 @@ mod tests {
             sample_count: 50,
         }];
         let entries = build_diff_entries(&baseline, &candidate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].baseline_samples, 0);
         assert_eq!(entries[0].candidate_samples, 50);
@@ -1756,7 +1756,7 @@ mod tests {
         }];
         let candidate = vec![];
         let entries = build_diff_entries(&baseline, &candidate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].delta_samples, -30);
     }
@@ -1812,7 +1812,7 @@ mod tests {
     #[test]
     fn validate_artifact_valid() {
         validate_flamegraph_artifact(&test_artifact())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]

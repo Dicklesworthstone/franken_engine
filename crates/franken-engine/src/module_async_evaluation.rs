@@ -638,7 +638,7 @@ impl AsyncModuleEvaluator {
                             dep_state
                                 .rejection_reason_hash
                                 .clone()
-                                .expect("serde deserialization should succeed"),
+                                .expect("operation should succeed for valid inputs"),
                             dep_state.rejection_reason_description.clone(),
                         ));
                     }
@@ -1115,7 +1115,7 @@ pub fn compute_async_evaluation_order(
         let successors: Vec<&str> = adjacency
             .get(spec)
             .cloned()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for succ in successors {
             if let Some(deg) = in_degree.get_mut(succ) {
                 *deg = deg.saturating_sub(1);
@@ -1308,10 +1308,10 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("tla.js", true, &[], Some(PromiseHandle(10)));
         eval.suspend_at_top_level_await("tla.js", PromiseHandle(20))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(eval.states()["tla.js"].suspensions.len(), 1);
         eval.resume_evaluation("tla.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(eval.states()["tla.js"].suspensions[0].resolved);
     }
 
@@ -1321,7 +1321,7 @@ mod tests {
         eval.register_module("m.js", true, &[], Some(PromiseHandle(10)));
         let resumable = eval
             .settle_module("m.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(resumable.is_empty());
         assert_eq!(eval.states()["m.js"].phase, AsyncModulePhase::Settled);
     }
@@ -1333,7 +1333,7 @@ mod tests {
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("bad.js", &js_error("oops"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(linkage.rejected_module, "bad.js");
         assert_eq!(eval.states()["bad.js"].phase, AsyncModulePhase::Rejected);
     }
@@ -1349,12 +1349,12 @@ mod tests {
             Some(PromiseHandle(2)),
         );
         eval.suspend_on_dependency("consumer.js", "dep.js", PromiseHandle(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!eval.states()["consumer.js"].all_dependencies_settled());
 
         let resumable = eval
             .notify_dependency_settled("dep.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(resumable.contains(&"consumer.js".to_string()));
         assert!(eval.states()["consumer.js"].all_dependencies_settled());
     }
@@ -1365,7 +1365,7 @@ mod tests {
         eval.register_module("dep.js", false, &[], None);
         eval.register_module("consumer.js", true, &[], Some(PromiseHandle(2)));
         eval.suspend_on_dependency("consumer.js", "dep.js", PromiseHandle(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(eval.declared_dependencies["consumer.js"].is_empty());
         assert!(
@@ -1376,7 +1376,7 @@ mod tests {
 
         let resumable = eval
             .notify_dependency_settled("dep.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(resumable, vec!["consumer.js".to_string()]);
         assert!(!eval.pending_dependents.contains_key("dep.js"));
@@ -1416,7 +1416,7 @@ mod tests {
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("old.js", &js_error("fail"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!linkage.transitive_closure.contains("consumer.js"));
         assert_ne!(
@@ -1436,12 +1436,12 @@ mod tests {
             Some(PromiseHandle(2)),
         );
         eval.suspend_on_dependency("child.js", "root.js", PromiseHandle(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("root.js", &js_error("fail"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(linkage.transitive_closure.contains("child.js"));
         assert_eq!(eval.states()["child.js"].phase, AsyncModulePhase::Rejected);
@@ -1467,7 +1467,7 @@ mod tests {
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("provider.js", &js_error("fail"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(
             linkage
@@ -1489,7 +1489,7 @@ mod tests {
         eval.register_module("consumer.js", true, &[], Some(PromiseHandle(1)));
 
         eval.suspend_on_dependency("consumer.js", "provider.js", PromiseHandle(2))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(
             eval.declared_dependencies["consumer.js"].is_empty(),
@@ -1499,7 +1499,7 @@ mod tests {
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("provider.js", &js_error("fail"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(
             linkage
@@ -1529,7 +1529,7 @@ mod tests {
 
         let linkage = eval
             .reject_module("bad.js", &js_error("fail"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(linkage.dead_bindings, vec![binding_id.clone()]);
         assert_eq!(
@@ -1548,7 +1548,7 @@ mod tests {
         eval.register_module("a.js", false, &[], None);
         eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
         eval.settle_module("b.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = eval.finalize();
         assert!(result.all_settled);
         assert_eq!(result.total_rejections, 0);
@@ -1561,7 +1561,7 @@ mod tests {
         eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
         eval.reject_module("bad.js", &js_error("err"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = eval.finalize();
         assert!(!result.all_settled);
         assert_eq!(result.total_rejections, 1);
@@ -1572,11 +1572,11 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
         eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.resume_evaluation("m.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.settle_module("m.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(eval.witness_events().len() >= 4);
     }
 
@@ -1589,9 +1589,9 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::new(config);
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
         eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.suspend_at_top_level_await("m.js", PromiseHandle(3))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = eval
             .suspend_at_top_level_await("m.js", PromiseHandle(4))
             .unwrap_err();
@@ -1622,19 +1622,19 @@ mod tests {
             m
         };
         let order = compute_async_evaluation_order(&modules, &deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos_a = order
             .iter()
             .position(|s| s == "a.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos_b = order
             .iter()
             .position(|s| s == "b.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos_c = order
             .iter()
             .position(|s| s == "c.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(pos_a < pos_b);
         assert!(pos_b < pos_c);
     }
@@ -1644,7 +1644,7 @@ mod tests {
         let modules = vec!["x.js".into(), "y.js".into()];
         let deps = BTreeMap::new();
         let order = compute_async_evaluation_order(&modules, &deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(order.len(), 2);
     }
 
@@ -1669,7 +1669,7 @@ mod tests {
         eval.register_module("a.js", false, &[], None);
         eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
         eval.settle_module("b.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = eval.finalize();
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: AsyncEvalResult =
@@ -1785,7 +1785,7 @@ mod tests {
         eval.register_module("bad.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
         eval.reject_module("bad.js", &js_error("err"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = eval.finalize();
         assert_eq!(result.settled_count(), 1); // ok.js is Synchronous
         assert_eq!(result.rejected_count(), 1); // bad.js
@@ -2132,7 +2132,7 @@ mod tests {
         // d.js settles -> b.js and c.js should become resumable
         let resumable = eval
             .settle_module("d.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(resumable.contains(&"b.js".to_string()));
         assert!(resumable.contains(&"c.js".to_string()));
         // a.js is still waiting on b.js and c.js
@@ -2141,14 +2141,14 @@ mod tests {
         // Settle b.js
         let resumable2 = eval
             .settle_module("b.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // a.js still waiting on c.js
         assert!(!resumable2.contains(&"a.js".to_string()));
 
         // Settle c.js -> a.js should become resumable
         let resumable3 = eval
             .settle_module("c.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(resumable3.contains(&"a.js".to_string()));
     }
 
@@ -2159,15 +2159,15 @@ mod tests {
         eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
         eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(2)));
         eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
         eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("root.js", &js_error("cascade"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // mid.js depends on root.js, leaf.js depends on mid.js
         assert!(linkage.transitive_closure.contains("mid.js"));
@@ -2183,12 +2183,12 @@ mod tests {
         eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(1)));
         eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(2)));
         eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("root.js", &js_error("cascade"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(linkage.transitive_closure.contains("mid.js"));
         assert!(linkage.transitive_closure.contains("leaf.js"));
@@ -2206,15 +2206,15 @@ mod tests {
         eval.register_module("root.js", true, &[], Some(PromiseHandle(1)));
         eval.register_module("mid.js", true, &["root.js".into()], Some(PromiseHandle(2)));
         eval.suspend_on_dependency("mid.js", "root.js", PromiseHandle(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.register_module("leaf.js", true, &["mid.js".into()], Some(PromiseHandle(3)));
         eval.suspend_on_dependency("leaf.js", "mid.js", PromiseHandle(2))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut bindings = empty_live_bindings();
         let linkage = eval
             .reject_module("root.js", &js_error("no-cascade"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Without transitive propagation, only direct dependents are in the closure.
         assert!(linkage.transitive_closure.contains("mid.js"));
@@ -2227,15 +2227,15 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
         eval.suspend_at_top_level_await("m.js", PromiseHandle(10))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.resume_evaluation("m.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.suspend_at_top_level_await("m.js", PromiseHandle(11))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.resume_evaluation("m.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.suspend_at_top_level_await("m.js", PromiseHandle(12))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let state = &eval.states()["m.js"];
         assert_eq!(state.suspensions.len(), 3);
@@ -2250,7 +2250,7 @@ mod tests {
         eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
         let mut bindings = empty_live_bindings();
         eval.reject_module("dep.js", &js_error("fail"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Now register a consumer that depends on the rejected module.
         eval.register_module("consumer.js", false, &["dep.js".into()], None);
@@ -2294,7 +2294,7 @@ mod tests {
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
         let resumable = eval
             .notify_dependency_settled("unknown.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(resumable.is_empty());
     }
 
@@ -2326,7 +2326,7 @@ mod tests {
 
         let linkage = eval
             .reject_module("lib.js", &js_error("err"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(linkage.dead_bindings.contains(&id1));
         assert!(linkage.dead_bindings.contains(&id2));
@@ -2334,21 +2334,21 @@ mod tests {
         assert_eq!(
             bindings
                 .get_cell(&id1)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             BindingCellState::Dead
         );
         assert_eq!(
             bindings
                 .get_cell(&id2)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             BindingCellState::Dead
         );
         assert_ne!(
             bindings
                 .get_cell(&id_other)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             BindingCellState::Dead
         );
@@ -2369,11 +2369,11 @@ mod tests {
         // Pre-mark the binding as dead.
         bindings
             .mark_dead(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let linkage = eval
             .reject_module("lib.js", &js_error("err"), &mut bindings)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Already-dead binding should not appear in dead_bindings.
         assert!(linkage.dead_bindings.is_empty());
     }
@@ -2387,7 +2387,7 @@ mod tests {
             eval.register_module("a.js", false, &[], None);
             eval.register_module("b.js", true, &[], Some(PromiseHandle(1)));
             eval.settle_module("b.js")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             eval.finalize()
         };
         let r1 = build();
@@ -2416,7 +2416,7 @@ mod tests {
         let modules = vec!["only.js".into()];
         let deps = BTreeMap::new();
         let order = compute_async_evaluation_order(&modules, &deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(order, vec!["only.js".to_string()]);
     }
 
@@ -2429,12 +2429,12 @@ mod tests {
         deps.insert("c.js".into(), vec!["a.js".into()]);
         deps.insert("d.js".into(), vec!["b.js".into(), "c.js".into()]);
         let order = compute_async_evaluation_order(&modules, &deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pos = |name: &str| {
             order
                 .iter()
                 .position(|s| s == name)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         assert!(pos("a.js") < pos("b.js"));
         assert!(pos("a.js") < pos("c.js"));
@@ -2447,9 +2447,9 @@ mod tests {
         let modules: Vec<String> = vec!["z.js".into(), "y.js".into(), "x.js".into(), "w.js".into()];
         let deps = BTreeMap::new();
         let order1 = compute_async_evaluation_order(&modules, &deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let order2 = compute_async_evaluation_order(&modules, &deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(order1, order2);
     }
 
@@ -2460,7 +2460,7 @@ mod tests {
         let mut deps: BTreeMap<String, Vec<String>> = BTreeMap::new();
         deps.insert("b.js".into(), vec!["external.js".into()]);
         let order = compute_async_evaluation_order(&modules, &deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(order.len(), 2);
     }
 
@@ -2484,7 +2484,7 @@ mod tests {
         let modules: Vec<String> = vec![];
         let deps = BTreeMap::new();
         let order = compute_async_evaluation_order(&modules, &deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(order.is_empty());
     }
 
@@ -2495,11 +2495,11 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("m.js", true, &[], Some(PromiseHandle(1)));
         eval.suspend_at_top_level_await("m.js", PromiseHandle(2))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.resume_evaluation("m.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.settle_module("m.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = eval.witness_events();
         let types: Vec<AsyncEvalEventType> = events.iter().map(|e| e.event_type).collect();
@@ -2515,13 +2515,13 @@ mod tests {
         eval.register_module("a.js", true, &[], Some(PromiseHandle(1)));
         eval.register_module("b.js", true, &[], Some(PromiseHandle(2)));
         eval.suspend_at_top_level_await("a.js", PromiseHandle(10))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.resume_evaluation("a.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.settle_module("a.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.settle_module("b.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = eval.witness_events();
         for window in events.windows(2) {
@@ -2594,21 +2594,21 @@ mod tests {
 
         // app.js suspends on TLA, then suspends on dep.js
         eval.suspend_at_top_level_await("app.js", PromiseHandle(10))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.suspend_on_dependency("app.js", "dep.js", PromiseHandle(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // dep.js settles
         eval.settle_module("dep.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // app.js should now be resumable
         assert!(eval.states()["app.js"].all_dependencies_settled());
 
         eval.resume_evaluation("app.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         eval.settle_module("app.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = eval.finalize();
         assert!(result.all_settled);
@@ -2624,7 +2624,7 @@ mod tests {
         let mut eval = AsyncModuleEvaluator::with_defaults();
         eval.register_module("dep.js", true, &[], Some(PromiseHandle(1)));
         eval.settle_module("dep.js")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Now register consumer — dep.js is Settled (terminal, not Rejected)
         // so it should NOT be added as pending.

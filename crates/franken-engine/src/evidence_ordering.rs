@@ -2189,21 +2189,21 @@ mod tests {
 
         // After normalization, candidates/witnesses/constraints are in same order
         let json_a = serde_json::to_string(&entry_a.candidates)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let json_b = serde_json::to_string(&entry_b.candidates)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json_a, json_b, "candidates should be deterministic");
 
         let json_a = serde_json::to_string(&entry_a.witnesses)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let json_b = serde_json::to_string(&entry_b.witnesses)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json_a, json_b, "witnesses should be deterministic");
 
         let json_a = serde_json::to_string(&entry_a.constraints)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let json_b = serde_json::to_string(&entry_b.constraints)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(json_a, json_b, "constraints should be deterministic");
     }
 
@@ -2487,7 +2487,7 @@ mod tests {
             max_constraints: 32,
         };
         let json =
-            serde_json::to_string_pretty(&bounds).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&bounds).expect("serialization should succeed");
         let restored: SizeBounds =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bounds, restored);

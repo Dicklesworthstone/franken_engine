@@ -1185,7 +1185,7 @@ mod tests {
             1_060_000, // 6% regression
             30,
         )];
-        let ev = compute_regression(&samples, &cfg).expect("serde deserialization should succeed");
+        let ev = compute_regression(&samples, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(ev.domain, SpecializationDomain::SSR);
         assert_eq!(ev.benchmark_class, BenchmarkClass::Latency);
         assert_eq!(ev.baseline_mean_millionths, 1_000_000);
@@ -1214,7 +1214,7 @@ mod tests {
                 10,
             ),
         ];
-        let ev = compute_regression(&samples, &cfg).expect("serde deserialization should succeed");
+        let ev = compute_regression(&samples, &cfg).expect("operation should succeed for valid inputs");
         // weighted mean candidate = (1_100_000*20 + 1_200_000*10) / 30 = 1_133_333
         assert_eq!(ev.candidate_mean_millionths, 1_133_333);
         assert_eq!(ev.sample_count, 30);
@@ -1230,7 +1230,7 @@ mod tests {
             100_000,
             30,
         )];
-        let ev = compute_regression(&samples, &cfg).expect("serde deserialization should succeed");
+        let ev = compute_regression(&samples, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(ev.relative_delta_millionths, MILLIONTHS);
     }
 
@@ -1767,7 +1767,7 @@ mod tests {
             1_010_000,
             100, // >> 3 * 30 = 90
         )];
-        let ev = compute_regression(&samples, &cfg).expect("serde deserialization should succeed");
+        let ev = compute_regression(&samples, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(ev.confidence_millionths, MILLIONTHS);
     }
 
@@ -1781,7 +1781,7 @@ mod tests {
             1_010_000,
             45, // < 3 * 30 = 90
         )];
-        let ev = compute_regression(&samples, &cfg).expect("serde deserialization should succeed");
+        let ev = compute_regression(&samples, &cfg).expect("operation should succeed for valid inputs");
         // confidence = 45 * 1_000_000 / 90 = 500_000
         assert_eq!(ev.confidence_millionths, 500_000);
     }

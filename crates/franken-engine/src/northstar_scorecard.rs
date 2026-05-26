@@ -803,7 +803,7 @@ mod tests {
         }
         let summary = sc
             .summary(MetricKind::RenderLatencyP50Us)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.count, 100);
         assert_eq!(summary.min, 0);
         assert_eq!(summary.max, 9900);
@@ -1100,7 +1100,7 @@ mod tests {
         sc.record(sample(MetricKind::RenderLatencyP50Us, 42, 1));
         let summary = sc
             .summary(MetricKind::RenderLatencyP50Us)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.count, 1);
         assert_eq!(summary.min, 42);
         assert_eq!(summary.max, 42);
@@ -1117,7 +1117,7 @@ mod tests {
         // p50 for RenderLatencyP50Us.
         let val = sc
             .current_value(MetricKind::RenderLatencyP50Us)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(val, 50); // p50 of 0..99
 
         for i in 0..100 {
@@ -1126,7 +1126,7 @@ mod tests {
         // p99 for RenderLatencyP99Us.
         let val99 = sc
             .current_value(MetricKind::RenderLatencyP99Us)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(val99, 99); // p99 of 0..99
     }
 
@@ -1266,7 +1266,7 @@ mod tests {
         // p95 of [0, 10, 20, ..., 990]
         let val = sc
             .current_value(MetricKind::RenderLatencyP95Us)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(val, 950); // index 95 in sorted 0..99
     }
 
@@ -1398,7 +1398,7 @@ mod tests {
         sc.record(sample(MetricKind::BundleSizeBytes, 200, 1));
         let summary = sc
             .summary(MetricKind::BundleSizeBytes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.count, 2);
         assert_eq!(summary.min, 100);
         assert_eq!(summary.max, 200);
@@ -1425,7 +1425,7 @@ mod tests {
         }
         let val = sc
             .current_value(MetricKind::ResponsivenessP99Us)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(val, 9900); // p99 of [0, 100, 200, ..., 9900]
     }
 
@@ -1522,7 +1522,7 @@ mod tests {
         }
         let val = sc
             .current_value(MetricKind::RollbackLatencyP99Us)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(val, 99_000); // p99
     }
 
@@ -2468,7 +2468,7 @@ mod tests {
         sc.record(sample(MetricKind::BundleSizeBytes, 3_000, 1));
         let summary = sc
             .summary(MetricKind::BundleSizeBytes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.min, 1_000);
         assert_eq!(summary.max, 5_000);
     }

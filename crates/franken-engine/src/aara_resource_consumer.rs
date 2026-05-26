@@ -927,7 +927,7 @@ mod tests {
         // SAFETY: Test just consumed good certificate, should have receipt for Scheduler subsystem
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, BudgetDecision::FullBudget);
         assert!(receipt.denial_reasons.is_empty());
         assert!(!receipt.allocated_budgets.is_empty());
@@ -941,7 +941,7 @@ mod tests {
         // SAFETY: Test just consumed good certificate, should have receipt for GarbageCollector subsystem
         let receipt = consumer
             .last_receipt_for(Subsystem::GarbageCollector)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, BudgetDecision::FullBudget);
     }
 
@@ -953,7 +953,7 @@ mod tests {
         // SAFETY: Test just consumed good certificate, should have receipt for HostcallGate subsystem
         let receipt = consumer
             .last_receipt_for(Subsystem::HostcallGate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, BudgetDecision::FullBudget);
     }
 
@@ -979,7 +979,7 @@ mod tests {
         // SAFETY: Test consumed uncertified certificate, should still have receipt for Scheduler subsystem
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             receipt
                 .denial_reasons
@@ -1000,7 +1000,7 @@ mod tests {
         // SAFETY: Test consumed low_bound certificate, should have receipt for Scheduler subsystem
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Time bound = 10k < required 100k → should be reduced or denied
         assert!(!receipt.denial_reasons.is_empty());
     }
@@ -1017,7 +1017,7 @@ mod tests {
         // SAFETY: Test consumed dynamic_code_gen certificate, should have receipt for Specializer subsystem
         let receipt = consumer
             .last_receipt_for(Subsystem::Specializer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, BudgetDecision::Denied);
         assert!(receipt.denial_reasons.iter().any(|r| matches!(
             r,
@@ -1034,7 +1034,7 @@ mod tests {
         consumer.consume(&cert);
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, BudgetDecision::FullBudget);
     }
 
@@ -1052,7 +1052,7 @@ mod tests {
         // rejects it as CertificateNotCertified before checking per-dimension confidence.
         let receipt = consumer
             .last_receipt_for(Subsystem::Specializer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             receipt
                 .denial_reasons
@@ -1073,7 +1073,7 @@ mod tests {
         // Module loader requires ModuleLoadCount and IoOperationCount — not covered
         let receipt = consumer
             .last_receipt_for(Subsystem::ModuleLoader)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, BudgetDecision::Abstain);
     }
 
@@ -1084,7 +1084,7 @@ mod tests {
         consumer.consume(&cert);
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Scheduler needs Time (covered) and StackDepth (not covered) → abstain
         assert_eq!(receipt.decision, BudgetDecision::Abstain);
     }
@@ -1361,7 +1361,7 @@ mod tests {
         // Specializer has reject_critical_assumptions = true, so denied.
         let spec_receipt = consumer
             .last_receipt_for(Subsystem::Specializer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(spec_receipt.decision, BudgetDecision::Denied);
         assert!(
             spec_receipt
@@ -1372,7 +1372,7 @@ mod tests {
         // Scheduler does NOT reject critical assumptions.
         let sched_receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sched_receipt.decision, BudgetDecision::FullBudget);
     }
 
@@ -1388,7 +1388,7 @@ mod tests {
         ] {
             let receipt = consumer
                 .last_receipt_for(subsys)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(
                 receipt.decision.is_granted(),
                 "{subsys} should still be granted with critical assumptions"
@@ -1424,7 +1424,7 @@ mod tests {
         consumer.consume(&cert);
         let sched = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             sched
                 .denial_reasons
@@ -1440,7 +1440,7 @@ mod tests {
         consumer.consume(&cert);
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Bounds are exactly equal to required — should be FullBudget (>= not >).
         assert_eq!(receipt.decision, BudgetDecision::FullBudget);
     }
@@ -1477,7 +1477,7 @@ mod tests {
         consumer.consume(&cert);
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Time bound is one below minimum → reduced (bound too low but
         // no forbidden effect or critical assumption).
         assert_eq!(receipt.decision, BudgetDecision::ReducedBudget);
@@ -1525,7 +1525,7 @@ mod tests {
         // last_receipt_for should return the second consumption's receipt
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.certificate_id, "test-uncertified");
         assert_eq!(receipt.decision, BudgetDecision::Denied);
     }
@@ -1657,7 +1657,7 @@ mod tests {
         consumer.consume(&dynamic_code_gen_certificate());
         let manifest = ConsumptionManifest::from_consumer(&consumer);
         let json =
-            serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&manifest).expect("serialization should succeed");
         let back: ConsumptionManifest =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);
@@ -1879,7 +1879,7 @@ mod tests {
         consumer.consume(&cert);
         let receipt = consumer
             .last_receipt_for(Subsystem::Specializer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, BudgetDecision::Denied);
         let forbidden_count = receipt
             .denial_reasons
@@ -1896,7 +1896,7 @@ mod tests {
         consumer.consume(&cert);
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, BudgetDecision::FullBudget);
         // Scheduler needs Time and StackDepth → both should be allocated.
         assert!(
@@ -1920,7 +1920,7 @@ mod tests {
         consumer.consume(&cert);
         let receipt = consumer
             .last_receipt_for(Subsystem::Scheduler)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.decision, BudgetDecision::Denied);
         // On an early CertificateNotCertified return, allocated is empty.
         assert!(receipt.allocated_budgets.is_empty());
@@ -1996,7 +1996,7 @@ mod tests {
         consumer.consume(&cert);
         let receipt = consumer
             .last_receipt_for(Subsystem::Specializer)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Confidence 900_000 < required 900_001 → reduced budget.
         assert_eq!(receipt.decision, BudgetDecision::ReducedBudget);
         assert!(

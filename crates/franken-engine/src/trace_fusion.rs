@@ -145,7 +145,7 @@ impl FusionMotif {
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         data.extend_from_slice(
             serde_json::to_string(&self.kind)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         for op in &self.opcode_pattern {
@@ -2259,7 +2259,7 @@ mod tests {
         assert!(template.is_some());
         assert_eq!(
             template
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .opcode,
             "SuperArithChain"
         );
@@ -2278,7 +2278,7 @@ mod tests {
         assert!(template.is_some());
         assert_eq!(
             template
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .opcode,
             "SuperPropChain"
         );
@@ -2405,7 +2405,7 @@ mod tests {
             .active_traces
             .keys()
             .next()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         assert!(engine.disable_trace(
             &trace_id,
@@ -2426,7 +2426,7 @@ mod tests {
             .active_traces
             .keys()
             .next()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         engine.disable_trace(
             &trace_id,
@@ -2448,13 +2448,13 @@ mod tests {
             .active_traces
             .keys()
             .next()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         assert!(engine.record_execution(&trace_id));
         assert!(engine.record_execution(&trace_id));
         let trace = engine
             .get_trace(&trace_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(trace.execution_count, 2);
     }
 
@@ -2469,7 +2469,7 @@ mod tests {
             .active_traces
             .keys()
             .next()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
 
         // 3 executions, 1 exit = 33% > 20%.
@@ -2480,7 +2480,7 @@ mod tests {
 
         let trace = engine
             .get_trace(&trace_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!trace.enabled);
     }
 
@@ -2493,13 +2493,13 @@ mod tests {
             .active_traces
             .keys()
             .next()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
 
         engine.invalidate_proof("cap-proof-1");
         let trace = engine
             .get_trace(&trace_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!trace.enabled);
         assert!(matches!(
             trace.disable_reason,
@@ -2519,7 +2519,7 @@ mod tests {
             .active_traces
             .values()
             .next()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!trace.enabled);
     }
 
@@ -2630,7 +2630,7 @@ mod tests {
             .active_traces
             .keys()
             .next()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         engine.disable_trace(
             &trace_id,
@@ -2844,7 +2844,7 @@ mod tests {
             .active_traces
             .values()
             .next()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(trace.super_instruction_count() > 0);
     }
 
@@ -2908,7 +2908,7 @@ mod tests {
             .active_traces
             .values()
             .next()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should have some passthrough + some fused.
         assert!(trace.instruction_count() < entries.len());
         assert!(trace.super_instruction_count() > 0);

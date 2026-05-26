@@ -1845,7 +1845,7 @@ mod tests {
         assert_eq!(
             val,
             serde_json::from_str::<RenderSurface>(&json)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
     }
 
@@ -1856,7 +1856,7 @@ mod tests {
         assert_eq!(
             val,
             serde_json::from_str::<ModuleRole>(&json)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
     }
 
@@ -1867,7 +1867,7 @@ mod tests {
         assert_eq!(
             val,
             serde_json::from_str::<GraphNodeId>(&json)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
     }
 
@@ -1878,7 +1878,7 @@ mod tests {
         assert_eq!(
             val,
             serde_json::from_str::<GraphVerificationVerdict>(&json)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
     }
 
@@ -2023,7 +2023,7 @@ mod tests {
             assert_eq!(
                 *surface,
                 serde_json::from_str::<RenderSurface>(&json)
-                    .expect("serde deserialization should succeed")
+                    .expect("deserialization should succeed")
             );
         }
     }

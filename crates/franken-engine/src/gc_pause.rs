@@ -948,17 +948,17 @@ mod tests {
 
         let mut gc = GcCollector::new(GcConfig::deterministic());
         gc.register_heap("ext-a".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let obj = gc
             .allocate("ext-a", 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.unroot("ext-a", obj)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = gc
             .collect("ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut tracker = PauseTracker::default();
         tracker.record(&event);

@@ -1386,7 +1386,7 @@ mod tests {
     fn gate_clean_scans_pass() {
         let scans = vec![clean_scan(Subsystem::Parser)];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_pass());
         assert_eq!(r.blocked_count(), 0);
         assert_eq!(r.warned_count(), 0);
@@ -1397,7 +1397,7 @@ mod tests {
         let entry = blocking_entry(Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_block());
         assert_eq!(r.blocked_count(), 1);
     }
@@ -1408,7 +1408,7 @@ mod tests {
         let waiver = make_waiver(&entry, Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let r = evaluate_gate(&scans, &[waiver], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_pass());
         assert_eq!(r.waived_count(), 1);
     }
@@ -1418,7 +1418,7 @@ mod tests {
         let entry = high_entry(Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r.verdict, GateVerdict::Warn);
         assert_eq!(r.warned_count(), 1);
     }
@@ -1433,7 +1433,7 @@ mod tests {
             ],
         )];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_pass());
     }
 
@@ -1504,7 +1504,7 @@ mod tests {
         w.created_epoch = 40;
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let r = evaluate_gate(&scans, &[w], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_block());
         assert_eq!(r.waived_count(), 0);
     }
@@ -1516,7 +1516,7 @@ mod tests {
         w.status = WaiverStatus::Revoked;
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let r = evaluate_gate(&scans, &[w], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_block());
     }
 
@@ -1528,7 +1528,7 @@ mod tests {
             clean_scan(Subsystem::Runtime),
         ];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_pass());
         assert_eq!(r.total_placeholders(), 0);
     }
@@ -1538,7 +1538,7 @@ mod tests {
         let entry = low_entry(Subsystem::Cli);
         let scans = vec![scan_with(Subsystem::Cli, vec![entry])];
         let r = evaluate_gate(&scans, &[], &GateConfig::strict(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_block());
     }
 
@@ -1548,7 +1548,7 @@ mod tests {
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let cfg = GateConfig::permissive();
         let r = evaluate_gate(&scans, &[], &cfg, &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_pass());
     }
 
@@ -1565,7 +1565,7 @@ mod tests {
             ),
         ];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r.total_placeholders(), 3);
     }
 
@@ -1575,7 +1575,7 @@ mod tests {
     fn summarize_contains_verdict() {
         let scans = vec![clean_scan(Subsystem::Parser)];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = summarize_report(&r);
         assert!(s.contains("pass"));
     }
@@ -1585,7 +1585,7 @@ mod tests {
         let entry = blocking_entry(Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = summarize_report(&r);
         assert!(s.contains("blocked entries:"));
         assert!(s.contains("src/lib.rs:42"));
@@ -1596,7 +1596,7 @@ mod tests {
         let entry = high_entry(Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = summarize_report(&r);
         assert!(s.contains("warned entries:"));
     }
@@ -1607,7 +1607,7 @@ mod tests {
         let waiver = make_waiver(&entry, Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![entry])];
         let r = evaluate_gate(&scans, &[waiver], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = summarize_report(&r);
         assert!(s.contains("waived entries:"));
     }
@@ -1687,7 +1687,7 @@ mod tests {
             ],
         )];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_block());
         assert_eq!(r.blocked_count(), 1);
         assert_eq!(r.warned_count(), 1);
@@ -1707,7 +1707,7 @@ mod tests {
         let w = make_waiver(&e1, Subsystem::Parser);
         let scans = vec![scan_with(Subsystem::Parser, vec![e1, e2])];
         let r = evaluate_gate(&scans, &[w], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.is_block());
         assert_eq!(r.waived_count(), 1);
         assert_eq!(r.blocked_count(), 1);
@@ -1723,7 +1723,7 @@ mod tests {
             scan_with(Subsystem::Lowering, vec![h]),
         ];
         let r = evaluate_gate(&scans, &[waiver], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Blocking waived, but High warns.
         assert_eq!(r.verdict, GateVerdict::Warn);
         assert_eq!(r.waived_count(), 1);
@@ -1734,7 +1734,7 @@ mod tests {
     fn gate_report_receipt_epoch_matches() {
         let scans = vec![clean_scan(Subsystem::Parser)];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 42)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r.receipt.epoch, test_epoch());
         assert_eq!(r.receipt.timestamp_micros, 42);
     }
@@ -1755,7 +1755,7 @@ mod tests {
             vec![blocking_entry(Subsystem::Parser)],
         )];
         let r = evaluate_gate(&scans, &[], &GateConfig::default(), &test_epoch(), 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: GateReport = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(r, back);

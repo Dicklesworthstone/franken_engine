@@ -1572,7 +1572,7 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = engine.register_prior(prior);
         assert!(matches!(result, Err(TransferError::DuplicatePrior { .. })));
     }
@@ -1585,11 +1585,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_eligible());
         assert!(!result.is_marginal());
     }
@@ -1600,11 +1600,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", false, true, false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_eligible());
         assert!(result.is_marginal());
         // Confidence should be discounted
@@ -1617,11 +1617,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", false, false, false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.is_eligible());
     }
 
@@ -1631,11 +1631,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", false, false, true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1650,11 +1650,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1670,11 +1670,11 @@ mod tests {
         prior.revoked = true;
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1689,11 +1689,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 500_000, 10); // below 700k floor
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1718,11 +1718,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::GcTuningPrior, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1741,11 +1741,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10); // 10 rules > 5 limit
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", true, false, false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -1769,11 +1769,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let record = engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.transfer_id, "t1");
         assert_eq!(record.rules_transferred, 10);
         // Default policy requires drift monitoring, so status should be Probationary
@@ -1787,11 +1787,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = engine.execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"));
         assert!(matches!(
             result,
@@ -1805,7 +1805,7 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10); // stale
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine.execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"));
         assert!(matches!(result, Err(TransferError::PolicyViolation { .. })));
@@ -1819,15 +1819,15 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let obs = DriftObservation::new("t1", "exec_time", 500_000, 510_000, test_epoch(5), 1);
         let verdict = engine
             .record_drift(obs)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(verdict, DriftVerdict::WithinBudget { .. }));
     }
 
@@ -1842,21 +1842,21 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let obs = DriftObservation::new("t1", "exec_time", 500_000, 700_000, test_epoch(5), 1);
         let verdict = engine
             .record_drift(obs)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(verdict, DriftVerdict::BudgetExceeded { .. }));
 
         // Transfer should be revoked
         let transfer = engine
             .get_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(transfer.status, TransferStatus::RevokedDrift);
         assert!(engine.get_revocation("t1").is_some());
     }
@@ -1867,13 +1867,13 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .revoke_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let obs = DriftObservation::new("t1", "exec_time", 500_000, 510_000, test_epoch(5), 1);
         let result = engine.record_drift(obs);
@@ -1891,25 +1891,25 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             engine
                 .get_transfer("t1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             TransferStatus::Probationary
         );
         engine
             .promote_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             engine
                 .get_transfer("t1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             TransferStatus::Active
         );
@@ -1925,10 +1925,10 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Already Active, not Probationary
         let result = engine.promote_transfer("t1");
@@ -1946,14 +1946,14 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = engine
             .revoke_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.reason, TransferStatus::RevokedManual);
         assert_eq!(engine.revoked_transfer_count(), 1);
     }
@@ -1964,13 +1964,13 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .revoke_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine.revoke_transfer("t1");
         assert!(matches!(
@@ -1987,17 +1987,17 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine
             .complete_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let transfer = engine
             .get_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(transfer.status, TransferStatus::Completed);
     }
 
@@ -2009,10 +2009,10 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Advance epoch past staleness threshold
         engine.advance_epoch(test_epoch(100));
@@ -2022,7 +2022,7 @@ mod tests {
 
         let transfer = engine
             .get_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(transfer.status, TransferStatus::RevokedStale);
     }
 
@@ -2035,16 +2035,16 @@ mod tests {
         let p2 = make_prior("p2", TransferKind::TieringPrior, 3, 800_000, 5);
         engine
             .register_prior(p1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_prior(p2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t2", "p2", "tgt1", "cert2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary = engine.summarize_target("tgt1");
         assert_eq!(summary.probationary_count, 2);
@@ -2069,19 +2069,19 @@ mod tests {
         let p2 = make_prior("p2", TransferKind::CacheHint, 3, 800_000, 5);
         engine
             .register_prior(p1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_prior(p2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t2", "p2", "tgt1", "cert2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t3", "p1", "tgt2", "cert3"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let active = engine.active_transfers_for("tgt1");
         assert_eq!(active.len(), 2);
@@ -2095,10 +2095,10 @@ mod tests {
         let p1 = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(p1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let inv = engine.evidence_inventory();
         assert_eq!(inv.total_priors, 1);
@@ -2247,29 +2247,29 @@ mod tests {
         let p1 = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(p1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Execute
         let record = engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.status, TransferStatus::Probationary);
 
         // Record drift within budget
         let obs1 = DriftObservation::new("t1", "exec_time", 500_000, 510_000, test_epoch(5), 1);
         let v1 = engine
             .record_drift(obs1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(v1, DriftVerdict::WithinBudget { .. }));
 
         // Promote
         engine
             .promote_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             engine
                 .get_transfer("t1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             TransferStatus::Active
         );
@@ -2277,11 +2277,11 @@ mod tests {
         // Complete
         engine
             .complete_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             engine
                 .get_transfer("t1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             TransferStatus::Completed
         );
@@ -2299,15 +2299,15 @@ mod tests {
         let p2 = make_prior("p2", TransferKind::CacheHint, 3, 900_000, 10);
         engine
             .register_prior(p1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_prior(p2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // First transfer: 15 rules
         engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Second transfer would exceed 20 rule limit (15 + 10 = 25 > 20)
         let result = engine.execute_transfer(&transfer_input("t2", "p2", "tgt1", "cert2"));
@@ -2321,12 +2321,12 @@ mod tests {
         // Revoke first transfer, freeing budget
         engine
             .revoke_transfer("t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Now second transfer should succeed (0 + 10 ≤ 20)
         let record = engine
             .execute_transfer(&transfer_input("t2", "p2", "tgt1", "cert2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.rules_transferred, 10);
     }
 
@@ -2340,11 +2340,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let result = engine
             .check_eligibility("p1", "tgt1", false, true, false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             result,
             TransferEligibility::Denied {
@@ -2363,11 +2363,11 @@ mod tests {
         let prior = make_prior("p1", TransferKind::RewritePack, 3, 900_000, 10);
         engine
             .register_prior(prior)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let record = engine
             .execute_transfer(&transfer_input("t1", "p1", "tgt1", "cert1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.status, TransferStatus::Active);
     }
 }

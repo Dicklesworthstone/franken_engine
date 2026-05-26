@@ -1341,7 +1341,7 @@ mod tests {
             config: &default_config(),
             was_previously_ready: false,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(results.len(), 2);
         assert!(
@@ -1367,7 +1367,7 @@ mod tests {
             config: &default_config(),
             was_previously_ready: false,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].outcome, DifferentialOutcome::Diverge);
@@ -1393,7 +1393,7 @@ mod tests {
             config: &default_config(),
             was_previously_ready: true, // was previously ready
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(verdict.is_regressed());
         if let PromotionReadiness::Regressed {
@@ -1441,7 +1441,7 @@ mod tests {
             config: &default_config(),
             was_previously_ready: true,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(verdict.is_regressed());
         if let PromotionReadiness::Regressed {
@@ -1473,7 +1473,7 @@ mod tests {
             config: &default_config(),
             was_previously_ready: false,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         if let PromotionReadiness::Ready {
             workload_count,
@@ -1540,7 +1540,7 @@ mod tests {
             .evaluate_single(&slot, &workloads, &|_| Ok(output.clone()), &|_| {
                 Ok(out2.clone())
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(results.len(), 1);
         assert!(verdict.is_ready());
@@ -1596,7 +1596,7 @@ mod tests {
             gate.evaluate_single(&slot, &workloads, &|_| Ok(output.clone()), &|_| {
                 Ok(out2.clone())
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
 
         assert!(gate.passes());
@@ -1628,7 +1628,7 @@ mod tests {
             &|_| Ok(ok.clone()),
             &|_| Ok(ok2.clone()),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Slot 2: failing (semantic divergence)
         let s2 = make_slot_id("interpreter");
@@ -1644,17 +1644,17 @@ mod tests {
             &|_| Ok(make_output("native", 100, 1000, &[])),
             &|_| Ok(make_output("delegate", 100, 1000, &[])),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(!gate.passes());
         assert!(
             gate.verdict_for(&s1)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_ready()
         );
         assert!(
             gate.verdict_for(&s2)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_blocked()
         );
     }
@@ -1687,7 +1687,7 @@ mod tests {
             &|_| Ok(make_output("native", 100, 1000, &[])),
             &|_| Ok(make_output("delegate", 100, 1000, &[])),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let evidence = gate.finalize_evidence();
         let sem_count = evidence

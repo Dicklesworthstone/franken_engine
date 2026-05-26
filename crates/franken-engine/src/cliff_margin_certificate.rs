@@ -1957,7 +1957,7 @@ mod tests {
         assert_eq!(verdict, CertificateVerdict::Blocked);
         let receipt = gate
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should have multiple blocking reasons
         assert!(receipt.blocking_reasons.len() >= 3);
     }
@@ -2060,7 +2060,7 @@ mod tests {
         assert_eq!(verdict, CertificateVerdict::Approved);
         assert_eq!(
             gate.last_receipt()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .escape_plan_status,
             EscapePlanStatus::NotRequired,
         );

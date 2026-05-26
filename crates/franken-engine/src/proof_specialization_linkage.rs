@@ -1226,7 +1226,7 @@ mod tests {
         let record = make_linkage("link-1", 5, &["proof-a"]);
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.total_count(), 1);
         assert_eq!(engine.active_count(), 1);
     }
@@ -1238,7 +1238,7 @@ mod tests {
         let r2 = make_linkage("link-1", 5, &["proof-b"]);
         engine
             .register(r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = engine.register(r2, "t2").unwrap_err();
         assert_eq!(error_code(&err), "LINKAGE_DUPLICATE");
     }
@@ -1262,7 +1262,7 @@ mod tests {
         let record = make_linkage("link-1", 5, &["proof-a"]);
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir3 = make_ir3();
         assert!(ir3.specialization.is_none());
@@ -1270,11 +1270,11 @@ mod tests {
         let lid = LinkageId::new("link-1");
         engine
             .attach_to_ir3(&lid, &mut ir3, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(ir3.specialization.is_some());
         let spec = ir3
             .specialization
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(spec.proof_input_ids, vec!["proof-a"]);
         assert_eq!(spec.validity_epoch, 5);
     }
@@ -1286,17 +1286,17 @@ mod tests {
         let r2 = make_linkage("link-2", 5, &["proof-b"]);
         engine
             .register(r1, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(r2, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir3 = make_ir3();
         let lid1 = LinkageId::new("link-1");
         let lid2 = LinkageId::new("link-2");
         engine
             .attach_to_ir3(&lid1, &mut ir3, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = engine.attach_to_ir3(&lid2, &mut ir3, "t3").unwrap_err();
         assert_eq!(error_code(&err), "LINKAGE_IR3_ALREADY_SPECIALIZED");
@@ -1309,7 +1309,7 @@ mod tests {
         record.active = false;
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir3 = make_ir3();
         let lid = LinkageId::new("link-1");
@@ -1323,7 +1323,7 @@ mod tests {
         let record = make_linkage("link-1", 3, &["proof-a"]); // epoch 3, engine at 5
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir3 = make_ir3();
         let lid = LinkageId::new("link-1");
@@ -1348,7 +1348,7 @@ mod tests {
         record.proof_inputs[0].validity_window_ticks = 10; // expires at 110
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir3 = make_ir3();
         let lid = LinkageId::new("link-expire");
@@ -1361,14 +1361,14 @@ mod tests {
         assert!(
             !engine
                 .get(&lid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
 
         let (_, cause) = engine
             .invalidations()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match cause {
             InvalidationCause::PolicyChange { reason } => {
                 assert!(reason.contains("proof_window_expired"));
@@ -1388,19 +1388,19 @@ mod tests {
         record.proof_inputs[0].validity_window_ticks = 20; // expires at 120
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir3 = make_ir3();
         let lid = LinkageId::new("link-safe");
         engine
             .attach_to_ir3_at_tick(&lid, &mut ir3, 119, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(ir3.specialization.is_some());
         assert!(
             engine
                 .get(&lid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
         assert!(engine.invalidations().is_empty());
@@ -1416,7 +1416,7 @@ mod tests {
         let record = make_linkage("link-1", 5, &["proof-a"]);
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir4 = make_ir4();
         ir4.instructions_executed = 100;
@@ -1429,7 +1429,7 @@ mod tests {
         };
         let exec = engine
             .record_execution(&lid, &mut ir4, perf, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(exec.linkage_id, lid);
         assert_eq!(exec.instructions_executed, 100);
@@ -1445,12 +1445,12 @@ mod tests {
         // Engine updated
         let stored = engine
             .get(&lid)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stored.execution_count, 1);
         assert_eq!(
             stored
                 .performance_delta
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .speedup_millionths,
             1_200_000
         );
@@ -1474,7 +1474,7 @@ mod tests {
         record.active = false;
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir4 = make_ir4();
         let lid = LinkageId::new("link-inactive");
@@ -1490,7 +1490,7 @@ mod tests {
         let record = make_linkage("link-epoch3", 3, &["proof-a"]);
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir4 = make_ir4();
         let lid = LinkageId::new("link-epoch3");
@@ -1508,7 +1508,7 @@ mod tests {
         record.proof_inputs[0].validity_window_ticks = 10; // expires at 110
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir4 = make_ir4();
         let lid = LinkageId::new("link-expire-exec");
@@ -1520,14 +1520,14 @@ mod tests {
         assert!(
             !engine
                 .get(&lid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
 
         let (_, cause) = engine
             .invalidations()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match cause {
             InvalidationCause::PolicyChange { reason } => {
                 assert!(reason.contains("proof_window_expired"));
@@ -1547,7 +1547,7 @@ mod tests {
         record.proof_inputs[0].validity_window_ticks = 10; // expires at 110
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir4 = make_ir4();
         ir4.instructions_executed = 55;
@@ -1565,14 +1565,14 @@ mod tests {
                 109,
                 "t2",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(exec.instructions_executed, 55);
         assert_eq!(exec.duration_ticks, 12);
         assert_eq!(
             engine
                 .get(&lid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             1
         );
@@ -1584,16 +1584,16 @@ mod tests {
         let record = make_linkage("link-1", 5, &["proof-a"]);
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut ir4 = make_ir4();
         let lid = LinkageId::new("link-1");
         engine
             .record_execution(&lid, &mut ir4, PerformanceDelta::NEUTRAL, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .record_execution(&lid, &mut ir4, PerformanceDelta::NEUTRAL, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should only appear once in IR4
         assert_eq!(
@@ -1607,7 +1607,7 @@ mod tests {
         assert_eq!(
             engine
                 .get(&lid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             2
         );
@@ -1622,7 +1622,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-old", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
         assert_eq!(rollbacks.len(), 1);
@@ -1638,14 +1638,14 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Register one at epoch 6 too
         let mut r2 = make_linkage("link-2", 6, &["proof-b"]);
         r2.validity_epoch = test_epoch(6);
         engine
             .register(r2, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
         assert_eq!(rollbacks.len(), 1); // Only link-1 invalidated
@@ -1655,7 +1655,7 @@ mod tests {
         assert!(
             engine
                 .get(&LinkageId::new("link-2"))
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
     }
@@ -1667,7 +1667,7 @@ mod tests {
         let expected_baseline = record.rollback.baseline_ir3_hash;
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
         assert_eq!(rollbacks[0].1, expected_baseline);
@@ -1678,7 +1678,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.on_epoch_change(test_epoch(6), "t2");
 
         assert_eq!(engine.invalidations().len(), 1);
@@ -1703,10 +1703,10 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a", "proof-b"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(make_linkage("link-2", 5, &["proof-c"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rollbacks = engine.invalidate_by_proof("proof-a", "t2");
         assert_eq!(rollbacks.len(), 1);
@@ -1715,13 +1715,13 @@ mod tests {
         assert!(
             !engine
                 .get(&LinkageId::new("link-1"))
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
         assert!(
             engine
                 .get(&LinkageId::new("link-2"))
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
     }
@@ -1731,14 +1731,14 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rollbacks = engine.invalidate_by_proof("proof-zzz", "t2");
         assert!(rollbacks.is_empty());
         assert!(
             engine
                 .get(&LinkageId::new("link-1"))
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
     }
@@ -1754,17 +1754,17 @@ mod tests {
         let expected_baseline = record.rollback.baseline_ir3_hash;
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let lid = LinkageId::new("link-1");
         let baseline = engine
             .invalidate_manual(&lid, "operator-1", "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(baseline, expected_baseline);
         assert!(
             !engine
                 .get(&lid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
     }
@@ -1776,7 +1776,7 @@ mod tests {
         record.active = false;
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let lid = LinkageId::new("link-1");
         let err = engine
@@ -1804,10 +1804,10 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a", "proof-b"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(make_linkage("link-2", 5, &["proof-a", "proof-c"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let ids = engine.consumed_proof_ids();
         assert_eq!(ids, vec!["proof-a", "proof-b", "proof-c"]);
@@ -1818,12 +1818,12 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut inactive = make_linkage("link-2", 5, &["proof-b"]);
         inactive.active = false;
         engine
             .register(inactive, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let plan = engine.rollback_plan();
         assert_eq!(plan.len(), 1);
@@ -1835,12 +1835,12 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut inactive = make_linkage("link-2", 5, &["proof-b"]);
         inactive.active = false;
         engine
             .register(inactive, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let active = engine.active_linkages();
         assert_eq!(active.len(), 1);
@@ -1856,10 +1856,10 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(make_linkage("link-2", 5, &["proof-b"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = engine.produce_witness_events(100, 42);
         assert_eq!(events.len(), 2);
@@ -1873,12 +1873,12 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut inactive = make_linkage("link-2", 5, &["proof-b"]);
         inactive.active = false;
         engine
             .register(inactive, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = engine.produce_witness_events(0, 0);
         assert_eq!(events.len(), 1);
@@ -1893,7 +1893,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!engine.events().is_empty());
         assert_eq!(engine.events()[0].event, "register");
@@ -1911,7 +1911,7 @@ mod tests {
         let last = engine
             .events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.outcome, "rejected");
         assert_eq!(
             last.error_code.as_deref(),
@@ -1954,7 +1954,7 @@ mod tests {
         let expected_baseline = record.rollback.baseline_ir3_hash;
         engine
             .register(record, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.active_count(), 1);
 
         // 2. Attach to IR3
@@ -1962,7 +1962,7 @@ mod tests {
         let lid = LinkageId::new("link-1");
         engine
             .attach_to_ir3(&lid, &mut ir3, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(ir3.specialization.is_some());
 
         // 3. Record execution in IR4
@@ -1975,7 +1975,7 @@ mod tests {
         };
         let exec = engine
             .record_execution(&lid, &mut ir4, perf, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(exec.instructions_executed, 1000);
         assert!(
             ir4.active_specialization_ids
@@ -2005,13 +2005,13 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-epoch5", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut r2 = make_linkage("link-epoch6", 6, &["proof-b"]);
         r2.validity_epoch = test_epoch(6);
         engine
             .register(r2, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Advance to epoch 6
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
@@ -2022,13 +2022,13 @@ mod tests {
         assert!(
             engine
                 .get(&LinkageId::new("link-epoch6"))
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
         assert!(
             !engine
                 .get(&LinkageId::new("link-epoch5"))
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
     }
@@ -2043,13 +2043,13 @@ mod tests {
         // Insert in non-alphabetical order
         engine
             .register(make_linkage("link-c", 5, &["proof-c"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(make_linkage("link-a", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(make_linkage("link-b", 5, &["proof-b"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rollbacks = engine.on_epoch_change(test_epoch(6), "t2");
         // BTreeMap order: a, b, c
@@ -2836,7 +2836,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let rollbacks = engine.on_epoch_change(test_epoch(5), "t2");
         assert!(rollbacks.is_empty());
         assert_eq!(engine.active_count(), 1);
@@ -2847,7 +2847,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r1 = engine.invalidate_by_proof("proof-a", "t2");
         assert_eq!(r1.len(), 1);
         // Second call: already inactive, should not match
@@ -2863,7 +2863,7 @@ mod tests {
         linkage.proof_inputs[0].validity_window_ticks = 10; // expires at 60
         engine
             .register(linkage, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rollbacks = engine.invalidate_expired_proof_windows(60, "t2");
         assert_eq!(rollbacks.len(), 1);
@@ -2871,13 +2871,13 @@ mod tests {
 
         let stored = engine
             .get(&LinkageId::new("link-expire"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!stored.active);
 
         let (_, cause) = engine
             .invalidations()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match cause {
             InvalidationCause::PolicyChange { reason } => {
                 assert!(reason.contains("proof_window_expired"));
@@ -2896,7 +2896,7 @@ mod tests {
         linkage.proof_inputs[0].validity_window_ticks = 0; // unbounded
         engine
             .register(linkage, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rollbacks = engine.invalidate_expired_proof_windows(u64::MAX, "t2");
         assert!(rollbacks.is_empty());
@@ -2912,7 +2912,7 @@ mod tests {
         linkage.proof_inputs[0].validity_window_ticks = 100; // saturates to u64::MAX
         engine
             .register(linkage, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let before_max = engine.invalidate_expired_proof_windows(u64::MAX - 1, "t2");
         assert!(before_max.is_empty());
@@ -3007,7 +3007,7 @@ mod tests {
         assert_eq!(record, back);
         assert_eq!(
             back.performance_delta
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .speedup_millionths,
             2_500_000
         );
@@ -3101,7 +3101,7 @@ mod tests {
         r.active = false;
         engine
             .register(r, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(engine.consumed_proof_ids().is_empty());
     }
 
@@ -3117,13 +3117,13 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(make_linkage("link-2", 5, &["proof-b"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(make_linkage("link-3", 5, &["proof-c"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = engine.produce_witness_events(1000, 555);
         assert_eq!(events.len(), 3);
         assert_eq!(events[0].seq, 1000);
@@ -3153,12 +3153,12 @@ mod tests {
         let mut engine = make_engine(1);
         engine
             .register(make_linkage("link-e1", 1, &["p1"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut r2 = make_linkage("link-e2", 2, &["p2"]);
         r2.validity_epoch = test_epoch(2);
         engine
             .register(r2, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Epoch 1 -> 2: link-e1 invalidated
         engine.on_epoch_change(test_epoch(2), "t2");
@@ -3176,18 +3176,18 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lid = LinkageId::new("link-1");
         let mut ir4 = make_ir4();
         for i in 0..10 {
             engine
                 .record_execution(&lid, &mut ir4, PerformanceDelta::NEUTRAL, &format!("t{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(
             engine
                 .get(&lid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .execution_count,
             10
         );
@@ -3198,7 +3198,7 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lid = LinkageId::new("link-1");
         let mut ir4 = make_ir4();
 
@@ -3208,13 +3208,13 @@ mod tests {
         };
         engine
             .record_execution(&lid, &mut ir4, perf1, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             engine
                 .get(&lid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .performance_delta
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .speedup_millionths,
             1_100_000
         );
@@ -3225,13 +3225,13 @@ mod tests {
         };
         engine
             .record_execution(&lid, &mut ir4, perf2, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             engine
                 .get(&lid)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .performance_delta
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .speedup_millionths,
             2_000_000
         );
@@ -3271,16 +3271,16 @@ mod tests {
                 make_linkage("link-1", 5, &["shared-proof", "proof-b"]),
                 "t1",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(
                 make_linkage("link-2", 5, &["shared-proof", "proof-c"]),
                 "t1",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register(make_linkage("link-3", 5, &["proof-d"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let rollbacks = engine.invalidate_by_proof("shared-proof", "t2");
         assert_eq!(rollbacks.len(), 2);
@@ -3288,7 +3288,7 @@ mod tests {
         assert!(
             engine
                 .get(&LinkageId::new("link-3"))
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .active
         );
     }
@@ -3298,11 +3298,11 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lid = LinkageId::new("link-1");
         engine
             .invalidate_manual(&lid, "admin-ops", "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.invalidations().len(), 1);
         match &engine.invalidations()[0].1 {
             InvalidationCause::ManualInvalidation { operator_id } => {
@@ -3393,11 +3393,11 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "my-trace-42")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let last = engine
             .events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.trace_id, "my-trace-42");
     }
 
@@ -3406,11 +3406,11 @@ mod tests {
         let mut engine = LinkageEngine::new("custom-policy-xyz", test_epoch(1));
         engine
             .register(make_linkage("link-1", 1, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let last = engine
             .events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.policy_id, "custom-policy-xyz");
     }
 
@@ -3419,16 +3419,16 @@ mod tests {
         let mut engine = make_engine(5);
         engine
             .register(make_linkage("link-1", 5, &["proof-a"]), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lid = LinkageId::new("link-1");
         let mut ir3 = make_ir3();
         engine
             .attach_to_ir3(&lid, &mut ir3, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut ir4 = make_ir4();
         engine
             .record_execution(&lid, &mut ir4, PerformanceDelta::NEUTRAL, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.on_epoch_change(test_epoch(6), "t4");
         // register + attach + record_execution + epoch_change = at least 4
         assert!(engine.events().len() >= 4);

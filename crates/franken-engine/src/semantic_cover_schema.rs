@@ -1116,7 +1116,7 @@ mod tests {
         let summary = cover.surface_summary();
         let parser_sum = summary
             .get(&EngineSurface::Parser)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parser_sum.total_relevant, 1);
         assert_eq!(parser_sum.supported, 1);
     }
@@ -1664,7 +1664,7 @@ mod tests {
         // Non-relevant surfaces should have total_relevant == 0
         let cli_sum = summary
             .get(&EngineSurface::Cli)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cli_sum.total_relevant, 0);
         assert_eq!(cli_sum.supported, 0);
     }
@@ -1692,13 +1692,13 @@ mod tests {
         let summary = cover.surface_summary();
         let parser_sum = summary
             .get(&EngineSurface::Parser)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parser_sum.total_relevant, 2);
         assert_eq!(parser_sum.supported, 1);
         assert_eq!(parser_sum.partial, 1);
         let lowering_sum = summary
             .get(&EngineSurface::Lowering)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lowering_sum.total_relevant, 2);
         assert_eq!(lowering_sum.unknown, 1);
         assert_eq!(lowering_sum.unsupported, 1);

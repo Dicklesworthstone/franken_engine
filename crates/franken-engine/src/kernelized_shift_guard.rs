@@ -751,10 +751,10 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 5, 500_000));
         let r1 = guard
             .check_shift(stable_embeddings(4, 5, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = guard
             .check_shift(stable_embeddings(4, 5, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.seq, 1);
         assert_eq!(r2.seq, 2);
     }
@@ -915,7 +915,7 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 10, 100_000));
         let result = guard
             .check_shift(shifted_embeddings(4, 10, 5_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.seq, 1);
         assert!(result.mmd_statistic > 0 || !result.shift_detected);
     }
@@ -926,7 +926,7 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 10, 100_000));
         let result = guard
             .check_shift(shifted_embeddings(4, 10, 5_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if result.shift_detected {
             assert!(result.expansion_triggered);
         }
@@ -942,7 +942,7 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 10, 100_000));
         let result = guard
             .check_shift(shifted_embeddings(4, 10, 5_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.expansion_triggered);
     }
 
@@ -952,7 +952,7 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 10, 100_000));
         let result = guard
             .check_shift(shifted_embeddings(4, 10, 5_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.shift_detected, result.freshness_alarm);
     }
 
@@ -962,7 +962,7 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 10, 500_000));
         let _ = guard
             .check_shift(stable_embeddings(4, 10, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(guard.board_freshness(), BoardFreshness::Healthy);
     }
 
@@ -972,7 +972,7 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 5, 500_000));
         let result = guard
             .check_shift(stable_embeddings(4, 5, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(result.content_hash, ContentHash::compute(b""));
     }
 
@@ -983,7 +983,7 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 5, 500_000));
         let result = guard
             .check_shift(stable_embeddings(4, 5, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.epoch, epoch);
     }
 
@@ -1069,7 +1069,7 @@ mod tests {
         // Should use the second baseline.
         let result = guard
             .check_shift(stable_embeddings(4, 5, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.seq, 1);
     }
 
@@ -1079,7 +1079,7 @@ mod tests {
         guard.set_baseline(stable_embeddings(64, 20, 500_000));
         let result = guard
             .check_shift(stable_embeddings(64, 20, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.seq, 1);
     }
 
@@ -1089,7 +1089,7 @@ mod tests {
         guard.set_baseline(stable_embeddings(4, 1, 500_000));
         let result = guard
             .check_shift(stable_embeddings(4, 1, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.seq, 1);
     }
 }

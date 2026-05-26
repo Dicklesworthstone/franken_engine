@@ -1319,7 +1319,7 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
             now_ns: 1_000_000_000,
         })
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     fn test_privacy_budget() -> PrivacyBudgetHealthInput {
@@ -1411,12 +1411,12 @@ mod tests {
     }
 
     fn test_signing_key() -> SigningKey {
-        SigningKey::from_bytes([42u8; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn test_ledger() -> GovernanceAuditLedger {
         GovernanceAuditLedger::new(GovernanceLedgerConfig::default())
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     fn test_actor() -> GovernanceActor {
@@ -1697,7 +1697,7 @@ mod tests {
         let actor = test_actor();
         let pub_result = publish_governance_scorecard(&req, &key, &mut ledger, actor);
         assert!(pub_result.is_ok());
-        let publication = pub_result.expect("serde deserialization should succeed");
+        let publication = pub_result.expect("operation should succeed for valid inputs");
         assert_eq!(publication.outcome, GovernanceScorecardOutcome::Healthy);
         assert!(publication.blockers.is_empty());
         assert!(publication.warnings.is_empty());
@@ -1722,14 +1722,14 @@ mod tests {
             &mut ledger1,
             GovernanceActor::System("test".to_string()),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let p2 = publish_governance_scorecard(
             &req,
             &key,
             &mut ledger2,
             GovernanceActor::System("test".to_string()),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(p1.artifact_hash_hex, p2.artifact_hash_hex);
     }
 
@@ -1739,7 +1739,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(verify_governance_scorecard_signature(&publication).is_ok());
     }
 
@@ -1752,7 +1752,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(publication.outcome, GovernanceScorecardOutcome::Critical);
         assert!(!publication.blockers.is_empty());
         assert!(
@@ -1770,7 +1770,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(publication.outcome, GovernanceScorecardOutcome::Critical);
         assert!(
             publication
@@ -1789,7 +1789,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(publication.outcome, GovernanceScorecardOutcome::Critical);
         assert!(publication.blockers.iter().any(|b| b.contains("moonshot")));
     }
@@ -1807,7 +1807,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(publication.outcome, GovernanceScorecardOutcome::Critical);
         assert!(
             publication
@@ -1823,7 +1823,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!publication.events.is_empty());
         assert_eq!(
             publication.events[0].component,
@@ -1844,7 +1844,7 @@ mod tests {
             &mut ledger,
             GovernanceActor::System("test".to_string()),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(p1.ledger_sequence > 0);
     }
 
@@ -1855,7 +1855,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(publication.scorecard_id.starts_with("gov-scorecard-"));
     }
 
@@ -1888,7 +1888,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(publication.trend_regression_detected);
         assert_eq!(publication.outcome, GovernanceScorecardOutcome::Warning);
         assert!(
@@ -1918,7 +1918,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(publication.trend_regression_detected);
         assert_eq!(publication.outcome, GovernanceScorecardOutcome::Critical);
         assert!(
@@ -1935,7 +1935,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!publication.trend_regression_detected);
     }
 
@@ -1945,7 +1945,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(publication.trend.len(), 1);
         assert_eq!(publication.trend[0].scorecard_id, "run-001");
     }
@@ -1958,7 +1958,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let md = publication.to_markdown_report();
         assert!(md.contains("# Governance Scorecard"));
         assert!(md.contains("## Dimensions"));
@@ -1974,7 +1974,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let md = publication.to_markdown_report();
         assert!(md.contains("## Blockers"));
     }
@@ -1987,10 +1987,10 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = publication
             .to_json_pretty()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let back: GovernanceScorecardPublication =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.scorecard_id, publication.scorecard_id);
@@ -2005,7 +2005,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let arc = &publication.attested_receipt_coverage;
         assert_eq!(arc.high_impact_total, 2);
         assert_eq!(arc.high_impact_with_valid_attestation, 2);
@@ -2020,7 +2020,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pbh = &publication.privacy_budget_health;
         assert_eq!(pbh.overrun_incidents, 0);
         assert!(pbh.threshold_pass);
@@ -2033,7 +2033,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mg = &publication.moonshot_governor;
         assert_eq!(mg.total_decisions, 100);
         assert_eq!(mg.override_count, 5);
@@ -2047,7 +2047,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let crc = &publication.cross_repo_conformance;
         assert_eq!(crc.total_cells, 100);
         assert_eq!(crc.passed_cells, 98);
@@ -2344,10 +2344,10 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Standalone signature verification (not via publish pipeline).
         verify_governance_scorecard_signature(&publication)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2382,7 +2382,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(publication.outcome, GovernanceScorecardOutcome::Warning);
         let md = publication.to_markdown_report();
         assert!(
@@ -2399,7 +2399,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             publication.scorecard_id.starts_with("gov-scorecard-"),
             "derived ID should start with gov-scorecard-"
@@ -2414,7 +2414,7 @@ mod tests {
         let key = test_signing_key();
         let mut ledger = test_ledger();
         let publication = publish_governance_scorecard(&req, &key, &mut ledger, test_actor())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(publication.outcome, GovernanceScorecardOutcome::Critical);
         assert!(
             publication
@@ -2526,11 +2526,11 @@ mod tests {
 
         // Derive IDs for all variants
         let id1 = derive_scorecard_id(&req1, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = derive_scorecard_id(&req2, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = derive_scorecard_id(&req3, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // All IDs should be different despite similar content
         assert_ne!(id1, id2, "IDs should differ for different field boundaries");
@@ -2573,9 +2573,9 @@ mod tests {
         };
 
         let id1 = derive_scorecard_id(&req1, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = derive_scorecard_id(&req2, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(id1, id2, "IDs should differ when field values are swapped");
     }
@@ -2604,11 +2604,11 @@ mod tests {
 
         // Derive ID multiple times
         let id1 = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id3 = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(id1, id2, "ID derivation should be deterministic");
         assert_eq!(id2, id3, "ID derivation should be deterministic");
@@ -2643,7 +2643,7 @@ mod tests {
 
         // Should not panic or fail even with unusual input
         let id = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(id.starts_with("gov-scorecard-"));
         assert!(id.len() > "gov-scorecard-".len());
 
@@ -2652,7 +2652,7 @@ mod tests {
         normal_req.scorecard_run_id = "".to_string();
         let normal_id =
             derive_scorecard_id(&normal_req, &attested, &privacy, &moonshot, &conformance)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         assert_ne!(
             id, normal_id,
             "Special characters should produce different ID"
@@ -2713,9 +2713,9 @@ mod tests {
         // Concatenated: "ab" + "cde" + "fghi" = "abcdefghi" same as req1: "abc" + "def" + "ghi"
 
         let id1 = derive_scorecard_id(&req1, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = derive_scorecard_id(&req2, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             id1, id2,
             "Length-prefixed fields should prevent boundary confusion attacks"
@@ -2730,9 +2730,9 @@ mod tests {
         req4.decision_id = "cdef".to_string();
 
         let id3 = derive_scorecard_id(&req3, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id4 = derive_scorecard_id(&req4, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             id3, id4,
             "Empty fields should not create collisions with non-empty fields"
@@ -2746,9 +2746,9 @@ mod tests {
         req6.decision_id = "inject".to_string();
 
         let id5 = derive_scorecard_id(&req5, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id6 = derive_scorecard_id(&req6, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(id5, id6, "Delimiter injection should not cause collisions");
 
         // Attack Vector 4: Length manipulation
@@ -2758,9 +2758,9 @@ mod tests {
         req8.trace_id = "b".repeat(1000); // Different very long field
 
         let id7 = derive_scorecard_id(&req7, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id8 = derive_scorecard_id(&req8, &attested, &privacy, &moonshot, &conformance)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             id7, id8,
             "Long fields with different content should produce different hashes"

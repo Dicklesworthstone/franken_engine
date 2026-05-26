@@ -2358,17 +2358,17 @@ mod tests {
         // Verify that serde(rename_all = "snake_case") produces expected JSON strings.
         assert_eq!(
             serde_json::to_string(&SubstrateKind::SwissTable)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"swiss_table\""
         );
         assert_eq!(
             serde_json::to_string(&SubstrateKind::GenericFallback)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"generic_fallback\""
         );
         assert_eq!(
             serde_json::to_string(&SubstrateKind::InlineCache)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"inline_cache\""
         );
     }
@@ -2377,17 +2377,17 @@ mod tests {
     fn test_optimization_level_serde_snake_case_field_values() {
         assert_eq!(
             serde_json::to_string(&OptimizationLevel::LocalityAware)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"locality_aware\""
         );
         assert_eq!(
             serde_json::to_string(&OptimizationLevel::FullySwizzled)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"fully_swizzled\""
         );
         assert_eq!(
             serde_json::to_string(&OptimizationLevel::CacheLine)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"cache_line\""
         );
     }
@@ -2396,17 +2396,17 @@ mod tests {
     fn test_fallback_path_serde_snake_case_field_values() {
         assert_eq!(
             serde_json::to_string(&FallbackPath::GenericScan)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"generic_scan\""
         );
         assert_eq!(
             serde_json::to_string(&FallbackPath::BTreeLookup)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"b_tree_lookup\""
         );
         assert_eq!(
             serde_json::to_string(&FallbackPath::LinearProbe)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"linear_probe\""
         );
     }
@@ -2415,22 +2415,22 @@ mod tests {
     fn test_rollback_strategy_serde_snake_case_field_values() {
         assert_eq!(
             serde_json::to_string(&RollbackStrategy::SnapshotRestore)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"snapshot_restore\""
         );
         assert_eq!(
             serde_json::to_string(&RollbackStrategy::EpochInvalidate)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"epoch_invalidate\""
         );
         assert_eq!(
             serde_json::to_string(&RollbackStrategy::CowClone)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"cow_clone\""
         );
         assert_eq!(
             serde_json::to_string(&RollbackStrategy::NoRollback)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"no_rollback\""
         );
     }
@@ -2439,17 +2439,17 @@ mod tests {
     fn test_transition_trigger_serde_snake_case_field_values() {
         assert_eq!(
             serde_json::to_string(&TransitionTrigger::HotnessThreshold)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"hotness_threshold\""
         );
         assert_eq!(
             serde_json::to_string(&TransitionTrigger::FallbackTriggered)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"fallback_triggered\""
         );
         assert_eq!(
             serde_json::to_string(&TransitionTrigger::PortabilityCheck)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"portability_check\""
         );
     }
@@ -2458,7 +2458,7 @@ mod tests {
     fn test_serde_deserialize_from_known_json_substrate_kind() {
         // Backwards compatibility: deserialize from a known JSON string.
         let kind: SubstrateKind = serde_json::from_str("\"compact_bitmap\"")
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
         assert_eq!(kind, SubstrateKind::CompactBitmap);
         let kind2: SubstrateKind =
             serde_json::from_str("\"art_tree\"").expect("deserialize known-valid JSON");

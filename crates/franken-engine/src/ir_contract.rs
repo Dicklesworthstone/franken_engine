@@ -3544,23 +3544,23 @@ mod tests {
         let mut verifier = IrVerifier::new();
         verifier
             .verify_ir0(&ir0, &ir0_hash, "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let ir1 = Ir1Module::new(ir0_hash, "ev.js");
         verifier
             .verify_ir1(&ir1, &ir0_hash, "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let ir3 = Ir3Module::new(ContentHash::compute(b"ir2"), "ev.js");
         verifier
             .verify_ir3(&ir3, "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let ir3_hash = ir3.content_hash();
         let ir4 = Ir4Module::new(ir3_hash, "ev.js");
         verifier
             .verify_ir4(&ir4, &ir3_hash, "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = verifier.drain_events();
         assert_eq!(events.len(), 4);
@@ -3604,7 +3604,7 @@ mod tests {
         let mut verifier = IrVerifier::new();
         verifier
             .verify_ir0(&ir0, &ir0_hash, "t-serde")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = verifier.drain_events();
         let json = serde_json::to_string(&events).expect("serialize derived Serialize");
@@ -4857,7 +4857,7 @@ mod tests {
         let mut verifier = IrVerifier::new();
         verifier
             .verify_ir0(&ir0, &hash, "t-drain")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(verifier.drain_events().len(), 1);
         // Second drain is empty
         assert!(verifier.drain_events().is_empty());

@@ -1657,7 +1657,7 @@ mod tests {
         assert_eq!(d, GateDecision::Denied);
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             receipt
                 .blocking_reasons
@@ -1675,7 +1675,7 @@ mod tests {
         assert_eq!(d, GateDecision::Denied);
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             receipt
                 .blocking_reasons
@@ -1760,7 +1760,7 @@ mod tests {
         assert_eq!(d, GateDecision::Denied);
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             receipt
                 .blocking_reasons
@@ -1878,7 +1878,7 @@ mod tests {
         g.evaluate("r-001", &parity, &cold, 100_000_000);
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(receipt.blocking_reasons.is_empty());
         assert_eq!(receipt.decision, GateDecision::Approved);
     }
@@ -1891,7 +1891,7 @@ mod tests {
         g.evaluate("r-002", &parity, &cold, 100_000_000);
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!receipt.blocking_reasons.is_empty());
         assert_eq!(receipt.decision, GateDecision::Denied);
     }
@@ -1904,7 +1904,7 @@ mod tests {
         g.evaluate("r-003", &parity, &cold, 100_000_000);
         let receipt = g
             .last_receipt()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.affected_packages.len(), 5);
     }
 
@@ -1918,10 +1918,10 @@ mod tests {
         g2.evaluate("r-001", &parity, &cold, 100_000_000);
         assert_eq!(
             g1.last_receipt()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .content_hash,
             g2.last_receipt()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .content_hash,
         );
     }

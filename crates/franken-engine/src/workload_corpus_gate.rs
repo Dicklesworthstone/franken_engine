@@ -1494,7 +1494,7 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(corpus.specimen_count(), 1);
         assert_eq!(corpus.covered_family_count(), 1);
     }
@@ -1508,7 +1508,7 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = corpus
             .add_specimen(make_specimen(
                 "s1",
@@ -1528,7 +1528,7 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let removed = corpus.remove_specimen("s1");
         assert!(removed.is_some());
         assert_eq!(corpus.specimen_count(), 0);
@@ -1557,7 +1557,7 @@ mod tests {
             .insert(WorkloadFamily::ModuleHeavy);
         corpus
             .add_specimen(specimen)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(corpus.covered_family_count(), 3);
         assert_eq!(
             corpus.specimens_by_family(WorkloadFamily::AsyncHeavy).len(),
@@ -1574,7 +1574,7 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let missing = corpus.missing_families();
         assert_eq!(missing.len(), 15); // 16 - 1
         assert!(!missing.contains(&WorkloadFamily::ParseHeavy));
@@ -1589,7 +1589,7 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let under = corpus.undercovered_families();
         // ParseHeavy has 1 specimen but min is 3, so it's undercovered
         assert!(under.contains_key(&WorkloadFamily::ParseHeavy));
@@ -1605,25 +1605,25 @@ mod tests {
             WorkloadFamily::ParseHeavy,
             InputLanguage::JavaScript,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         c1.add_specimen(make_specimen(
             "b",
             WorkloadFamily::AsyncHeavy,
             InputLanguage::TypeScript,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         c2.add_specimen(make_specimen(
             "a",
             WorkloadFamily::ParseHeavy,
             InputLanguage::JavaScript,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         c2.add_specimen(make_specimen(
             "b",
             WorkloadFamily::AsyncHeavy,
             InputLanguage::TypeScript,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(c1.content_hash(), c2.content_hash());
     }
 
@@ -1636,13 +1636,13 @@ mod tests {
             WorkloadFamily::ParseHeavy,
             InputLanguage::JavaScript,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         c2.add_specimen(make_specimen(
             "b",
             WorkloadFamily::ParseHeavy,
             InputLanguage::JavaScript,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(c1.content_hash(), c2.content_hash());
     }
 
@@ -1653,7 +1653,7 @@ mod tests {
         spec.provenance.license = LicenseStatus::Copyleft;
         corpus
             .add_specimen(spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(corpus.unpublishable_specimens().len(), 1);
     }
 
@@ -1833,7 +1833,7 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         corpus.record_equivalence(make_equivalence(
             "s1",
             BaselineRuntime::NodeJs,
@@ -1845,7 +1845,7 @@ mod tests {
             .family_summaries
             .iter()
             .find(|s| s.family == WorkloadFamily::ParseHeavy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parse_summary.specimen_count, 1);
         assert_eq!(parse_summary.equivalence_count, 1);
         assert_eq!(parse_summary.acceptable_count, 1);
@@ -1861,7 +1861,7 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = corpus
             .try_specimens_by_family(WorkloadFamily::AsyncHeavy)
@@ -1889,7 +1889,7 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         corpus.record_equivalence(make_equivalence(
             "s1",
             BaselineRuntime::NodeJs,
@@ -1902,7 +1902,7 @@ mod tests {
             .family_summaries
             .iter()
             .find(|summary| summary.family == WorkloadFamily::AsyncHeavy)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!report.verdict.permits_publication());
         assert!(
@@ -1933,7 +1933,7 @@ mod tests {
         spec.provenance.license = LicenseStatus::Copyleft;
         corpus
             .add_specimen(spec)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         corpus.record_equivalence(make_equivalence(
             "s1",
             BaselineRuntime::NodeJs,
@@ -2006,7 +2006,7 @@ mod tests {
                     WorkloadFamily::ParseHeavy,
                     InputLanguage::JavaScript,
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let err = corpus
             .add_specimen(make_specimen(
@@ -2050,7 +2050,7 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         corpus.record_equivalence(make_equivalence(
             "s1",
             BaselineRuntime::NodeJs,
@@ -2117,21 +2117,21 @@ mod tests {
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         corpus
             .add_specimen(make_specimen(
                 "s2",
                 WorkloadFamily::ParseHeavy,
                 InputLanguage::TypeScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         corpus
             .add_specimen(make_specimen(
                 "s3",
                 WorkloadFamily::AsyncHeavy,
                 InputLanguage::JavaScript,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             corpus.specimens_by_family(WorkloadFamily::ParseHeavy).len(),
             2

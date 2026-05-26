@@ -625,7 +625,7 @@ mod tests {
     use crate::signature_preimage::SigningKey;
 
     fn make_sk(seed: u8) -> SigningKey {
-        SigningKey::from_bytes([seed; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([seed; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn make_policy_head(pt: PolicyType, version: u64) -> PolicyHead {
@@ -641,7 +641,7 @@ mod tests {
         CheckpointBuilder::genesis(SecurityEpoch::GENESIS, DeterministicTimestamp(100), zone)
             .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
             .build(keys)
-            .expect("serde deserialization should succeed")
+            .expect("builder should produce a valid value")
     }
 
     fn build_after(
@@ -655,7 +655,7 @@ mod tests {
         CheckpointBuilder::after(prev, seq, epoch, DeterministicTimestamp(tick), zone)
             .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, seq + 1))
             .build(keys)
-            .expect("serde deserialization should succeed")
+            .expect("builder should produce a valid value")
     }
 
     fn conformance_frontier_state(zone: &str, frontier_seq: u64, id_byte: u8) -> FrontierState {
@@ -773,11 +773,11 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, &[vk], "t-genesis")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier.frontier_seq, 0);
         assert_eq!(frontier.frontier_checkpoint_id, genesis.checkpoint_id);
         assert_eq!(frontier.accept_count, 1);
@@ -791,7 +791,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, &[vk], "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = mgr.drain_events();
         assert_eq!(events.len(), 1);
@@ -812,7 +812,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -823,15 +823,15 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp2 = build_after(&cp1, 2, SecurityEpoch::GENESIS, 300, &[sk], "zone-a");
         mgr.accept_checkpoint("zone-a", &cp2, 1, &[vk], "t-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier.frontier_seq, 2);
         assert_eq!(frontier.frontier_checkpoint_id, cp2.checkpoint_id);
         assert_eq!(frontier.accept_count, 3);
@@ -847,7 +847,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -858,7 +858,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Build a validly-signed checkpoint at seq=0 (rollback to genesis level).
         // This must be rejected even though signatures are valid.
@@ -885,7 +885,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -896,7 +896,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Drain previous events.
         mgr.drain_events();
@@ -922,7 +922,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -933,7 +933,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Try to accept cp1 again (same seq=1).
         let dup = build_after(&genesis, 1, SecurityEpoch::GENESIS, 250, &[sk], "zone-a");
@@ -965,11 +965,11 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_e5, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Advance to seq=1, still at epoch 5.
         let cp1 = build_after(
@@ -981,7 +981,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Build a seq=2 checkpoint at epoch 3 (regression). The builder
         // won't catch this because it only checks against its direct
@@ -996,7 +996,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         // Build seq=2 from the epoch-3 chain.
         let regressed_cp = build_after(
@@ -1028,9 +1028,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, std::slice::from_ref(&vk), "t-b0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Advance zone-a to seq=3.
         let cp_a1 = build_after(
@@ -1042,7 +1042,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp_a1, 1, std::slice::from_ref(&vk), "t-a1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp_a2 = build_after(
             &cp_a1,
@@ -1053,7 +1053,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp_a2, 1, std::slice::from_ref(&vk), "t-a2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp_a3 = build_after(
             &cp_a2,
@@ -1064,28 +1064,28 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp_a3, 1, std::slice::from_ref(&vk), "t-a3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Zone-b should still be at seq=0.
         let frontier_b = mgr
             .get_frontier("zone-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier_b.frontier_seq, 0);
 
         // Zone-a should be at seq=3.
         let frontier_a = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier_a.frontier_seq, 3);
 
         // Zone-b can still accept seq=1.
         let cp_b1 = build_after(&genesis_b, 1, SecurityEpoch::GENESIS, 200, &[sk], "zone-b");
         mgr.accept_checkpoint("zone-b", &cp_b1, 1, &[vk], "t-b1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let frontier_b = mgr
             .get_frontier("zone-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier_b.frontier_seq, 1);
     }
 
@@ -1095,7 +1095,7 @@ mod tests {
     fn quorum_failure_rejects_acceptance() {
         let sk = make_sk(1);
         let wrong_vk =
-            VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
+            VerificationKey::from_bytes([0xFF; 32]).expect("operation should succeed for valid inputs");
         let genesis = build_genesis(&[sk], "zone-a");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
@@ -1119,14 +1119,14 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, &[vk], "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(mgr.backend().persist_count, 1);
         let loaded = mgr
             .backend()
             .load("zone-a")
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(loaded.frontier_seq, 0);
         assert_eq!(loaded.zone, "zone-a");
     }
@@ -1139,7 +1139,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Enable failure.
         mgr.backend_mut().fail_on_persist = true;
@@ -1154,7 +1154,7 @@ mod tests {
         // Frontier should NOT have advanced.
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier.frontier_seq, 0);
     }
 
@@ -1192,18 +1192,18 @@ mod tests {
         state.advance(&cp2);
         backend
             .persist(&state)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Create new manager and recover.
         let mut mgr = CheckpointFrontierManager::new(backend);
         let count = mgr
             .recover("t-recover")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(count, 1);
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier.frontier_seq, 2);
         assert_eq!(frontier.accept_count, 3);
 
@@ -1237,11 +1237,11 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp3, 1, &[vk], "t-3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier.frontier_seq, 3);
     }
 
@@ -1255,7 +1255,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -1266,15 +1266,15 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp2 = build_after(&cp1, 2, SecurityEpoch::GENESIS, 300, &[sk], "zone-a");
         mgr.accept_checkpoint("zone-a", &cp2, 1, &[vk], "t-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier.recent_ids.len(), 3);
         assert_eq!(frontier.recent_ids[0].checkpoint_seq, 0);
         assert_eq!(frontier.recent_ids[1].checkpoint_seq, 1);
@@ -1289,7 +1289,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Accept 40 more checkpoints (exceeds MAX_RECENT_ENTRIES=32).
         let mut prev = genesis;
@@ -1309,20 +1309,20 @@ mod tests {
                 std::slice::from_ref(&vk),
                 &format!("t-{i}"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             prev = cp;
         }
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(frontier.recent_ids.len() <= FrontierState::MAX_RECENT_ENTRIES);
         // The last entry should be seq=40.
         assert_eq!(
             frontier
                 .recent_ids
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .checkpoint_seq,
             40
         );
@@ -1352,15 +1352,15 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(&[sk1, sk2])
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 2, &[vk1, vk2], "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier.frontier_seq, 0);
     }
 
@@ -1374,7 +1374,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Epoch transition from 0 to 5.
         let cp1 = build_after(
@@ -1386,11 +1386,11 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, &[vk], "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier.frontier_epoch, SecurityEpoch::from_raw(5));
     }
 
@@ -1406,11 +1406,11 @@ mod tests {
 
         let genesis_a = build_genesis(std::slice::from_ref(&sk), "zone-a");
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let genesis_b = build_genesis(&[sk], "zone-b");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, &[vk], "t-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let zones = mgr.zones();
         assert_eq!(zones.len(), 2);
@@ -1428,7 +1428,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -1439,7 +1439,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Attempt rollback.
         let rollback = build_genesis(&[sk], "zone-a");
@@ -1541,12 +1541,12 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(&genesis, 1, SecurityEpoch::GENESIS, 200, &[sk], "zone-a");
 
         mgr.verify_linkage_against_frontier("zone-a", &genesis, &cp1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1557,7 +1557,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -1568,7 +1568,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Try to verify using genesis as prev (but frontier is at cp1).
         let cp2 = build_after(&cp1, 2, SecurityEpoch::GENESIS, 300, &[sk], "zone-a");
@@ -1767,9 +1767,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, &[vk], "t-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let zones = mgr.zones();
         assert_eq!(zones.len(), 2);
@@ -1787,7 +1787,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -1798,7 +1798,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Re-submit cp1 — should be duplicate.
         let err = mgr
@@ -1839,7 +1839,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Enable failure.
         mgr.backend_mut().fail_on_persist = true;
@@ -1853,7 +1853,7 @@ mod tests {
         // Frontier should NOT have advanced.
         assert_eq!(
             mgr.get_frontier("zone-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .frontier_seq,
             0
         );
@@ -1870,16 +1870,16 @@ mod tests {
         let state = FrontierState::from_genesis("zone-a", &genesis);
         backend
             .persist(&state)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut mgr = CheckpointFrontierManager::new(backend);
         let count = mgr
             .recover("t-recover")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(count, 1);
         assert_eq!(
             mgr.get_frontier("zone-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .frontier_seq,
             0
         );
@@ -1893,11 +1893,11 @@ mod tests {
         let mut backend = InMemoryBackend::new();
         backend
             .persist(&FrontierState::from_genesis("zone-a", &genesis))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut mgr = CheckpointFrontierManager::new(backend);
         mgr.recover("t-recover")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = mgr.drain_events();
         assert_eq!(events.len(), 1);
@@ -1919,12 +1919,12 @@ mod tests {
         assert_eq!(mgr.backend().persist_count, 0);
 
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.backend().persist_count, 1);
 
         let cp1 = build_after(&genesis, 1, SecurityEpoch::GENESIS, 200, &[sk], "zone-a");
         mgr.accept_checkpoint("zone-a", &cp1, 1, &[vk], "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.backend().persist_count, 2);
     }
 
@@ -1938,7 +1938,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut prev = genesis;
         for i in 1..=40u64 {
@@ -1957,13 +1957,13 @@ mod tests {
                 std::slice::from_ref(&vk),
                 &format!("t-{i}"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             prev = cp;
         }
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(frontier.recent_ids.len() <= FrontierState::MAX_RECENT_ENTRIES);
         assert_eq!(frontier.frontier_seq, 40);
         assert_eq!(frontier.accept_count, 41); // genesis + 40
@@ -1977,7 +1977,7 @@ mod tests {
         assert!(
             backend
                 .load("nonexistent")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
     }
@@ -1988,7 +1988,7 @@ mod tests {
         assert!(
             backend
                 .load_all()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_empty()
         );
     }
@@ -2003,7 +2003,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, &[vk], "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = mgr.drain_events();
         assert!(!events.is_empty());
@@ -2199,9 +2199,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, std::slice::from_ref(&vk), "t-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let counts = mgr.event_counts();
         assert_eq!(counts["zone_initialized"], 2);
@@ -2294,7 +2294,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Skip from seq 0 to seq 5 — monotonicity only requires > frontier.
         let cp5 = build_after(
@@ -2306,11 +2306,11 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp5, 1, std::slice::from_ref(&vk), "t-5")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let frontier = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(frontier.frontier_seq, 5);
         assert_eq!(frontier.accept_count, 2);
     }
@@ -2325,7 +2325,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "trace-42")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = mgr.drain_events();
         assert_eq!(events[0].trace_id, "trace-42");
@@ -2343,15 +2343,15 @@ mod tests {
         // Insert in reverse alphabetical order.
         let genesis_c = build_genesis(std::slice::from_ref(&sk), "zone-c");
         mgr.accept_checkpoint("zone-c", &genesis_c, 1, std::slice::from_ref(&vk), "t-c")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let genesis_a = build_genesis(std::slice::from_ref(&sk), "zone-a");
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let genesis_b = build_genesis(std::slice::from_ref(&sk), "zone-b");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, std::slice::from_ref(&vk), "t-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let zones = mgr.zones();
         assert_eq!(zones, vec!["zone-a", "zone-b", "zone-c"]);
@@ -2368,15 +2368,15 @@ mod tests {
         let mut backend = InMemoryBackend::new();
         backend
             .persist(&FrontierState::from_genesis("zone-a", &genesis_a))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         backend
             .persist(&FrontierState::from_genesis("zone-b", &genesis_b))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut mgr = CheckpointFrontierManager::new(backend);
         let count = mgr
             .recover("t-recover-multi")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(count, 2);
 
         assert!(mgr.get_frontier("zone-a").is_some());
@@ -2406,11 +2406,11 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_e5, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis_e5,
@@ -2421,7 +2421,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Trigger duplicate (seq=1 again).
         let _ = mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-dup");
@@ -2434,7 +2434,7 @@ mod tests {
         )
         .add_policy_head(make_policy_head(PolicyType::RuntimeExecution, 1))
         .build(std::slice::from_ref(&sk))
-        .expect("serde deserialization should succeed");
+        .expect("builder should produce a valid value");
         let regressed = build_after(
             &low_epoch_genesis,
             2,
@@ -2522,7 +2522,7 @@ mod tests {
         assert!(!mgr.backend().fail_on_persist);
 
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mgr.backend().persist_count, 1);
     }
 
@@ -2536,10 +2536,10 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             mgr.get_frontier("zone-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .frontier_epoch,
             SecurityEpoch::GENESIS
         );
@@ -2554,10 +2554,10 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             mgr.get_frontier("zone-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .frontier_epoch,
             SecurityEpoch::from_raw(3)
         );
@@ -2572,10 +2572,10 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp2, 1, std::slice::from_ref(&vk), "t-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             mgr.get_frontier("zone-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .frontier_epoch,
             SecurityEpoch::from_raw(7)
         );
@@ -2591,10 +2591,10 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             mgr.get_frontier("zone-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .accept_count,
             1
         );
@@ -2616,12 +2616,12 @@ mod tests {
                 std::slice::from_ref(&vk),
                 &format!("t-{i}"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             prev = cp;
         }
         assert_eq!(
             mgr.get_frontier("zone-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .accept_count,
             6
         );
@@ -2648,7 +2648,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp1 = build_after(
             &genesis,
@@ -2659,7 +2659,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cp2 = build_after(
             &cp1,
@@ -2670,7 +2670,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp2, 1, std::slice::from_ref(&vk), "t-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         mgr.drain_events(); // clear
 
@@ -2707,12 +2707,12 @@ mod tests {
         let mut backend = InMemoryBackend::new();
         backend
             .persist(&state1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             backend
                 .load("zone-a")
-                .expect("serde deserialization should succeed")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
+                .expect("operation should succeed for valid inputs")
                 .accept_count,
             1
         );
@@ -2730,12 +2730,12 @@ mod tests {
         state2.advance(&cp1);
         backend
             .persist(&state2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let loaded = backend
             .load("zone-a")
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(loaded.accept_count, 2);
         assert_eq!(loaded.frontier_seq, 1);
     }
@@ -2750,7 +2750,7 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.drain_events(); // clear genesis event
 
         let cp1 = build_after(
@@ -2762,7 +2762,7 @@ mod tests {
             "zone-a",
         );
         mgr.accept_checkpoint("zone-a", &cp1, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = mgr.drain_events();
         assert_eq!(events.len(), 1);
@@ -2910,7 +2910,7 @@ mod tests {
         assert!(
             backend
                 .load("does-not-exist")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_none()
         );
     }
@@ -2955,18 +2955,18 @@ mod tests {
         };
         backend
             .persist(&state)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut mgr = CheckpointFrontierManager::new(backend);
         assert!(mgr.get_frontier("zone-a").is_none());
 
         let count = mgr
             .recover("t-recover")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(count, 1);
         let loaded = mgr
             .get_frontier("zone-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(loaded.frontier_seq, 5);
     }
 
@@ -2984,11 +2984,11 @@ mod tests {
         };
         backend
             .persist(&state)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(backend.persist_count, 1);
         backend
             .persist(&state)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(backend.persist_count, 2);
     }
 
@@ -3001,9 +3001,9 @@ mod tests {
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());
         mgr.accept_checkpoint("zone-a", &genesis_a, 1, std::slice::from_ref(&vk), "t-0")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.accept_checkpoint("zone-b", &genesis_b, 1, std::slice::from_ref(&vk), "t-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut zones = mgr.zones();
         zones.sort();

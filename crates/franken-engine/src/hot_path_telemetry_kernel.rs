@@ -1722,7 +1722,7 @@ mod tests {
     fn registry_register_kernel() {
         let mut r = build_registry("reg1".to_string(), epoch(1));
         let k = make_kernel("k1", MILLION, 100);
-        register_kernel(&mut r, k).expect("serde deserialization should succeed");
+        register_kernel(&mut r, k).expect("operation should succeed for valid inputs");
         assert_eq!(r.kernels.len(), 1);
         assert_eq!(r.active_count(), 1);
     }
@@ -1731,11 +1731,11 @@ mod tests {
     fn registry_deterministic_ordering() {
         let mut r = build_registry("reg1".to_string(), epoch(1));
         register_kernel(&mut r, make_kernel("k_z", MILLION, 100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         register_kernel(&mut r, make_kernel("k_a", MILLION, 100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         register_kernel(&mut r, make_kernel("k_m", MILLION, 100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r.kernels[0].kernel_id, "k_a");
         assert_eq!(r.kernels[1].kernel_id, "k_m");
         assert_eq!(r.kernels[2].kernel_id, "k_z");
@@ -1745,7 +1745,7 @@ mod tests {
     fn registry_find_kernel() {
         let mut r = build_registry("reg1".to_string(), epoch(1));
         register_kernel(&mut r, make_kernel("k1", MILLION, 100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.find_kernel("k1").is_some());
         assert!(r.find_kernel("k2").is_none());
     }
@@ -1763,9 +1763,9 @@ mod tests {
     fn submit_full_rate_always_accepts() {
         let mut k = make_kernel("k1", MILLION, 100);
         let result = submit_observation(&mut k, "key_a", MILLION)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_some());
-        let entry = result.expect("serde deserialization should succeed");
+        let entry = result.expect("operation should succeed for valid inputs");
         assert_eq!(entry.kernel_id, "k1");
         assert_eq!(entry.key, "key_a");
         assert_eq!(entry.capture_mode, CaptureMode::Budgeted);
@@ -1775,7 +1775,7 @@ mod tests {
     fn submit_zero_rate_always_rejects() {
         let mut k = make_kernel("k1", 0, 100);
         let result = submit_observation(&mut k, "key_a", MILLION)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.is_none());
         assert_eq!(k.rejected_count, 1);
     }
@@ -1783,8 +1783,8 @@ mod tests {
     #[test]
     fn submit_exhausts_budget() {
         let mut k = make_kernel("k1", MILLION, 2);
-        submit_observation(&mut k, "key_a", MILLION).expect("serde deserialization should succeed");
-        submit_observation(&mut k, "key_b", MILLION).expect("serde deserialization should succeed");
+        submit_observation(&mut k, "key_a", MILLION).expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_b", MILLION).expect("operation should succeed for valid inputs");
         assert!(k.exhausted);
         assert_eq!(k.capture_mode, CaptureMode::Degraded);
         let err = submit_observation(&mut k, "key_c", MILLION).unwrap_err();
@@ -1794,23 +1794,23 @@ mod tests {
     #[test]
     fn submit_increments_sequence() {
         let mut k = make_kernel("k1", MILLION, 100);
-        submit_observation(&mut k, "key_a", MILLION).expect("serde deserialization should succeed");
-        submit_observation(&mut k, "key_b", MILLION).expect("serde deserialization should succeed");
+        submit_observation(&mut k, "key_a", MILLION).expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_b", MILLION).expect("operation should succeed for valid inputs");
         assert_eq!(k.sequence, 2);
     }
 
     #[test]
     fn submit_accumulates_sketch_buckets() {
         let mut k = make_kernel("k1", MILLION, 100);
-        submit_observation(&mut k, "key_a", 500_000).expect("serde deserialization should succeed");
-        submit_observation(&mut k, "key_a", 300_000).expect("serde deserialization should succeed");
-        submit_observation(&mut k, "key_b", 200_000).expect("serde deserialization should succeed");
+        submit_observation(&mut k, "key_a", 500_000).expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_a", 300_000).expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_b", 200_000).expect("operation should succeed for valid inputs");
         assert_eq!(k.sketch_buckets.len(), 2);
         let bucket_a = k
             .sketch_buckets
             .iter()
             .find(|b| b.key == "key_a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bucket_a.weight_millionths, 800_000);
         assert_eq!(bucket_a.count, 2);
     }
@@ -1820,11 +1820,11 @@ mod tests {
         let mut k1 = make_kernel("k1", MILLION, 100);
         let mut k2 = make_kernel("k1", MILLION, 100);
         let e1 = submit_observation(&mut k1, "key_a", MILLION)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         let e2 = submit_observation(&mut k2, "key_a", MILLION)
-            .expect("serde deserialization should succeed")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(e1.content_hash, e2.content_hash);
     }
 
@@ -1838,11 +1838,11 @@ mod tests {
         for i in 0..10 {
             let key = format!("key_{i}");
             submit_observation(&mut k, &key, MILLION)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             shadow.observe(&key, MILLION);
         }
         let evidence =
-            calibrate_kernel(&k, &shadow, epoch(1)).expect("serde deserialization should succeed");
+            calibrate_kernel(&k, &shadow, epoch(1)).expect("operation should succeed for valid inputs");
         assert!(evidence.passed);
         assert_eq!(evidence.mean_error_millionths, 0);
         assert_eq!(evidence.max_error_millionths, 0);
@@ -1872,13 +1872,13 @@ mod tests {
         // Sketch sees key_a 5 times, shadow sees it 10 times.
         for _ in 0..5 {
             submit_observation(&mut k, "key_a", MILLION)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for _ in 0..10 {
             shadow.observe("key_a", MILLION);
         }
         let evidence =
-            calibrate_kernel(&k, &shadow, epoch(1)).expect("serde deserialization should succeed");
+            calibrate_kernel(&k, &shadow, epoch(1)).expect("operation should succeed for valid inputs");
         // Error = |5 - 10| / 10 = 50% = 500_000 millionths.
         assert_eq!(evidence.per_key_results.len(), 1);
         let r = &evidence.per_key_results[0];
@@ -1898,16 +1898,16 @@ mod tests {
         for i in 0..5 {
             let key = format!("key_{i}");
             submit_observation(&mut k1, &key, MILLION)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             shadow1.observe(&key, MILLION);
             submit_observation(&mut k2, &key, MILLION)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             shadow2.observe(&key, MILLION);
         }
         let e1 = calibrate_kernel(&k1, &shadow1, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let e2 = calibrate_kernel(&k2, &shadow2, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(e1.content_hash, e2.content_hash);
     }
 
@@ -1929,7 +1929,7 @@ mod tests {
             .collect();
         let policy = make_policy("p1", ThinningStrategy::UniformRate, MILLION);
         let bundle = apply_thinning(&entries, &policy, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bundle.retained_count, 10);
         assert_eq!(bundle.discarded_ids.len(), 0);
         assert_eq!(bundle.actual_retention_millionths, MILLION);
@@ -1976,7 +1976,7 @@ mod tests {
         policy.priority_floor = 50;
         policy.content_hash = policy.compute_hash();
         let bundle = apply_thinning(&entries, &policy, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.retained_count >= 3); // At least the priority entries.
         assert_eq!(bundle.priority_retained_count, 3);
     }
@@ -1990,7 +1990,7 @@ mod tests {
         ];
         let policy = make_policy("p1", ThinningStrategy::UniformRate, 1); // minimal retention
         let bundle = apply_thinning(&entries, &policy, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.retained_ids.contains("e0")); // ExactShadow always retained.
         assert!(bundle.retained_ids.contains("e1")); // FullCapture always retained.
     }
@@ -2011,9 +2011,9 @@ mod tests {
             .collect();
         let policy = make_policy("p1", ThinningStrategy::HashDeterministic, 500_000);
         let b1 = apply_thinning(&entries, &policy, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b2 = apply_thinning(&entries, &policy, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(b1.retained_ids, b2.retained_ids);
         assert_eq!(b1.discarded_ids, b2.discarded_ids);
         assert_eq!(b1.content_hash, b2.content_hash);
@@ -2024,7 +2024,7 @@ mod tests {
         let entries: Vec<HotPathEvidenceEntry> = Vec::new();
         let policy = make_policy("p1", ThinningStrategy::UniformRate, 500_000);
         let bundle = apply_thinning(&entries, &policy, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bundle.original_count, 0);
         assert_eq!(bundle.retained_count, 0);
     }
@@ -2045,7 +2045,7 @@ mod tests {
             .collect();
         let policy = make_policy("p1", ThinningStrategy::UniformRate, MILLION);
         let bundle = apply_thinning(&entries, &policy, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s = format!("{bundle}");
         assert!(s.contains("p1"));
         assert!(s.contains("orig=5"));
@@ -2057,7 +2057,7 @@ mod tests {
     fn manifest_healthy_publishable() {
         let mut registry = build_registry("reg1".to_string(), epoch(1));
         register_kernel(&mut registry, make_kernel("k1", MILLION, 100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let manifest = build_manifest(
             "m1".to_string(),
             &registry,
@@ -2076,9 +2076,9 @@ mod tests {
         let mut registry = build_registry("reg1".to_string(), epoch(1));
         let mut k = make_kernel("k1", MILLION, 1);
         // Exhaust the kernel.
-        submit_observation(&mut k, "key", MILLION).expect("serde deserialization should succeed");
+        submit_observation(&mut k, "key", MILLION).expect("operation should succeed for valid inputs");
         assert!(k.exhausted);
-        register_kernel(&mut registry, k).expect("serde deserialization should succeed");
+        register_kernel(&mut registry, k).expect("operation should succeed for valid inputs");
         let manifest = build_manifest(
             "m1".to_string(),
             &registry,
@@ -2099,7 +2099,7 @@ mod tests {
     fn manifest_failed_calibration_not_publishable() {
         let mut registry = build_registry("reg1".to_string(), epoch(1));
         register_kernel(&mut registry, make_kernel("k1", MILLION, 100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cal = CalibrationEvidence {
             kernel_id: "k1".to_string(),
             epoch: epoch(1),
@@ -2139,10 +2139,10 @@ mod tests {
     fn manifest_hash_deterministic() {
         let mut r1 = build_registry("reg1".to_string(), epoch(1));
         register_kernel(&mut r1, make_kernel("k1", MILLION, 100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut r2 = build_registry("reg1".to_string(), epoch(1));
         register_kernel(&mut r2, make_kernel("k1", MILLION, 100))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let m1 = build_manifest("m".to_string(), &r1, Vec::new(), Vec::new(), epoch(1));
         let m2 = build_manifest("m".to_string(), &r2, Vec::new(), Vec::new(), epoch(1));
         assert_eq!(m1.content_hash, m2.content_hash);
@@ -2203,11 +2203,11 @@ mod tests {
         for i in 0..3 {
             let key = format!("key_{i}");
             submit_observation(&mut k, &key, MILLION)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             shadow.observe(&key, MILLION);
         }
         let evidence =
-            calibrate_kernel(&k, &shadow, epoch(1)).expect("serde deserialization should succeed");
+            calibrate_kernel(&k, &shadow, epoch(1)).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&evidence).expect("serialize derived Serialize");
         let restored: CalibrationEvidence =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2268,18 +2268,18 @@ mod tests {
             50,
             epoch(5),
         );
-        register_kernel(&mut registry, kernel).expect("serde deserialization should succeed");
+        register_kernel(&mut registry, kernel).expect("operation should succeed for valid inputs");
 
         // Submit observations and shadow-count.
         let mut shadow = ExactShadowCounter::new("e2e-kernel".to_string());
         let mut entries = Vec::new();
         let k = registry
             .find_kernel_mut("e2e-kernel")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for i in 0..20 {
             let key = format!("op_{}", i % 5);
             if let Some(entry) =
-                submit_observation(k, &key, MILLION).expect("serde deserialization should succeed")
+                submit_observation(k, &key, MILLION).expect("operation should succeed for valid inputs")
             {
                 entries.push(entry);
             }
@@ -2289,15 +2289,15 @@ mod tests {
         // Calibrate.
         let k = registry
             .find_kernel("e2e-kernel")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let calibration =
-            calibrate_kernel(k, &shadow, epoch(5)).expect("serde deserialization should succeed");
+            calibrate_kernel(k, &shadow, epoch(5)).expect("operation should succeed for valid inputs");
         assert!(calibration.passed);
 
         // Thin.
         let policy = make_policy("e2e-pol", ThinningStrategy::HashDeterministic, 500_000);
         let bundle = apply_thinning(&entries, &policy, epoch(5))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.retained_count > 0);
         assert!(bundle.retained_count <= entries.len() as u64);
 
@@ -2386,7 +2386,7 @@ mod tests {
         }
         let policy = make_policy("wp", ThinningStrategy::WeightProportional, 200_000);
         let bundle = apply_thinning(&entries, &policy, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should retain some entries.
         assert!(bundle.retained_count > 0);
         assert!(bundle.retained_count < 100);

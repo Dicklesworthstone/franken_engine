@@ -438,7 +438,7 @@ mod tests {
             "Compilation should succeed for simple element"
         );
 
-        let result = result.expect("serde deserialization should succeed");
+        let result = result.expect("operation should succeed for valid inputs");
         assert_eq!(result.source, source);
         assert!(
             !result.generated_code.is_empty(),
@@ -471,7 +471,7 @@ mod tests {
         let config = ReactCompileConfig::default();
 
         let result = compile_react_source(source, ReactInputLanguage::Jsx, &config)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let evidence = generate_compilation_evidence(&result, &config, ReactInputLanguage::Jsx)
             .expect("Evidence generation should succeed");
 

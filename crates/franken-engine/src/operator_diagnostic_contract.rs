@@ -815,7 +815,7 @@ mod tests {
         // SAFETY: BoundaryPolicyMappingContract derives Serialize and has no non-serializable fields.
         // to_string_pretty on derived Serialize types only fails on writer errors (impossible with String).
         let json =
-            serde_json::to_string_pretty(&contract).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&contract).expect("serialization should succeed");
         // SAFETY: JSON was just produced by to_string_pretty of a valid BoundaryPolicyMappingContract,
         // so from_str back to BoundaryPolicyMappingContract cannot fail (valid format + matching schema).
         let parsed: BoundaryPolicyMappingContract =
@@ -877,7 +877,7 @@ mod tests {
         let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
         let mapping = contract
             .mapping_for(InternalFailureKind::PanicClass)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mapping.severity, DiagnosticSeverity::Fatal);
     }
 
@@ -886,7 +886,7 @@ mod tests {
         let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
         let mapping = contract
             .mapping_for(InternalFailureKind::DomainError)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mapping.severity, DiagnosticSeverity::Info);
     }
 
@@ -982,7 +982,7 @@ mod tests {
         for kind in InternalFailureKind::all() {
             let mapping = contract
                 .mapping_for(*kind)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(
                 mapping.error_code.starts_with(kind.error_code_prefix()),
                 "error code {} should start with prefix {} for {:?}",
@@ -1020,7 +1020,7 @@ mod tests {
         let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
         let mapping = contract
             .mapping_for(InternalFailureKind::Cancellation)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mapping.severity, DiagnosticSeverity::Warning);
         assert_eq!(mapping.next_action, NextAction::Retry);
         assert_eq!(mapping.operator_impact, OperatorImpact::InformationalOnly);
@@ -1033,7 +1033,7 @@ mod tests {
         let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
         let mapping = contract
             .mapping_for(InternalFailureKind::InfrastructureFailure)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mapping.severity, DiagnosticSeverity::Error);
         assert_eq!(mapping.operator_impact, OperatorImpact::ImmediateAction);
         assert_eq!(mapping.next_action, NextAction::InvestigateInfra);
@@ -1111,7 +1111,7 @@ mod tests {
         let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
         let mapping = contract
             .mapping_for(InternalFailureKind::DomainError)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!mapping.has_evidence_ref);
         assert!(!mapping.has_replay_ref);
     }
@@ -1123,7 +1123,7 @@ mod tests {
         let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
         let mapping = contract
             .mapping_for(InternalFailureKind::PanicClass)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mapping.has_evidence_ref);
         assert!(mapping.has_replay_ref);
     }
@@ -1135,7 +1135,7 @@ mod tests {
         let contract = BoundaryPolicyMappingContract::canonical(SecurityEpoch::from_raw(1));
         let mapping = contract
             .mapping_for(InternalFailureKind::BudgetExhaustion)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(mapping).expect("serialize derived Serialize");
         let back: PolicyMapping =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1173,7 +1173,7 @@ mod tests {
         for kind in InternalFailureKind::all() {
             let mapping = contract
                 .mapping_for(*kind)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(
                 !mapping.description.is_empty(),
                 "mapping for {kind:?} must have a description"

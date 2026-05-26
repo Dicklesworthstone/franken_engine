@@ -1196,7 +1196,7 @@ mod tests {
         // SAFETY: Test with valid proof and budget should succeed
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(hypotheses.len(), 2);
         assert_eq!(hypotheses[0].kind, HypothesisKind::DeadCodeElimination);
@@ -1210,7 +1210,7 @@ mod tests {
         // SAFETY: Test with valid proof and budget should succeed
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(hypotheses.len(), 1);
         assert_eq!(hypotheses[0].kind, HypothesisKind::FlowCheckElision);
@@ -1224,7 +1224,7 @@ mod tests {
         // SAFETY: Test with valid proof and budget should succeed
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(hypotheses.len(), 1);
         assert_eq!(hypotheses[0].kind, HypothesisKind::SuperinstructionFusion);
@@ -1238,7 +1238,7 @@ mod tests {
         // SAFETY: Test with valid proof and budget should succeed
         engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(engine.active_proofs().contains_key(&proof_id));
         assert_eq!(engine.active_hypotheses().len(), 2);
@@ -1252,7 +1252,7 @@ mod tests {
         // SAFETY: Test with valid proof and budget should succeed
         engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let hyps = engine.hypotheses_for_proof(&proof_id);
         assert_eq!(hyps.len(), 2);
@@ -1267,11 +1267,11 @@ mod tests {
         // SAFETY: Test with valid proof and budget should succeed
         engine
             .ingest_proof(p1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test with valid proof and budget should succeed
         engine
             .ingest_proof(p2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let dce = engine.hypotheses_by_kind(&HypothesisKind::DeadCodeElimination);
         assert_eq!(dce.len(), 1);
@@ -1288,7 +1288,7 @@ mod tests {
         // SAFETY: Test with valid proof and budget should succeed on first ingestion
         engine
             .ingest_proof(proof.clone(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = engine.ingest_proof(proof, 2000).unwrap_err();
         assert!(matches!(
@@ -1313,7 +1313,7 @@ mod tests {
             &test_key(),
         )
         // SAFETY: Test helper with valid proof creation parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let err = engine.ingest_proof(proof, 1000).unwrap_err();
         assert!(matches!(
@@ -1338,7 +1338,7 @@ mod tests {
             &test_key(),
         )
         // SAFETY: Test helper with valid proof creation parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let err = engine.ingest_proof(proof, 1_000).unwrap_err();
         assert!(matches!(
@@ -1363,7 +1363,7 @@ mod tests {
             &test_key(),
         )
         // SAFETY: Test helper with valid proof creation parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let err = engine.ingest_proof(proof, 1000).unwrap_err();
         assert!(matches!(
@@ -1388,7 +1388,7 @@ mod tests {
             &test_key(),
         )
         // SAFETY: Test helper with valid proof creation parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let err = engine.ingest_proof(proof, 1_500).unwrap_err();
         assert!(matches!(
@@ -1460,7 +1460,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(engine.active_proofs().len(), 1);
         assert_eq!(engine.active_hypotheses().len(), 2);
@@ -1478,7 +1478,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Advance to same epoch — nothing invalidated.
         let invalidated = engine.advance_epoch(test_epoch(), 2000);
@@ -1494,7 +1494,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let count = engine.invalidate_proof(&proof_id, "revoked", 2000);
         assert_eq!(count, 2); // 2 hypotheses
@@ -1509,7 +1509,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
 
@@ -1549,7 +1549,7 @@ mod tests {
             // SAFETY: Test with valid proof creation parameters should successfully ingest
             engine
                 .ingest_proof(proof, 1000 + i * 100)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             engine.invalidate_proof(&proof_id, "test-churn", 1000 + i * 100 + 50);
         }
 
@@ -1569,7 +1569,7 @@ mod tests {
         // SAFETY: Test with valid proof creation parameters should successfully ingest
         engine
             .ingest_proof(p1, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.invalidate_proof(&p1_id, "test", 200);
 
         let p2 = make_proof(ProofType::IfcFlowProof, b"b", "policy-001");
@@ -1577,7 +1577,7 @@ mod tests {
         // SAFETY: Test with valid proof creation parameters should successfully ingest
         engine
             .ingest_proof(p2, 300)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.invalidate_proof(&p2_id, "test", 400);
 
         assert!(engine.is_conservative_mode());
@@ -1588,7 +1588,7 @@ mod tests {
         // SAFETY: Test with valid proof creation parameters should successfully ingest
         engine
             .ingest_proof(p3, 5000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.invalidate_proof(&p3_id, "test", 5100);
 
         // Window is 1000ns, so old invalidations at 200 and 400 should be pruned.
@@ -1605,7 +1605,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let hyp_id = hypotheses[0].hypothesis_id.clone();
 
         let receipt = engine
@@ -1618,7 +1618,7 @@ mod tests {
                 2000,
             )
             // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(receipt.hypothesis_id, hyp_id);
         assert_eq!(receipt.activation_stage, ActivationStageLocal::Shadow);
@@ -1637,7 +1637,7 @@ mod tests {
             b"fake",
         )
         // SAFETY: Test ID derivation with valid parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let err = engine
             .emit_receipt(
@@ -1665,7 +1665,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for (i, event) in engine.events().iter().enumerate() {
             assert_eq!(event.seq, usize_to_u64_saturating(i));
@@ -1693,7 +1693,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for event in engine.events() {
             assert_eq!(event.epoch, test_epoch());
@@ -1759,7 +1759,7 @@ mod tests {
             b"fake",
         )
         // SAFETY: Test ID derivation with valid parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let errors = vec![
             IngestionError::ValidationFailed {
@@ -1797,7 +1797,7 @@ mod tests {
             b"fake",
         )
         // SAFETY: Test ID derivation with valid parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let statuses = vec![
             ProofValidationStatus::Accepted,
@@ -1855,7 +1855,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Serialization of valid OptimizerHypothesis should succeed
         let json = serde_json::to_string(&hypotheses[0]).expect("serialize derived Serialize");
@@ -1872,7 +1872,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = engine
             .emit_receipt(
@@ -1884,7 +1884,7 @@ mod tests {
                 2000,
             )
             // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: Serialization of valid SpecializationReceipt should succeed
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
@@ -1901,7 +1901,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = &engine.events()[0];
         // SAFETY: Serialization of valid IngestionEvent should succeed
@@ -1927,7 +1927,7 @@ mod tests {
             &test_key(),
         )
         // SAFETY: Test helper with valid proof creation parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Even at a very large timestamp, it shouldn't expire.
         let result = engine.ingest_proof(proof, u64::MAX / 2);
@@ -1947,15 +1947,15 @@ mod tests {
         // SAFETY: Test with valid proof should successfully ingest
         engine
             .ingest_proof(p1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test with valid proof should successfully ingest
         engine
             .ingest_proof(p2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test with valid proof should successfully ingest
         engine
             .ingest_proof(p3, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(engine.active_proofs().len(), 3);
         assert_eq!(engine.active_hypotheses().len(), 4); // 2 + 1 + 1
@@ -1970,11 +1970,11 @@ mod tests {
         // SAFETY: Test with valid proof should successfully ingest
         engine
             .ingest_proof(p1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test with valid proof should successfully ingest
         engine
             .ingest_proof(p2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
         assert_eq!(invalidated, 3); // 2 plas + 1 ifc
@@ -2073,7 +2073,7 @@ mod tests {
             b"fake",
         )
         // SAFETY: Test ID derivation with valid parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let errors = vec![
             IngestionError::ValidationFailed {
@@ -2114,7 +2114,7 @@ mod tests {
             b"fake",
         )
         // SAFETY: Test ID derivation with valid parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let statuses = vec![
             ProofValidationStatus::Accepted,
@@ -2230,7 +2230,7 @@ mod tests {
             b"unknown",
         )
         // SAFETY: Test ID derivation with valid parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let count = engine.invalidate_proof(&fake_id, "test", 1000);
         assert_eq!(count, 0);
     }
@@ -2263,7 +2263,7 @@ mod tests {
         // SAFETY: Test-only unwrap with valid proof and engine configuration
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let bytes1 = hypotheses[0].canonical_bytes();
         let bytes2 = hypotheses[0].canonical_bytes();
@@ -2296,7 +2296,7 @@ mod tests {
             b"none",
         )
         // SAFETY: Test ID derivation with valid parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(engine.hypotheses_for_proof(&fake_id).is_empty());
     }
 
@@ -2381,7 +2381,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof.clone(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let bytes = hypotheses[0].canonical_bytes();
         // Should include hypothesis_id bytes and source proof_id bytes.
@@ -2397,7 +2397,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let hypothesis = &hypotheses[0];
 
         let mut expected = Vec::new();
@@ -2430,7 +2430,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for h in &hypotheses {
             assert_eq!(h.expected_speedup_millionths, 1_200_000);
@@ -2444,7 +2444,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(hypotheses.len(), 1);
         assert_eq!(
@@ -2462,7 +2462,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(hypotheses.len(), 1);
         assert_eq!(
@@ -2480,7 +2480,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(hypotheses[0].risk, RiskLevel::Low);
         assert_eq!(
@@ -2525,7 +2525,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = engine
             .emit_receipt(
@@ -2537,7 +2537,7 @@ mod tests {
                 2000,
             )
             // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(receipt.proof_input_ids.contains(&proof_id));
         assert_eq!(receipt.proof_input_ids.len(), 1);
@@ -2550,7 +2550,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hyps1 = engine1
             .ingest_proof(proof1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r1 = engine1
             .emit_receipt(
                 &hyps1[0].hypothesis_id,
@@ -2561,14 +2561,14 @@ mod tests {
                 2000,
             )
             // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut engine2 = test_engine();
         let proof2 = make_default_proof(ProofType::IfcFlowProof);
         // SAFETY: Test with default valid proof should successfully ingest
         let hyps2 = engine2
             .ingest_proof(proof2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = engine2
             .emit_receipt(
                 &hyps2[0].hypothesis_id,
@@ -2579,7 +2579,7 @@ mod tests {
                 2000,
             )
             // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(r1.receipt_id, r2.receipt_id);
         assert_eq!(r1.signature, r2.signature);
@@ -2592,7 +2592,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let hyp_id = hypotheses[0].hypothesis_id.clone();
 
         let r1 = engine
@@ -2605,7 +2605,7 @@ mod tests {
                 2000,
             )
             // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let r2 = engine
             .emit_receipt(
@@ -2617,7 +2617,7 @@ mod tests {
                 3000,
             )
             // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Different timestamps produce different receipt IDs.
         assert_ne!(r1.receipt_id, r2.receipt_id);
@@ -2635,7 +2635,7 @@ mod tests {
         // SAFETY: Test with default valid proof should successfully ingest
         let hypotheses = engine
             .ingest_proof(proof, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let pre_event_count = engine.events().len();
 
         let receipt = engine
@@ -2648,7 +2648,7 @@ mod tests {
                 2000,
             )
             // SAFETY: Test receipt emission with valid hypothesis and parameters should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // One new event for receipt emission.
         assert_eq!(engine.events().len(), pre_event_count + 1);
@@ -2656,7 +2656,7 @@ mod tests {
         let last_event = engine
             .events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             &last_event.event_type,
             IngestionEventType::SpecializationReceiptEmitted {
@@ -2686,7 +2686,7 @@ mod tests {
             &test_key(),
         )
         // SAFETY: Test helper with valid proof creation parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(engine.ingest_proof(proof, 5000).is_ok());
     }
@@ -2704,7 +2704,7 @@ mod tests {
             b"evt",
         )
         // SAFETY: Test ID derivation with valid parameters should succeed
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let variants = vec![
             IngestionEventType::ProofSubmitted {

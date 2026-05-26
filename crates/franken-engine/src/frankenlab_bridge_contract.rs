@@ -989,7 +989,7 @@ impl BridgeContractValidator {
             &self.replay_verdicts,
             &self.oracle_results,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("serialization should succeed");
         let content_hash = ContentHash::compute(&content_bytes);
 
         BridgeContractReport {
@@ -1383,7 +1383,7 @@ mod tests {
         assert_eq!(
             *m.fault_schedule
                 .get("panic")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             100
         );
     }
@@ -1782,7 +1782,7 @@ mod tests {
                 *report
                     .seam_status
                     .get(&seam.to_string())
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
                 SeamStatus::Clean,
             );
         }
@@ -1797,7 +1797,7 @@ mod tests {
             *report
                 .seam_status
                 .get(&BridgeSeam::ScenarioExecution.to_string())
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             SeamStatus::ReleaseBlocked,
         );
     }
@@ -1809,7 +1809,7 @@ mod tests {
         v.record_scenario_execution("s1");
         let report = v.build_report();
         let json =
-            serde_json::to_string_pretty(&report).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&report).expect("serialization should succeed");
         let round: BridgeContractReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);

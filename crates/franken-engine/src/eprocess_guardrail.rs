@@ -760,9 +760,9 @@ mod tests {
     fn triggered_guardrail_rejects_updates() {
         let mut gr = test_guardrail();
         gr.update(15_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gr.update(15_000)
-            .expect("serde deserialization should succeed"); // triggers
+            .expect("operation should succeed for valid inputs"); // triggers
         assert_eq!(gr.state(), GuardrailState::Triggered);
 
         let err = gr.update(15_000).unwrap_err();
@@ -843,9 +843,9 @@ mod tests {
     fn reset_with_empty_authorized_by_fails() {
         let mut gr = test_guardrail();
         gr.update(15_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gr.update(15_000)
-            .expect("serde deserialization should succeed"); // triggers
+            .expect("operation should succeed for valid inputs"); // triggers
 
         let receipt = ResetReceipt {
             authorized_by: "".to_string(),
@@ -1443,7 +1443,7 @@ mod tests {
     fn drain_events_idempotent() {
         let mut gr = test_guardrail();
         gr.update(5_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let first = gr.drain_events();
         assert!(!first.is_empty());
         let second = gr.drain_events();
@@ -1496,7 +1496,7 @@ mod tests {
         };
         let ratio = lr
             .ratio(-250_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(ratio < 0); // negative obs / positive mean = negative ratio
     }
 
@@ -1506,7 +1506,7 @@ mod tests {
         for i in 0..5 {
             assert_eq!(gr.observation_count(), i);
             gr.update(5_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(gr.observation_count(), 5);
     }
@@ -2158,10 +2158,10 @@ mod tests {
             rationale: "reason".into(),
             epoch: SecurityEpoch::GENESIS,
         };
-        let json = serde_json::to_value(&receipt).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&receipt).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("authorized_by"), "missing 'authorized_by'");
         assert!(obj.contains_key("rationale"), "missing 'rationale'");
         assert!(obj.contains_key("epoch"), "missing 'epoch'");
@@ -2175,10 +2175,10 @@ mod tests {
             high_ratio_millionths: 2,
             low_ratio_millionths: 3,
         };
-        let json = serde_json::to_value(&lr).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&lr).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("threshold_millionths"));
         assert!(obj.contains_key("high_ratio_millionths"));
         assert!(obj.contains_key("low_ratio_millionths"));
@@ -2190,10 +2190,10 @@ mod tests {
         let lr = UniversalLikelihoodRatio {
             null_mean_millionths: 42,
         };
-        let json = serde_json::to_value(&lr).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&lr).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("null_mean_millionths"));
         assert_eq!(obj.len(), 1);
     }
@@ -2207,14 +2207,14 @@ mod tests {
             verdict: MartingaleVerdict::Continue,
             sequence: 1,
         };
-        let json = serde_json::to_value(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&event).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("EValueUpdated"));
         let inner = obj["EValueUpdated"]
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(inner.contains_key("guardrail_id"));
         assert!(inner.contains_key("observation"));
         assert!(inner.contains_key("log_likelihood_ratio"));
@@ -2230,14 +2230,14 @@ mod tests {
             blocked_actions: vec!["x".into()],
             expected_losses: BTreeMap::new(),
         };
-        let json = serde_json::to_value(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&event).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("Triggered"));
         let inner = obj["Triggered"]
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(inner.contains_key("guardrail_id"));
         assert!(inner.contains_key("e_value"));
         assert!(inner.contains_key("threshold"));
@@ -2252,14 +2252,14 @@ mod tests {
             rationale: "r".into(),
             epoch: SecurityEpoch::GENESIS,
         };
-        let json = serde_json::to_value(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&event).expect("serialization should succeed");
         let obj = json
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("Reset"));
         let inner = obj["Reset"]
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(inner.contains_key("guardrail_id"));
         assert!(inner.contains_key("authorized_by"));
         assert!(inner.contains_key("rationale"));
@@ -2378,7 +2378,7 @@ mod tests {
         // observation = 1_000_000 (1.0), ratio = 1_000_000 * 1_000_000 / 1 = 1e12
         let ratio = lr
             .ratio(1_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ratio, 1_000_000_000_000);
     }
 
@@ -2390,7 +2390,7 @@ mod tests {
         // observation = 1_000_000, ratio = 1M * 1M / -500K = -2M
         let ratio = lr
             .ratio(1_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ratio, -2_000_000);
     }
 
@@ -2433,7 +2433,7 @@ mod tests {
         );
         // e = 1_000_000 * 2_000_000 / 1_000_000 = 2_000_000 >= 0, triggers
         gr.update(100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gr.state(), GuardrailState::Triggered);
     }
 
@@ -2453,7 +2453,7 @@ mod tests {
             }),
         );
         gr.update(1_000_000)
-            .expect("serde deserialization should succeed"); // triggers
+            .expect("operation should succeed for valid inputs"); // triggers
         assert_eq!(gr.state(), GuardrailState::Triggered);
         assert!(gr.blocked_actions().is_empty());
         assert!(!gr.blocks("any_action"));
@@ -2477,7 +2477,7 @@ mod tests {
         );
         // e = 1M * 2M / 1M = 2M — well below i64::MAX
         gr.update(1_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gr.state(), GuardrailState::Active);
     }
 
@@ -2691,7 +2691,7 @@ mod tests {
         // Phase 1: trigger
         assert_eq!(gr.state(), GuardrailState::Active);
         gr.update(1_000_000)
-            .expect("serde deserialization should succeed"); // e = 10.0 >= 5.0
+            .expect("operation should succeed for valid inputs"); // e = 10.0 >= 5.0
         assert_eq!(gr.state(), GuardrailState::Triggered);
         assert!(gr.blocks("deploy"));
 
@@ -2702,14 +2702,14 @@ mod tests {
             epoch: SecurityEpoch::from_raw(1),
         };
         gr.reset(&receipt)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gr.state(), GuardrailState::Active);
         assert!(!gr.blocks("deploy"));
         assert_eq!(gr.martingale_state().log_m_millionths, 0); // Reset should set log M_n back to 0
 
         // Phase 3: re-trigger
         gr.update(1_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gr.state(), GuardrailState::Triggered);
         assert!(gr.blocks("deploy"));
     }
@@ -2749,12 +2749,12 @@ mod tests {
 
         let gr_mut = registry
             .get_mut("mutable")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gr_mut.suspend("via registry");
         assert_eq!(
             registry
                 .get("mutable")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state(),
             GuardrailState::Suspended
         );
@@ -2792,14 +2792,14 @@ mod tests {
         assert_eq!(
             registry
                 .get("gr-a")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .observation_count(),
             1
         );
         assert_eq!(
             registry
                 .get("gr-b")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .observation_count(),
             0
         );
@@ -2829,7 +2829,7 @@ mod tests {
             }),
         );
         for _ in 0..10 {
-            gr.update(0).expect("serde deserialization should succeed");
+            gr.update(0).expect("operation should succeed for valid inputs");
         }
         assert_eq!(gr.martingale_state().log_m_millionths, 0); // Reset should set log M_n back to 0 // remains 1.0
         assert_eq!(gr.observation_count(), 10);
@@ -2851,9 +2851,9 @@ mod tests {
                 low_ratio_millionths: 500_000,       // 0.5
             }),
         );
-        gr.update(0).expect("serde deserialization should succeed"); // log M_n decreases with lr < 1
+        gr.update(0).expect("operation should succeed for valid inputs"); // log M_n decreases with lr < 1
         assert!(gr.martingale_state().log_m_millionths < 0); // Should be negative after lr = 0.5
-        gr.update(0).expect("serde deserialization should succeed"); // log M_n decreases further
+        gr.update(0).expect("operation should succeed for valid inputs"); // log M_n decreases further
         assert!(gr.martingale_state().log_m_millionths < -693147); // ln(0.5) = -0.693147, so after two updates should be ~2*ln(0.5)
     }
 

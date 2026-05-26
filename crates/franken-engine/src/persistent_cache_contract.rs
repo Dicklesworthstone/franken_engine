@@ -958,7 +958,7 @@ fn required_artifact_names() -> Vec<String> {
 }
 
 fn digest_json<T: Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).expect("serde deserialization should succeed");
+    let bytes = serde_json::to_vec(value).expect("serialization should succeed");
     format!("sha256:{}", sha256_hex(&bytes))
 }
 
@@ -981,7 +981,7 @@ fn check_field(
 impl FileArtifact {
     fn json(path: &str, value: &impl Serialize) -> Self {
         let contents =
-            serde_json::to_vec_pretty(value).expect("serde deserialization should succeed");
+            serde_json::to_vec_pretty(value).expect("operation should succeed for valid inputs");
         Self {
             path: path.to_string(),
             contents,
@@ -991,7 +991,7 @@ impl FileArtifact {
     fn jsonl(path: &str, rows: &[impl Serialize]) -> Self {
         let mut contents = Vec::new();
         for row in rows {
-            contents.extend(serde_json::to_vec(row).expect("serde deserialization should succeed"));
+            contents.extend(serde_json::to_vec(row).expect("serialization should succeed"));
             contents.push(b'\n');
         }
         Self {
@@ -1868,7 +1868,7 @@ mod tests {
             fail_closed: true,
         };
         let found = apply_rollback_plan(&plan, &[other, target_receipt.clone()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(found.receipt_id, "target-r1");
         assert_eq!(found, target_receipt);
     }
@@ -1906,7 +1906,7 @@ mod tests {
             fail_closed: false,
         };
         let result = apply_rollback_plan(&plan, &[receipt_a.clone(), receipt_b])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.cache_key_id, receipt_a.cache_key_id);
     }
 
@@ -2260,7 +2260,7 @@ mod tests {
             receipt_v2
                 .rollback_target_receipt_id
                 .as_ref()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             &receipt_v1.receipt_id
         );
     }

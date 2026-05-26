@@ -1503,9 +1503,9 @@ mod tests {
         let reordered_report = apply_redaction_with_audit(&record, &reordered_spec);
 
         let baseline_serialized = serialize_redaction_audit_report(&baseline_report)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let reordered_serialized = serialize_redaction_audit_report(&reordered_report)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(baseline_serialized, reordered_serialized);
     }
@@ -1527,9 +1527,9 @@ mod tests {
 
         let report = apply_redaction_with_audit(&record, &spec);
         let serialized = serialize_redaction_audit_report(&report)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let deserialized = deserialize_redaction_audit_report(&serialized)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(deserialized, report);
     }

@@ -1494,11 +1494,11 @@ pub fn write_geometry_evidence_bundle(
 
     std::fs::write(
         &inventory_path,
-        serde_json::to_string_pretty(&inventory).expect("serde deserialization should succeed"),
+        serde_json::to_string_pretty(&inventory).expect("serialization should succeed"),
     )?;
     std::fs::write(
         &manifest_path,
-        serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed"),
+        serde_json::to_string_pretty(&manifest).expect("serialization should succeed"),
     )?;
 
     let mut events_content = String::new();
@@ -1624,7 +1624,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let result = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.seq, 1);
         assert!(!result.trace_id.is_empty());
     }
@@ -1647,7 +1647,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let result = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.gate_verdict.is_none());
     }
 
@@ -1656,10 +1656,10 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = orch
             .process_trace(&simple_trace("t2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.gate_verdict.is_some());
     }
 
@@ -1668,13 +1668,13 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = orch
             .process_trace(&simple_trace("t2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = orch
             .process_trace(&simple_trace("t3"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(orch.step_count, 3);
     }
 
@@ -1685,10 +1685,10 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = orch
             .process_trace(&simple_trace("t2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.regime_changed);
     }
 
@@ -1697,11 +1697,11 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Different trace shape — regime may or may not change depending on classifier.
         let result = orch
             .process_trace(&shifted_trace("t2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // The test validates that the pipeline runs without error regardless.
         assert_eq!(result.seq, 2);
     }
@@ -1711,13 +1711,13 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = orch
             .process_trace(&shifted_trace("t2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = orch
             .process_trace(&simple_trace("t3"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Transition count depends on classifier; just verify it's >= 0.
         let summary = orch.summary();
         assert!(summary.regime_transitions <= 3);
@@ -1730,7 +1730,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let result = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // First step — morphing should either be NoOp, Applied, or Rejected.
         assert!(matches!(
             result.morphing_outcome,
@@ -1745,10 +1745,10 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = orch
             .process_trace(&simple_trace("t2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if !result.regime_changed {
             assert_eq!(result.morphing_outcome, MorphingOutcome::NoOp);
         }
@@ -1759,7 +1759,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let result = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.active_profile_name.is_empty());
     }
 
@@ -1818,10 +1818,10 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = orch
             .process_trace(&simple_trace("t2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = orch.summary();
         assert_eq!(summary.total_steps, 2);
         assert!(!summary.current_profile_name.is_empty());
@@ -1832,7 +1832,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s1 = orch.summary();
         let s2 = orch.summary();
         assert_eq!(s1.content_hash, s2.content_hash);
@@ -1845,10 +1845,10 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = orch
             .process_trace(&simple_trace("t2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(orch.history().len(), 2);
     }
 
@@ -1876,7 +1876,7 @@ mod tests {
             RegimeGeometryOrchestrator::new(default_anchor_profile(), test_epoch(), config);
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(orch.history().is_empty());
     }
 
@@ -1917,7 +1917,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(orch.step_count, 1);
         orch.reset(SecurityEpoch::from_raw(2));
         assert_eq!(orch.step_count, 0);
@@ -1928,7 +1928,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!orch.history().is_empty());
         orch.reset(SecurityEpoch::from_raw(2));
         assert!(orch.history().is_empty());
@@ -1939,7 +1939,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         orch.reset(SecurityEpoch::from_raw(2));
         assert_eq!(orch.current_regime(), RegimeLabel::Abstention);
     }
@@ -1949,7 +1949,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         orch.reset(SecurityEpoch::from_raw(2));
         let summary = orch.summary();
         assert_eq!(summary.morphing_applied, 0);
@@ -1964,10 +1964,10 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let _ = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = orch
             .process_trace(&simple_trace("t2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if result.gate_verdict == Some(GateVerdict::Pass) {
             assert!(!result.is_gated());
         }
@@ -1978,7 +1978,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let result = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.signature_hash.is_empty());
     }
 
@@ -1987,7 +1987,7 @@ mod tests {
         let mut orch = make_default_orchestrator();
         let result = orch
             .process_trace(&simple_trace("t1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.epoch, test_epoch());
     }
 

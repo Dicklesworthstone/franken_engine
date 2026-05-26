@@ -212,7 +212,7 @@ impl RefutationWitness {
         data.extend_from_slice(self.candidate_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.reason)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(self.description.as_bytes());
@@ -262,12 +262,12 @@ impl ProofAttempt {
         data.extend_from_slice(self.candidate_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.strategy)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.verdict)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(&self.confidence_millionths.to_le_bytes());
@@ -423,12 +423,12 @@ impl ProofCampaignResult {
         data.extend_from_slice(self.candidate_id.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.candidate_kind)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(
             serde_json::to_string(&self.final_verdict)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         data.extend_from_slice(&self.aggregate_confidence_millionths.to_le_bytes());

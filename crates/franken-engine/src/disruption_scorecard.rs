@@ -807,7 +807,7 @@ mod tests {
         schema
             .thresholds
             .get_mut("performance_delta")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .floor_millionths = MILLION + 1;
         let result = schema.validate();
         assert!(result.is_err());
@@ -909,7 +909,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(result.outcome.is_pass());
         assert_eq!(result.dimensions_evaluated, 3);
@@ -926,13 +926,13 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         let sec = result
             .dimension_scores
             .get("security_delta")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!sec.meets_floor);
     }
 
@@ -977,14 +977,14 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let r2 = compute_scorecard(
             &schema,
             &evidence,
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(r1.result_hash, r2.result_hash);
         assert_eq!(r1.dimension_scores, r2.dimension_scores);
         assert_eq!(r1.outcome, r2.outcome);
@@ -1002,14 +1002,14 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let r2 = compute_scorecard(
             &schema,
             &ev2,
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_ne!(r1.result_hash, r2.result_hash);
     }
 
@@ -1030,7 +1030,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(result.targets_met, 2);
     }
 
@@ -1048,7 +1048,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(result.targets_met, 3);
         assert!(result.outcome.is_pass());
     }
@@ -1067,7 +1067,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Performance floor is 0 → passes; Security (500k) and Autonomy (600k) → fail
         assert!(!result.outcome.is_pass());
     }
@@ -1087,7 +1087,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(result.outcome.is_pass());
     }
 
@@ -1104,7 +1104,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(passes_release_gate(&result));
     }
 
@@ -1117,7 +1117,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(!passes_release_gate(&result));
     }
 
@@ -1134,7 +1134,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-42", &result);
         assert_eq!(entries.len(), 3);
         assert!(entries.iter().all(|e| e.trace_id == "trace-42"));
@@ -1149,12 +1149,12 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("t1", &result);
         let sec = entries
             .iter()
             .find(|e| e.dimension == DisruptionDimension::SecurityDelta)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!sec.pass);
     }
 
@@ -1173,7 +1173,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         history.append(
             "rc-1".to_string(),
             "2026-02-24T00:00:00Z".to_string(),
@@ -1185,7 +1185,7 @@ mod tests {
         assert_eq!(
             history
                 .latest()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .candidate_id,
             "rc-1"
         );
@@ -1200,7 +1200,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         history.append("rc-1".to_string(), "t1".to_string(), result);
         assert!(!history.has_regression());
     }
@@ -1222,7 +1222,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         history.append("rc-1".to_string(), "t1".to_string(), r1);
 
         // Second: lower security score.
@@ -1237,7 +1237,7 @@ mod tests {
             SecurityEpoch::from_raw(2),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         history.append("rc-2".to_string(), "t2".to_string(), r2);
 
         assert!(history.has_regression());
@@ -1259,7 +1259,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         history.append("rc-1".to_string(), "t1".to_string(), r1);
 
         let ev2 = vec![
@@ -1273,7 +1273,7 @@ mod tests {
             SecurityEpoch::from_raw(2),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         history.append("rc-2".to_string(), "t2".to_string(), r2);
 
         assert!(!history.has_regression());
@@ -1358,7 +1358,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: ScorecardResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1375,7 +1375,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         history.append("rc-1".to_string(), "t1".to_string(), result);
         let json = serde_json::to_string(&history).expect("serialize derived Serialize");
         let back: ScorecardHistory =
@@ -1494,7 +1494,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "boundary-test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(
             result.outcome.is_pass(),
             "scores at exact floor should pass"
@@ -1676,9 +1676,9 @@ mod tests {
     #[test]
     fn outcome_serde_distinct_json() {
         let pass_json = serde_json::to_string(&ScorecardOutcome::Pass)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let fail_json = serde_json::to_string(&ScorecardOutcome::Fail)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_ne!(pass_json, fail_json);
     }
 
@@ -1767,7 +1767,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut cloned = orig.clone();
         cloned.outcome = ScorecardOutcome::Fail;
         cloned.targets_met = 0;
@@ -1794,7 +1794,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         orig.append("rc-1".to_string(), "t1".to_string(), result);
 
         let mut cloned = orig.clone();
@@ -1804,7 +1804,7 @@ mod tests {
             SecurityEpoch::from_raw(2),
             "test2".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         cloned.append("rc-2".to_string(), "t2".to_string(), result2);
         assert_eq!(orig.len(), 1);
         assert_eq!(cloned.len(), 2);
@@ -1893,7 +1893,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         assert!(json.contains("\"schema_version\""));
         assert!(json.contains("\"dimension_scores\""));
@@ -1947,7 +1947,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let entry = HistoryEntry {
             candidate_id: "rc-1".to_string(),
             timestamp: "2026-02-28T00:00:00Z".to_string(),
@@ -2133,13 +2133,13 @@ mod tests {
                 SecurityEpoch::from_raw(i + 1),
                 "test".to_string(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             h.append(format!("rc-{}", i), format!("t{}", i), result);
         }
         assert_eq!(h.len(), 5);
         assert_eq!(
             h.latest()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .candidate_id,
             "rc-4"
         );
@@ -2164,7 +2164,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "max-test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(result.outcome.is_pass());
         assert_eq!(result.targets_met, 3);
     }
@@ -2192,7 +2192,7 @@ mod tests {
             epoch,
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(result.epoch.as_u64(), 42);
     }
 
@@ -2204,7 +2204,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "my-env-fp".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(result.environment_fingerprint, "my-env-fp");
     }
 
@@ -2234,9 +2234,9 @@ mod tests {
             SecurityEpoch::from_raw(99),
             "deep-roundtrip".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json =
-            serde_json::to_string_pretty(&result).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&result).expect("serialization should succeed");
         let back: ScorecardResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);
@@ -2270,7 +2270,7 @@ mod tests {
                 SecurityEpoch::from_raw(i + 1),
                 format!("env-{}", i),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             history.append(
                 format!("rc-{}", i),
                 format!("2026-02-28T0{}:00:00Z", i),
@@ -2373,7 +2373,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let h1 = result.compute_hash();
         let h2 = result.compute_hash();
         assert_eq!(h1, h2);
@@ -2387,7 +2387,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(result.result_hash, result.compute_hash());
     }
 
@@ -2399,7 +2399,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &result);
         for entry in &entries {
             assert_eq!(entry.scorecard_version, result.schema_version);
@@ -2414,7 +2414,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &result);
         let mut dims = std::collections::BTreeSet::new();
         for entry in &entries {
@@ -2439,7 +2439,7 @@ mod tests {
                 SecurityEpoch::from_raw(i + 1),
                 "test".to_string(),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             h.append(format!("rc-{}", i), format!("t{}", i), result);
         }
         assert!(
@@ -2454,7 +2454,7 @@ mod tests {
         let t = schema
             .thresholds
             .get_mut("autonomy_delta")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         t.floor_millionths = t.target_millionths + 1;
         assert!(schema.validate().is_err());
     }
@@ -2522,7 +2522,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(result.schema_version, SCORECARD_SCHEMA_VERSION);
     }
 
@@ -2535,7 +2535,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             "test".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(result.dimensions_evaluated, 3);
     }
 
@@ -2558,7 +2558,7 @@ mod tests {
             SecurityEpoch::from_raw(7),
             "entry-rt".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let entry = HistoryEntry {
             candidate_id: "rc-42".to_string(),
             timestamp: "2026-02-28T12:34:56Z".to_string(),

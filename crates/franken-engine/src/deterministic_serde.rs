@@ -566,7 +566,7 @@ fn decode_at(
             let v = u64::from_be_bytes(
                 data[pos..pos + 8]
                     .try_into()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             );
             Ok((CanonicalValue::U64(v), pos + 8))
         }
@@ -575,7 +575,7 @@ fn decode_at(
             let v = i64::from_be_bytes(
                 data[pos..pos + 8]
                     .try_into()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             );
             Ok((CanonicalValue::I64(v), pos + 8))
         }
@@ -595,7 +595,7 @@ fn decode_at(
             let len = u32::from_be_bytes(
                 data[pos..pos + 4]
                     .try_into()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             ) as usize;
             let start = pos + 4;
             need_bytes(data, start, len)?;
@@ -607,7 +607,7 @@ fn decode_at(
             let len = u32::from_be_bytes(
                 data[pos..pos + 4]
                     .try_into()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             ) as usize;
             let start = pos + 4;
             need_bytes(data, start, len)?;
@@ -620,7 +620,7 @@ fn decode_at(
             let count = u32::from_be_bytes(
                 data[pos..pos + 4]
                     .try_into()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             ) as usize;
             let mut cur = pos + 4;
 
@@ -640,7 +640,7 @@ fn decode_at(
             let count = u32::from_be_bytes(
                 data[pos..pos + 4]
                     .try_into()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             ) as usize;
             let mut cur = pos + 4;
             let mut map = BTreeMap::new();
@@ -650,7 +650,7 @@ fn decode_at(
                 let key_len = u32::from_be_bytes(
                     data[cur..cur + 4]
                         .try_into()
-                        .expect("serde deserialization should succeed"),
+                        .expect("operation should succeed for valid inputs"),
                 ) as usize;
                 cur += 4;
                 need_bytes(data, cur, key_len)?;
@@ -685,7 +685,7 @@ fn decode_at(
             let bits = u64::from_be_bytes(
                 data[pos..pos + 8]
                     .try_into()
-                    .expect("serde deserialization should succeed"),
+                    .expect("operation should succeed for valid inputs"),
             );
             Ok((
                 CanonicalValue::Float(CanonicalF64::from_bits(bits)),
@@ -739,7 +739,7 @@ pub fn deserialize_with_schema(
     let actual_schema = SchemaHash(
         data[..32]
             .try_into()
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
     );
     if actual_schema != *expected_schema {
         return Err(SerdeError::SchemaMismatch {
@@ -836,7 +836,7 @@ impl SchemaRegistry {
         let schema_hash = SchemaHash(
             data[..32]
                 .try_into()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
         );
         let def = self
             .lookup(&schema_hash)
@@ -979,7 +979,7 @@ mod tests {
         let val = CanonicalValue::U64(42);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -989,7 +989,7 @@ mod tests {
         let val = CanonicalValue::U64(u64::MAX);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -999,7 +999,7 @@ mod tests {
         let val = CanonicalValue::I64(-12345);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1009,7 +1009,7 @@ mod tests {
         let val = CanonicalValue::Bool(true);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1019,7 +1019,7 @@ mod tests {
         let val = CanonicalValue::Bool(false);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1029,7 +1029,7 @@ mod tests {
         let val = CanonicalValue::Bytes(vec![0xde, 0xad, 0xbe, 0xef]);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1039,7 +1039,7 @@ mod tests {
         let val = CanonicalValue::Bytes(vec![]);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1049,7 +1049,7 @@ mod tests {
         let val = CanonicalValue::String("hello world".to_string());
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1059,7 +1059,7 @@ mod tests {
         let val = CanonicalValue::String(String::new());
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1069,7 +1069,7 @@ mod tests {
         let val = CanonicalValue::Null;
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1083,7 +1083,7 @@ mod tests {
         ]);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1093,7 +1093,7 @@ mod tests {
         let val = CanonicalValue::Array(vec![]);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1107,7 +1107,7 @@ mod tests {
         let val = CanonicalValue::Map(map);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1124,7 +1124,7 @@ mod tests {
         ]);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1151,7 +1151,7 @@ mod tests {
         let bytes = encode_value(&CanonicalValue::Map(map));
 
         // Decode and verify key order.
-        let decoded = decode_value(&bytes).expect("serde deserialization should succeed");
+        let decoded = decode_value(&bytes).expect("operation should succeed for valid inputs");
         if let CanonicalValue::Map(m) = decoded {
             let keys: Vec<&String> = m.keys().collect();
             assert_eq!(keys, vec!["apple", "mango", "zebra"]);
@@ -1169,7 +1169,7 @@ mod tests {
         let bytes = serialize_with_schema(&schema, &val);
         assert_eq!(bytes.len(), 32 + 1 + 8); // schema + tag + u64
         let decoded =
-            deserialize_with_schema(&schema, &bytes).expect("serde deserialization should succeed");
+            deserialize_with_schema(&schema, &bytes).expect("operation should succeed for valid inputs");
         assert_eq!(decoded, val);
     }
 
@@ -1193,7 +1193,7 @@ mod tests {
         assert!(reg.is_known(&hash));
         let def = reg
             .lookup(&hash)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(def.name, "TestObject");
         assert_eq!(def.version, 1);
     }
@@ -1216,7 +1216,7 @@ mod tests {
         let bytes = serialize_with_schema(&hash, &CanonicalValue::U64(123));
         let (def, val) = reg
             .deserialize_checked(&bytes)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(def.name, "TestObj");
         assert_eq!(val, CanonicalValue::U64(123));
     }
@@ -1520,7 +1520,7 @@ mod tests {
             let val = CanonicalValue::I64(v);
             let bytes = encode_value(&val);
             assert_eq!(
-                decode_value(&bytes).expect("serde deserialization should succeed"),
+                decode_value(&bytes).expect("operation should succeed for valid inputs"),
                 val
             );
         }
@@ -1533,7 +1533,7 @@ mod tests {
         let val = CanonicalValue::Map(outer);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1588,7 +1588,7 @@ mod tests {
         let val = CanonicalValue::Map(BTreeMap::new());
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1694,7 +1694,7 @@ mod tests {
             val = CanonicalValue::Array(vec![val]);
         }
         let bytes = encode_value(&val);
-        let decoded = decode_value(&bytes).expect("serde deserialization should succeed");
+        let decoded = decode_value(&bytes).expect("operation should succeed for valid inputs");
         assert_eq!(decoded, val);
     }
 
@@ -1780,7 +1780,7 @@ mod tests {
         let val = CanonicalValue::U64(0);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1790,7 +1790,7 @@ mod tests {
         let val = CanonicalValue::I64(0);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1800,7 +1800,7 @@ mod tests {
         let val = CanonicalValue::Bytes(vec![0xAB; 1024]);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1810,7 +1810,7 @@ mod tests {
         let val = CanonicalValue::String("\u{1F600}\u{1F4A9}\u{00E9}\u{2603}".to_string());
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1824,7 +1824,7 @@ mod tests {
         let val = CanonicalValue::Map(map);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1843,7 +1843,7 @@ mod tests {
         ]);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -1860,7 +1860,7 @@ mod tests {
         let val = CanonicalValue::Map(map);
         let bytes = serialize_with_schema(&schema, &val);
         let decoded =
-            deserialize_with_schema(&schema, &bytes).expect("serde deserialization should succeed");
+            deserialize_with_schema(&schema, &bytes).expect("operation should succeed for valid inputs");
         assert_eq!(decoded, val);
     }
 
@@ -1888,7 +1888,7 @@ mod tests {
         assert_eq!(reg.len(), 1);
         let def = reg
             .lookup(&h1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(def.name, "Second");
         assert_eq!(def.version, 2);
     }
@@ -1905,13 +1905,13 @@ mod tests {
 
         let (d1, v1) = reg
             .deserialize_checked(&bytes1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(d1.name, "TypeA");
         assert_eq!(v1, CanonicalValue::U64(100));
 
         let (d2, v2) = reg
             .deserialize_checked(&bytes2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(d2.name, "TypeB");
         assert_eq!(v2, CanonicalValue::I64(-200));
     }
@@ -2122,7 +2122,7 @@ mod tests {
         }
         let val = CanonicalValue::Array(arr);
         let bytes = encode_value(&val);
-        let decoded = decode_value(&bytes).expect("serde deserialization should succeed");
+        let decoded = decode_value(&bytes).expect("operation should succeed for valid inputs");
         assert_eq!(decoded, val);
     }
 
@@ -2133,7 +2133,7 @@ mod tests {
         let outer = BTreeMap::from([("top_key".to_string(), CanonicalValue::Map(mid))]);
         let val = CanonicalValue::Map(outer);
         let bytes = encode_value(&val);
-        let decoded = decode_value(&bytes).expect("serde deserialization should succeed");
+        let decoded = decode_value(&bytes).expect("operation should succeed for valid inputs");
         assert_eq!(decoded, val);
     }
 
@@ -2186,7 +2186,7 @@ mod tests {
         let val = CanonicalValue::Float(CanonicalF64::new(3.14159));
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -2196,7 +2196,7 @@ mod tests {
         let val = CanonicalValue::Float(CanonicalF64::new(-273.15));
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -2206,7 +2206,7 @@ mod tests {
         let val = CanonicalValue::Float(CanonicalF64::new(0.0));
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -2235,7 +2235,7 @@ mod tests {
         // When encoded/decoded, the canonical pattern is preserved
         let val = CanonicalValue::Float(nan1);
         let bytes = encode_value(&val);
-        let decoded = decode_value(&bytes).expect("serde deserialization should succeed");
+        let decoded = decode_value(&bytes).expect("operation should succeed for valid inputs");
         if let CanonicalValue::Float(f) = decoded {
             assert_eq!(f.to_bits(), 0x7FF8_0000_0000_0000);
         } else {
@@ -2259,8 +2259,8 @@ mod tests {
         assert_ne!(bytes_pos, bytes_neg);
 
         // Round-trip preserves distinction
-        let decoded_pos = decode_value(&bytes_pos).expect("serde deserialization should succeed");
-        let decoded_neg = decode_value(&bytes_neg).expect("serde deserialization should succeed");
+        let decoded_pos = decode_value(&bytes_pos).expect("operation should succeed for valid inputs");
+        let decoded_neg = decode_value(&bytes_neg).expect("operation should succeed for valid inputs");
         assert_ne!(decoded_pos, decoded_neg);
 
         // Verify neg zero detection
@@ -2281,11 +2281,11 @@ mod tests {
         let val_neg = CanonicalValue::Float(neg_inf);
 
         assert_eq!(
-            decode_value(&encode_value(&val_pos)).expect("serde deserialization should succeed"),
+            decode_value(&encode_value(&val_pos)).expect("operation should succeed for valid inputs"),
             val_pos
         );
         assert_eq!(
-            decode_value(&encode_value(&val_neg)).expect("serde deserialization should succeed"),
+            decode_value(&encode_value(&val_neg)).expect("operation should succeed for valid inputs"),
             val_neg
         );
 
@@ -2346,7 +2346,7 @@ mod tests {
         ]);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -2365,7 +2365,7 @@ mod tests {
         let val = CanonicalValue::Map(map);
         let bytes = encode_value(&val);
         assert_eq!(
-            decode_value(&bytes).expect("serde deserialization should succeed"),
+            decode_value(&bytes).expect("operation should succeed for valid inputs"),
             val
         );
     }
@@ -2424,16 +2424,16 @@ mod tests {
         let val_min_pos = CanonicalValue::Float(min_positive);
 
         assert_eq!(
-            decode_value(&encode_value(&val_max)).expect("serde deserialization should succeed"),
+            decode_value(&encode_value(&val_max)).expect("operation should succeed for valid inputs"),
             val_max
         );
         assert_eq!(
-            decode_value(&encode_value(&val_min)).expect("serde deserialization should succeed"),
+            decode_value(&encode_value(&val_min)).expect("operation should succeed for valid inputs"),
             val_min
         );
         assert_eq!(
             decode_value(&encode_value(&val_min_pos))
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             val_min_pos
         );
     }
@@ -2444,7 +2444,7 @@ mod tests {
         let subnormal = CanonicalF64::new(5e-324);
         let val = CanonicalValue::Float(subnormal);
         let bytes = encode_value(&val);
-        let decoded = decode_value(&bytes).expect("serde deserialization should succeed");
+        let decoded = decode_value(&bytes).expect("operation should succeed for valid inputs");
         assert_eq!(decoded, val);
     }
 

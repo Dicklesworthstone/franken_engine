@@ -836,14 +836,14 @@ mod tests {
             *report
                 .severity_counts
                 .get("error")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
         assert_eq!(
             *report
                 .category_counts
                 .get("budget_propagation")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             1
         );
     }
@@ -959,7 +959,7 @@ mod tests {
             let json: String = serde_json::from_str(
                 &serde_json::to_string(&sev).expect("serialize derived Serialize"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
             assert_eq!(json, sev.as_str());
         }
     }

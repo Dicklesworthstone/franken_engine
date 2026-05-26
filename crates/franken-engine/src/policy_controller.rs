@@ -401,7 +401,7 @@ impl PolicyController {
                     .iter()
                     .find(|(a, _)| a == action)
                     .map(|(_, r)| format!("blocked by guardrail: {r}"))
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
                 builder = builder.candidate(CandidateAction::filtered(action, el, reason));
             } else {
                 builder = builder.candidate(CandidateAction::new(action, el));
@@ -697,10 +697,10 @@ mod tests {
 
         assert_eq!(ctrl.decision_count(), 0);
         ctrl.select_action(&posterior, epoch, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.decision_count(), 1);
         ctrl.select_action(&posterior, epoch, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl.decision_count(), 2);
         assert_eq!(ctrl.decisions().len(), 2);
     }
@@ -994,7 +994,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // medium: 0.9*300k + 0.1*1M = 270k + 100k = 370k
         assert_eq!(sel.expected_loss, 370_000);
     }
@@ -1005,7 +1005,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sel.decision_id, "mon-ctrl-000001");
     }
 
@@ -1016,10 +1016,10 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let s1 = ctrl
             .select_action(&posterior, epoch, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s2 = ctrl
             .select_action(&posterior, epoch, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s1.decision_id, "mon-ctrl-000001");
         assert_eq!(s2.decision_id, "mon-ctrl-000002");
     }
@@ -1031,10 +1031,10 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let s1 = ctrl
             .select_action(&posterior, epoch, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s2 = ctrl
             .select_action(&posterior, epoch, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let history = ctrl.decisions();
         assert_eq!(history.len(), 2);
         assert_eq!(history[0], s1);
@@ -1059,7 +1059,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Both low and medium blocked, only high left
         assert_eq!(sel.action, "high");
         assert!(!sel.is_safe_default);
@@ -1080,10 +1080,10 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let sel = ctrl
             .select_action(&posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = ctrl
             .build_evidence(&sel, &posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.constraints.len(), 1);
         assert_eq!(entry.constraints[0].constraint_id, "g1");
         assert!(entry.constraints[0].active);
@@ -1101,10 +1101,10 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let sel = ctrl
             .select_action(&posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = ctrl
             .build_evidence(&sel, &posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(entry.chosen_action.rationale.contains("safe default"));
     }
 
@@ -1115,10 +1115,10 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let sel = ctrl
             .select_action(&posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = ctrl
             .build_evidence(&sel, &posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             entry
                 .chosen_action
@@ -1141,7 +1141,7 @@ mod tests {
         let p = Posterior::new(probs);
         let sel = ctrl
             .select_action(&p, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // All actions have 0 expected loss except if they have entries in new matrix
         // "low" has loss 1 for state "s" which isn't in posterior, so all are 0
         // Ties go to first in action_set order (deterministic)
@@ -1156,7 +1156,7 @@ mod tests {
         let posterior = Posterior::new(BTreeMap::new());
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sel.expected_loss, 0);
         // With zero expected loss for all, picks first in action_set order
         assert_eq!(sel.action, "low");
@@ -1171,7 +1171,7 @@ mod tests {
         let posterior = Posterior::new(probs);
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // low:  0.5*100k + 0.5*5M = 50k + 2500k = 2550k
         // med:  0.5*300k + 0.5*1M = 150k + 500k = 650k
         // high: 0.5*800k + 0.5*200k = 400k + 100k = 500k
@@ -1194,7 +1194,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sel.action, "only");
         assert!(!sel.is_safe_default);
     }
@@ -1206,11 +1206,11 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         for _ in 0..999_999 {
             ctrl.select_action(&posterior, epoch, "t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let sel = ctrl
             .select_action(&posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sel.decision_id, "mon-ctrl-1000000");
         assert_eq!(ctrl.decision_count(), 1_000_000);
     }
@@ -1227,7 +1227,7 @@ mod tests {
         let posterior = anomalous_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // "high" blocked, so picks next best among "low" and "medium"
         // medium: 0.2*300k + 0.8*1M = 60k + 800k = 860k
         // low:    0.2*100k + 0.8*5M = 20k + 4000k = 4020k
@@ -1242,10 +1242,10 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let sel = ctrl
             .select_action(&posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = ctrl
             .build_evidence(&sel, &posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.candidates.len(), ctrl.config().action_set.len());
     }
 
@@ -1268,7 +1268,7 @@ mod tests {
         let posterior = Posterior::new(probs);
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sel.action, "good");
         assert_eq!(sel.expected_loss, -500_000);
     }
@@ -1285,10 +1285,10 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let sel = ctrl
             .select_action(&posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = ctrl
             .build_evidence(&sel, &posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Guardrail should be present but inactive
         assert_eq!(entry.constraints.len(), 1);
         assert!(!entry.constraints[0].active);
@@ -1313,7 +1313,7 @@ mod tests {
         let posterior = Posterior::new(probs);
         let sel1 = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // min_by_key picks first minimum — deterministic
         let mut ctrl2 = {
             let mut m = LossMatrix::new();
@@ -1330,7 +1330,7 @@ mod tests {
         };
         let sel2 = ctrl2
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sel1.action, sel2.action);
     }
 
@@ -1386,7 +1386,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&sel).expect("serialize derived Serialize");
         let back: ActionSelection =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1434,7 +1434,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(sel.is_safe_default);
         assert_eq!(sel.action, "high"); // safe_default
     }
@@ -1445,7 +1445,7 @@ mod tests {
         let posterior = normal_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cloned = sel.clone();
         assert_eq!(sel, cloned);
     }
@@ -1458,7 +1458,7 @@ mod tests {
             let epoch = SecurityEpoch::from_raw(1);
             for i in 0..5 {
                 ctrl.select_action(&posterior, epoch, &format!("t{i}"))
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
             }
             ctrl.decisions().to_vec()
         };
@@ -1471,7 +1471,7 @@ mod tests {
         let posterior = anomalous_posterior();
         let sel = ctrl
             .select_action(&posterior, SecurityEpoch::from_raw(1), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // high: 0.2*800k + 0.8*200k = 160k + 160k = 320k  (lowest)
         // medium: 0.2*300k + 0.8*1M = 60k + 800k = 860k
         // low: 0.2*100k + 0.8*5M = 20k + 4M = 4020k
@@ -1496,10 +1496,10 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
         let sel = ctrl
             .select_action(&posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let entry = ctrl
             .build_evidence(&sel, &posterior, epoch, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!entry.chosen_action.action_name.is_empty());
         assert!(entry.chosen_action.expected_loss_millionths >= 0);
     }

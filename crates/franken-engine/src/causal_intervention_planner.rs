@@ -541,7 +541,7 @@ impl CausalInterventionPlanner {
                         expected_effect_millionths: effect,
                         confidence_millionths: confidence,
                         identifiability: status,
-                        adjustment_set: adjustment.expect("serde deserialization should succeed"),
+                        adjustment_set: adjustment.expect("operation should succeed for valid inputs"),
                         risk_description: String::new(),
                         cost_description: String::new(),
                         tracking_bead: None,
@@ -809,9 +809,9 @@ mod tests {
     fn add_nodes() {
         let mut dag = CausalDag::new();
         dag.add_node(lever("l1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_node(metric("m1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(dag.node_count(), 2);
         assert_eq!(dag.levers().len(), 1);
         assert_eq!(dag.metrics().len(), 1);
@@ -821,7 +821,7 @@ mod tests {
     fn duplicate_node_rejected() {
         let mut dag = CausalDag::new();
         dag.add_node(lever("l1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = dag.add_node(lever("l1")).unwrap_err();
         assert!(matches!(err, PlannerError::DuplicateNode { .. }));
     }
@@ -830,11 +830,11 @@ mod tests {
     fn add_edge_valid() {
         let mut dag = CausalDag::new();
         dag.add_node(lever("l1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_node(metric("m1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_edge(direct_edge("l1", "m1", 100_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(dag.edge_count(), 1);
     }
 
@@ -842,7 +842,7 @@ mod tests {
     fn add_edge_missing_node() {
         let mut dag = CausalDag::new();
         dag.add_node(lever("l1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = dag.add_edge(direct_edge("l1", "m_missing", 0)).unwrap_err();
         assert!(matches!(err, PlannerError::MissingNode { .. }));
     }
@@ -851,11 +851,11 @@ mod tests {
     fn parents_and_children() {
         let mut dag = CausalDag::new();
         dag.add_node(lever("l1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_node(metric("m1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_edge(direct_edge("l1", "m1", 0))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(dag.parents("m1").contains("l1"));
         assert!(dag.children("l1").contains("m1"));
     }
@@ -864,14 +864,14 @@ mod tests {
     fn adjustment_set_simple() {
         let mut dag = CausalDag::new();
         dag.add_node(lever("l1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_node(metric("m1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_edge(direct_edge("l1", "m1", 0))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let adj = dag
             .adjustment_set("l1", "m1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(adj.is_empty()); // No confounders
     }
 
@@ -879,9 +879,9 @@ mod tests {
     fn adjustment_set_with_confounder() {
         let mut dag = CausalDag::new();
         dag.add_node(lever("l1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_node(metric("m1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_node(CausalNode {
             id: "c1".to_string(),
             name: "c1".to_string(),
@@ -890,14 +890,14 @@ mod tests {
             observable: true,
             interventionable: false,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         dag.add_edge(direct_edge("c1", "l1", 0))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         dag.add_edge(direct_edge("l1", "m1", 0))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let adj = dag
             .adjustment_set("l1", "m1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(adj.contains("c1"));
     }
 
@@ -919,7 +919,7 @@ mod tests {
         let d1 = build_seed_dag();
         let mut d2 = build_seed_dag();
         d2.add_node(lever("extra"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(d1.content_hash(), d2.content_hash());
     }
 

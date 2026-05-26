@@ -863,7 +863,7 @@ mod tests {
     fn default_passes_validation() {
         RuntimeConfig::default()
             .validate()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -973,7 +973,7 @@ mod tests {
     #[test]
     fn toml_roundtrip_default() {
         let config = RuntimeConfig::default();
-        let toml_str = toml::to_string(&config).expect("serde deserialization should succeed");
+        let toml_str = toml::to_string(&config).expect("serialization should succeed");
         let restored: RuntimeConfig = toml::from_str(&toml_str).expect("parse valid string");
         assert_eq!(config, restored);
     }
@@ -993,7 +993,7 @@ mod tests {
 
     #[test]
     fn empty_toml_produces_default() {
-        let config = RuntimeConfig::from_toml("").expect("serde deserialization should succeed");
+        let config = RuntimeConfig::from_toml("").expect("operation should succeed for valid inputs");
         assert_eq!(config, RuntimeConfig::default());
     }
 
@@ -1004,7 +1004,7 @@ mod tests {
 deterministic_budget = 50000
 "#;
         let config =
-            RuntimeConfig::from_toml(toml_str).expect("serde deserialization should succeed");
+            RuntimeConfig::from_toml(toml_str).expect("operation should succeed for valid inputs");
         assert_eq!(config.execution.deterministic_budget, 50_000);
         // All other fields should be defaults.
         assert_eq!(config.execution.throughput_budget, 1_000_000);
@@ -1019,7 +1019,7 @@ deterministic_budget = 50000
 grace_period_ns = 1000000000
 "#;
         let config =
-            RuntimeConfig::from_toml(toml_str).expect("serde deserialization should succeed");
+            RuntimeConfig::from_toml(toml_str).expect("operation should succeed for valid inputs");
         assert_eq!(config.guardplane.containment.grace_period_ns, 1_000_000_000);
         assert_eq!(
             config.guardplane.containment.challenge_timeout_ns,
@@ -1266,7 +1266,7 @@ grace_period_ns = 1000000000
     #[test]
     fn load_missing_file_returns_default() {
         let config = RuntimeConfig::load(Path::new("/nonexistent/path/config.toml"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(config, RuntimeConfig::default());
     }
 
@@ -1303,7 +1303,7 @@ unknown_millionths = 100000
 floor_mass = 100
 "#;
         let config =
-            RuntimeConfig::from_toml(toml_str).expect("serde deserialization should succeed");
+            RuntimeConfig::from_toml(toml_str).expect("operation should succeed for valid inputs");
         assert_eq!(config.guardplane.priors.benign_millionths, 700_000);
         assert_eq!(config.guardplane.priors.anomalous_millionths, 150_000);
         assert_eq!(config.guardplane.priors.malicious_millionths, 50_000);
@@ -1319,7 +1319,7 @@ max_entrypoint_len = 2048
 max_trust_chain_ref_len = 512
 "#;
         let config =
-            RuntimeConfig::from_toml(toml_str).expect("serde deserialization should succeed");
+            RuntimeConfig::from_toml(toml_str).expect("operation should succeed for valid inputs");
         assert_eq!(config.extension_host.max_name_len, 256);
         assert_eq!(config.extension_host.max_version_len, 96);
         assert_eq!(config.extension_host.max_entrypoint_len, 2048);

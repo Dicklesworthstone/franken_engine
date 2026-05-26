@@ -768,7 +768,7 @@ impl EpochInvalidationEngine {
             .specializations
             .iter_mut()
             .find(|s| &s.specialization_id == spec_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         spec_mut.state = FallbackState::BaselineFallback;
 
         // Build receipt.
@@ -991,7 +991,7 @@ mod tests {
             &SchemaId::from_definition(b"test-proof"),
             suffix.as_bytes(),
         )
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     fn make_spec(
@@ -1036,7 +1036,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(engine.specializations().len(), 1);
         assert!(engine.get_specialization(&spec_id).is_some());
@@ -1049,7 +1049,7 @@ mod tests {
         let spec = make_default_spec();
         engine
             .register_specialization(spec.clone(), 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = engine.register_specialization(spec, 2000).unwrap_err();
         assert!(matches!(
@@ -1100,7 +1100,7 @@ mod tests {
         let spec = make_default_spec(); // valid 90..=110
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(engine.active_count(), 1);
         assert_eq!(engine.fallback_count(), 0);
@@ -1118,7 +1118,7 @@ mod tests {
         let spec = make_default_spec(); // valid 90..=110
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Stay within validity window.
         let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
@@ -1145,10 +1145,10 @@ mod tests {
         );
         engine
             .register_specialization(s1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Epoch 110: s1 expires (valid_until=105), s2 survives (valid_until=120).
         let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(110), 2000);
@@ -1171,7 +1171,7 @@ mod tests {
             );
             engine
                 .register_specialization(spec, 1000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let invalidated = engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
@@ -1197,7 +1197,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = engine
             .invalidate_specialization(
@@ -1207,7 +1207,7 @@ mod tests {
                 },
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(receipt.specialization_id, spec_id);
         assert!(!receipt.signature.is_empty());
@@ -1241,7 +1241,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine
             .invalidate_specialization(
@@ -1251,7 +1251,7 @@ mod tests {
                 },
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = engine
             .invalidate_specialization(
@@ -1285,10 +1285,10 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(90),
             activated_at_ns: 1000,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let count = engine.invalidate_by_proof(&proof_id, 2000);
         assert_eq!(count, 1);
@@ -1323,13 +1323,13 @@ mod tests {
         );
         engine
             .register_specialization(s1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s3, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let count = engine.invalidate_by_policy("policy-A", 2000);
         assert_eq!(count, 2);
@@ -1345,7 +1345,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Invalidate.
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
@@ -1354,10 +1354,10 @@ mod tests {
         // Begin re-specialization.
         engine
             .begin_respecialization(&spec_id, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let spec = engine
             .get_specialization(&spec_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(spec.state, FallbackState::ReSpecializing);
 
         // Complete re-specialization with new bounds.
@@ -1374,11 +1374,11 @@ mod tests {
                 new_proofs,
                 4000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let spec = engine
             .get_specialization(&spec_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(spec.state, FallbackState::Active);
         assert_eq!(spec.valid_from_epoch, SecurityEpoch::from_raw(111));
         assert_eq!(spec.valid_until_epoch, SecurityEpoch::from_raw(130));
@@ -1391,7 +1391,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Active spec can't begin re-specialization.
         let err = engine.begin_respecialization(&spec_id, 2000).unwrap_err();
@@ -1405,7 +1405,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Invalidate but don't begin re-specialization.
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
@@ -1442,7 +1442,7 @@ mod tests {
             let spec_id = spec.specialization_id.clone();
             engine
                 .register_specialization(spec, 1000 + i * 100)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             engine
                 .invalidate_specialization(
                     &spec_id,
@@ -1451,7 +1451,7 @@ mod tests {
                     },
                     1050 + i * 100,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert!(engine.is_conservative_mode());
@@ -1477,7 +1477,7 @@ mod tests {
         let s1_id = s1.specialization_id.clone();
         engine
             .register_specialization(s1, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .invalidate_specialization(
                 &s1_id,
@@ -1486,7 +1486,7 @@ mod tests {
                 },
                 200,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let s2 = make_spec(
             OptimizationClass::Superinstruction,
@@ -1498,7 +1498,7 @@ mod tests {
         let s2_id = s2.specialization_id.clone();
         engine
             .register_specialization(s2, 300)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .invalidate_specialization(
                 &s2_id,
@@ -1507,7 +1507,7 @@ mod tests {
                 },
                 400,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(engine.is_conservative_mode());
 
@@ -1522,7 +1522,7 @@ mod tests {
         let s3_id = s3.specialization_id.clone();
         engine
             .register_specialization(s3, 5000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .invalidate_specialization(
                 &s3_id,
@@ -1531,7 +1531,7 @@ mod tests {
                 },
                 5100,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Old timestamps pruned; only 5100 remains < threshold of 2.
         assert!(!engine.is_conservative_mode());
@@ -1547,7 +1547,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
@@ -1567,7 +1567,7 @@ mod tests {
         let expected_baseline = spec.baseline_ir_hash;
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
@@ -1584,7 +1584,7 @@ mod tests {
         let spec = make_default_spec();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
         for (i, event) in engine.events().iter().enumerate() {
@@ -1598,7 +1598,7 @@ mod tests {
         let spec = make_default_spec();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
         let event_types: Vec<_> = engine
@@ -1646,10 +1646,10 @@ mod tests {
         );
         engine
             .register_specialization(s1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let trace_specs = engine.specializations_by_class(&OptimizationClass::TraceSpecialization);
         assert_eq!(trace_specs.len(), 1);
@@ -1676,10 +1676,10 @@ mod tests {
         );
         engine
             .register_specialization(s1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Invalidate s1 via epoch advance.
         engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
@@ -1783,7 +1783,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = engine
             .invalidate_specialization(
@@ -1793,7 +1793,7 @@ mod tests {
                 },
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: InvalidationReceipt =
@@ -1807,7 +1807,7 @@ mod tests {
         let spec = make_default_spec();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let event = &engine.events()[0];
         let json = serde_json::to_string(event).expect("serialize derived Serialize");
@@ -1822,7 +1822,7 @@ mod tests {
         let spec = make_default_spec();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         let restored: EpochInvalidationEngine =
@@ -1850,7 +1850,7 @@ mod tests {
             );
             engine
                 .register_specialization(spec, 1000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         engine.advance_epoch(SecurityEpoch::from_raw(101), 2000);
@@ -1870,7 +1870,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine.total_invalidations = u64::MAX;
         engine
@@ -1895,7 +1895,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
 
@@ -1906,7 +1906,7 @@ mod tests {
 
         let spec = restored
             .get_specialization(&spec_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(spec.state, FallbackState::BaselineFallback);
     }
 
@@ -2177,7 +2177,7 @@ mod tests {
         let spec = make_default_spec();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let unrelated = make_proof_id("unrelated-proof");
         let count = engine.invalidate_by_proof(&unrelated, 2000);
@@ -2191,7 +2191,7 @@ mod tests {
         let spec = make_default_spec(); // policy-001
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let count = engine.invalidate_by_policy("policy-nonexistent", 2000);
         assert_eq!(count, 0);
@@ -2239,13 +2239,13 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Invalidate then begin re-specialization.
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
         engine
             .begin_respecialization(&spec_id, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Inverted range.
         let err = engine
@@ -2411,7 +2411,7 @@ mod tests {
             let sid = spec.specialization_id.clone();
             engine
                 .register_specialization(spec, 1000 + i * 10)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             engine
                 .invalidate_specialization(
                     &sid,
@@ -2420,7 +2420,7 @@ mod tests {
                     },
                     1005 + i * 10,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let has_churn_activated = engine.events().iter().any(|e| {
@@ -2451,7 +2451,7 @@ mod tests {
             let sid = spec.specialization_id.clone();
             engine
                 .register_specialization(spec, 100 + i * 10)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             engine
                 .invalidate_specialization(
                     &sid,
@@ -2460,7 +2460,7 @@ mod tests {
                     },
                     200 + i * 10,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert!(engine.is_conservative_mode());
 
@@ -2475,7 +2475,7 @@ mod tests {
         let s3_id = s3.specialization_id.clone();
         engine
             .register_specialization(s3, 50_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .invalidate_specialization(
                 &s3_id,
@@ -2484,7 +2484,7 @@ mod tests {
                 },
                 50_100,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!engine.is_conservative_mode());
 
         let has_churn_deactivated = engine.events().iter().any(|e| {
@@ -2519,10 +2519,10 @@ mod tests {
                 activated_epoch: SecurityEpoch::from_raw(90),
                 activated_at_ns: 1000,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             engine
                 .register_specialization(spec, 1000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let count = engine.invalidate_by_proof(&shared_proof, 2000);
@@ -2557,7 +2557,7 @@ mod tests {
             );
             engine
                 .register_specialization(spec, 1000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let count = engine.invalidate_by_policy("shared-policy", 2000);
@@ -2595,12 +2595,12 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
         engine
             .begin_respecialization(&spec_id, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let new_proofs = {
             let mut s = BTreeSet::new();
@@ -2616,11 +2616,11 @@ mod tests {
                 new_proofs.clone(),
                 5000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let spec = engine
             .get_specialization(&spec_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(spec.state, FallbackState::Active);
         assert_eq!(spec.valid_from_epoch, SecurityEpoch::from_raw(111));
         assert_eq!(spec.valid_until_epoch, SecurityEpoch::from_raw(150));
@@ -2648,19 +2648,19 @@ mod tests {
         let sid = spec1.specialization_id.clone();
 
         e1.register_specialization(spec1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         e2.register_specialization(spec2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let reason = InvalidationReason::OperatorInvalidation {
             reason: "test".to_string(),
         };
         let r1 = e1
             .invalidate_specialization(&sid, reason.clone(), 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = e2
             .invalidate_specialization(&sid, reason, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r1.signature, r2.signature);
     }
@@ -2751,14 +2751,14 @@ mod tests {
         let sid = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let reason = InvalidationReason::OperatorInvalidation {
             reason: "test".into(),
         };
         let receipt = engine
             .invalidate_specialization(&sid, reason, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let back: InvalidationReceipt =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2771,7 +2771,7 @@ mod tests {
         let spec = make_default_spec();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = engine.events();
         assert!(!events.is_empty());
@@ -2807,7 +2807,7 @@ mod tests {
         let spec = make_default_spec();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&engine).expect("serialize derived Serialize");
         let back: EpochInvalidationEngine =
@@ -2896,10 +2896,10 @@ mod tests {
         );
         engine
             .register_specialization(s1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // First advance: s1 expires (valid_until=105), s2 survives.
         let inv1 = engine.advance_epoch(SecurityEpoch::from_raw(110), 2000);
@@ -2932,7 +2932,7 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(90),
             activated_at_ns: 1000,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let s1_id = s1.specialization_id.clone();
 
         let s2 = create_specialization(SpecializationInput {
@@ -2946,14 +2946,14 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(90),
             activated_at_ns: 1000,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         engine
             .register_specialization(s1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Manually invalidate s1.
         engine
@@ -2964,7 +2964,7 @@ mod tests {
                 },
                 1500,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.fallback_count(), 1);
 
         // invalidate_by_proof should only hit s2 (the still-active one).
@@ -2981,12 +2981,12 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
         engine
             .begin_respecialization(&spec_id, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let has_respec = engine.events().iter().any(|e| {
             matches!(
@@ -3005,17 +3005,17 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Invalidate then begin re-specialization.
         engine.advance_epoch(SecurityEpoch::from_raw(111), 2000);
         engine
             .begin_respecialization(&spec_id, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             engine
                 .get_specialization(&spec_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             FallbackState::ReSpecializing,
         );
@@ -3030,12 +3030,12 @@ mod tests {
                 },
                 4000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.specialization_id, spec_id);
         assert_eq!(
             engine
                 .get_specialization(&spec_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             FallbackState::BaselineFallback,
         );
@@ -3053,7 +3053,7 @@ mod tests {
         );
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Advance within validity — 0 invalidated.
         let count = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
@@ -3085,13 +3085,13 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Cycle 1: invalidate -> respec.
         engine.advance_epoch(SecurityEpoch::from_raw(106), 2000);
         engine
             .begin_respecialization(&spec_id, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .complete_respecialization(
                 &spec_id,
@@ -3100,11 +3100,11 @@ mod tests {
                 BTreeSet::new(),
                 4000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             engine
                 .get_specialization(&spec_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             FallbackState::Active,
         );
@@ -3114,13 +3114,13 @@ mod tests {
         assert_eq!(
             engine
                 .get_specialization(&spec_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             FallbackState::BaselineFallback,
         );
         engine
             .begin_respecialization(&spec_id, 6000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .complete_respecialization(
                 &spec_id,
@@ -3129,11 +3129,11 @@ mod tests {
                 BTreeSet::new(),
                 7000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             engine
                 .get_specialization(&spec_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .state,
             FallbackState::Active,
         );
@@ -3155,19 +3155,19 @@ mod tests {
         let sid = spec1.specialization_id.clone();
 
         e1.register_specialization(spec1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         e2.register_specialization(spec2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let reason = InvalidationReason::OperatorInvalidation {
             reason: "ts-test".into(),
         };
         let r1 = e1
             .invalidate_specialization(&sid, reason.clone(), 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = e2
             .invalidate_specialization(&sid, reason, 3000) // different timestamp
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Receipt IDs should differ because timestamp is in the derivation input.
         assert_ne!(r1.receipt_id, r2.receipt_id);
@@ -3193,10 +3193,10 @@ mod tests {
         );
         engine
             .register_specialization(s1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Manually invalidate s1.
         engine
@@ -3207,7 +3207,7 @@ mod tests {
                 },
                 1500,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // invalidate_by_policy should only hit s2.
         let count = engine.invalidate_by_policy("pol-shared", 2000);
@@ -3241,7 +3241,7 @@ mod tests {
             );
             engine
                 .register_specialization(spec, 1000 + i)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for i in 0..12 {
             let id = engine.specializations()[i].specialization_id.clone();
@@ -3300,7 +3300,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .invalidate_specialization(
                 &spec_id,
@@ -3309,7 +3309,7 @@ mod tests {
                 },
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.receipts().len(), 1);
         assert_eq!(engine.receipts()[0].specialization_id, spec_id);
     }
@@ -3321,7 +3321,7 @@ mod tests {
         let spec = make_default_spec();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(engine.events().len(), 1);
         assert!(matches!(
             &engine.events()[0].event_type,
@@ -3342,7 +3342,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = engine.begin_respecialization(&spec_id, 2000).unwrap_err();
         assert!(
             matches!(&err, InvalidationError::InvalidState { .. }),
@@ -3364,7 +3364,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .invalidate_specialization(
                 &spec_id,
@@ -3373,7 +3373,7 @@ mod tests {
                 },
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = engine
             .invalidate_specialization(
                 &spec_id,
@@ -3401,10 +3401,10 @@ mod tests {
         let s2_id = s2.specialization_id.clone();
         engine
             .register_specialization(s1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Move s1 to BaselineFallback then ReSpecializing.
         engine
             .invalidate_specialization(
@@ -3414,10 +3414,10 @@ mod tests {
                 },
                 1500,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .begin_respecialization(&s1_id, 1600)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // s1 is ReSpecializing, s2 is Active.
         // Advance epoch past 100 — should only invalidate s2.
         let count = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
@@ -3425,13 +3425,13 @@ mod tests {
         // s2 should be BaselineFallback.
         let s2_state = engine
             .get_specialization(&s2_id)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .state;
         assert_eq!(s2_state, FallbackState::BaselineFallback);
         // s1 should still be ReSpecializing.
         let s1_state = engine
             .get_specialization(&s1_id)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .state;
         assert_eq!(s1_state, FallbackState::ReSpecializing);
     }
@@ -3469,10 +3469,10 @@ mod tests {
         let class = spec.optimization_class.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let found = engine
             .get_specialization(&spec_id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(found.optimization_class, class);
     }
 
@@ -3489,10 +3489,10 @@ mod tests {
         );
         engine
             .register_specialization(s1, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.advance_epoch(SecurityEpoch::from_raw(115), 300);
         let seqs: Vec<u64> = engine.events().iter().map(|e| e.seq).collect();
         for window in seqs.windows(2) {
@@ -3512,13 +3512,13 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let reason = InvalidationReason::KeyRotation {
             key_id: "k42".into(),
         };
         let receipt = engine
             .invalidate_specialization(&spec_id, reason.clone(), 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.reason, reason);
     }
 
@@ -3582,7 +3582,7 @@ mod tests {
             );
             engine
                 .register_specialization(spec, 1000 + i)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(engine.specializations().len(), 5);
         assert_eq!(engine.active_count(), 5);
@@ -3603,7 +3603,7 @@ mod tests {
             );
             engine
                 .register_specialization(spec, 1000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for i in 0..11 {
             let id = engine.specializations()[i].specialization_id.clone();
@@ -3652,10 +3652,10 @@ mod tests {
             activated_epoch: SecurityEpoch::from_raw(90),
             activated_at_ns: 1000,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Invalidation by proof_a should hit the spec.
         let count = engine.invalidate_by_proof(&proof_a, 2000);
         assert_eq!(count, 1);
@@ -3678,7 +3678,7 @@ mod tests {
         // create_specialization itself doesn't validate epoch range,
         // but register_specialization does. Let's verify the spec is created.
         // Actually, create_specialization doesn't validate. Let's register it.
-        let spec = result.expect("serde deserialization should succeed");
+        let spec = result.expect("operation should succeed for valid inputs");
         let mut engine = test_engine();
         let err = engine.register_specialization(spec, 1000).unwrap_err();
         assert!(matches!(err, InvalidationError::InvalidEpochRange { .. }));
@@ -3691,7 +3691,7 @@ mod tests {
         let spec_id = spec.specialization_id.clone();
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = engine
             .complete_respecialization(
                 &spec_id,
@@ -3720,7 +3720,7 @@ mod tests {
         let spec = make_spec(OptimizationClass::Superinstruction, 90, 200, "p", "wide");
         engine
             .register_specialization(spec, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events_before = engine.events().len();
         let count = engine.advance_epoch(SecurityEpoch::from_raw(105), 2000);
         assert_eq!(count, 0);
@@ -3747,7 +3747,7 @@ mod tests {
             );
             engine
                 .register_specialization(spec, 1000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for i in 0..3 {
             let id = engine.specializations()[i].specialization_id.clone();
@@ -3759,7 +3759,7 @@ mod tests {
                     },
                     2000 + usize_to_u64_saturating(i),
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(engine.total_invalidations(), 3);
     }
@@ -3846,24 +3846,24 @@ mod tests {
         let s2_id = s2.specialization_id.clone();
         engine
             .register_specialization(s1, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine
             .register_specialization(s2, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r1 = engine
             .invalidate_specialization(
                 &s1_id,
                 InvalidationReason::OperatorInvalidation { reason: "a".into() },
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = engine
             .invalidate_specialization(
                 &s2_id,
                 InvalidationReason::OperatorInvalidation { reason: "b".into() },
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.signature, r2.signature);
     }
 

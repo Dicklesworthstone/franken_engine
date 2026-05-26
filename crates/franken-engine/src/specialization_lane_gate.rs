@@ -1227,7 +1227,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(result.outcome.is_pass());
         assert!(result.blockers.is_empty());
@@ -1244,8 +1244,8 @@ mod tests {
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
 
-        let r1 = evaluate_gate(&input).expect("serde deserialization should succeed");
-        let r2 = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let r1 = evaluate_gate(&input).expect("operation should succeed for valid inputs");
+        let r2 = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         assert_eq!(r1.evidence_hash, r2.evidence_hash);
     }
 
@@ -1272,8 +1272,8 @@ mod tests {
             ..input1.clone()
         };
 
-        let r1 = evaluate_gate(&input1).expect("serde deserialization should succeed");
-        let r2 = evaluate_gate(&input2).expect("serde deserialization should succeed");
+        let r1 = evaluate_gate(&input1).expect("operation should succeed for valid inputs");
+        let r2 = evaluate_gate(&input2).expect("operation should succeed for valid inputs");
         assert_ne!(r1.evidence_hash, r2.evidence_hash);
     }
 
@@ -1307,7 +1307,7 @@ mod tests {
         let receipts = passing_receipts(3);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1326,7 +1326,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1356,7 +1356,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1384,7 +1384,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 0,
         };
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1413,7 +1413,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 0,
         };
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         // Both InsufficientReceiptCoverage (4/5=80%) and UnverifiedReceipt.
@@ -1435,7 +1435,7 @@ mod tests {
             make_fallback_fail("workload_1", InjectionKind::CapabilityRevocation),
         ];
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1456,7 +1456,7 @@ mod tests {
         fb.fallback_latency_ns = 2000; // 100% slower
         let fallbacks = vec![fb];
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1475,7 +1475,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1494,7 +1494,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         assert!(
@@ -1516,7 +1516,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         assert!(passes_release_gate(&result));
     }
 
@@ -1527,7 +1527,7 @@ mod tests {
         let receipts = passing_receipts(3);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         assert!(!passes_release_gate(&result));
     }
 
@@ -1542,7 +1542,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &result);
 
         assert!(!entries.is_empty());
@@ -1558,7 +1558,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &result);
 
         let delta_entries: Vec<_> = entries
@@ -1575,7 +1575,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &result);
 
         let fb_entries: Vec<_> = entries
@@ -1592,7 +1592,7 @@ mod tests {
         let receipts = passing_receipts(3);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         let entries = generate_log_entries("trace-1", &result);
 
         assert_eq!(entries[0].error_code, Some("GATE_FAILED".to_string()));
@@ -1625,7 +1625,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: GateEvidenceBundle =
@@ -1761,7 +1761,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 0,
         };
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         // Coverage is vacuously satisfied.
         assert_eq!(
             result.receipt_coverage.coverage_millionths,
@@ -1798,7 +1798,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 50_000, // require 5% improvement
         };
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         // 1% improvement < 5% threshold → fails
         assert!(!result.outcome.is_pass());
     }
@@ -1810,7 +1810,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
         assert_eq!(result.schema_version, GATE_SCHEMA_VERSION);
     }
 
@@ -1821,7 +1821,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert_eq!(result.summary.total_workloads, 12);
         assert_eq!(result.summary.workloads_with_positive_delta, 12);
@@ -1850,7 +1850,7 @@ mod tests {
             fallback_results: &fallbacks,
             significance_threshold_millionths: 0,
         };
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert!(!result.outcome.is_pass());
         // Should have at least InsufficientWorkloads, OutputDivergence,
@@ -1865,7 +1865,7 @@ mod tests {
         let receipts = passing_receipts(5);
         let fallbacks = passing_fallbacks();
         let input = make_passing_input(&spec, &amb, &receipts, &fallbacks);
-        let result = evaluate_gate(&input).expect("serde deserialization should succeed");
+        let result = evaluate_gate(&input).expect("operation should succeed for valid inputs");
 
         assert_eq!(result.receipt_coverage.total_decisions, 5);
         assert_eq!(result.receipt_coverage.covered_decisions, 5);

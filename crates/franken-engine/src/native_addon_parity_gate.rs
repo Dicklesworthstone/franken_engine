@@ -1143,7 +1143,7 @@ impl GateEvaluator {
                 match violated_axes
                     .iter()
                     .next()
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                 {
                     GateAxis::Parity => GateVerdict::ParityViolation,
                     GateAxis::Security => GateVerdict::SecurityBlocking,
@@ -2098,22 +2098,22 @@ mod tests {
         let m = native_addon_parity_gate_manifest();
         assert_eq!(
             m.get("schema_version")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             SCHEMA_VERSION
         );
         assert_eq!(
             m.get("component")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             COMPONENT
         );
         assert_eq!(
             m.get("bead_id")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             BEAD_ID
         );
         assert_eq!(
             m.get("policy_id")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             POLICY_ID
         );
     }

@@ -950,22 +950,22 @@ mod tests {
     fn execution_wave_serde_tags_are_stable() {
         assert_eq!(
             serde_json::to_string(&ExecutionWave::Wave0)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"wave_0\""
         );
         assert_eq!(
             serde_json::to_string(&ExecutionWave::Wave1)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"wave_1\""
         );
         assert_eq!(
             serde_json::to_string(&ExecutionWave::Wave2)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"wave_2\""
         );
         assert_eq!(
             serde_json::to_string(&ExecutionWave::Wave3)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"wave_3\""
         );
     }
@@ -1560,7 +1560,7 @@ mod tests {
         let protocol = default_rgc_execution_wave_protocol();
         let package = default_wave_handoff_package();
         let report = run_coordination_dry_run(&protocol, &package, 0, "t", "d")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.action, AntiStallAction::Healthy);
     }
 
@@ -1575,7 +1575,7 @@ mod tests {
             "t",
             "d",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(report.action, AntiStallAction::Split);
     }
 

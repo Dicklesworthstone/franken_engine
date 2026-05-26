@@ -1138,7 +1138,7 @@ mod tests {
         let e = SynthesisEnvelope::compute(epoch(), &schemas, &freqs);
         assert!(
             e.verdict_for("s1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .is_eligible()
         );
         assert!(e.verdict_for("nonexistent").is_none());
@@ -1212,7 +1212,7 @@ mod tests {
         assert_eq!(
             *c.observation_counts
                 .get("s1")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             80
         );
     }

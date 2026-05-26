@@ -838,7 +838,7 @@ mod tests {
     #[test]
     fn gittins_creation() {
         let gc = GittinsIndexComputer::new(vec!["hyp_a".into(), "hyp_b".into()], 900_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gc.arms.len(), 2);
     }
 
@@ -865,7 +865,7 @@ mod tests {
     #[test]
     fn gittins_large_counts_do_not_overflow_recompute() {
         let mut computer = GittinsIndexComputer::new(vec!["a".into()], 950_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         computer.arms[0].successes = u64::MAX;
         computer.arms[0].failures = u64::MAX;
 
@@ -885,14 +885,14 @@ mod tests {
     #[test]
     fn gittins_updates_with_successes() {
         let mut gc = GittinsIndexComputer::new(vec!["a".into(), "b".into()], 900_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Arm 0 gets all successes.
         for _ in 0..10 {
             gc.observe(0, true)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gc.observe(1, false)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert!(gc.arms[0].gittins_index_millionths > gc.arms[1].gittins_index_millionths);
@@ -903,12 +903,12 @@ mod tests {
     fn gittins_ranked_arms_sorted() {
         let mut gc =
             GittinsIndexComputer::new(vec!["a".into(), "b".into(), "c".into()], 900_000, 100)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         gc.observe(2, true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gc.observe(2, true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ranked = gc.ranked_arms();
         // First entry should have highest index.
         assert!(ranked[0].1 >= ranked[1].1);
@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn gittins_arm_out_of_bounds() {
         let mut gc = GittinsIndexComputer::new(vec!["a".into()], 900_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             gc.observe(5, true),
             Err(StoppingError::IndexOutOfBounds { .. })
@@ -928,7 +928,7 @@ mod tests {
     #[test]
     fn gittins_serde_roundtrip() {
         let gc = GittinsIndexComputer::new(vec!["a".into(), "b".into()], 900_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&gc).expect("serialize derived Serialize");
         let restored: GittinsIndexComputer =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -942,7 +942,7 @@ mod tests {
         // Payoffs: [1, 3, 2].  Without discount, optimal is to stop at t=1 (payoff 3).
         let payoffs = vec![1_000_000, 3_000_000, 2_000_000];
         let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("serde deserialization should succeed");
+            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
         assert_eq!(env.optimal_stopping_time, 1);
         assert_eq!(env.optimal_value_millionths, 3_000_000);
     }
@@ -952,7 +952,7 @@ mod tests {
         // Payoffs: [1, 2, 3, 4, 5].  Best to wait until last.
         let payoffs = vec![1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000];
         let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("serde deserialization should succeed");
+            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
         assert_eq!(env.optimal_stopping_time, 4); // last index
     }
 
@@ -961,7 +961,7 @@ mod tests {
         // Payoffs: [5, 4, 3, 2, 1].  Best to stop immediately.
         let payoffs = vec![5_000_000, 4_000_000, 3_000_000, 2_000_000, 1_000_000];
         let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("serde deserialization should succeed");
+            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
         assert_eq!(env.optimal_stopping_time, 0);
     }
 
@@ -970,7 +970,7 @@ mod tests {
         // Payoffs: [1, 10].  With high discount (0.5), future payoff discounted.
         let payoffs = vec![1_000_000, 10_000_000];
         let env =
-            SnellEnvelope::compute(payoffs, 500_000).expect("serde deserialization should succeed");
+            SnellEnvelope::compute(payoffs, 500_000).expect("operation should succeed for valid inputs");
         // Discounted continuation = 0.5 * 10 = 5 > 1, so wait.
         assert_eq!(env.optimal_stopping_time, 1);
     }
@@ -999,7 +999,7 @@ mod tests {
     fn snell_should_stop_at() {
         let payoffs = vec![1_000_000, 3_000_000, 2_000_000];
         let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("serde deserialization should succeed");
+            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
         assert!(!env.should_stop_at(0));
         assert!(env.should_stop_at(1));
     }
@@ -1008,7 +1008,7 @@ mod tests {
     fn snell_envelope_serde_roundtrip() {
         let payoffs = vec![1_000_000, 3_000_000, 2_000_000];
         let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("serde deserialization should succeed");
+            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let restored: SnellEnvelope =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1082,7 +1082,7 @@ mod tests {
     #[test]
     fn escalation_policy_creation() {
         let policy = EscalationPolicy::new(5_000_000, 500_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(policy.cusum_enabled);
         assert!(policy.secretary_enabled);
         assert_eq!(policy.total_observations, 0);
@@ -1091,7 +1091,7 @@ mod tests {
     #[test]
     fn escalation_policy_triggers_on_cusum() {
         let mut policy = EscalationPolicy::new(2_000_000, 500_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         policy.secretary_enabled = false; // isolate CUSUM
 
         let mut triggered = false;
@@ -1109,7 +1109,7 @@ mod tests {
     #[test]
     fn escalation_policy_triggers_on_secretary() {
         let mut policy = EscalationPolicy::new(100_000_000, 500_000, 10)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         policy.cusum_enabled = false; // isolate secretary
 
         // Feed increasing scores.
@@ -1125,7 +1125,7 @@ mod tests {
     #[test]
     fn escalation_policy_serde_roundtrip() {
         let policy = EscalationPolicy::new(5_000_000, 500_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let restored: EscalationPolicy =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1244,7 +1244,7 @@ mod tests {
     fn snell_envelope_single_payoff() {
         let payoffs = vec![2_000_000];
         let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("serde deserialization should succeed");
+            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
         assert_eq!(env.optimal_stopping_time, 0);
         assert_eq!(env.optimal_value_millionths, 2_000_000);
         assert!(env.should_stop_at(0));
@@ -1253,7 +1253,7 @@ mod tests {
     #[test]
     fn escalation_policy_serde_after_observations() {
         let mut policy = EscalationPolicy::new(5_000_000, 500_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let obs = make_observation(100_000, 100_000, 0);
         policy.observe(&obs);
         let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
@@ -1265,7 +1265,7 @@ mod tests {
     #[test]
     fn gittins_select_arm_prefers_unexplored() {
         let gc = GittinsIndexComputer::new(vec!["a".into(), "b".into()], 900_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Both arms have identical priors, select_arm should return 0
         let arm = gc.select_arm();
         assert!(arm < 2);
@@ -1290,7 +1290,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_snell_envelope() {
         let a = SnellEnvelope::compute(vec![1_000_000, 3_000_000, 2_000_000], MILLION)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = a.clone();
         assert_eq!(a, b);
     }
@@ -1305,7 +1305,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_escalation_policy() {
         let a = EscalationPolicy::new(5_000_000, 500_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = a.clone();
         assert_eq!(a, b);
     }
@@ -1327,7 +1327,7 @@ mod tests {
     #[test]
     fn enrichment_json_fields_gittins_arm() {
         let gc = GittinsIndexComputer::new(vec!["hyp_x".into()], 900_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&gc.arms[0]).expect("serialize derived Serialize");
         assert!(json.contains("arm_id"));
         assert!(json.contains("successes"));
@@ -1362,7 +1362,7 @@ mod tests {
     #[test]
     fn enrichment_serde_roundtrip_gittins_arm() {
         let gc = GittinsIndexComputer::new(vec!["arm0".into()], 800_000, 50)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let arm = &gc.arms[0];
         let json = serde_json::to_string(arm).expect("serialize derived Serialize");
         let restored: GittinsArm =
@@ -1483,7 +1483,7 @@ mod tests {
     #[test]
     fn enrichment_clone_eq_gittins_index_computer() {
         let a = GittinsIndexComputer::new(vec!["x".into(), "y".into()], 900_000, 50)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = a.clone();
         assert_eq!(a, b);
     }
@@ -1531,7 +1531,7 @@ mod tests {
     #[test]
     fn enrichment_json_fields_escalation_policy() {
         let policy = EscalationPolicy::new(5_000_000, 500_000, 50)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         assert!(json.contains("cusum"));
         assert!(json.contains("cusum_enabled"));
@@ -1544,7 +1544,7 @@ mod tests {
     #[test]
     fn enrichment_json_fields_snell_envelope() {
         let env = SnellEnvelope::compute(vec![1_000_000, 2_000_000], MILLION)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         assert!(json.contains("payoffs_millionths"));
         assert!(json.contains("envelope_millionths"));
@@ -1600,11 +1600,11 @@ mod tests {
     #[test]
     fn enrichment_gittins_observe_failure_decreases_index() {
         let mut gc = GittinsIndexComputer::new(vec!["a".into()], 900_000, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let initial_index = gc.arms[0].gittins_index_millionths;
         for _ in 0..10 {
             gc.observe(0, false)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert!(gc.arms[0].gittins_index_millionths < initial_index);
     }
@@ -1612,7 +1612,7 @@ mod tests {
     #[test]
     fn enrichment_snell_should_stop_at_past_horizon() {
         let env = SnellEnvelope::compute(vec![1_000_000, 2_000_000], MILLION)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Index beyond the envelope length should return true (must stop)
         assert!(env.should_stop_at(100));
         assert!(env.should_stop_at(usize::MAX));
@@ -1652,7 +1652,7 @@ mod tests {
         // With discount factor 0, continuation value is always 0,
         // so optimal stopping is at the max payoff if it's positive
         let payoffs = vec![-1_000_000, 3_000_000, -500_000];
-        let env = SnellEnvelope::compute(payoffs, 0).expect("serde deserialization should succeed");
+        let env = SnellEnvelope::compute(payoffs, 0).expect("operation should succeed for valid inputs");
         // With zero discount, each envelope value is just max(payoff, 0 * next)
         // so envelope = max(payoff, 0) for each step
         // optimal_stopping_time = first t where envelope_t == payoff_t

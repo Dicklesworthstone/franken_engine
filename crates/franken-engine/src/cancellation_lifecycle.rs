@@ -1071,7 +1071,7 @@ mod tests {
             assert!(r.is_ok());
             assert!(
                 r.as_ref()
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .success
             );
         }
@@ -1222,10 +1222,10 @@ mod tests {
 
             cell.register_obligation("ob-1", "flush");
             cell.commit_obligation("ob-1")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             mgr.cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             mgr.drain_events()
         };
 
@@ -1725,9 +1725,9 @@ mod tests {
         let mut mgr = CancellationManager::new();
 
         mgr.cancel_cell(&mut cell1, &mut cx, LifecycleEvent::Unload)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         mgr.cancel_cell(&mut cell2, &mut cx, LifecycleEvent::Quarantine)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let outcomes = mgr.outcomes();
         assert_eq!(outcomes.len(), 2);
@@ -1810,7 +1810,7 @@ mod tests {
         let mut mgr = CancellationManager::new();
 
         mgr.cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let first = mgr.drain_events();
         assert!(!first.is_empty());
@@ -1828,7 +1828,7 @@ mod tests {
 
         cancel_mgr
             .cancel_managed_cell(&mut cell_mgr, "ext-1", &mut cx, LifecycleEvent::Unload)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // ext-1 should be archived (no longer gettable as active)
         assert!(cell_mgr.get("ext-1").is_none());
@@ -1941,12 +1941,12 @@ mod tests {
         let mut mgr = CancellationManager::new();
 
         mgr.cancel_cell(&mut cell1, &mut cx, LifecycleEvent::Unload)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mgr.is_cancelled("ext-1"));
         assert!(!mgr.is_cancelled("ext-2"));
 
         mgr.cancel_cell(&mut cell2, &mut cx, LifecycleEvent::Quarantine)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(mgr.is_cancelled("ext-1"));
         assert!(mgr.is_cancelled("ext-2"));
     }
@@ -1958,12 +1958,12 @@ mod tests {
         let mut mgr = CancellationManager::new();
 
         mgr.cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events_after_first = mgr.events().len();
 
         // Second (idempotent) cancel should not add more events
         mgr.cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             mgr.events().len(),
             events_after_first,
@@ -2000,15 +2000,15 @@ mod tests {
         cell.register_obligation("ob-2", "cleanup");
         cell.register_obligation("ob-3", "notify");
         cell.commit_obligation("ob-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         cell.commit_obligation("ob-2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         cell.commit_obligation("ob-3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let outcome = mgr
             .cancel_cell(&mut cell, &mut cx, LifecycleEvent::Unload)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(outcome.success);
         assert!(!outcome.timeout_escalated);
@@ -2025,12 +2025,12 @@ mod tests {
         cell.register_obligation("ob-1", "committed");
         cell.register_obligation("ob-2", "will timeout");
         cell.commit_obligation("ob-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // ob-2 remains pending
 
         let outcome = mgr
             .cancel_cell(&mut cell, &mut cx, LifecycleEvent::Quarantine)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // ob-2 should timeout and be aborted
         assert!(outcome.timeout_escalated);
@@ -2055,7 +2055,7 @@ mod tests {
             .iter()
             .map(|r| {
                 r.as_ref()
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
                     .cell_id
                     .clone()
             })

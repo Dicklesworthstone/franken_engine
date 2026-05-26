@@ -1454,7 +1454,7 @@ mod tests {
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
         let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(verdict, GovernanceVerdict::Approved);
     }
 
@@ -1464,7 +1464,7 @@ mod tests {
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 1000, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
         let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("no evidence of speedup")));
@@ -1479,7 +1479,7 @@ mod tests {
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, false, 100_000)];
         let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("semantic parity")));
@@ -1516,7 +1516,7 @@ mod tests {
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 100, 180, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
         let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(verdict.requires_rollback());
     }
 
@@ -1644,7 +1644,7 @@ mod tests {
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
         let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("observability")));
@@ -1663,7 +1663,7 @@ mod tests {
             make_parity(ParityCheckKind::BehavioralParity, true, 0),
         ];
         let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(verdict, GovernanceVerdict::Approved);
     }
 
@@ -1685,7 +1685,7 @@ mod tests {
         let evidence = vec![make_evidence(StartupPathKind::WarmCache, 1000, 800, 50)];
         // No parity results at all — should still approve.
         let verdict = evaluate_cold_start(&evidence, &[], &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(verdict, GovernanceVerdict::Approved);
     }
 
@@ -1696,7 +1696,7 @@ mod tests {
         // Semantic parity passes but divergence exceeds max.
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 100_000)];
         let verdict = evaluate_cold_start(&evidence, &parity, &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("divergence")));
@@ -1714,7 +1714,7 @@ mod tests {
         let ev_slow = make_evidence(StartupPathKind::AotRestored, 1000, 1200, 50);
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
         let verdict = evaluate_cold_start(&[ev_fast, ev_slow], &parity, &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match verdict {
             GovernanceVerdict::Rollback { triggers } => {
                 assert!(!triggers.is_empty());
@@ -1732,7 +1732,7 @@ mod tests {
         let ev_slow = make_evidence(StartupPathKind::AotRestored, 1000, 1200, 50);
         let parity = vec![make_parity(ParityCheckKind::SemanticParity, true, 0)];
         let verdict = evaluate_cold_start(&[ev_fast, ev_slow], &parity, &cfg)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         match verdict {
             GovernanceVerdict::Blocked { reasons } => {
                 assert!(reasons.iter().any(|r| r.contains("slower")));

@@ -3942,7 +3942,7 @@ mod tests {
     const TEST_ZONE: &str = "test-zone";
 
     fn governance_signing_key() -> SigningKey {
-        SigningKey::from_bytes([0x01; 32]).expect("serde deserialization should succeed")
+        SigningKey::from_bytes([0x01; 32]).expect("operation should succeed for valid inputs")
     }
 
     fn governance_vk() -> VerificationKey {
@@ -5864,7 +5864,7 @@ mod tests {
     fn verify_governance_signature_wrong_key_fails() {
         let contract = create_test_contract();
         let wrong_sk =
-            SigningKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([0xFF; 32]).expect("operation should succeed for valid inputs");
         let wrong_vk = wrong_sk.verification_key();
         let result = contract.verify_governance_signature(&wrong_vk);
         assert!(matches!(
@@ -5898,7 +5898,7 @@ mod tests {
         let active = registry.active_for_zone(TEST_ZONE);
         assert!(active.is_some());
         assert_eq!(
-            active.expect("serde deserialization should succeed").zone,
+            active.expect("operation should succeed for valid inputs").zone,
             TEST_ZONE
         );
     }
@@ -5929,7 +5929,7 @@ mod tests {
         let mut input = test_contract_input();
         input.feature_schema.version = 2;
         let contract2 = PrivacyLearningContract::create_signed(&governance_signing_key(), input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = registry.register(contract2, &governance_vk(), "t-2");
         assert!(matches!(
             result,
@@ -5948,14 +5948,14 @@ mod tests {
         let mut input = test_contract_input();
         input.epoch = SecurityEpoch::from_raw(2);
         let contract2 = PrivacyLearningContract::create_signed(&governance_signing_key(), input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = registry
             .register(contract2, &governance_vk(), "t-2")
             .expect("upgrade");
 
         let active = registry
             .active_for_zone(TEST_ZONE)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(active.contract_id, id2);
         assert_eq!(active.epoch, SecurityEpoch::from_raw(2));
     }
@@ -5985,7 +5985,7 @@ mod tests {
         let mut registry = ContractRegistry::new();
         let contract = create_test_contract();
         let wrong_sk =
-            SigningKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
+            SigningKey::from_bytes([0xFF; 32]).expect("operation should succeed for valid inputs");
         let wrong_vk = wrong_sk.verification_key();
         let result = registry.register(contract, &wrong_vk, "t-sig");
         assert!(matches!(
@@ -6406,7 +6406,7 @@ mod tests {
         let mut input2 = test_contract_input();
         input2.zone = "other-zone";
         let contract2 = PrivacyLearningContract::create_signed(&governance_signing_key(), input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         registry
             .register(contract2, &governance_vk(), "t-2")
             .expect("zone2");
@@ -7318,7 +7318,7 @@ mod tests {
         assert!(active.is_some());
         assert_eq!(
             active
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .verdict,
             ShadowPromotionVerdict::Pass
         );

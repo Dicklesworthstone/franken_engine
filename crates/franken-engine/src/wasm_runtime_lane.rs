@@ -746,14 +746,14 @@ mod tests {
     fn bounded_queue_push_pop() {
         let mut q = BoundedQueue::new(3);
         // SAFETY: Queue capacity is 3, pushing 1 element cannot exceed capacity.
-        q.push(1).expect("serde deserialization should succeed");
+        q.push(1).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing 2nd element cannot exceed capacity.
-        q.push(2).expect("serde deserialization should succeed");
+        q.push(2).expect("operation should succeed for valid inputs");
         assert_eq!(q.len(), 2);
         // SAFETY: Queue has 2 elements, pop cannot fail.
-        assert_eq!(q.pop().expect("serde deserialization should succeed"), 1);
+        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 1);
         // SAFETY: Queue has 1 element remaining, pop cannot fail.
-        assert_eq!(q.pop().expect("serde deserialization should succeed"), 2);
+        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 2);
         assert!(q.is_empty());
     }
 
@@ -761,9 +761,9 @@ mod tests {
     fn bounded_queue_full() {
         let mut q = BoundedQueue::new(2);
         // SAFETY: Queue capacity is 2, pushing 1st element cannot exceed capacity
-        q.push(1).expect("serde deserialization should succeed");
+        q.push(1).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 2, pushing 2nd element cannot exceed capacity
-        q.push(2).expect("serde deserialization should succeed");
+        q.push(2).expect("operation should succeed for valid inputs");
         assert!(q.is_full());
         assert!(matches!(q.push(3), Err(QueueError::Full { capacity: 2 })));
     }
@@ -778,11 +778,11 @@ mod tests {
     fn bounded_queue_drain_all() {
         let mut q = BoundedQueue::new(5);
         // SAFETY: Queue capacity is 5, pushing 1st element cannot exceed capacity
-        q.push(10).expect("serde deserialization should succeed");
+        q.push(10).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 5, pushing 2nd element cannot exceed capacity
-        q.push(20).expect("serde deserialization should succeed");
+        q.push(20).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 5, pushing 3rd element cannot exceed capacity
-        q.push(30).expect("serde deserialization should succeed");
+        q.push(30).expect("operation should succeed for valid inputs");
         let all = q.drain_all();
         assert_eq!(all, vec![10, 20, 30]);
         assert!(q.is_empty());
@@ -792,9 +792,9 @@ mod tests {
     fn bounded_queue_clear_batch2() {
         let mut q = BoundedQueue::new(5);
         // SAFETY: Queue capacity is 5, pushing 1st element cannot exceed capacity
-        q.push(1).expect("serde deserialization should succeed");
+        q.push(1).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 5, pushing 2nd element cannot exceed capacity
-        q.push(2).expect("serde deserialization should succeed");
+        q.push(2).expect("operation should succeed for valid inputs");
         q.clear();
         assert!(q.is_empty());
     }
@@ -813,12 +813,12 @@ mod tests {
         let id = g.next_id();
         // SAFETY: register cannot fail with valid test inputs
         g.register(id, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(g.active_count(), 1);
         // SAFETY: get cannot fail for ID we just registered
         assert_eq!(
             g.get(id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .depth,
             0
         );
@@ -830,17 +830,17 @@ mod tests {
         let s = g.next_id();
         // SAFETY: register cannot fail with valid test inputs and unique IDs
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d = g.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d, WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: get cannot fail for ID we just registered
         assert_eq!(
             g.get(d)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .depth,
             1
         );
@@ -852,19 +852,19 @@ mod tests {
         let s = g.next_id();
         // SAFETY: register cannot fail with valid test inputs and unique IDs
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d1 = g.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d1, WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d2 = g.next_id();
         let mut deps2 = BTreeSet::new();
         deps2.insert(d1);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d2, WasmSignalKind::Derived, deps2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // depth 3 exceeds max_depth=2
         let d3 = g.next_id();
         let mut deps3 = BTreeSet::new();
@@ -881,9 +881,9 @@ mod tests {
         let s1 = g.next_id();
         let s2 = g.next_id();
         g.register(s1, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         g.register(s2, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s3 = g.next_id();
         assert!(matches!(
             g.register(s3, WasmSignalKind::Source, BTreeSet::new()),
@@ -896,7 +896,7 @@ mod tests {
         let mut g = WasmSignalGraph::new(64, 100);
         let id = g.next_id();
         g.register(id, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             g.register(id, WasmSignalKind::Source, BTreeSet::new()),
             Err(WasmGraphError::DuplicateSignal(_))
@@ -908,33 +908,33 @@ mod tests {
         let mut g = WasmSignalGraph::new(64, 100);
         let s = g.next_id();
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: mark_clean cannot fail for registered ID
         g.mark_clean(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d = g.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d, WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: mark_clean cannot fail for registered ID
         g.mark_clean(d)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let e = g.next_id();
         let mut deps2 = BTreeSet::new();
         deps2.insert(d);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(e, WasmSignalKind::Effect, deps2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: mark_clean cannot fail for registered ID
         g.mark_clean(e)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: propagate_dirty cannot fail for registered ID
         let dirty = g
             .propagate_dirty(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(dirty.len(), 3);
         assert_eq!(dirty[0], s);
         assert_eq!(dirty[1], d);
@@ -946,15 +946,15 @@ mod tests {
         let mut g = WasmSignalGraph::new(64, 100);
         let s = g.next_id();
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d = g.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         // SAFETY: register cannot fail with valid test inputs and registered dependencies
         g.register(d, WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: dispose cannot fail for registered ID
-        g.dispose(d).expect("serde deserialization should succeed");
+        g.dispose(d).expect("operation should succeed for valid inputs");
         assert_eq!(g.active_count(), 1);
     }
 
@@ -963,7 +963,7 @@ mod tests {
         let mut g = WasmSignalGraph::new(64, 100);
         let s = g.next_id();
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: WasmSignalGraph derives Serialize and has no non-serializable fields
         let json = serde_json::to_string(&g).expect("serialize derived Serialize");
         // SAFETY: JSON was just generated from WasmSignalGraph, deserialization guaranteed to succeed
@@ -1052,14 +1052,14 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
             payload: vec![1],
             sequence: 0,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(lane.update_queue.len(), 1);
     }
 
@@ -1069,27 +1069,27 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let d = lane.graph.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         lane.graph
             .register(d, WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(d)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
             payload: vec![42],
             sequence: 0,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let result = lane.flush();
         assert_eq!(result.cycle, 0);
@@ -1105,27 +1105,27 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let e = lane.graph.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         lane.graph
             .register(e, WasmSignalKind::Effect, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(e)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
             payload: vec![],
             sequence: 0,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let result = lane.flush();
         assert_eq!(result.dom_ops_emitted, 1); // effect counts as dom op
@@ -1140,27 +1140,27 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let d = lane.graph.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         lane.graph
             .register(d, WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(d)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
             payload: vec![],
             sequence: 0,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let result = lane.flush();
         assert_eq!(result.mode_after, WasmLaneMode::Degraded);
@@ -1176,37 +1176,37 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let e1 = lane.graph.next_id();
         let mut deps1 = BTreeSet::new();
         deps1.insert(s);
         lane.graph
             .register(e1, WasmSignalKind::Effect, deps1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(e1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let e2 = lane.graph.next_id();
         let mut deps2 = BTreeSet::new();
         deps2.insert(s);
         lane.graph
             .register(e2, WasmSignalKind::Effect, deps2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(e2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
             payload: vec![1],
             sequence: 0,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let result = lane.flush();
         assert_eq!(result.mode_after, WasmLaneMode::Degraded);
@@ -1225,12 +1225,12 @@ mod tests {
 
         let s = lane
             .register_signal(WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut deps = BTreeSet::new();
         deps.insert(s);
         let d = lane
             .register_signal(WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut deps2 = BTreeSet::new();
         deps2.insert(d);
 
@@ -1253,7 +1253,7 @@ mod tests {
         let mut lane = WasmRuntimeLane::new(budget);
 
         lane.register_signal(WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = lane
             .register_signal(WasmSignalKind::Source, BTreeSet::new())
             .unwrap_err();
@@ -1274,14 +1274,14 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
             payload: vec![],
             sequence: 0,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Second update should trigger safe mode
         let result = lane.enqueue_update(AbiStateUpdate {
@@ -1349,10 +1349,10 @@ mod tests {
         for s in [s1, s2, s3] {
             lane.graph
                 .register(s, WasmSignalKind::Source, BTreeSet::new())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             lane.graph
                 .mark_clean(s)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // Derived that depends on s1+s2
@@ -1362,10 +1362,10 @@ mod tests {
         deps.insert(s2);
         lane.graph
             .register(d, WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(d)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Effect on derived
         let e = lane.graph.next_id();
@@ -1373,10 +1373,10 @@ mod tests {
         edeps.insert(d);
         lane.graph
             .register(e, WasmSignalKind::Effect, edeps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(e)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Enqueue updates for s1 and s3
         lane.enqueue_update(AbiStateUpdate {
@@ -1384,13 +1384,13 @@ mod tests {
             payload: vec![1],
             sequence: 0,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s3,
             payload: vec![3],
             sequence: 1,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let result = lane.flush();
         assert_eq!(result.updates_consumed, 2);
@@ -1405,25 +1405,25 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d = lane.graph.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         lane.graph
             .register(d, WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: dispose cannot fail for registered ID
         lane.graph
             .dispose(d)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(lane.graph.active_count(), 1);
 
         // SAFETY: propagate_dirty cannot fail for registered ID
         let dirty = lane
             .graph
             .propagate_dirty(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(dirty.len(), 1);
     }
 
@@ -1433,7 +1433,7 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for i in 0..3 {
             lane.enqueue_update(AbiStateUpdate {
@@ -1441,7 +1441,7 @@ mod tests {
                 payload: vec![i as u8],
                 sequence: i,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             let result = lane.flush();
             assert_eq!(result.cycle, i);
         }
@@ -1453,51 +1453,51 @@ mod tests {
         let mut js = JsSignalGraph::new();
         let js_s = js.next_signal_id();
         js.register(js_s, JsSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         js.mark_clean(js_s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let js_d = js.next_signal_id();
         let mut js_deps = BTreeSet::new();
         js_deps.insert(js_s);
         js.register(js_d, JsSignalKind::Derived, js_deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         js.mark_clean(js_d)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let js_e = js.next_signal_id();
         let mut js_deps2 = BTreeSet::new();
         js_deps2.insert(js_d);
         js.register(js_e, JsSignalKind::Effect, js_deps2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         js.mark_clean(js_e)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut wasm = WasmSignalGraph::new(64, 100);
         let ws = wasm.next_id();
         wasm.register(ws, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         wasm.mark_clean(ws)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let wd = wasm.next_id();
         let mut wdeps = BTreeSet::new();
         wdeps.insert(ws);
         wasm.register(wd, WasmSignalKind::Derived, wdeps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         wasm.mark_clean(wd)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let we = wasm.next_id();
         let mut wdeps2 = BTreeSet::new();
         wdeps2.insert(wd);
         wasm.register(we, WasmSignalKind::Effect, wdeps2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         wasm.mark_clean(we)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let js_dirty = js
             .mark_dirty(js_s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let wasm_dirty = wasm
             .propagate_dirty(ws)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let js_ids: Vec<u32> = js_dirty.into_iter().map(|id| id.0 as u32).collect();
         let wasm_ids: Vec<u32> = wasm_dirty.into_iter().map(|id| id.0).collect();
         assert_eq!(js_ids, wasm_ids);
@@ -1508,34 +1508,34 @@ mod tests {
         let mut js = JsSignalGraph::new();
         let js_s = js.next_signal_id();
         js.register(js_s, JsSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let js_d = js.next_signal_id();
         let mut js_deps = BTreeSet::new();
         js_deps.insert(js_s);
         js.register(js_d, JsSignalKind::Derived, js_deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: dispose cannot fail for registered ID
         js.dispose(js_d)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let js_dirty = js
             .mark_dirty(js_s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let js_ids: Vec<JsSignalId> = js_dirty;
 
         let mut wasm = WasmSignalGraph::new(64, 100);
         let ws = wasm.next_id();
         wasm.register(ws, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let wd = wasm.next_id();
         let mut wdeps = BTreeSet::new();
         wdeps.insert(ws);
         wasm.register(wd, WasmSignalKind::Derived, wdeps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         wasm.dispose(wd)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let wasm_dirty = wasm
             .propagate_dirty(ws)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let wasm_ids: Vec<WasmSignalId> = wasm_dirty;
 
         assert_eq!(js_ids.len(), wasm_ids.len());
@@ -1728,8 +1728,8 @@ mod tests {
         let mut g = WasmSignalGraph::new(64, 100);
         let s = g.next_id();
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
-        g.dispose(s).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        g.dispose(s).expect("operation should succeed for valid inputs");
         assert!(matches!(
             g.propagate_dirty(s),
             Err(WasmGraphError::Disposed(_))
@@ -1755,10 +1755,10 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.graph
             .mark_clean(s)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for i in 0..3u64 {
             lane.enqueue_update(AbiStateUpdate {
@@ -1766,7 +1766,7 @@ mod tests {
                 payload: vec![i as u8],
                 sequence: i,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             lane.flush();
         }
 
@@ -1790,9 +1790,9 @@ mod tests {
         let mut q = BoundedQueue::<u32>::new(2);
         assert!(!q.is_full());
         // SAFETY: Queue capacity is 2, pushing first element cannot exceed capacity
-        q.push(10).expect("serde deserialization should succeed");
+        q.push(10).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 2, pushing second element cannot exceed capacity
-        q.push(20).expect("serde deserialization should succeed");
+        q.push(20).expect("operation should succeed for valid inputs");
         assert!(q.is_full());
         let err = q.push(30).unwrap_err();
         assert_eq!(err, QueueError::Full { capacity: 2 });
@@ -1802,17 +1802,17 @@ mod tests {
     fn bounded_queue_pop_fifo_order() {
         let mut q = BoundedQueue::new(3);
         // SAFETY: Queue capacity is 3, pushing first element cannot exceed capacity
-        q.push(1u32).expect("serde deserialization should succeed");
+        q.push(1u32).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing second element cannot exceed capacity
-        q.push(2).expect("serde deserialization should succeed");
+        q.push(2).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing third element cannot exceed capacity
-        q.push(3).expect("serde deserialization should succeed");
+        q.push(3).expect("operation should succeed for valid inputs");
         // SAFETY: Queue has 3 elements, pop cannot fail
-        assert_eq!(q.pop().expect("serde deserialization should succeed"), 1);
+        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 1);
         // SAFETY: Queue has 2 elements remaining, pop cannot fail
-        assert_eq!(q.pop().expect("serde deserialization should succeed"), 2);
+        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 2);
         // SAFETY: Queue has 1 element remaining, pop cannot fail
-        assert_eq!(q.pop().expect("serde deserialization should succeed"), 3);
+        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 3);
         assert_eq!(q.pop().unwrap_err(), QueueError::Empty);
     }
 
@@ -1820,9 +1820,9 @@ mod tests {
     fn bounded_queue_drain_all_empties() {
         let mut q = BoundedQueue::new(3);
         // SAFETY: Queue capacity is 3, pushing first element cannot exceed capacity
-        q.push(1u32).expect("serde deserialization should succeed");
+        q.push(1u32).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing second element cannot exceed capacity
-        q.push(2).expect("serde deserialization should succeed");
+        q.push(2).expect("operation should succeed for valid inputs");
         let drained = q.drain_all();
         assert_eq!(drained.len(), 2);
         assert!(q.is_empty());
@@ -1832,9 +1832,9 @@ mod tests {
     fn bounded_queue_clear() {
         let mut q = BoundedQueue::new(3);
         // SAFETY: Queue capacity is 3, pushing first element cannot exceed capacity
-        q.push(1u32).expect("serde deserialization should succeed");
+        q.push(1u32).expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing second element cannot exceed capacity
-        q.push(2).expect("serde deserialization should succeed");
+        q.push(2).expect("operation should succeed for valid inputs");
         q.clear();
         assert!(q.is_empty());
         assert!(!q.is_full());
@@ -1846,7 +1846,7 @@ mod tests {
         let id = graph.next_id();
         graph
             .register(id, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = graph
             .register(id, WasmSignalKind::Source, BTreeSet::new())
             .unwrap_err();
@@ -1872,13 +1872,13 @@ mod tests {
         // SAFETY: register cannot fail with valid test inputs and empty dependencies
         graph
             .register(id, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: dispose cannot fail for registered ID
         graph
             .dispose(id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: get cannot fail for ID we just registered and disposed
-        let node = graph.get(id).expect("serde deserialization should succeed");
+        let node = graph.get(id).expect("operation should succeed for valid inputs");
         assert_eq!(node.status, WasmSignalStatus::Disposed);
     }
 
@@ -1888,10 +1888,10 @@ mod tests {
         let id = graph.next_id();
         graph
             .register(id, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .dispose(id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = graph.propagate_dirty(id).unwrap_err();
         assert!(matches!(err, WasmGraphError::Disposed(_)));
     }
@@ -1904,32 +1904,32 @@ mod tests {
         let c = graph.next_id();
         graph
             .register(a, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut deps_b = BTreeSet::new();
         deps_b.insert(a);
         graph
             .register(b, WasmSignalKind::Derived, deps_b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut deps_c = BTreeSet::new();
         deps_c.insert(b);
         graph
             .register(c, WasmSignalKind::Effect, deps_c)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         graph
             .mark_clean(a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .mark_clean(b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         graph
             .mark_clean(c)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // SAFETY: propagate_dirty cannot fail for registered ID
         let dirty = graph
             .propagate_dirty(a)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // a(depth=0), b(depth=1), c(depth=2)
         assert_eq!(dirty.len(), 3);
         assert_eq!(dirty[0], a);
@@ -2133,19 +2133,19 @@ mod tests {
         let s = lane.graph.next_id();
         lane.graph
             .register(s, WasmSignalKind::Source, BTreeSet::new())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let d = lane.graph.next_id();
         let mut deps = BTreeSet::new();
         deps.insert(s);
         lane.graph
             .register(d, WasmSignalKind::Derived, deps)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         lane.enqueue_update(AbiStateUpdate {
             signal_id: s,
             payload: vec![1, 2, 3],
             sequence: 0,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&lane).expect("serialize derived Serialize");
         let restored: WasmRuntimeLane =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

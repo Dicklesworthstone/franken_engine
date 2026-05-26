@@ -695,7 +695,7 @@ mod tests {
     fn single_observation_updates_count() {
         let mut det = test_detector("hostcall_rate");
         det.observe(100_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(det.observation_count(), 1);
     }
 
@@ -704,7 +704,7 @@ mod tests {
         let mut det = test_detector("hostcall_rate");
         for _ in 0..20 {
             det.observe(300_000)
-                .expect("serde deserialization should succeed"); // 0.3, well within normal
+                .expect("operation should succeed for valid inputs"); // 0.3, well within normal
         }
         assert_eq!(det.regime(), Regime::Normal);
         let events = det.drain_events();
@@ -719,14 +719,14 @@ mod tests {
         // Feed 10+ normal observations first to fill window
         for _ in 0..10 {
             det.observe(300_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(det.regime(), Regime::Normal);
 
         // Now feed high observations to push mean above elevated threshold
         for _ in 0..15 {
             det.observe(950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // With window_size=10, after 10+ high obs the mean should be high
@@ -740,19 +740,19 @@ mod tests {
         // Fill with normal
         for _ in 0..10 {
             det.observe(300_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // Push to attack
         for _ in 0..15 {
             det.observe(950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let events = det.drain_events();
         assert!(!events.is_empty());
 
-        let last = events.last().expect("serde deserialization should succeed");
+        let last = events.last().expect("operation should succeed for valid inputs");
         assert_eq!(last.detector_id, "det-1");
         assert_eq!(last.metric_stream, "hostcall_rate");
     }
@@ -770,7 +770,7 @@ mod tests {
         let mut det = test_detector("m");
         for _ in 0..20 {
             det.observe(500_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // After stable observations, most probable run length should be > 0
         assert!(det.most_probable_run_length() > 0);
@@ -791,7 +791,7 @@ mod tests {
                 .iter()
                 .map(|&x| {
                     det.observe(x)
-                        .expect("serde deserialization should succeed")
+                        .expect("operation should succeed for valid inputs")
                 })
                 .collect();
             let events = det.drain_events();
@@ -819,11 +819,11 @@ mod tests {
 
         multi
             .observe("hostcall_rate", 300_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             multi
                 .get("hostcall_rate")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .observation_count(),
             1
         );
@@ -851,14 +851,14 @@ mod tests {
         for _ in 0..15 {
             multi
                 .observe("a", 950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // "b" stays normal
         for _ in 0..15 {
             multi
                 .observe("b", 300_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // Overall should be at least elevated (worst case across streams)
@@ -877,7 +877,7 @@ mod tests {
         for _ in 0..15 {
             multi
                 .observe("a", 950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let events = multi.drain_all_events();
@@ -1051,7 +1051,7 @@ mod tests {
         let mut det = test_detector("health");
         for _ in 0..15 {
             det.observe(-600_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert!(det.regime() >= Regime::Degraded);
     }
@@ -1067,7 +1067,7 @@ mod tests {
         // Feed observations to trigger a change event
         for _ in 0..15 {
             det.observe(950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let events = det.drain_events();
         if let Some(event) = events.last() {
@@ -1087,10 +1087,10 @@ mod tests {
         for _ in 0..15 {
             multi
                 .observe("a", 950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             multi
                 .observe("b", 950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let events = multi.drain_all_events();
@@ -1127,7 +1127,7 @@ mod tests {
         let mut det = test_detector("m");
         for i in 0..25 {
             det.observe(300_000 + i * 1000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(det.observation_count(), 25);
     }
@@ -1249,7 +1249,7 @@ mod tests {
         let initial_cp = det.change_point_probability();
         for _ in 0..20 {
             det.observe(500_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // After stable observations, change-point probability should decrease
         // (run-length mass moves away from 0)
@@ -1262,13 +1262,13 @@ mod tests {
         // Stable period
         for _ in 0..20 {
             det.observe(500_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let mprl_before = det.most_probable_run_length();
         // Sudden shift: large deviation
         for _ in 0..5 {
             det.observe(-500_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let mprl_after = det.most_probable_run_length();
         // Most probable run length should decrease after a regime shift
@@ -1284,14 +1284,14 @@ mod tests {
         // Normal phase
         for _ in 0..10 {
             det.observe(300_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(det.regime(), Regime::Normal);
 
         // Transition to elevated
         for _ in 0..15 {
             det.observe(750_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Mean should now be in elevated range
         assert_eq!(det.regime(), Regime::Elevated);
@@ -1299,7 +1299,7 @@ mod tests {
         // Transition to attack
         for _ in 0..15 {
             det.observe(950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(det.regime(), Regime::Attack);
 
@@ -1314,14 +1314,14 @@ mod tests {
         // Attack phase
         for _ in 0..15 {
             det.observe(950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert!(det.regime() >= Regime::Elevated);
 
         // Recovery: observations drop back to normal
         for _ in 0..15 {
             det.observe(200_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(det.regime(), Regime::Normal);
     }
@@ -1338,7 +1338,7 @@ mod tests {
         for _ in 0..15 {
             multi
                 .observe("a", 950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let regime_before = multi.regime("a");
 
@@ -1359,13 +1359,13 @@ mod tests {
         for _ in 0..15 {
             multi
                 .observe("a", 300_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Push "b" to degraded
         for _ in 0..15 {
             multi
                 .observe("b", -600_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Overall should reflect worst case
         assert!(multi.overall_regime() >= Regime::Degraded);
@@ -1400,7 +1400,7 @@ mod tests {
                 .map(|(stream, val)| {
                     let r = multi
                         .observe(stream, *val)
-                        .expect("serde deserialization should succeed");
+                        .expect("operation should succeed for valid inputs");
                     (stream.to_string(), r)
                 })
                 .collect();
@@ -1433,11 +1433,11 @@ mod tests {
         // Fill window with normal, then push to attack
         for _ in 0..10 {
             det.observe(300_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         for _ in 0..15 {
             det.observe(950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let events = det.drain_events();
@@ -1487,7 +1487,7 @@ mod tests {
         // Feed more observations than max_run_length
         for _ in 0..20 {
             det.observe(500_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Most probable run length should be bounded
         assert!(det.most_probable_run_length() <= 5);
@@ -1538,7 +1538,7 @@ mod tests {
         // Feed 100 observations
         for i in 0..100 {
             det.observe(300_000 + i * 100)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Verify observation count is correct
         assert_eq!(det.observation_count(), 100);
@@ -1553,7 +1553,7 @@ mod tests {
         let mut det = test_detector("m");
         for _ in 0..15 {
             det.observe(0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(det.regime(), Regime::Normal);
     }
@@ -1577,7 +1577,7 @@ mod tests {
         let mut det = test_detector("m");
         for _ in 0..15 {
             det.observe(950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let events1 = det.drain_events();
         assert!(!events1.is_empty());
@@ -1624,7 +1624,7 @@ mod tests {
         // Large values should not panic (overflow protection via i128 casts)
         for _ in 0..15 {
             det.observe(10_000_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(det.observation_count(), 15);
         // Regime should be Attack due to very high mean
@@ -1639,17 +1639,17 @@ mod tests {
         // Normal -> Elevated
         for _ in 0..15 {
             det.observe(750_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Elevated -> Attack
         for _ in 0..15 {
             det.observe(950_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         // Attack -> Normal
         for _ in 0..15 {
             det.observe(200_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let events = det.drain_events();

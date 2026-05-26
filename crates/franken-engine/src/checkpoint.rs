@@ -1035,7 +1035,7 @@ mod tests {
         assert_eq!(
             events
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .reason,
             CheckpointReason::CancelPending
         );
@@ -1532,13 +1532,13 @@ mod tests {
     fn checkpoint_reason_serde_distinct_json() {
         let variants = [
             serde_json::to_string(&CheckpointReason::Periodic)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointReason::CancelPending)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointReason::BudgetExhausted)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointReason::Explicit)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
         ];
         let set: std::collections::BTreeSet<_> = variants.iter().collect();
         assert_eq!(
@@ -1552,11 +1552,11 @@ mod tests {
     fn checkpoint_action_serde_distinct_json() {
         let variants = [
             serde_json::to_string(&CheckpointAction::Continue)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointAction::Drain)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&CheckpointAction::Abort)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
         ];
         let set: std::collections::BTreeSet<_> = variants.iter().collect();
         assert_eq!(
@@ -1570,27 +1570,27 @@ mod tests {
     fn loop_site_serde_distinct_json() {
         let variants = [
             serde_json::to_string(&LoopSite::BytecodeDispatch)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::GcScanning)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::GcSweep)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::PolicyIteration)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::ContractEvaluation)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::ReplayStep)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::ModuleDecode)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::ModuleVerify)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::IrLowering)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::IrCompilation)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::Custom("unique_name".to_string()))
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
         ];
         let set: std::collections::BTreeSet<_> = variants.iter().collect();
         assert_eq!(
@@ -2048,7 +2048,7 @@ mod tests {
         assert_eq!(
             events
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .reason,
             CheckpointReason::CancelPending
         );
@@ -2167,7 +2167,7 @@ mod tests {
         assert_eq!(
             events
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .action,
             CheckpointAction::Abort
         );

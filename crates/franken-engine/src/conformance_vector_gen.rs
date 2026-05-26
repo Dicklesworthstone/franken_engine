@@ -1102,7 +1102,7 @@ mod tests {
         let serde_prop = props
             .iter()
             .find(|p| p.property_id == "serde-roundtrip")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // serde-roundtrip applies to all surface kinds.
         assert!(serde_prop.applicable_surfaces.len() >= 10);
     }
@@ -1877,14 +1877,14 @@ mod tests {
     fn enrichment_vector_category_json_quoted_strings() {
         // Verify serde serialises as quoted strings (not integers).
         let json = serde_json::to_string(&VectorCategory::Positive)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(
             json.starts_with('"'),
             "expected quoted string, got: {}",
             json
         );
         let json = serde_json::to_string(&VectorCategory::Fault)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json.starts_with('"'));
     }
 
@@ -1976,13 +1976,13 @@ mod tests {
         );
         let inner = val
             .get("ReplayAttack")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             inner
                 .get("original_nonce")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .as_u64()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             9999
         );
     }
@@ -2038,7 +2038,7 @@ mod tests {
         assert!(
             !val["expected_pass"]
                 .as_bool()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -2068,13 +2068,13 @@ mod tests {
         assert_eq!(
             val["seed"]
                 .as_u64()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             42
         );
         assert_eq!(
             val["max_positive_per_entry"]
                 .as_u64()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             3
         );
         assert!(val["sibling_filter"].is_array());
@@ -2156,18 +2156,18 @@ mod tests {
         assert_eq!(
             val["property_id"]
                 .as_str()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "ordering-determinism"
         );
         assert!(
             val["passed"]
                 .as_bool()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         );
         assert_eq!(
             val["detail"]
                 .as_str()
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "ok"
         );
     }

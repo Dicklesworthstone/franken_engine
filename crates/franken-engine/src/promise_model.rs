@@ -1382,7 +1382,7 @@ mod tests {
     fn new_promise_is_pending() {
         let mut store = PromiseStore::new();
         let h = store.create();
-        let p = store.get(h).expect("serde deserialization should succeed");
+        let p = store.get(h).expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Pending);
         assert!(!p.state.is_settled());
     }
@@ -1394,8 +1394,8 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(42), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
-        let p = store.get(h).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        let p = store.get(h).expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Fulfilled(js_int(42)));
         assert!(p.state.is_fulfilled());
     }
@@ -1407,8 +1407,8 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("error"), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
-        let p = store.get(h).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        let p = store.get(h).expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Rejected(js_str("error")));
         assert!(p.state.is_rejected());
     }
@@ -1420,7 +1420,7 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(1), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = store.fulfill(h, js_int(2), Label::Public, &mut queue);
         assert!(matches!(result, Err(PromiseError::AlreadySettled { .. })));
     }
@@ -1432,7 +1432,7 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(1), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = store.reject(h, js_str("err"), Label::Public, &mut queue);
         assert!(matches!(result, Err(PromiseError::AlreadySettled { .. })));
     }
@@ -1444,7 +1444,7 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("err"), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = store.fulfill(h, js_int(1), Label::Public, &mut queue);
         assert!(matches!(result, Err(PromiseError::AlreadySettled { .. })));
     }
@@ -1466,19 +1466,19 @@ mod tests {
         let handler = ClosureHandle(0);
         let result_h = store
             .then(h, Some(handler), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // No microtasks yet (promise still pending).
         assert!(queue.is_empty());
 
         // Reactions registered.
-        let p = store.get(h).expect("serde deserialization should succeed");
+        let p = store.get(h).expect("operation should succeed for valid inputs");
         assert_eq!(p.reactions.len(), 2);
 
         // Result promise exists.
         let rp = store
             .get(result_h)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(rp.state, PromiseState::Pending);
     }
 
@@ -1489,12 +1489,12 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(10), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let handler = ClosureHandle(1);
         let _result_h = store
             .then(h, Some(handler), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Microtask enqueued immediately.
         assert_eq!(queue.pending_count(), 1);
@@ -1507,12 +1507,12 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("fail"), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let handler = ClosureHandle(2);
         let _result_h = store
             .then(h, None, Some(handler), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(queue.pending_count(), 1);
     }
@@ -1525,12 +1525,12 @@ mod tests {
         let handler = ClosureHandle(5);
         store
             .then(h, Some(handler), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(queue.is_empty());
 
         store
             .fulfill(h, js_int(99), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // The promise settled fulfilled, so only the fulfill reaction is scheduled.
         assert_eq!(queue.pending_count(), 1);
     }
@@ -1542,7 +1542,7 @@ mod tests {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
         let h = store.resolve(js_int(7), Label::Public, &mut queue);
-        let p = store.get(h).expect("serde deserialization should succeed");
+        let p = store.get(h).expect("operation should succeed for valid inputs");
         assert!(p.state.is_fulfilled());
     }
 
@@ -1551,7 +1551,7 @@ mod tests {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
         let h = store.reject_with(js_str("boom"), Label::Public, &mut queue);
-        let p = store.get(h).expect("serde deserialization should succeed");
+        let p = store.get(h).expect("operation should succeed for valid inputs");
         assert!(p.state.is_rejected());
     }
 
@@ -1575,10 +1575,10 @@ mod tests {
 
         let first = queue
             .dequeue()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let second = queue
             .dequeue()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(queue.dequeue().is_none());
 
         // Verify FIFO: first enqueued, first dequeued.
@@ -1653,13 +1653,13 @@ mod tests {
 
         let first = queue
             .dequeue_ready(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // MessageChannel has higher priority (lower enum discriminant).
         assert_eq!(first.source, MacrotaskSource::MessageChannel);
 
         let second = queue
             .dequeue_ready(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(second.source, MacrotaskSource::Timer);
     }
 
@@ -1675,15 +1675,15 @@ mod tests {
 
         let first = queue
             .dequeue_ready(100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(first.handler, ClosureHandle(1)); // 50ms, seq=1
         let second = queue
             .dequeue_ready(100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(second.handler, ClosureHandle(2)); // 50ms, seq=2
         let third = queue
             .dequeue_ready(100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(third.handler, ClosureHandle(0)); // 100ms, seq=0
     }
 
@@ -1793,18 +1793,18 @@ mod tests {
             // Register .then on both.
             store
                 .then(p1, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             store
                 .then(p2, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             // Fulfill p1, then p2.
             store
                 .fulfill(p1, js_int(1), Label::Public, &mut queue)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             store
                 .fulfill(p2, js_int(2), Label::Public, &mut queue)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             // Drain all microtasks.
             let mut drained = Vec::new();
@@ -1871,7 +1871,7 @@ mod tests {
             tracker
                 .outcomes
                 .get(&0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             "fulfilled"
         );
@@ -1879,7 +1879,7 @@ mod tests {
             tracker
                 .outcomes
                 .get(&1)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .status,
             "rejected"
         );
@@ -1936,7 +1936,7 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("unhandled"), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let unhandled = store.unhandled_rejections();
         assert_eq!(unhandled.len(), 1);
@@ -1952,10 +1952,10 @@ mod tests {
         // Register a rejection handler BEFORE rejecting.
         store
             .then(h, None, Some(ClosureHandle(0)), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .reject(h, js_str("handled"), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let unhandled = store.unhandled_rejections();
         assert!(unhandled.is_empty());
@@ -1970,10 +1970,10 @@ mod tests {
         // Register only onFulfilled; this must not mark a future rejection handled.
         store
             .then(h, Some(ClosureHandle(7)), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .reject(h, js_str("still_unhandled"), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(store.unhandled_rejections(), vec![h]);
     }
@@ -1985,7 +1985,7 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("err"), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Initially unhandled.
         assert_eq!(store.unhandled_rejections().len(), 1);
@@ -1993,7 +1993,7 @@ mod tests {
         // Calling .then with onRejected marks it handled.
         store
             .then(h, None, Some(ClosureHandle(0)), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(store.unhandled_rejections().is_empty());
     }
 
@@ -2004,12 +2004,12 @@ mod tests {
         let h = store.create();
         store
             .reject(h, js_str("err"), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(store.unhandled_rejections(), vec![h]);
 
         store
             .then(h, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(store.unhandled_rejections(), vec![h]);
     }
 
@@ -2022,8 +2022,8 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_str("secret_data"), Label::Secret, &mut queue)
-            .expect("serde deserialization should succeed");
-        let p = store.get(h).expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
+        let p = store.get(h).expect("operation should succeed for valid inputs");
         assert_eq!(p.label, Label::Secret);
     }
 
@@ -2036,7 +2036,7 @@ mod tests {
         let h = store.create();
         store
             .fulfill(h, js_int(1), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let log = store.witness_log();
         assert_eq!(log.len(), 2);
@@ -2216,10 +2216,10 @@ mod tests {
         let p1 = store.create();
         let p2 = store
             .then(p1, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let p3 = store
             .then(p2, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Three distinct promises: p1, p2 (result of first .then), p3 (result of second .then).
         assert_ne!(p1, p2);
         assert_ne!(p2, p3);
@@ -2233,13 +2233,13 @@ mod tests {
         let p = store.create();
         let r1 = store
             .then(p, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = store
             .then(p, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1, r2);
         // Both register reactions on the same pending promise.
-        let record = store.get(p).expect("serde deserialization should succeed");
+        let record = store.get(p).expect("operation should succeed for valid inputs");
         assert_eq!(record.reactions.len(), 4); // 2 per .then (fulfill + reject)
     }
 
@@ -2250,13 +2250,13 @@ mod tests {
         let p = store.create();
         store
             .then(p, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .then(p, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         store
             .fulfill(p, js_int(42), Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Only fulfill reactions are scheduled when the promise fulfills.
         assert_eq!(queue.pending_count(), 2);
     }
@@ -2275,7 +2275,7 @@ mod tests {
         assert_eq!(
             r1.macrotask
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .handler,
             ClosureHandle(1)
         );
@@ -2286,7 +2286,7 @@ mod tests {
         assert_eq!(
             r2.macrotask
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .handler,
             ClosureHandle(2)
         );
@@ -2297,7 +2297,7 @@ mod tests {
         assert_eq!(
             r3.macrotask
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .handler,
             ClosureHandle(0)
         );
@@ -2317,7 +2317,7 @@ mod tests {
         let h = store.resolve(js_int(5), Label::Public, &mut queue);
         let _r = store
             .then(h, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Resolve itself doesn't enqueue (no reactions at creation time),
         // but .then on a fulfilled promise enqueues immediately.
         assert!(queue.pending_count() >= 1);
@@ -2352,11 +2352,11 @@ mod tests {
 
         let first = queue
             .dequeue_ready(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(first.source, MacrotaskSource::Timer);
         let second = queue
             .dequeue_ready(0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(second.source, MacrotaskSource::IoCompletion);
     }
 
@@ -2400,10 +2400,10 @@ mod tests {
             let p2 = store.resolve(js_int(2), Label::Public, &mut queue);
             let _r1 = store
                 .then(p1, Some(ClosureHandle(0)), None, Label::Public, &mut queue)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let _r2 = store
                 .then(p2, Some(ClosureHandle(1)), None, Label::Public, &mut queue)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
             while queue.dequeue().is_some() {}
             all_witnesses.push(store.witness_log().to_vec());
@@ -2628,7 +2628,7 @@ mod tests {
 
         let p = store
             .get(promise)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(p.state.is_rejected());
     }
 
@@ -2654,7 +2654,7 @@ mod tests {
 
         let p = store
             .get(module_promise)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(p.state.is_rejected());
     }
 
@@ -2692,7 +2692,7 @@ mod tests {
         assert_eq!(outcome.rejected_promise, Some(caller));
         let p = store
             .get(caller)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(p.state.is_rejected());
     }
 
@@ -2715,7 +2715,7 @@ mod tests {
         assert_eq!(outcome.rejected_promise, Some(result));
         let p = store
             .get(result)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(p.state.is_rejected());
     }
 
@@ -2730,10 +2730,10 @@ mod tests {
 
         bridge
             .bridge_async_exception(js_str("err1"), p1, &mut store, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         bridge
             .bridge_module_exception(js_str("err2"), "m.js", Some(p2), &mut store, &mut queue)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let log = bridge.witness_log();
         assert_eq!(log.len(), 2);
@@ -2821,7 +2821,7 @@ mod tests {
         assert!(result1.macrotask.is_some());
         let task = result1
             .macrotask
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(task.source, MacrotaskSource::Timer);
         assert_eq!(task.handler, handler);
         assert_eq!(task.registration_seq, registration_seq);
@@ -2871,7 +2871,7 @@ mod tests {
         assert_eq!(event_loop.clock.now_ms(), 100);
         let task2 = result1
             .macrotask
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(task2.handler, ClosureHandle(2));
         assert_eq!(task2.registration_seq, seq2);
 
@@ -2881,7 +2881,7 @@ mod tests {
         assert_eq!(event_loop.clock.now_ms(), 200);
         let task1 = result3
             .macrotask
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(task1.handler, ClosureHandle(1));
         assert_eq!(task1.registration_seq, seq1);
 
@@ -2891,7 +2891,7 @@ mod tests {
         assert_eq!(event_loop.clock.now_ms(), 300);
         let task3 = result5
             .macrotask
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(task3.handler, ClosureHandle(3));
         assert_eq!(task3.registration_seq, seq3);
     }
@@ -2915,7 +2915,7 @@ mod tests {
         assert_eq!(
             result2
                 .macrotask
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .handler,
             ClosureHandle(2)
         );

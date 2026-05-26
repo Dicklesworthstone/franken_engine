@@ -2289,7 +2289,7 @@ mod tests {
         candidate
             .split_metrics
             .get_mut(&BenchmarkSplit::Baseline)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .throughput_ops_per_sec = 0;
         let d = evaluate_control_plane_benchmark_split(
             &input(previous_snapshot(), candidate),
@@ -2326,7 +2326,7 @@ mod tests {
         candidate
             .split_metrics
             .get_mut(&BenchmarkSplit::CxThreading)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .throughput_ops_per_sec = 800_000; // big drop from 1M baseline
         let d = evaluate_control_plane_benchmark_split(
             &input(previous_snapshot(), candidate),
@@ -2347,7 +2347,7 @@ mod tests {
         candidate
             .split_metrics
             .get_mut(&BenchmarkSplit::EvidenceEmission)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .throughput_ops_per_sec = 700_000;
         let d = evaluate_control_plane_benchmark_split(
             &input(previous_snapshot(), candidate),
@@ -2367,7 +2367,7 @@ mod tests {
         candidate
             .split_metrics
             .get_mut(&BenchmarkSplit::FullIntegration)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .throughput_ops_per_sec = 800_000;
         let d = evaluate_control_plane_benchmark_split(
             &input(previous_snapshot(), candidate),
@@ -2387,7 +2387,7 @@ mod tests {
         candidate
             .split_metrics
             .get_mut(&BenchmarkSplit::CxThreading)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .peak_rss_delta_bytes = 100 * 1024 * 1024; // 100MB, limit is 16MB
         let d = evaluate_control_plane_benchmark_split(
             &input(previous_snapshot(), candidate),
@@ -2408,7 +2408,7 @@ mod tests {
         candidate
             .split_metrics
             .get_mut(&BenchmarkSplit::Baseline)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .throughput_ops_per_sec = 800_000; // 20% drop
         let d = evaluate_control_plane_benchmark_split(
             &input(previous_snapshot(), candidate),
@@ -2427,7 +2427,7 @@ mod tests {
         candidate
             .split_metrics
             .get_mut(&BenchmarkSplit::Baseline)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .latency_ns
             .p95_ns = 2_000_000; // 100% increase
         let d = evaluate_control_plane_benchmark_split(
@@ -2495,7 +2495,7 @@ mod tests {
     #[test]
     fn coefficient_of_variation_normal() {
         let cv = coefficient_of_variation_millionths(&[100, 110, 90, 105, 95])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(cv > 0);
         assert!(cv < 100_000); // should be around 7%
     }
@@ -2568,7 +2568,7 @@ mod tests {
             &input(previous_snapshot(), candidate_snapshot()),
             &BenchmarkSplitThresholds::default(),
         );
-        let last = d.logs.last().expect("serde deserialization should succeed");
+        let last = d.logs.last().expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "benchmark_split_decision");
         assert_eq!(last.outcome, "pass");
         assert!(last.error_code.is_none());
@@ -2935,10 +2935,10 @@ mod tests {
             p99_ns: 300,
         };
         let val: serde_json::Value =
-            serde_json::to_value(&stats).expect("serde deserialization should succeed");
+            serde_json::to_value(&stats).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("p50_ns"));
         assert!(obj.contains_key("p95_ns"));
         assert!(obj.contains_key("p99_ns"));
@@ -2957,10 +2957,10 @@ mod tests {
             peak_rss_delta_bytes: 1024,
         };
         let val: serde_json::Value =
-            serde_json::to_value(&m).expect("serde deserialization should succeed");
+            serde_json::to_value(&m).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("throughput_ops_per_sec"));
         assert!(obj.contains_key("latency_ns"));
         assert!(obj.contains_key("peak_rss_delta_bytes"));
@@ -2978,10 +2978,10 @@ mod tests {
             threshold_millionths: None,
         };
         let val: serde_json::Value =
-            serde_json::to_value(&f).expect("serde deserialization should succeed");
+            serde_json::to_value(&f).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("code"));
         assert!(obj.contains_key("split"));
         assert!(obj.contains_key("metric"));
@@ -3005,10 +3005,10 @@ mod tests {
             metric: None,
         };
         let val: serde_json::Value =
-            serde_json::to_value(&ev).expect("serde deserialization should succeed");
+            serde_json::to_value(&ev).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));

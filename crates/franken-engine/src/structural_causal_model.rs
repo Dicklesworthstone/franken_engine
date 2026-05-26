@@ -1434,21 +1434,21 @@ mod tests {
         //           ↘ Outcome
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("C", NodeRole::Confounder, VariableDomain::Regime))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("C", "T", EdgeSign::Positive, 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("C", "Y", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Negative, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm
     }
 
@@ -1464,7 +1464,7 @@ mod tests {
     fn test_add_node() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("A", NodeRole::Exogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(scm.nodes().len(), 1);
         assert!(scm.node("A").is_some());
     }
@@ -1473,7 +1473,7 @@ mod tests {
     fn test_add_duplicate_node_fails() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("A", NodeRole::Exogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = scm
             .add_node(node("A", NodeRole::Exogenous, VariableDomain::LaneChoice))
             .unwrap_err();
@@ -1484,11 +1484,11 @@ mod tests {
     fn test_add_edge() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("A", NodeRole::Exogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node("B", NodeRole::Endogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("A", "B", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(scm.edges().len(), 1);
         assert!(scm.children_of("A").contains("B"));
         assert!(scm.parents_of("B").contains("A"));
@@ -1498,7 +1498,7 @@ mod tests {
     fn test_add_edge_missing_source() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("B", NodeRole::Endogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = scm
             .add_edge(edge("A", "B", EdgeSign::Positive, 500_000))
             .unwrap_err();
@@ -1509,7 +1509,7 @@ mod tests {
     fn test_add_edge_missing_target() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("A", NodeRole::Exogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = scm
             .add_edge(edge("A", "B", EdgeSign::Positive, 500_000))
             .unwrap_err();
@@ -1520,11 +1520,11 @@ mod tests {
     fn test_add_duplicate_edge_fails() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("A", NodeRole::Exogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node("B", NodeRole::Endogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("A", "B", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = scm
             .add_edge(edge("A", "B", EdgeSign::Negative, 300_000))
             .unwrap_err();
@@ -1535,15 +1535,15 @@ mod tests {
     fn test_cycle_detection() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("A", NodeRole::Exogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node("B", NodeRole::Endogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node("C", NodeRole::Endogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("A", "B", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("B", "C", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = scm
             .add_edge(edge("C", "A", EdgeSign::Positive, 500_000))
             .unwrap_err();
@@ -1587,15 +1587,15 @@ mod tests {
         let c_pos = order
             .iter()
             .position(|n| n == "C")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let t_pos = order
             .iter()
             .position(|n| n == "T")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let y_pos = order
             .iter()
             .position(|n| n == "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(c_pos < t_pos);
         assert!(c_pos < y_pos);
         assert!(t_pos < y_pos);
@@ -1606,7 +1606,7 @@ mod tests {
         let mut scm = simple_dag();
         let confounders = scm
             .classify_confounders("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(confounders.len(), 1);
         assert_eq!(confounders[0].node_id, "C");
         // Regime domain → TimeVarying class
@@ -1617,18 +1617,18 @@ mod tests {
     fn test_classify_confounders_no_confounding() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let confounders = scm
             .classify_confounders("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(confounders.is_empty());
     }
 
@@ -1643,26 +1643,26 @@ mod tests {
         // T → M ← Y (M is a collider)
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "M",
             NodeRole::Endogenous,
             VariableDomain::CalibrationMetric,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "M", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("Y", "M", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let confounders = scm
             .classify_confounders("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let colliders: Vec<_> = confounders
             .iter()
             .filter(|c| c.class == ConfounderClass::Collider)
@@ -1676,7 +1676,7 @@ mod tests {
         let scm = simple_dag();
         let result = scm
             .backdoor_criterion("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.identified);
         assert!(result.adjustment_set.contains("C"));
     }
@@ -1685,18 +1685,18 @@ mod tests {
     fn test_backdoor_criterion_no_confounding() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = scm
             .backdoor_criterion("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.identified);
         assert!(result.adjustment_set.is_empty());
         assert!(result.confounding_paths.is_empty());
@@ -1713,24 +1713,24 @@ mod tests {
             observable: false,
             fixed_value_millionths: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("U", "T", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("U", "Y", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = scm
             .backdoor_criterion("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Latent confounder is not observable, cannot be in adjustment set
         assert!(!result.adjustment_set.contains("U"));
         // If it's the only confounding path and U is not observable, identification fails
@@ -1742,7 +1742,7 @@ mod tests {
         let mut scm = simple_dag();
         let surfaces = scm
             .compute_intervention_surfaces("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             surfaces
                 .iter()
@@ -1756,14 +1756,14 @@ mod tests {
         let mut scm = simple_dag();
         let surfaces = scm
             .compute_intervention_surfaces("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let backdoor_surface = surfaces
             .iter()
             .find(|s| s.name.contains("backdoor_adjustment"));
         assert!(backdoor_surface.is_some());
         assert!(
             backdoor_surface
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .node_ids
                 .contains("C")
         );
@@ -1777,29 +1777,29 @@ mod tests {
             NodeRole::Instrument,
             VariableDomain::PolicySetting,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("Z", "T", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let surfaces = scm
             .compute_intervention_surfaces("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let iv_surface = surfaces
             .iter()
             .find(|s| s.name.contains("instrumental_variable"));
         assert!(iv_surface.is_some());
         assert!(
             iv_surface
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .node_ids
                 .contains("Z")
         );
@@ -1813,27 +1813,27 @@ mod tests {
             NodeRole::Instrument,
             VariableDomain::PolicySetting,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node("M", NodeRole::Endogenous, VariableDomain::RiskBelief))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("Z", "M", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("M", "T", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let surfaces = scm
             .compute_intervention_surfaces("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let iv_surface = surfaces
             .iter()
             .find(|s| s.name.contains("instrumental_variable"))
@@ -1849,29 +1849,29 @@ mod tests {
             NodeRole::Instrument,
             VariableDomain::PolicySetting,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node("M", NodeRole::Endogenous, VariableDomain::RiskBelief))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("Z", "M", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("M", "T", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("M", "Y", EdgeSign::Positive, 400_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let surfaces = scm
             .compute_intervention_surfaces("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             !surfaces
                 .iter()
@@ -1889,7 +1889,7 @@ mod tests {
         };
         let mutated = scm
             .do_intervention(&intervention)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // T should have no parents in the mutated model
         assert!(mutated.parents_of("T").is_empty());
         // T should still have children
@@ -1898,7 +1898,7 @@ mod tests {
         assert_eq!(
             mutated
                 .node("T")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .fixed_value_millionths,
             Some(1_000_000)
         );
@@ -1935,15 +1935,15 @@ mod tests {
     fn test_estimate_ate_no_confounding() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Add observations: treated gets Y=800_000, control gets Y=200_000
         for i in 0..10 {
@@ -1961,7 +1961,7 @@ mod tests {
 
         let effect = scm
             .estimate_ate("T", "Y", 1_000_000, 0, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(effect.ate_millionths, 600_000);
         assert!(effect.identified);
         assert_eq!(effect.sample_size, 20);
@@ -2014,7 +2014,7 @@ mod tests {
 
         let effect = scm
             .estimate_ate("T", "Y", 1_000_000, 0, 5)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(effect.ate_millionths, 400_000);
         assert!(effect.identified);
         assert!(effect.adjustment_set.contains("C"));
@@ -2039,21 +2039,21 @@ mod tests {
             observable: false,
             fixed_value_millionths: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("U", "T", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("U", "Y", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for i in 0..10 {
             scm.record_observation(Observation {
@@ -2085,19 +2085,19 @@ mod tests {
     fn test_decompose_attribution_single_path() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 1_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let decomp = scm
             .decompose_attribution("T", "Y", 500_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decomp.pathways.len(), 1);
         assert_eq!(decomp.pathways[0].effect_millionths, 500_000);
         assert_eq!(decomp.pathways[0].fraction_millionths, 1_000_000);
@@ -2109,29 +2109,29 @@ mod tests {
         // T → M → Y and T → Y (direct)
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "M",
             NodeRole::Mediator,
             VariableDomain::CalibrationMetric,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "M", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("M", "Y", EdgeSign::Positive, 600_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let decomp = scm
             .decompose_attribution("T", "Y", 1_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decomp.pathways.len(), 2);
         // T→M→Y strength = 0.5 * 0.6 = 0.3
         // T→Y strength = 0.8
@@ -2147,24 +2147,24 @@ mod tests {
     fn test_decompose_attribution_no_path() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // No edge between T and Y
         let decomp = scm
             .decompose_attribution("T", "Y", 500_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(decomp.pathways.is_empty());
         assert_eq!(decomp.residual_millionths, 500_000);
     }
 
     #[test]
     fn test_build_lane_decision_dag() {
-        let dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         assert!(dag.nodes().len() >= 10);
         assert!(dag.edges().len() >= 10);
         // Verify key nodes exist
@@ -2177,27 +2177,27 @@ mod tests {
 
     #[test]
     fn test_lane_dag_is_acyclic() {
-        let dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         let topo = dag.topological_order();
         assert_eq!(topo.len(), dag.nodes().len());
     }
 
     #[test]
     fn test_lane_dag_regime_is_confounder() {
-        let mut dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let mut dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         let confounders = dag
             .classify_confounders("lane_choice", "latency_outcome")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let regime_confounder = confounders.iter().find(|c| c.node_id == "regime");
         assert!(regime_confounder.is_some());
     }
 
     #[test]
     fn test_lane_dag_backdoor_identified() {
-        let dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         let result = dag
             .backdoor_criterion("lane_choice", "latency_outcome")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.identified);
     }
 
@@ -2357,7 +2357,7 @@ mod tests {
     fn test_children_and_parents_empty_node() {
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("A", NodeRole::Exogenous, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(scm.children_of("A").is_empty());
         assert!(scm.parents_of("A").is_empty());
     }
@@ -2391,40 +2391,40 @@ mod tests {
             NodeRole::Confounder,
             VariableDomain::WorkloadCharacteristic,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "C2",
             NodeRole::Confounder,
             VariableDomain::WorkloadCharacteristic,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("C1", "T", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("C1", "Y", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("C2", "T", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("C2", "Y", EdgeSign::Positive, 500_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "Y", EdgeSign::Positive, 900_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let confounders = scm
             .classify_confounders("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(confounders.len(), 2);
 
         let result = scm
             .backdoor_criterion("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.identified);
         assert!(result.adjustment_set.contains("C1"));
         assert!(result.adjustment_set.contains("C2"));
@@ -2435,23 +2435,23 @@ mod tests {
         // T → M → Y
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "M",
             NodeRole::Mediator,
             VariableDomain::CalibrationMetric,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "M", EdgeSign::Positive, 700_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("M", "Y", EdgeSign::Positive, 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let paths = scm.all_directed_paths("T", "Y");
         assert_eq!(paths.len(), 1);
@@ -2463,29 +2463,29 @@ mod tests {
         // T → A → Y and T → B → Y
         let mut scm = StructuralCausalModel::new();
         scm.add_node(node("T", NodeRole::Treatment, VariableDomain::LaneChoice))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "A",
             NodeRole::Mediator,
             VariableDomain::CalibrationMetric,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_node(node("B", NodeRole::Mediator, VariableDomain::RiskBelief))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_node(node(
             "Y",
             NodeRole::Outcome,
             VariableDomain::ObservedOutcome,
         ))
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "A", EdgeSign::Positive, 600_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("T", "B", EdgeSign::Negative, 400_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("A", "Y", EdgeSign::Positive, 800_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         scm.add_edge(edge("B", "Y", EdgeSign::Positive, 700_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let paths = scm.all_directed_paths("T", "Y");
         assert_eq!(paths.len(), 2);
@@ -2495,11 +2495,11 @@ mod tests {
         let t_pos = topo
             .iter()
             .position(|n| n == "T")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let y_pos = topo
             .iter()
             .position(|n| n == "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(t_pos < y_pos);
     }
 
@@ -2598,7 +2598,7 @@ mod tests {
         };
         let mutated = scm
             .do_intervention(&intervention)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // C→Y edge should still exist
         assert!(mutated.has_path(&"C".to_string(), &"Y".to_string()));
         // C→T edge should be removed
@@ -2607,10 +2607,10 @@ mod tests {
 
     #[test]
     fn test_lane_dag_intervention_surfaces() {
-        let mut dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let mut dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         let surfaces = dag
             .compute_intervention_surfaces("lane_choice", "latency_outcome")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!surfaces.is_empty());
         // Direct intervention should always be present
         assert!(
@@ -2622,7 +2622,7 @@ mod tests {
 
     #[test]
     fn test_lane_dag_topological_order_valid() {
-        let dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         let order = dag.topological_order();
 
         // For every edge, source must come before target
@@ -2630,11 +2630,11 @@ mod tests {
             let src_pos = order
                 .iter()
                 .position(|n| n == &edge.source)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let tgt_pos = order
                 .iter()
                 .position(|n| n == &edge.target)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(
                 src_pos < tgt_pos,
                 "Edge {} -> {} violates topological order",
@@ -2646,19 +2646,19 @@ mod tests {
 
     #[test]
     fn test_lane_dag_all_paths_lane_to_latency() {
-        let dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         let paths = dag.all_directed_paths("lane_choice", "latency_outcome");
         // Should have at least the direct path
         assert!(!paths.is_empty());
         for path in &paths {
             // SAFETY: causal paths are non-empty by construction; first() returns Some
             assert_eq!(
-                path.first().expect("serde deserialization should succeed"),
+                path.first().expect("operation should succeed for valid inputs"),
                 "lane_choice"
             );
             // SAFETY: causal paths are non-empty by construction; last() returns Some
             assert_eq!(
-                path.last().expect("serde deserialization should succeed"),
+                path.last().expect("operation should succeed for valid inputs"),
                 "latency_outcome"
             );
         }
@@ -2666,7 +2666,7 @@ mod tests {
 
     #[test]
     fn test_lane_dag_workload_affects_outcome() {
-        let dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         assert!(dag.has_path(
             &"workload_complexity".to_string(),
             &"latency_outcome".to_string()
@@ -2675,7 +2675,7 @@ mod tests {
 
     #[test]
     fn test_lane_dag_environment_affects_outcome() {
-        let dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         assert!(dag.has_path(
             &"environment_load".to_string(),
             &"latency_outcome".to_string()
@@ -2684,7 +2684,7 @@ mod tests {
 
     #[test]
     fn test_lane_dag_report_content() {
-        let dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         let report = dag.report();
         assert!(report.contains("lane_choice"));
         assert!(report.contains("latency_outcome"));
@@ -2714,7 +2714,7 @@ mod tests {
             observable: true,
             fixed_value_millionths: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let err = scm
             .add_edge(CausalEdge {
                 source: "A".to_string(),
@@ -2738,7 +2738,7 @@ mod tests {
             observable: true,
             fixed_value_millionths: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let paths = scm.all_directed_paths("A", "A");
         assert_eq!(paths.len(), 1);
         assert_eq!(paths[0], vec!["A".to_string()]);
@@ -2761,7 +2761,7 @@ mod tests {
                 observable: true,
                 fixed_value_millionths: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         scm.add_edge(CausalEdge {
             source: "T".to_string(),
@@ -2770,7 +2770,7 @@ mod tests {
             strength_millionths: 800_000,
             mechanism: "direct".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let intervention = Intervention {
             node_id: "T".to_string(),
             value_millionths: 1_000_000,
@@ -2778,11 +2778,11 @@ mod tests {
         };
         let mutated = scm
             .do_intervention(&intervention)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Original is unchanged
         assert!(
             scm.node("T")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .fixed_value_millionths
                 .is_none()
         );
@@ -2791,7 +2791,7 @@ mod tests {
         assert_eq!(
             mutated
                 .node("T")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .fixed_value_millionths,
             Some(1_000_000)
         );
@@ -2814,7 +2814,7 @@ mod tests {
                 observable: true,
                 fixed_value_millionths: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         scm.add_edge(CausalEdge {
             source: "C".to_string(),
@@ -2823,7 +2823,7 @@ mod tests {
             strength_millionths: 500_000,
             mechanism: "confound->treat".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(CausalEdge {
             source: "C".to_string(),
             target: "Y".to_string(),
@@ -2831,7 +2831,7 @@ mod tests {
             strength_millionths: 500_000,
             mechanism: "confound->outcome".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(CausalEdge {
             source: "T".to_string(),
             target: "Y".to_string(),
@@ -2839,11 +2839,11 @@ mod tests {
             strength_millionths: 800_000,
             mechanism: "direct".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(scm.confounders().is_empty());
         let classified = scm
             .classify_confounders("T", "Y")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!classified.is_empty());
         // After classify, accessor returns persisted confounders
         assert_eq!(scm.confounders().len(), classified.len());
@@ -2861,7 +2861,7 @@ mod tests {
                 observable: true,
                 fixed_value_millionths: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         scm.add_edge(CausalEdge {
             source: "A".to_string(),
@@ -2870,7 +2870,7 @@ mod tests {
             strength_millionths: 1_000_000,
             mechanism: "A->B".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         scm.add_edge(CausalEdge {
             source: "B".to_string(),
             target: "C".to_string(),
@@ -2878,7 +2878,7 @@ mod tests {
             strength_millionths: 1_000_000,
             mechanism: "B->C".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let err = scm
             .add_edge(CausalEdge {
                 source: "C".to_string(),
@@ -2924,7 +2924,7 @@ mod tests {
                 observable: true,
                 fixed_value_millionths: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         scm.add_edge(CausalEdge {
             source: "T".to_string(),
@@ -2933,10 +2933,10 @@ mod tests {
             strength_millionths: -500_000, // negative strength
             mechanism: "inhibitory".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let attr = scm
             .decompose_attribution("T", "Y", 1_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(attr.pathways.len(), 1);
         // Decomposition uses abs(strength) for fractions, so negative edge
         // still gets full attribution weight — effect equals total_delta
@@ -2990,7 +2990,7 @@ mod tests {
                 observable: true,
                 fixed_value_millionths: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         // No edges — no path
         assert!(!scm.has_path(&"A".to_string(), &"B".to_string()));
@@ -3009,7 +3009,7 @@ mod tests {
                 observable: true,
                 fixed_value_millionths: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
         scm.add_edge(CausalEdge {
             source: "T".to_string(),
@@ -3018,7 +3018,7 @@ mod tests {
             strength_millionths: 800_000,
             mechanism: "direct-effect".to_string(),
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let report = scm.report();
         assert!(report.contains("T"), "report should mention T");
         assert!(report.contains("Y"), "report should mention Y");
@@ -3059,12 +3059,12 @@ mod tests {
 
     #[test]
     fn test_intervention_surfaces_persist_after_compute() {
-        let dag = build_lane_decision_dag().expect("serde deserialization should succeed");
+        let dag = build_lane_decision_dag().expect("operation should succeed for valid inputs");
         assert!(dag.intervention_surfaces().is_empty());
         let mut dag = dag;
         let surfaces = dag
             .compute_intervention_surfaces("lane_choice", "latency_outcome")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!surfaces.is_empty());
         assert_eq!(dag.intervention_surfaces().len(), surfaces.len());
     }
@@ -3158,7 +3158,7 @@ mod tests {
             observable: true,
             fixed_value_millionths: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let mut values = BTreeMap::new();
         values.insert("X".to_string(), 500_000_i64);
         let obs = Observation {
@@ -3175,7 +3175,7 @@ mod tests {
             *recorded[0]
                 .values
                 .get("X")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             500_000
         );
     }
@@ -3227,7 +3227,7 @@ mod tests {
             observable: true,
             fixed_value_millionths: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(scm.ancestors_of("solo").is_empty());
     }
 
@@ -3242,7 +3242,7 @@ mod tests {
             observable: true,
             fixed_value_millionths: None,
         })
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(scm.descendants_of("solo").is_empty());
     }
 

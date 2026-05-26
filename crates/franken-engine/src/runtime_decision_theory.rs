@@ -1602,7 +1602,7 @@ mod tests {
         // SAFETY: String literal is valid JSON format for LaneId deserialization.
         // from_str only fails on invalid JSON or schema mismatch (both impossible here).
         let back: LaneId = serde_json::from_str("\"quickjs_inspired_native\"")
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
         assert_eq!(back, LaneId::deterministic_profile());
     }
 

@@ -649,7 +649,7 @@ mod tests {
         // Retrieve by ID
         let retrieved = registry
             .get_artifact("test-artifact-001")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(retrieved, &artifact);
 
         // List all artifacts

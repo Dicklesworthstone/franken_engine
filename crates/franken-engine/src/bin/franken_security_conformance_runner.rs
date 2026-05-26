@@ -131,7 +131,7 @@ fn environment_fingerprint() -> String {
     );
     digest_hex(
         serde_json::to_string(&kv)
-            .expect("serde deserialization should succeed")
+            .expect("serialization should succeed")
             .as_bytes(),
     )
 }

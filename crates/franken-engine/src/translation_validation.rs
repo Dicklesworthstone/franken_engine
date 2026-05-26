@@ -876,7 +876,7 @@ mod tests {
             &SchemaId::from_definition(b"test-signer"),
             b"key-material",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         OptReceipt {
             schema_version: proof_schema_version_current(),
@@ -906,7 +906,7 @@ mod tests {
             &SchemaId::from_definition(b"test-issuer"),
             b"issuer-material",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         RollbackToken {
             schema_version: proof_schema_version_current(),
@@ -1040,7 +1040,7 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
 
         gate.submit(&receipt, &token, TEST_KEY, epoch, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(gate.tracked_count(), 1);
         assert_eq!(gate.current_stage("opt-1"), Some(ActivationStage::Shadow));
@@ -1055,7 +1055,7 @@ mod tests {
         let epoch = SecurityEpoch::from_raw(1);
 
         gate.submit(&receipt, &token, TEST_KEY, epoch, 1000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             gate.submit(&receipt, &token, TEST_KEY, epoch, 2000),
             Err(ValidationGateError::DuplicateSubmission { .. })
@@ -1144,7 +1144,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let result = gate
             .record_verdict(
@@ -1154,7 +1154,7 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(result.is_none());
         assert_eq!(gate.tracked_count(), 1);
@@ -1171,7 +1171,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let result = gate
             .record_verdict(
@@ -1181,10 +1181,10 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(result.is_some());
-        let receipt = result.expect("serde deserialization should succeed");
+        let receipt = result.expect("operation should succeed for valid inputs");
         assert_eq!(receipt.optimization_id, "opt-1");
         assert!(receipt.counterexample_hash.is_some());
         assert!(receipt.verify_signature(TEST_KEY));
@@ -1205,7 +1205,7 @@ mod tests {
             SecurityEpoch::from_raw(1),
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let result = gate
             .record_verdict(
@@ -1215,10 +1215,10 @@ mod tests {
                 SecurityEpoch::from_raw(1),
                 2000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(result.is_some());
-        let receipt = result.expect("serde deserialization should succeed");
+        let receipt = result.expect("operation should succeed for valid inputs");
         assert!(receipt.failure_reason.contains("inconclusive"));
         assert!(receipt.counterexample_hash.is_none());
     }
@@ -1251,9 +1251,9 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let promotion = gate
             .promote(
@@ -1263,7 +1263,7 @@ mod tests {
                 epoch,
                 3000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(promotion.from_stage, ActivationStage::Shadow);
         assert_eq!(promotion.to_stage, ActivationStage::Canary);
@@ -1282,7 +1282,7 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let stages = [
             (ActivationStage::Shadow, ActivationStage::Canary),
@@ -1293,7 +1293,7 @@ mod tests {
         for (tick, (from, to)) in stages.iter().enumerate() {
             let t = (tick as u64 + 1) * 1000 + 1000;
             gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, t)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             let p = gate
                 .promote(
                     "opt-1",
@@ -1302,7 +1302,7 @@ mod tests {
                     epoch,
                     t + 500,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(p.from_stage, *from);
             assert_eq!(p.to_stage, *to);
         }
@@ -1321,7 +1321,7 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // No verdict recorded, promotion should fail.
         assert!(matches!(
@@ -1341,12 +1341,12 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // Fast-forward to Default.
         for t in [2000u64, 3000, 4000] {
             gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, t)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             gate.promote(
                 "opt-1",
                 ContentHash::compute(b"ev"),
@@ -1354,12 +1354,12 @@ mod tests {
                 epoch,
                 t + 100,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         }
 
         // Now at Default, should fail.
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 5000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 5100),
             Err(ValidationGateError::InvalidStageTransition { .. })
@@ -1379,11 +1379,11 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let demotion = gate
             .demote(
@@ -1394,7 +1394,7 @@ mod tests {
                 epoch,
                 4000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(demotion.from_stage, ActivationStage::Canary);
         assert_eq!(demotion.to_stage, ActivationStage::Shadow);
@@ -1413,7 +1413,7 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         // At Shadow, cannot demote to Shadow or higher.
         assert!(matches!(
@@ -1444,9 +1444,9 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Try to resubmit.
         assert!(matches!(
@@ -1473,14 +1473,14 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(gate.is_quarantined("opt-1"));
 
         gate.lift_quarantine("opt-1", "new evidence available", epoch, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!gate.is_quarantined("opt-1"));
 
@@ -1492,7 +1492,7 @@ mod tests {
             epoch,
             4000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(gate.tracked_count(), 1);
     }
 
@@ -1598,11 +1598,11 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = gate.events();
         assert_eq!(events.len(), 3);
@@ -1632,9 +1632,9 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = gate.events();
         assert_eq!(events.len(), 3); // submitted, validated, rolled_back
@@ -1656,15 +1656,15 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.lift_quarantine("opt-1", "policy override", epoch, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = gate.events();
         // SAFETY: Test performed submit, record_verdict, lift_quarantine operations; events non-empty
-        let last = events.last().expect("serde deserialization should succeed");
+        let last = events.last().expect("operation should succeed for valid inputs");
         assert!(matches!(
             last.event_type,
             ValidationEventType::QuarantineLifted { .. }
@@ -1742,7 +1742,7 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&gate).expect("serialize derived Serialize");
         let restored: TranslationValidationGate =
@@ -1765,16 +1765,16 @@ mod tests {
                 epoch,
                 1000,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             g.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             g.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             g
         };
 
-        let json1 = serde_json::to_string(&build()).expect("serde deserialization should succeed");
-        let json2 = serde_json::to_string(&build()).expect("serde deserialization should succeed");
+        let json1 = serde_json::to_string(&build()).expect("serialization should succeed");
+        let json2 = serde_json::to_string(&build()).expect("serialization should succeed");
         assert_eq!(
             json1, json2,
             "identical operations must produce identical state"
@@ -1813,15 +1813,15 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 4000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 5000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let history = gate.promotion_history("opt-1");
         assert_eq!(history.len(), 2);
@@ -1843,12 +1843,12 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         gate.lift_quarantine("opt-1", "new evidence", epoch, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.submit(
             &test_receipt("opt-1"),
             &test_token("opt-1"),
@@ -1856,9 +1856,9 @@ mod tests {
             epoch,
             4000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", inconclusive_verdict(), TEST_KEY, epoch, 5000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(gate.rollback_receipts().len(), 2);
     }
@@ -1912,11 +1912,11 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.demote(
             "opt-1",
             ActivationStage::Shadow,
@@ -1925,10 +1925,10 @@ mod tests {
             epoch,
             4000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let events = gate.events();
-        let last = events.last().expect("serde deserialization should succeed");
+        let last = events.last().expect("operation should succeed for valid inputs");
         assert!(matches!(
             last.event_type,
             ValidationEventType::StageDemoted {
@@ -1952,7 +1952,7 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.submit(
             &test_receipt("opt-2"),
             &test_token("opt-2"),
@@ -1960,14 +1960,14 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(gate.tracked_count(), 2);
 
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-2", fail_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(gate.tracked_count(), 1); // opt-2 removed
         assert_eq!(gate.quarantine_count(), 1); // opt-2 quarantined
@@ -1989,12 +1989,12 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         gate.lift_quarantine("opt-1", "retry", epoch, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         gate.submit(
             &test_receipt("opt-1"),
             &test_token("opt-1"),
@@ -2002,9 +2002,9 @@ mod tests {
             epoch,
             4000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-1", fail_verdict(), TEST_KEY, epoch, 5000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         gate.submit(
             &test_receipt("opt-2"),
@@ -2013,9 +2013,9 @@ mod tests {
             epoch,
             6000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         gate.record_verdict("opt-2", fail_verdict(), TEST_KEY, epoch, 7000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let ids = gate.quarantined_ids();
         assert_eq!(ids.len(), 2);
@@ -2398,15 +2398,15 @@ mod tests {
             epoch,
             1000,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(gate.event_count(), 1);
 
         gate.record_verdict("opt-1", pass_verdict(), TEST_KEY, epoch, 2000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate.event_count(), 2);
 
         gate.promote("opt-1", ContentHash::compute(b"ev"), TEST_KEY, epoch, 3000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate.event_count(), 3);
     }
 

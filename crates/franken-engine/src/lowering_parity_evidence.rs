@@ -415,7 +415,7 @@ mod tests {
         // duration_since only fails if the system clock is set before 1970-01-01 (impossible in practice).
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .as_nanos();
         std::env::temp_dir().join(format!("{}-{}", prefix, ts))
     }
@@ -825,7 +825,7 @@ mod tests {
             },
         };
         let json =
-            serde_json::to_string_pretty(&manifest).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&manifest).expect("serialization should succeed");
         let back: ParityEvidenceRunManifest =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.schema_version, manifest.schema_version);
@@ -867,7 +867,7 @@ mod tests {
             let json: String = serde_json::from_str(
                 &serde_json::to_string(&verdict).expect("serialize derived Serialize"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
             assert_eq!(json, verdict.as_str());
         }
     }
@@ -1221,21 +1221,21 @@ mod tests {
             finding_event
                 .detail
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("parser=resolved")
         );
         assert!(
             finding_event
                 .detail
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("lowering=resolved")
         );
         assert!(
             finding_event
                 .detail
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("verdict=covered")
         );
     }
@@ -1253,18 +1253,18 @@ mod tests {
     fn generate_events_end_event_detail_contains_contract_status() {
         let inv = parity_evidence_inventory();
         let events = generate_events(&inv);
-        let end = events.last().expect("serde deserialization should succeed");
+        let end = events.last().expect("operation should succeed for valid inputs");
         assert!(
             end.detail
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("Contract:")
         );
         // Current inventory should be SATISFIED
         assert!(
             end.detail
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("SATISFIED")
         );
     }
@@ -1284,17 +1284,17 @@ mod tests {
             }],
         };
         let events = generate_events(&inv);
-        let end = events.last().expect("serde deserialization should succeed");
+        let end = events.last().expect("operation should succeed for valid inputs");
         assert!(
             end.detail
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("VIOLATED")
         );
         assert!(
             end.detail
                 .as_ref()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .contains("1 violations")
         );
     }
@@ -1381,27 +1381,27 @@ mod tests {
     fn parity_verdict_serde_snake_case_encoding() {
         assert_eq!(
             serde_json::to_string(&ParityVerdict::Covered)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"covered\""
         );
         assert_eq!(
             serde_json::to_string(&ParityVerdict::FailClosedAgreed)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"fail_closed_agreed\""
         );
         assert_eq!(
             serde_json::to_string(&ParityVerdict::ParserLeadsLowering)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"parser_leads_lowering\""
         );
         assert_eq!(
             serde_json::to_string(&ParityVerdict::LoweringLeadsParser)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"lowering_leads_parser\""
         );
         assert_eq!(
             serde_json::to_string(&ParityVerdict::OpenGap)
-                .expect("serde deserialization should succeed"),
+                .expect("serialization should succeed"),
             "\"open_gap\""
         );
     }
@@ -1459,9 +1459,9 @@ mod tests {
             "cmd_gamma".to_string(),
         ];
         let artifacts = write_parity_evidence_bundle(&out_dir, &commands)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let content = fs::read_to_string(&artifacts.commands_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(content, "cmd_alpha\ncmd_beta\ncmd_gamma");
     }
 
@@ -1470,9 +1470,9 @@ mod tests {
         let out_dir = unique_temp_dir("parity-empty-cmds");
         let commands: Vec<String> = Vec::new();
         let artifacts = write_parity_evidence_bundle(&out_dir, &commands)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let content = fs::read_to_string(&artifacts.commands_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(content.is_empty());
     }
 
@@ -1480,9 +1480,9 @@ mod tests {
     fn write_bundle_events_jsonl_each_line_is_valid_json() {
         let out_dir = unique_temp_dir("parity-jsonl");
         let artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let content = fs::read_to_string(&artifacts.events_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for line in content.lines() {
             let parsed: Result<serde_json::Value, _> = serde_json::from_str(line);
             assert!(parsed.is_ok(), "invalid JSON line: {}", line);
@@ -1493,9 +1493,9 @@ mod tests {
     fn write_bundle_manifest_trace_id_derived_from_hash() {
         let out_dir = unique_temp_dir("parity-trace");
         let artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let manifest_json = fs::read_to_string(&artifacts.run_manifest_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let manifest: ParityEvidenceRunManifest =
             serde_json::from_str(&manifest_json).expect("deserialize known-valid JSON");
         assert!(manifest.trace_id.starts_with("parity-evidence-"));
@@ -1513,9 +1513,9 @@ mod tests {
     fn write_bundle_manifest_artifact_paths_are_filenames_only() {
         let out_dir = unique_temp_dir("parity-paths");
         let artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let manifest_json = fs::read_to_string(&artifacts.run_manifest_path)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let manifest: ParityEvidenceRunManifest =
             serde_json::from_str(&manifest_json).expect("deserialize known-valid JSON");
         // Paths should be relative filenames, not absolute paths
@@ -1535,7 +1535,7 @@ mod tests {
         let out_dir = unique_temp_dir("parity-mkdir").join("nested").join("deep");
         assert!(!out_dir.exists());
         let _artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(out_dir.exists());
     }
 
@@ -1543,7 +1543,7 @@ mod tests {
     fn inventory_hash_is_hex_string() {
         let out_dir = unique_temp_dir("parity-hex");
         let artifacts = write_parity_evidence_bundle(&out_dir, &["test".to_string()])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!artifacts.inventory_hash.is_empty());
         assert!(
             artifacts

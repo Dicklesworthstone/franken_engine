@@ -900,7 +900,7 @@ mod tests {
     #[test]
     fn degradation_regime_serde_roundtrip() {
         let json = serde_json::to_string(&DegradationRegime::Emergency)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let back: DegradationRegime =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, DegradationRegime::Emergency);
@@ -929,7 +929,7 @@ mod tests {
     #[test]
     fn demotion_target_serde_roundtrip() {
         let json = serde_json::to_string(&DemotionTarget::UncompressedEvidence)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let back: DemotionTarget =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, DemotionTarget::UncompressedEvidence);
@@ -1090,7 +1090,7 @@ mod tests {
         let policy = make_policy();
         let max = policy
             .max_demotion_severity()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(max, DemotionTarget::FullReplayCapture);
     }
 
@@ -1837,7 +1837,7 @@ mod tests {
         let sentinel = make_sentinel();
         let report = generate_report(&sentinel);
         let json = serde_json::to_string(&report.dimensions[0])
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json.contains("\"dimension\""));
         assert!(json.contains("\"current_regime\""));
         assert!(json.contains("\"last_value_millionths\""));

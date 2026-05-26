@@ -769,7 +769,7 @@ mod tests {
 
     fn make_witness(surface: SupportSurface, kind: ObstructionKind) -> ObstructionWitness {
         emit_witness(surface, kind, "let x = 1;", "test failure", "test-seam")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
     }
 
     // -- Constants ------------------------------------------------------
@@ -885,7 +885,7 @@ mod tests {
             "gap in parser",
             "parser-lowering",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(w.witness_id.starts_with("ow-"));
         assert_eq!(w.surface, SupportSurface::Parser);
@@ -940,7 +940,7 @@ mod tests {
             "boundary issue",
             "lowering-runtime",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let w2 = emit_witness(
             SupportSurface::Lowering,
             ObstructionKind::BoundaryIncompatibility,
@@ -948,7 +948,7 @@ mod tests {
             "boundary issue",
             "lowering-runtime",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(w1.content_hash, w2.content_hash);
         assert_eq!(w1.witness_id, w2.witness_id);
@@ -963,7 +963,7 @@ mod tests {
             "type error",
             "seam-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let w2 = emit_witness(
             SupportSurface::Parser,
             ObstructionKind::TypeMismatch,
@@ -971,7 +971,7 @@ mod tests {
             "type error",
             "seam-a",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_ne!(w1.content_hash, w2.content_hash);
     }
@@ -996,7 +996,7 @@ mod tests {
                 "fail",
                 "seam",
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
             assert_eq!(w.surface, s);
         }
     }
@@ -1014,7 +1014,7 @@ mod tests {
         ];
         for k in kinds {
             let w = emit_witness(SupportSurface::Runtime, k.clone(), "code", "fail", "seam")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(w.kind, k);
         }
     }
@@ -1030,8 +1030,8 @@ mod tests {
             "test failure",
             "seam-location",
         )
-        .expect("serde deserialization should succeed");
-        let minimized = minimize_witness(&w).expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
+        let minimized = minimize_witness(&w).expect("operation should succeed for valid inputs");
 
         assert!(minimized.minimal);
         assert!(minimized.reduction_steps > 0);
@@ -1041,7 +1041,7 @@ mod tests {
     #[test]
     fn test_minimize_witness_preserves_surface_and_kind() {
         let w = make_witness(SupportSurface::Lowering, ObstructionKind::TypeMismatch);
-        let minimized = minimize_witness(&w).expect("serde deserialization should succeed");
+        let minimized = minimize_witness(&w).expect("operation should succeed for valid inputs");
 
         assert_eq!(minimized.surface, SupportSurface::Lowering);
         assert_eq!(minimized.kind, ObstructionKind::TypeMismatch);
@@ -1072,8 +1072,8 @@ mod tests {
             "fail",
             "x",
         )
-        .expect("serde deserialization should succeed");
-        let minimized = minimize_witness(&w).expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
+        let minimized = minimize_witness(&w).expect("operation should succeed for valid inputs");
         assert!(minimized.minimal);
         assert_eq!(minimized.program_source, "x");
     }
@@ -1081,7 +1081,7 @@ mod tests {
     #[test]
     fn test_minimize_witness_id_has_min_prefix() {
         let w = make_witness(SupportSurface::Module, ObstructionKind::UnsupportedFeature);
-        let minimized = minimize_witness(&w).expect("serde deserialization should succeed");
+        let minimized = minimize_witness(&w).expect("operation should succeed for valid inputs");
         assert!(minimized.witness_id.starts_with("ow-min-"));
     }
 
@@ -1094,9 +1094,9 @@ mod tests {
             "failure",
             "seam-x",
         )
-        .expect("serde deserialization should succeed");
-        let m1 = minimize_witness(&w).expect("serde deserialization should succeed");
-        let m2 = minimize_witness(&w).expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
+        let m1 = minimize_witness(&w).expect("operation should succeed for valid inputs");
+        let m2 = minimize_witness(&w).expect("operation should succeed for valid inputs");
         assert_eq!(m1.content_hash, m2.content_hash);
         assert_eq!(m1.program_source, m2.program_source);
     }
@@ -1275,7 +1275,7 @@ mod tests {
     #[test]
     fn test_build_report_empty() {
         let report = build_report(SecurityEpoch::from_raw(1), vec![], vec![], vec![])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.total_obstructions, 0);
         assert!(report.report_id.contains("obstruction_witness_emitter"));
     }
@@ -1284,7 +1284,7 @@ mod tests {
     fn test_build_report_with_witnesses() {
         let w = make_witness(SupportSurface::Parser, ObstructionKind::TypeMismatch);
         let report = build_report(SecurityEpoch::from_raw(5), vec![w], vec![], vec![])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.total_obstructions, 1);
         assert_eq!(report.witnesses.len(), 1);
     }
@@ -1293,9 +1293,9 @@ mod tests {
     fn test_build_report_deterministic() {
         let w = make_witness(SupportSurface::Runtime, ObstructionKind::ResourceViolation);
         let r1 = build_report(SecurityEpoch::from_raw(2), vec![w.clone()], vec![], vec![])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = build_report(SecurityEpoch::from_raw(2), vec![w], vec![], vec![])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -1303,7 +1303,7 @@ mod tests {
     fn test_build_report_epoch_preserved() {
         let epoch = SecurityEpoch::from_raw(42);
         let report = build_report(epoch, vec![], vec![], vec![])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.epoch, epoch);
     }
 
@@ -1318,7 +1318,7 @@ mod tests {
         );
         let d = diagnose_seam(&[], SupportSurface::Parser, SupportSurface::Lowering);
         let report = build_report(SecurityEpoch::from_raw(1), vec![], vec![ng], vec![d])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.nongluable_programs.len(), 1);
         assert_eq!(report.seam_diagnoses.len(), 1);
     }
@@ -1416,7 +1416,7 @@ mod tests {
             vec![],
             vec![],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let deserialized: ObstructionReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1451,7 +1451,7 @@ mod tests {
             "unicode identifier not supported",
             "parser-unicode-seam",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(w.program_source.contains('\u{1F600}'));
     }
 
@@ -1483,7 +1483,7 @@ mod tests {
     #[test]
     fn test_report_id_contains_epoch() {
         let report = build_report(SecurityEpoch::from_raw(99), vec![], vec![], vec![])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(report.report_id.contains("99"));
     }
 }

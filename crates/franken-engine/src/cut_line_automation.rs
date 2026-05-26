@@ -2224,7 +2224,7 @@ mod tests {
         // SAFETY: Test setup ensures evaluate() succeeds with valid inputs and test epoch
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Approved);
         assert_eq!(record.risk_level, RiskLevel::Low);
         assert!(evaluator.is_promoted(CutLine::C0));
@@ -2247,7 +2247,7 @@ mod tests {
         // SAFETY: Test with valid evaluation input should succeed even for denial cases
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
         assert!(!evaluator.is_promoted(CutLine::C0));
     }
@@ -2267,7 +2267,7 @@ mod tests {
         // SAFETY: Test with valid evaluation input should succeed even for denial cases
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
     }
 
@@ -2300,7 +2300,7 @@ mod tests {
         // SAFETY: Test with valid evaluation input should succeed even for denial cases
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
         // Check that staleness is mentioned in evaluations.
         // SAFETY: Test setup ensures SemanticContract evaluation exists in the record
@@ -2308,7 +2308,7 @@ mod tests {
             .evaluations
             .iter()
             .find(|e| e.category == GateCategory::SemanticContract)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!stale_eval.passed);
         assert!(matches!(
             stale_eval.input_validity,
@@ -2344,14 +2344,14 @@ mod tests {
         // SAFETY: Test with valid evaluation input should succeed even for denial cases
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
         // SAFETY: Test setup ensures SemanticContract evaluation exists in the record
         let incompat_eval = record
             .evaluations
             .iter()
             .find(|e| e.category == GateCategory::SemanticContract)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             incompat_eval.input_validity,
             InputValidity::Incompatible { .. }
@@ -2375,7 +2375,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
         assert_eq!(record.risk_level, RiskLevel::Critical);
     }
@@ -2411,7 +2411,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(c1_input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Approved);
         assert!(evaluator.is_promoted(CutLine::C1));
         assert!(record.predecessor_hash.is_some());
@@ -2434,7 +2434,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Approved);
     }
 
@@ -2476,7 +2476,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(c1_input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
     }
 
@@ -2514,7 +2514,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         let runtime_eval = record
@@ -2565,7 +2565,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         let runtime_eval = record
@@ -2598,7 +2598,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         assert_eq!(record.risk_level, RiskLevel::Critical);
@@ -2639,7 +2639,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Approved);
         assert!(evaluator.is_promoted(CutLine::C2));
@@ -2688,7 +2688,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         let handoff_eval = record
@@ -2721,7 +2721,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         assert_eq!(record.risk_level, RiskLevel::Critical);
@@ -2771,7 +2771,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Approved);
         assert!(evaluator.is_promoted(CutLine::C3));
@@ -2829,7 +2829,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         let runtime_eval = record
@@ -2862,7 +2862,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         assert_eq!(record.risk_level, RiskLevel::Critical);
@@ -2921,7 +2921,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Approved);
         assert!(evaluator.is_promoted(CutLine::C4));
@@ -2988,7 +2988,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         let governance_eval = record
@@ -3021,7 +3021,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         assert_eq!(record.risk_level, RiskLevel::Critical);
@@ -3089,7 +3089,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Approved);
         assert!(evaluator.is_promoted(CutLine::C5));
@@ -3165,7 +3165,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         let handoff_eval = record
@@ -3327,10 +3327,10 @@ mod tests {
 
         let r1 = e1
             .evaluate(make_input())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = e2
             .evaluate(make_input())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.record_hash, r2.record_hash);
     }
 
@@ -3351,7 +3351,7 @@ mod tests {
         };
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let restored: PromotionRecord =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3375,7 +3375,7 @@ mod tests {
         };
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(record.rationale.contains("C0"));
     }
 
@@ -3493,7 +3493,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Approved because only advisory gate failed.
         assert_eq!(record.verdict, GateVerdict::Approved);
         assert_eq!(record.risk_level, RiskLevel::Medium);
@@ -3530,7 +3530,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Approved);
     }
 
@@ -3631,7 +3631,7 @@ mod tests {
         };
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             evaluator.promotion_hash(CutLine::C0),
             Some(&record.record_hash)
@@ -3658,7 +3658,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
     }
 
@@ -3750,7 +3750,7 @@ mod tests {
         };
         let r0 = evaluator
             .evaluate(c0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r0.verdict, GateVerdict::Approved);
 
         // Promote C1.
@@ -3764,7 +3764,7 @@ mod tests {
         };
         let r1 = evaluator
             .evaluate(c1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.verdict, GateVerdict::Approved);
         assert_eq!(r1.predecessor_hash, Some(r0.record_hash));
         assert!(evaluator.is_promoted(CutLine::C0));
@@ -4020,7 +4020,7 @@ mod tests {
         // Promote C0.
         let r1 = evaluator
             .evaluate(make_c0())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.verdict, GateVerdict::Approved);
         assert!(evaluator.is_promoted(CutLine::C0));
 
@@ -4031,7 +4031,7 @@ mod tests {
         // Re-promote.
         let r2 = evaluator
             .evaluate(make_c0())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r2.verdict, GateVerdict::Approved);
         assert!(evaluator.is_promoted(CutLine::C0));
         assert_eq!(evaluator.history_len(), 2); // evaluate + re-evaluate; revoke doesn't add history
@@ -4057,7 +4057,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "zone-a".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let r2 = e2
             .evaluate(GateEvaluationInput {
@@ -4071,7 +4071,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "zone-b".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r1.record_hash, r2.record_hash);
     }
@@ -4096,7 +4096,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let r2 = e2
             .evaluate(GateEvaluationInput {
@@ -4110,7 +4110,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r1.record_hash, r2.record_hash);
     }
@@ -4151,7 +4151,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Best score is 900_000 >= 800_000 and all passed → Approved.
         assert_eq!(record.verdict, GateVerdict::Approved);
     }
@@ -4189,7 +4189,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // One failing input means not all passed → Denied.
         assert_eq!(record.verdict, GateVerdict::Denied);
     }
@@ -4227,7 +4227,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(eval_input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Approved);
     }
 
@@ -4264,7 +4264,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(eval_input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
     }
 
@@ -4301,7 +4301,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(eval_input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
     }
 
@@ -4344,7 +4344,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
         assert!(!evaluator.is_promoted(CutLine::C0));
         assert!(evaluator.promotion_hash(CutLine::C0).is_none());
@@ -4395,7 +4395,7 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Approved);
     }
 
@@ -4431,13 +4431,13 @@ mod tests {
 
         let record = evaluator
             .evaluate(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.verdict, GateVerdict::Denied);
         let stale_eval = record
             .evaluations
             .iter()
             .find(|e| e.category == GateCategory::SemanticContract)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             stale_eval.input_validity,
             InputValidity::Stale { .. }
@@ -4843,7 +4843,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "staging".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.cut_line, CutLine::C0);
         assert_eq!(record.epoch, epoch);
@@ -4889,7 +4889,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let r2 = e2
             .evaluate(GateEvaluationInput {
@@ -4903,7 +4903,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r1.record_hash, r2.record_hash);
     }
@@ -4948,7 +4948,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let r2 = e2
             .evaluate(GateEvaluationInput {
@@ -4959,7 +4959,7 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r1.record_hash, r2.record_hash);
     }
@@ -4998,14 +4998,14 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         let compiler_eval = record
             .evaluations
             .iter()
             .find(|e| e.category == GateCategory::CompilerCorrectness)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             compiler_eval.input_validity,
             InputValidity::Incompatible { .. }
@@ -5054,14 +5054,14 @@ mod tests {
                 predecessor_promoted: false,
                 zone: "test".into(),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(record.verdict, GateVerdict::Denied);
         let security_eval = record
             .evaluations
             .iter()
             .find(|e| e.category == GateCategory::SecuritySurvival)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             security_eval.input_validity,
             InputValidity::Incompatible { .. }

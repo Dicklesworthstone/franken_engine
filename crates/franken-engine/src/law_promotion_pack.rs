@@ -259,7 +259,7 @@ impl AcceptedLaw {
         data.extend_from_slice(self.statement.as_bytes());
         data.extend_from_slice(
             serde_json::to_string(&self.strength)
-                .expect("serde deserialization should succeed")
+                .expect("serialization should succeed")
                 .as_bytes(),
         );
         let mut sorted_tags = self.scope_tags.clone();

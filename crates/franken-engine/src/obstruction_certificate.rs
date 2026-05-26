@@ -1440,7 +1440,7 @@ mod tests {
             &schema_id,
             evidence_hash.as_bytes(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         CoherenceViolation {
             id,
             kind,
@@ -1514,7 +1514,7 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::Coherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.outcome, CertificationOutcome::Clear);
         assert!(result.certificates.is_empty());
         assert!(result.can_proceed());
@@ -1527,7 +1527,7 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::CoherentWithWarnings);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.outcome, CertificationOutcome::Clear);
     }
 
@@ -1549,7 +1549,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             result.outcome,
@@ -1573,13 +1573,13 @@ mod tests {
         let plan = cert
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(plan.has_feasible_resolution);
         assert!(plan.actions.len() >= 3);
         // First feasible action should be lowest-cost.
         let recommended = plan
             .recommended_action()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(recommended.feasible);
     }
 
@@ -1597,7 +1597,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         assert!(cert.explanation.contains("AuthContext"));
         assert!(cert.explanation.contains("App"));
@@ -1621,7 +1621,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::CoherentWithWarnings);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             result.outcome,
@@ -1651,7 +1651,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         assert_eq!(cert.violation_kind_tag, "capability-gap");
@@ -1689,7 +1689,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         assert_eq!(cert.violation_kind_tag, "effect-order-cycle");
@@ -1713,13 +1713,13 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         let plan = cert
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SplitBoundary is infeasible for >10 targets.
         let split_action = plan
             .actions
@@ -1748,7 +1748,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         assert_eq!(cert.violation_kind_tag, "layout-after-passive");
@@ -1775,7 +1775,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         assert_eq!(cert.violation_kind_tag, "suspense-boundary-conflict");
@@ -1803,7 +1803,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         assert_eq!(cert.violation_kind_tag, "hydration-boundary-conflict");
@@ -1829,7 +1829,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         assert_eq!(cert.violation_kind_tag, "hook-cleanup-mismatch");
@@ -1855,7 +1855,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         assert_eq!(cert.violation_kind_tag, "duplicate-provider");
@@ -1884,7 +1884,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         assert_eq!(cert.violation_kind_tag, "boundary-capability-leak");
@@ -1924,7 +1924,7 @@ mod tests {
         let input = make_check_result(vec![v1, v2, v3], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result.total_obstructions, 3);
         assert_eq!(result.certificates.len(), 3);
@@ -1962,7 +1962,7 @@ mod tests {
         let input = make_check_result(vec![v1, v2], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Only the blocking violation should produce a certificate.
         assert_eq!(result.total_obstructions, 1);
@@ -1999,7 +1999,7 @@ mod tests {
         let input = make_check_result(violations, CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result.outcome, CertificationOutcome::BudgetExhausted);
         assert_eq!(result.certificates.len(), 2);
@@ -2025,10 +2025,10 @@ mod tests {
 
         let r1 = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(r1.result_hash, r2.result_hash);
         assert_eq!(r1.certificates.len(), r2.certificates.len());
@@ -2060,15 +2060,15 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let recommended = plan
             .recommended_action()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(recommended.feasible);
         // All other feasible actions should cost >= recommended.
         for action in &plan.actions {
@@ -2094,13 +2094,13 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = &result.certificates[0];
         let plan = cert
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.certificate_id, cert.id);
     }
 
@@ -2131,19 +2131,19 @@ mod tests {
 
         let r1 = c
             .certify(&make_check_result(vec![v1], CoherenceOutcome::Incoherent))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = c
             .certify(&make_check_result(vec![v2], CoherenceOutcome::Incoherent))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let plan1 = r1.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan2 = r2.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // For the same action kind, multi-target should cost more.
         if let (Some(esc1), Some(esc2)) = (
@@ -2178,7 +2178,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let deserialized: CertificationResult =
@@ -2204,7 +2204,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
 
         let json = serde_json::to_string(cert).expect("serialize derived Serialize");
@@ -2224,7 +2224,7 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::Coherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_certification_report(&result);
         assert!(report.contains("No obstructions detected"));
         assert!(report.contains("clear"));
@@ -2244,7 +2244,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_certification_report(&result);
         assert!(report.contains("Obstruction #1"));
         assert!(report.contains("[RECOMMENDED]"));
@@ -2269,7 +2269,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // All fallbacks are feasible for unresolved-context, so should NOT block.
         assert!(!should_block_gate(&result));
     }
@@ -2280,7 +2280,7 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::Coherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!should_block_gate(&result));
     }
 
@@ -2310,7 +2310,7 @@ mod tests {
         let input = make_check_result(vec![v1, v2], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let codes = collect_debt_codes(&result);
         assert!(codes.contains(DEBT_UNRESOLVED_CONTEXT));
         assert!(codes.contains(DEBT_CAPABILITY_GAP));
@@ -2361,7 +2361,7 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::Coherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let line = result.summary_line();
         assert!(line.contains("clear"));
         assert!(line.contains("0 obstructions"));
@@ -2478,19 +2478,19 @@ mod tests {
         let input = make_check_result(vec![v1, v2, v3], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let grouped = result.by_debt_code();
         assert_eq!(
             grouped
                 .get(DEBT_UNRESOLVED_CONTEXT)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             2
         );
         assert_eq!(
             grouped
                 .get(DEBT_CAPABILITY_GAP)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .len(),
             1
         );
@@ -2514,11 +2514,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let feasible = plan.feasible_actions();
         assert!(!feasible.is_empty());
@@ -2541,11 +2541,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = plan.summary_line();
         assert!(summary.contains("actions"));
         assert!(summary.contains("feasible"));
@@ -2569,7 +2569,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         let summary = cert.summary_line();
         assert!(summary.contains("capability-gap"));
@@ -2602,7 +2602,7 @@ mod tests {
         let input = make_check_result(vec![v1, v2], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let blocking = result.blocking_certificates();
         assert_eq!(blocking.len(), 1);
         assert_eq!(blocking[0].violation_kind_tag, "unresolved-context");
@@ -2629,17 +2629,17 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let isolate = plan
             .actions
             .iter()
             .find(|a| a.kind == FallbackActionKind::Isolate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Cost should be 100 * 1 target = 100.
         assert_eq!(isolate.disruption_cost_millionths, 100);
     }
@@ -2670,10 +2670,10 @@ mod tests {
 
         let r1 = c
             .certify(&make_check_result(vec![v1], CoherenceOutcome::Incoherent))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = c
             .certify(&make_check_result(vec![v2], CoherenceOutcome::Incoherent))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(
             r1.certificates[0].certificate_hash,
@@ -2910,14 +2910,14 @@ mod tests {
                 &SchemaId::from_definition(b"test"),
                 b"empty",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             certificate_id: derive_id(
                 ObjectDomain::EvidenceRecord,
                 "test",
                 &SchemaId::from_definition(b"test"),
                 b"cert",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             actions: vec![],
             recommended_action_index: 0,
             has_feasible_resolution: false,
@@ -2946,11 +2946,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let action = &plan.actions[0];
 
         let json = serde_json::to_string(action).expect("serialize derived Serialize");
@@ -2983,11 +2983,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(plan).expect("serialize derived Serialize");
         let back: FallbackPlan = serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3014,7 +3014,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // All fallbacks for unresolved-context are feasible
         let infeasible = result.infeasible_certificates();
         assert!(infeasible.is_empty());
@@ -3030,7 +3030,7 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::Coherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let codes = collect_debt_codes(&result);
         assert!(codes.is_empty());
     }
@@ -3061,7 +3061,7 @@ mod tests {
         let input = make_check_result(violations, CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(should_block_gate(&result));
         assert_eq!(result.outcome, CertificationOutcome::BudgetExhausted);
     }
@@ -3085,11 +3085,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for action in &plan.actions {
             assert!(action.disruption_cost_millionths <= 10 * MILLION);
         }
@@ -3119,7 +3119,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         // Witness fragments should be capped at max_witness_components
         assert!(cert.witness_fragments.len() <= 3);
@@ -3143,11 +3143,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let remove = plan
             .actions
             .iter()
@@ -3179,16 +3179,16 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let inject = plan
             .actions
             .iter()
             .find(|a| a.kind == FallbackActionKind::InjectAdapter)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(inject.feasible); // 1 target component <= 3
     }
 
@@ -3218,7 +3218,7 @@ mod tests {
         let input = make_check_result(violations, CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_certification_report(&result);
         assert!(report.contains("budget-exhausted"));
         assert!(report.contains("Obstruction #1"));
@@ -3242,7 +3242,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Medium severity should be blocking
         assert!(result.certificates[0].is_blocking());
     }
@@ -3261,7 +3261,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::CoherentWithWarnings);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!result.certificates[0].is_blocking());
     }
 
@@ -3283,7 +3283,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let line = result.summary_line();
         assert!(line.contains("1 obstructions"));
         assert!(line.contains("1 blocking"));
@@ -3327,7 +3327,7 @@ mod tests {
         );
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.total_obstructions, 3);
         assert_eq!(result.blocking_obstructions, 2); // critical + high
         assert_eq!(result.blocking_certificates().len(), 2);
@@ -3352,7 +3352,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         assert_eq!(cert.witness_components.len(), 3);
         // First fragment is the boundary owner
@@ -3387,7 +3387,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         assert_eq!(cert.witness_components.len(), 4); // boundary + 3 children
         assert!(cert.explanation.contains("async conflict"));
@@ -3412,7 +3412,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         assert!(cert.witness_components.contains("CompX"));
         assert!(cert.witness_components.contains("CompY"));
@@ -3446,7 +3446,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         assert_eq!(cert.witness_components.len(), 1);
         assert!(cert.witness_components.contains("SecBound"));
@@ -3476,11 +3476,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Should have degrade, split, escalate
         assert!(plan.actions.len() >= 3);
         let kinds: Vec<&FallbackActionKind> = plan.actions.iter().map(|a| &a.kind).collect();
@@ -3507,7 +3507,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_certification_report(&result);
         assert!(report.contains("Fragment:"));
         assert!(report.contains("Widget"));
@@ -3564,11 +3564,11 @@ mod tests {
         let c = ObstructionCertifier::new();
         let r1 = c
             .certify(&make_check_result(vec![], CoherenceOutcome::Coherent))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Same input → same hash
         let r2 = c
             .certify(&make_check_result(vec![], CoherenceOutcome::Coherent))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.result_hash, r2.result_hash);
     }
 
@@ -3590,7 +3590,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let codes = collect_debt_codes(&result);
         // Should include the cert debt code
         assert!(codes.contains(DEBT_UNRESOLVED_CONTEXT));
@@ -3616,7 +3616,7 @@ mod tests {
         input.check_epoch = 42;
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.certification_epoch, 42);
         assert_eq!(result.certificates[0].detected_epoch, 42);
     }
@@ -3639,11 +3639,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::CoherentWithWarnings);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let kinds: Vec<&FallbackActionKind> = plan.actions.iter().map(|a| &a.kind).collect();
         assert!(kinds.contains(&&FallbackActionKind::RemoveAndStub));
         assert!(kinds.contains(&&FallbackActionKind::Degrade));
@@ -3668,7 +3668,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.outcome,
             CertificationOutcome::ObstructedWithFallbacks
@@ -3690,16 +3690,16 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let split = plan
             .actions
             .iter()
             .find(|a| a.kind == FallbackActionKind::SplitBoundary)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // targets.len() <= 10, so feasible
         assert!(split.feasible);
     }
@@ -3718,16 +3718,16 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let split = plan
             .actions
             .iter()
             .find(|a| a.kind == FallbackActionKind::SplitBoundary)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!split.feasible);
     }
 
@@ -3749,11 +3749,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // All action costs should be MILLION * 1 target = 1_000_000
         for action in &plan.actions {
             assert_eq!(action.disruption_cost_millionths, MILLION);
@@ -3774,7 +3774,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_certification_report(&result);
         assert!(report.contains("INFEASIBLE"));
     }
@@ -3784,7 +3784,7 @@ mod tests {
         let c = ObstructionCertifier::new();
         let r_clear = c
             .certify(&make_check_result(vec![], CoherenceOutcome::Coherent))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let v = make_violation(
             CoherenceViolationKind::UnresolvedContext {
@@ -3796,7 +3796,7 @@ mod tests {
         );
         let r_obstructed = c
             .certify(&make_check_result(vec![v], CoherenceOutcome::Incoherent))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r_clear.result_hash, r_obstructed.result_hash);
     }
@@ -3815,7 +3815,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: CertificationResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -3837,7 +3837,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         let json = serde_json::to_string(cert).expect("serialize derived Serialize");
         let back: ObstructionCertificate =
@@ -3870,16 +3870,16 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let remove = plan
             .actions
             .iter()
             .find(|a| a.kind == FallbackActionKind::RemoveAndStub)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(remove.feasible); // >= 2 providers
     }
 
@@ -3897,11 +3897,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.actions.len(), 4);
     }
 
@@ -3919,11 +3919,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::CoherentWithWarnings);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.actions.len(), 3);
     }
 
@@ -3942,11 +3942,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.actions.len(), 4);
     }
 
@@ -3965,11 +3965,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.actions.len(), 4);
     }
 
@@ -3987,11 +3987,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.actions.len(), 4);
     }
 
@@ -4010,11 +4010,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.actions.len(), 4);
     }
 
@@ -4032,11 +4032,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.actions.len(), 4);
     }
 
@@ -4047,7 +4047,7 @@ mod tests {
         input.check_epoch = 99;
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.certification_epoch, 99);
     }
 
@@ -4065,11 +4065,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for window in plan.actions.windows(2) {
             assert!(window[0].disruption_cost_millionths <= window[1].disruption_cost_millionths);
         }
@@ -4090,7 +4090,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.certificates[0].source_violation_id, violation_id);
     }
 
@@ -4107,7 +4107,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.certificates[0].debt_code, DEBT_EFFECT_CYCLE);
     }
 
@@ -4125,11 +4125,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(plan.has_feasible_resolution);
         assert!(plan.debt_code.is_none());
     }
@@ -4149,12 +4149,12 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         let plan = cert
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let witness: BTreeSet<String> = cert.witness_components.clone();
         for action in &plan.actions {
             let action_targets: BTreeSet<String> =
@@ -4177,7 +4177,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         assert!(cert.explanation.contains("LayoutComp"));
         assert!(cert.explanation.contains("PassiveComp"));
@@ -4262,9 +4262,9 @@ mod tests {
         let schema = SchemaId::from_definition(b"test.enrichment.v1");
         let plan = FallbackPlan {
             id: derive_id(ObjectDomain::EvidenceRecord, "test-plan", &schema, b"p1")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             certificate_id: derive_id(ObjectDomain::EvidenceRecord, "test-cert", &schema, b"c1")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             actions: vec![],
             recommended_action_index: 0,
             has_feasible_resolution: false,
@@ -4273,14 +4273,14 @@ mod tests {
         };
         let cert = ObstructionCertificate {
             id: derive_id(ObjectDomain::EvidenceRecord, "test-cert", &schema, b"c1")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             source_violation_id: derive_id(
                 ObjectDomain::EvidenceRecord,
                 "test-viol",
                 &schema,
                 b"v1",
             )
-            .expect("serde deserialization should succeed"),
+            .expect("operation should succeed for valid inputs"),
             violation_kind_tag: "test-kind".to_string(),
             severity: SeverityScore::critical(),
             debt_code: DEBT_UNRESOLVED_CONTEXT.to_string(),
@@ -4321,7 +4321,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = result.certificates[0].summary_line();
         assert!(summary.contains("3 witness components"));
     }
@@ -4333,7 +4333,7 @@ mod tests {
         input.check_epoch = 42;
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_certification_report(&result);
         assert!(report.contains("epoch 42"));
     }
@@ -4344,7 +4344,7 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::Coherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.schema_version, OBSTRUCTION_CERT_SCHEMA_VERSION);
         assert_eq!(result.bead_id, OBSTRUCTION_CERT_BEAD_ID);
     }
@@ -4354,9 +4354,9 @@ mod tests {
         let schema = SchemaId::from_definition(b"test.enrichment.v1");
         let cert = ObstructionCertificate {
             id: derive_id(ObjectDomain::EvidenceRecord, "test", &schema, b"c")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             source_violation_id: derive_id(ObjectDomain::EvidenceRecord, "test", &schema, b"v")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             violation_kind_tag: "test-kind".to_string(),
             severity: SeverityScore::critical(),
             debt_code: "TEST-DEBT".to_string(),
@@ -4409,11 +4409,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = plan.summary_line();
         assert!(summary.contains(&format!("{}", plan.certificate_id)));
         assert!(summary.contains("recommended="));
@@ -4425,7 +4425,7 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::Coherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.total_obstructions, 0);
         assert_eq!(result.blocking_obstructions, 0);
         assert_eq!(result.feasible_fallback_count, 0);
@@ -4447,11 +4447,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.actions.len(), 3);
         let kinds: Vec<&FallbackActionKind> = plan.actions.iter().map(|a| &a.kind).collect();
         assert!(kinds.contains(&&FallbackActionKind::Degrade));
@@ -4515,18 +4515,18 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let r1 = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let p1 = r1.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let p2 = r2.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for (a1, a2) in p1.actions.iter().zip(p2.actions.iter()) {
             assert_eq!(a1.id, a2.id);
         }
@@ -4546,11 +4546,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ids: BTreeSet<_> = plan.actions.iter().map(|a| &a.id).collect();
         assert_eq!(ids.len(), plan.actions.len());
     }
@@ -4573,11 +4573,11 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plan = result.certificates[0]
             .fallback_plan
             .as_ref()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(plan.actions.len() <= 2);
     }
 
@@ -4603,7 +4603,7 @@ mod tests {
         let input = make_check_result(vec![v1, v2], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_certification_report(&result);
         assert!(report.contains("Obstruction #1"));
         assert!(report.contains("Obstruction #2"));
@@ -4623,7 +4623,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_certification_report(&result);
         assert!(report.contains("feasible"));
         assert!(report.contains("cost="));
@@ -4634,9 +4634,9 @@ mod tests {
         let schema = SchemaId::from_definition(b"test.enrichment2.v1");
         let plan_feasible = FallbackPlan {
             id: derive_id(ObjectDomain::EvidenceRecord, "p", &schema, b"p1")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             certificate_id: derive_id(ObjectDomain::EvidenceRecord, "c", &schema, b"c1")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             actions: vec![],
             recommended_action_index: 0,
             has_feasible_resolution: true,
@@ -4645,9 +4645,9 @@ mod tests {
         };
         let plan_infeasible = FallbackPlan {
             id: derive_id(ObjectDomain::EvidenceRecord, "p", &schema, b"p2")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             certificate_id: derive_id(ObjectDomain::EvidenceRecord, "c", &schema, b"c2")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             actions: vec![],
             recommended_action_index: 0,
             has_feasible_resolution: false,
@@ -4656,9 +4656,9 @@ mod tests {
         };
         let cert1 = ObstructionCertificate {
             id: derive_id(ObjectDomain::EvidenceRecord, "c", &schema, b"c1")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             source_violation_id: derive_id(ObjectDomain::EvidenceRecord, "v", &schema, b"v1")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             violation_kind_tag: "feasible-kind".into(),
             severity: SeverityScore::critical(),
             debt_code: DEBT_UNRESOLVED_CONTEXT.into(),
@@ -4671,9 +4671,9 @@ mod tests {
         };
         let cert2 = ObstructionCertificate {
             id: derive_id(ObjectDomain::EvidenceRecord, "c", &schema, b"c2")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             source_violation_id: derive_id(ObjectDomain::EvidenceRecord, "v", &schema, b"v2")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             violation_kind_tag: "infeasible-kind".into(),
             severity: SeverityScore::critical(),
             debt_code: DEBT_CAPABILITY_GAP.into(),
@@ -4715,7 +4715,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         assert_eq!(cert.witness_components.len(), 3);
         assert_eq!(cert.witness_fragments.len(), 3);
@@ -4749,7 +4749,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.feasible_fallback_count, 1);
         assert_eq!(result.infeasible_fallback_count, 0);
     }
@@ -4768,7 +4768,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         assert_ne!(cert.id, cert.source_violation_id);
     }
@@ -4779,10 +4779,10 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::Coherent);
         let r1 = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.result_hash, r2.result_hash);
     }
 
@@ -4806,7 +4806,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         // max_witness_components is 3: boundary + 2 children
         assert!(cert.witness_components.len() <= 3);
@@ -4833,7 +4833,7 @@ mod tests {
         let input = make_check_result(vec![], CoherenceOutcome::Coherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = render_certification_report(&result);
         assert!(!report.contains("[RECOMMENDED]"));
     }
@@ -4851,7 +4851,7 @@ mod tests {
         let input = make_check_result(vec![v], CoherenceOutcome::Incoherent);
         let result = c
             .certify(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = &result.certificates[0];
         assert!(cert.explanation.contains("X -> Y -> Z"));
     }

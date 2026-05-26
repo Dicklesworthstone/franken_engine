@@ -1333,7 +1333,7 @@ mod tests {
         // SAFETY: Test just verified found.is_some(), so unwrap() cannot panic
         assert_eq!(
             found
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .resolved_path,
             "node_modules/react/index.js"
         );
@@ -2000,7 +2000,7 @@ mod tests {
         assert!(react.is_some());
         assert_eq!(
             react
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .resolved_path,
             "node_modules/react/index.js"
         );
@@ -2012,7 +2012,7 @@ mod tests {
         assert!(utils.is_some());
         assert_eq!(
             utils
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .resolved_content_hash
                 .as_deref(),
             Some("sha256:util_hash")
@@ -2053,10 +2053,10 @@ mod tests {
         assert!(from_b.is_some());
         assert_ne!(
             from_a
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .resolved_path,
             from_b
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .resolved_path
         );
     }
@@ -2094,9 +2094,9 @@ mod tests {
         assert!(esm.is_some());
         assert!(cjs.is_some());
         assert_ne!(
-            esm.expect("serde deserialization should succeed")
+            esm.expect("operation should succeed for valid inputs")
                 .resolved_path,
-            cjs.expect("serde deserialization should succeed")
+            cjs.expect("operation should succeed for valid inputs")
                 .resolved_path
         );
     }
@@ -2133,7 +2133,7 @@ mod tests {
         assert_eq!(index.entry_count(), 1);
         let found = index
             .lookup("./dup", None, TsRequestStyle::Import)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(found.resolved_path, "/second.ts");
     }
 
@@ -2162,9 +2162,9 @@ mod tests {
     #[test]
     fn test_manifest_verdict_serde_roundtrip() {
         let pass_json = serde_json::to_string(&ManifestVerdict::Pass)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let fail_json = serde_json::to_string(&ManifestVerdict::Fail)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let pass_rt: ManifestVerdict =
             serde_json::from_str(&pass_json).expect("deserialize known-valid JSON");
         let fail_rt: ManifestVerdict =

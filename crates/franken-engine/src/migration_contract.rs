@@ -1003,27 +1003,27 @@ mod tests {
         // SAFETY: Test helper uses valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration(mid, cutover), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test helper uses valid dry run; dry_run succeeds in controlled test environment.
         runner
             .dry_run(mid, passing_dry_run(mid), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test helper uses valid checkpoint; create_checkpoint succeeds in controlled test environment.
         runner
             .create_checkpoint(mid, 42, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test helper uses valid execution; complete_execution succeeds in controlled test environment.
         runner
             .complete_execution(mid, 100, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test helper uses valid verification; verify succeeds in controlled test environment.
         runner
             .verify(mid, passing_verification(mid), "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test helper uses valid commit; commit succeeds in controlled test environment.
         runner
             .commit(mid, "trace-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- declaration ------------------------------------------------------
@@ -1034,7 +1034,7 @@ mod tests {
         // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.migration_count(), 1);
         assert_eq!(runner.state("m-1"), Some(MigrationState::Declared));
     }
@@ -1045,7 +1045,7 @@ mod tests {
         // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
             .unwrap_err();
@@ -1063,11 +1063,11 @@ mod tests {
         // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test uses valid dry run; dry_run succeeds in controlled test environment.
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-1"), Some(MigrationState::DryRunPassed));
     }
 
@@ -1077,7 +1077,7 @@ mod tests {
         // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = runner
             .dry_run("m-1", failing_dry_run("m-1"), "t")
             .unwrap_err();
@@ -1090,10 +1090,10 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
             .unwrap_err();
@@ -1111,15 +1111,15 @@ mod tests {
         // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test uses valid dry run; dry_run succeeds in controlled test environment.
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test uses valid checkpoint; create_checkpoint succeeds in controlled test environment.
         runner
             .create_checkpoint("m-1", 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-1"), Some(MigrationState::Executing));
     }
 
@@ -1129,7 +1129,7 @@ mod tests {
         // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = runner.create_checkpoint("m-1", 42, "t").unwrap_err();
         assert!(matches!(
             err,
@@ -1144,16 +1144,16 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-1", 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .complete_execution("m-1", 100, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-1"), Some(MigrationState::Verifying));
     }
 
@@ -1165,23 +1165,23 @@ mod tests {
         // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test uses valid dry run; dry_run succeeds in controlled test environment.
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test uses valid checkpoint; create_checkpoint succeeds in controlled test environment.
         runner
             .create_checkpoint("m-1", 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test uses valid execution; complete_execution succeeds in controlled test environment.
         runner
             .complete_execution("m-1", 100, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test uses valid verification; verify succeeds in controlled test environment.
         runner
             .verify("m-1", passing_verification("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-1"), Some(MigrationState::Verified));
     }
 
@@ -1190,16 +1190,16 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-1", 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .complete_execution("m-1", 100, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = runner
             .verify("m-1", failing_verification("m-1"), "t")
             .unwrap_err();
@@ -1230,7 +1230,7 @@ mod tests {
         // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = runner.commit("m-1", "t").unwrap_err();
         assert!(matches!(
             err,
@@ -1246,16 +1246,16 @@ mod tests {
         // SAFETY: Test creates valid declaration; declare succeeds in controlled test environment.
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-1", 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .rollback("m-1", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-1"), Some(MigrationState::RolledBack));
     }
 
@@ -1264,19 +1264,19 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-1", 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .complete_execution("m-1", 100, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .rollback("m-1", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-1"), Some(MigrationState::RolledBack));
     }
 
@@ -1285,7 +1285,7 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = runner.rollback("m-1", "t").unwrap_err();
         assert!(matches!(
             err,
@@ -1327,7 +1327,7 @@ mod tests {
 
         runner
             .check_format_acceptance(ObjectClass::SerializationSchema, "v2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1338,7 +1338,7 @@ mod tests {
         // TokenFormat is NOT in affected_objects, so old version should be fine.
         runner
             .check_format_acceptance(ObjectClass::TokenFormat, "v1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1349,7 +1349,7 @@ mod tests {
         // Soft migration doesn't reject old format via check_format_acceptance.
         runner
             .check_format_acceptance(ObjectClass::SerializationSchema, "v1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- soft migration window --------------------------------------------
@@ -1400,16 +1400,16 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-1", 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .rollback("m-1", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = runner.drain_events();
         let event_names: Vec<&str> = events.iter().map(|e| e.event.as_str()).collect();
@@ -1447,7 +1447,7 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         run_full_pipeline(&mut runner, "m-2", CutoverType::SoftMigration);
 
         let summary = runner.summary();
@@ -1740,10 +1740,10 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let decl = runner
             .declaration("m-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decl.migration_id, "m-1");
         assert_eq!(decl.cutover_type, CutoverType::HardCutover);
     }
@@ -1774,22 +1774,22 @@ mod tests {
         d1.to_version = "v2".to_string();
         runner
             .declare(d1, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-1", passing_dry_run("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-1", 10, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .complete_execution("m-1", 50, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .verify("m-1", passing_verification("m-1"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .commit("m-1", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         runner.set_tick(100);
         let mut d2 = make_declaration("m-2", CutoverType::SoftMigration);
@@ -1797,22 +1797,22 @@ mod tests {
         d2.to_version = "v3".to_string();
         runner
             .declare(d2, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-2", passing_dry_run("m-2"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-2", 20, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .complete_execution("m-2", 50, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .verify("m-2", passing_verification("m-2"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .commit("m-2", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(runner.applied_count(), 2);
         assert_eq!(runner.applied_migrations()[0].from_version, "v1");
@@ -1925,7 +1925,7 @@ mod tests {
         // No migrations registered, so any format is accepted
         runner
             .check_format_acceptance(ObjectClass::SerializationSchema, "v1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // -- Enrichment: MigrationStep ordering -------------------------
@@ -1945,16 +1945,16 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-vf", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-vf", passing_dry_run("m-vf"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-vf", 42, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .complete_execution("m-vf", 100, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = runner.verify("m-vf", failing_verification("m-vf"), "t");
         assert_eq!(
             runner.state("m-vf"),
@@ -1963,7 +1963,7 @@ mod tests {
         // VerificationFailed is not terminal — rollback should succeed
         runner
             .rollback("m-vf", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-vf"), Some(MigrationState::RolledBack));
     }
 
@@ -2581,13 +2581,13 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-max", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-max", passing_dry_run("m-max"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-max", u64::MAX, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-max"), Some(MigrationState::Executing));
     }
 
@@ -2635,7 +2635,7 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-1", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!runner.events().is_empty());
         let drained = runner.drain_events();
         assert!(!drained.is_empty());
@@ -2736,7 +2736,7 @@ mod tests {
         }
         // Also test Rollback
         let json = serde_json::to_string(&MigrationStep::Rollback)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let deser: MigrationStep =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(MigrationStep::Rollback, deser);
@@ -2928,14 +2928,14 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-drp", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-drp", passing_dry_run("m-drp"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-drp"), Some(MigrationState::DryRunPassed));
         runner
             .rollback("m-drp", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(runner.state("m-drp"), Some(MigrationState::RolledBack));
     }
 
@@ -2944,16 +2944,16 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-rb", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .dry_run("m-rb", passing_dry_run("m-rb"), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .create_checkpoint("m-rb", 1, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         runner
             .rollback("m-rb", "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // RolledBack is terminal — cannot rollback again
         let err = runner.rollback("m-rb", "t").unwrap_err();
         assert!(matches!(
@@ -2967,7 +2967,7 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-drf", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let _ = runner.dry_run("m-drf", failing_dry_run("m-drf"), "t");
         assert_eq!(runner.state("m-drf"), Some(MigrationState::DryRunFailed));
         // DryRunFailed is terminal — cannot rollback
@@ -2989,7 +2989,7 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-ce", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = runner.complete_execution("m-ce", 100, "t").unwrap_err();
         assert!(matches!(
             err,
@@ -3002,7 +3002,7 @@ mod tests {
         let mut runner = MigrationRunner::new();
         runner
             .declare(make_declaration("m-vr", CutoverType::HardCutover), "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = runner
             .verify("m-vr", passing_verification("m-vr"), "t")
             .unwrap_err();

@@ -1449,7 +1449,7 @@ mod tests {
         let mut p2 = p1.clone();
         p2.controllers
             .get_mut("test")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .kp_millionths = 900_000;
         let h2 = p2.content_hash();
 
@@ -1618,7 +1618,7 @@ mod tests {
         new_policy
             .controllers
             .get_mut("test")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .kp_millionths = 900_000;
         coordinator.apply_policy(new_policy);
         assert_eq!(coordinator.controllers["test"].state.epoch_count, 0);
@@ -1692,7 +1692,7 @@ mod tests {
         policy_b
             .controllers
             .get_mut("test")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .kp_millionths = 900_000;
 
         let coordinator_a = FeedbackCoordinator::new(policy_a, test_epoch());
@@ -1730,13 +1730,13 @@ mod tests {
         coordinator
             .controllers
             .get_mut("a")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .state
             .emergency_count = u64::MAX;
         coordinator
             .controllers
             .get_mut("b")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .state
             .emergency_count = 1;
 

@@ -941,7 +941,7 @@ mod tests {
         }
         // SAFETY: estimator with known observations (0,1 pairs) has valid non-empty alphabet
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         assert_eq!(coder.alphabet_size, 2);
     }
 
@@ -994,11 +994,11 @@ mod tests {
         }
         // SAFETY: estimator with known observations has valid non-empty alphabet
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         // SAFETY: coder was created successfully, encoding known symbols cannot fail
         let compressed = coder
             .encode(&[0, 1, 0, 1, 0])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!compressed.compressed_data.is_empty());
         assert_eq!(compressed.original_symbol_count, 5);
         assert_eq!(
@@ -1013,7 +1013,7 @@ mod tests {
         est.observe(0);
         // SAFETY: estimator with observed symbol has valid non-empty alphabet
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         assert!(matches!(coder.encode(&[]), Err(EntropyError::EmptyInput)));
     }
 
@@ -1023,7 +1023,7 @@ mod tests {
         est.observe(0);
         // SAFETY: estimator with observed symbol has valid non-empty alphabet
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         assert!(matches!(
             coder.encode(&[99]),
             Err(EntropyError::UnknownSymbol { symbol: 99 })
@@ -1039,10 +1039,10 @@ mod tests {
             }
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(kraft <= MILLION + 1000);
     }
 
@@ -1072,7 +1072,7 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let ecl = coder.expected_code_length_millibits();
         // Should be close to 1 bit (uniform binary).
         assert!(ecl > 500_000);
@@ -1085,7 +1085,7 @@ mod tests {
         est.observe(0);
         est.observe(1);
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         let restored: ArithmeticCoder =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1122,14 +1122,14 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..20).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert = CompressionCertificate::build(&est, &compressed, kraft);
         assert!(cert.kraft_satisfied);
@@ -1206,14 +1206,14 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..200).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = CompressionCertificate::build(&est, &compressed, kraft);
 
         if cert.shannon_lower_bound_bits > 0 {
@@ -1227,13 +1227,13 @@ mod tests {
         let mut est = EntropyEstimator::new();
         est.observe(7);
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let compressed = coder
             .encode(&[7])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = CompressionCertificate::build(&est, &compressed, kraft);
 
         assert_eq!(cert.shannon_lower_bound_bits, 0);
@@ -1288,7 +1288,7 @@ mod tests {
         assert!(h < 200_000, "skewed entropy should be low, got {h}");
 
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let ecl = coder.expected_code_length_millibits();
         assert!(
             ecl < 500_000,
@@ -1462,10 +1462,10 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let compressed = coder
             .encode(&[0, 1, 0])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(compressed.schema, ENTROPY_SCHEMA_VERSION);
     }
 
@@ -1529,7 +1529,7 @@ mod tests {
             est.observe(i);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         assert_eq!(coder.alphabet_size, MAX_ALPHABET_SIZE);
     }
 
@@ -1580,7 +1580,7 @@ mod tests {
             est.observe(2);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let cloned = coder.clone();
         assert_eq!(coder, cloned);
     }
@@ -1908,7 +1908,7 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let mut cloned = coder.clone();
         cloned.total_frequency = 999;
         assert_ne!(coder, cloned);
@@ -1953,7 +1953,7 @@ mod tests {
         let mut est = EntropyEstimator::new();
         est.observe(0);
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         for field in &["frequency_table", "total_frequency", "alphabet_size"] {
             assert!(
@@ -2125,10 +2125,10 @@ mod tests {
             est.observe(5);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let compressed = coder
             .encode(&[5, 5, 5, 5, 5])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(compressed.original_symbol_count, 5);
         assert!(!compressed.compressed_data.is_empty());
     }
@@ -2142,11 +2142,11 @@ mod tests {
             est.observe(2);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..1000).map(|i| (i % 3) as u32).collect();
         let compressed = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(compressed.original_symbol_count, 1000);
         assert!(compressed.compressed_data.len() < 1000);
     }
@@ -2160,10 +2160,10 @@ mod tests {
             }
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             (kraft - MILLION).abs() < 100,
             "kraft sum should be ~1M, got {kraft}"
@@ -2179,7 +2179,7 @@ mod tests {
         }
         let h = est.entropy_millibits();
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let ecl = coder.expected_code_length_millibits();
         assert!(
             (ecl - h).abs() < 200_000,
@@ -2295,11 +2295,11 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..20).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = CompressionCertificate::build(&est, &compressed, 1_500_000);
         assert!(!cert.kraft_satisfied);
     }
@@ -2312,11 +2312,11 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..20).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = CompressionCertificate::build(&est, &compressed, MILLION + 1000);
         assert!(cert.kraft_satisfied);
     }
@@ -2329,14 +2329,14 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..10).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let cert1 = CompressionCertificate::build(&est, &compressed, kraft);
         let cert2 = CompressionCertificate::build(&est, &compressed, kraft);
@@ -2403,7 +2403,7 @@ mod tests {
             }
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         let restored: ArithmeticCoder =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2420,11 +2420,11 @@ mod tests {
             est.observe(2);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..500).map(|i| (i % 3) as u32).collect();
         let compressed = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&compressed).expect("serialize derived Serialize");
         let restored: CompressedEvidence =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2493,14 +2493,14 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let symbols = [0u32, 1, 0, 1, 0, 1];
         let ce1 = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ce2 = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ce1.content_hash, ce2.content_hash);
         assert_eq!(ce1.compressed_data, ce2.compressed_data);
     }
@@ -2518,16 +2518,16 @@ mod tests {
             est.observe(2);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(kraft <= MILLION + 1000);
 
         let symbols: Vec<u32> = (0..300).map(|i| (i % 3) as u32).collect();
         let compressed = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(compressed.schema, ENTROPY_SCHEMA_VERSION);
 
         let cert = CompressionCertificate::build(&est, &compressed, kraft);
@@ -2554,14 +2554,14 @@ mod tests {
             est.observe(1);
         }
         let coder =
-            ArithmeticCoder::from_estimator(&est).expect("serde deserialization should succeed");
+            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..50).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cert = CompressionCertificate::build(&est, &compressed, kraft);
         let ss = SufficientStatistic::from_estimator(
             &est,
@@ -2580,27 +2580,27 @@ mod tests {
         assert_eq!(
             est,
             serde_json::from_str::<EntropyEstimator>(&est_json)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
         assert_eq!(
             coder,
             serde_json::from_str::<ArithmeticCoder>(&coder_json)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
         assert_eq!(
             compressed,
             serde_json::from_str::<CompressedEvidence>(&compressed_json)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
         assert_eq!(
             cert,
             serde_json::from_str::<CompressionCertificate>(&cert_json)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
         assert_eq!(
             ss,
             serde_json::from_str::<SufficientStatistic>(&ss_json)
-                .expect("serde deserialization should succeed")
+                .expect("deserialization should succeed")
         );
     }
 }

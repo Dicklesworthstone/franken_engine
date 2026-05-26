@@ -1724,7 +1724,7 @@ mod tests {
             "escape-cert-bundle-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .as_nanos()
         ));
         let cmds = vec!["test".to_string()];
@@ -1742,7 +1742,7 @@ mod tests {
             "escape-cert-hex-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .as_nanos()
         ));
         let cmds = vec!["test".to_string()];

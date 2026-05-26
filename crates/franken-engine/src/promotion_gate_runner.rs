@@ -1404,7 +1404,7 @@ mod tests {
     #[test]
     fn config_serde_round_trip() {
         let config = GateRunnerConfig::standard(test_slot_id(), "candidate".to_string(), 42);
-        let json = serde_json::to_vec(&config).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&config).expect("serialization should succeed");
         let decoded: GateRunnerConfig =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(config, decoded);
@@ -1436,7 +1436,7 @@ mod tests {
             evidence: vec!["ev1".to_string(), "ev2".to_string()],
             summary: "failed".to_string(),
         };
-        let json = serde_json::to_vec(&eval).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&eval).expect("serialization should succeed");
         let decoded: GateEvaluation =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(eval, decoded);
@@ -1476,7 +1476,7 @@ mod tests {
         assert!(
             event
                 .error_code
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .starts_with("FE-GATE-")
         );
     }
@@ -1492,7 +1492,7 @@ mod tests {
             summary: "ok".to_string(),
         };
         let event = log_gate_evaluation(&config, &eval);
-        let json = serde_json::to_vec(&event).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&event).expect("serialization should succeed");
         let decoded: GateRunnerLogEvent =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(event, decoded);
@@ -1511,7 +1511,7 @@ mod tests {
     #[test]
     fn strictness_serde_round_trip() {
         let s = GateStrictness::standard(GateKind::PerformanceThreshold);
-        let json = serde_json::to_vec(&s).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&s).expect("serialization should succeed");
         let decoded: GateStrictness =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(s, decoded);
@@ -1524,7 +1524,7 @@ mod tests {
         let config = GateRunnerConfig::standard(test_slot_id(), "candidate".to_string(), 42);
         let input = all_passing_input();
         let output = run_promotion_gates(&config, &input);
-        let json = serde_json::to_vec(&output).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&output).expect("serialization should succeed");
         let decoded: GateRunnerOutput =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(output, decoded);
@@ -1538,7 +1538,7 @@ mod tests {
             content_hash: "deadbeef".to_string(),
             description: "test evidence".to_string(),
         };
-        let json = serde_json::to_vec(&artifact).expect("serde deserialization should succeed");
+        let json = serde_json::to_vec(&artifact).expect("serialization should succeed");
         let decoded: EvidenceArtifact =
             serde_json::from_slice(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, decoded);
@@ -1619,13 +1619,13 @@ mod tests {
             .evaluations
             .iter()
             .find(|e| e.gate == GateKind::PerformanceThreshold)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!perf_eval.passed);
         let eq_eval = output
             .evaluations
             .iter()
             .find(|e| e.gate == GateKind::Equivalence)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(eq_eval.passed);
     }
 

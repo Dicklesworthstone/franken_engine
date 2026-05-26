@@ -1158,7 +1158,7 @@ mod tests {
         cell.initialize_millionths(1_000_000);
         assert_eq!(cell.version, 1);
         cell.mutate_millionths(2_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cell.version, 2);
         assert_eq!(cell.value_millionths, Some(2_000_000));
     }
@@ -1245,7 +1245,7 @@ mod tests {
         assert_eq!(id, BindingId::new("mod_a", "foo"));
         let retrieved = map
             .get_cell(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(retrieved.source_module, "mod_a");
         assert_eq!(retrieved.export_name, "foo");
     }
@@ -1256,24 +1256,24 @@ mod tests {
         let cell = make_cell("mod_a", "counter");
         let id = map.register_cell(cell);
         map.initialize_millionths(&id, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             map.get_cell(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_millionths,
             Some(0)
         );
         map.mutate_millionths(&id, 1_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             map.get_cell(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_millionths,
             Some(1_000_000)
         );
         assert_eq!(
             map.get_cell(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             2
         );
@@ -1285,7 +1285,7 @@ mod tests {
         let cell = make_cell("mod_a", "val");
         let id = map.register_cell(cell);
         map.mark_dead(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(map.mutate_millionths(&id, 1).is_err());
     }
 
@@ -1303,7 +1303,7 @@ mod tests {
         let cell = make_cell("mod_a", "foo");
         let id = map.register_cell(cell);
         map.initialize_millionths(&id, 42)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let import = ImportBinding {
             importer: "mod_b".to_string(),
@@ -1315,7 +1315,7 @@ mod tests {
 
         let cell = map
             .read_through_import("mod_b", "myFoo")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cell.value_millionths, Some(42));
     }
 
@@ -1325,7 +1325,7 @@ mod tests {
         let cell = make_cell("mod_a", "counter");
         let id = map.register_cell(cell);
         map.initialize_millionths(&id, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let import = ImportBinding {
             importer: "mod_b".to_string(),
@@ -1338,19 +1338,19 @@ mod tests {
         // Before mutation
         assert_eq!(
             map.read_through_import("mod_b", "cnt")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_millionths,
             Some(0)
         );
 
         // Mutate in source module
         map.mutate_millionths(&id, 1_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // After mutation — importer sees updated value
         assert_eq!(
             map.read_through_import("mod_b", "cnt")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_millionths,
             Some(1_000_000)
         );
@@ -1369,7 +1369,7 @@ mod tests {
         ));
         map.register_alias(alias_id.clone(), source_id.clone());
         map.initialize_millionths(&source_id, 100)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         map.wire_import(ImportBinding {
             importer: "mod_c".to_string(),
@@ -1380,22 +1380,22 @@ mod tests {
 
         assert_eq!(
             map.get_cell(&alias_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .source_module,
             "mod_a"
         );
         assert_eq!(
             map.read_through_import("mod_c", "foo")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_millionths,
             Some(100)
         );
 
         map.mutate_millionths(&alias_id, 200)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             map.get_cell(&source_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_millionths,
             Some(200)
         );
@@ -1442,19 +1442,19 @@ mod tests {
 
         assert_eq!(
             map.get_cell(&alias_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .binding_type,
             BindingType::Direct
         );
         assert_eq!(
             map.get_surface_cell(&alias_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .binding_type,
             BindingType::StarReExport
         );
         assert_eq!(
             map.get_surface_cell(&alias_id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .source_module,
             "mod_b"
         );
@@ -1466,11 +1466,11 @@ mod tests {
         let cell = make_cell("mod_a", "x");
         let id = map.register_cell(cell);
         map.initialize_millionths(&id, 1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         map.mutate_millionths(&id, 2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         map.mark_dead(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 1 created + 1 initialized + 1 mutated + 1 died = 4 events
         assert_eq!(map.events.len(), 4);
     }
@@ -1636,26 +1636,26 @@ mod tests {
         let cell = make_cell("mod_a", "name");
         let id = map.register_cell(cell);
         map.initialize_string(&id, "alice".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             map.get_cell(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_string
                 .as_deref(),
             Some("alice")
         );
         map.mutate_string(&id, "bob".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             map.get_cell(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_string
                 .as_deref(),
             Some("bob")
         );
         assert_eq!(
             map.get_cell(&id)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .version,
             2
         );
@@ -1667,7 +1667,7 @@ mod tests {
         let cell = make_cell("mod_a", "shared");
         let id = map.register_cell(cell);
         map.initialize_millionths(&id, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Two importers both import the same binding
         map.wire_import(ImportBinding {
@@ -1685,18 +1685,18 @@ mod tests {
 
         // Mutate from source
         map.mutate_millionths(&id, 999)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Both importers see the mutation
         assert_eq!(
             map.read_through_import("mod_b", "s1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_millionths,
             Some(999)
         );
         assert_eq!(
             map.read_through_import("mod_c", "s2")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .value_millionths,
             Some(999)
         );
@@ -1786,7 +1786,7 @@ mod tests {
         cell.initialize_string("hello".into());
         assert_eq!(cell.version, 1);
         cell.mutate_string("world".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(cell.version, 2);
         assert_eq!(cell.value_string.as_deref(), Some("world"));
     }
@@ -1800,9 +1800,9 @@ mod tests {
         let cell = BindingCell::new("mod_a", "name", "name", BindingType::Direct);
         map.register_cell(cell);
         map.initialize_string(&id, "alice".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         map.mutate_string(&id, "bob".into())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // At least 3 events: CellCreated, CellInitialized, CellMutated
         assert!(map.events.len() >= 3);
     }
@@ -1814,7 +1814,7 @@ mod tests {
         let cell = BindingCell::new("mod_a", "x", "x", BindingType::Direct);
         map.register_cell(cell);
         map.mark_dead(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let has_died = map
             .events
             .iter()
@@ -1831,7 +1831,7 @@ mod tests {
         let cell = BindingCell::new("mod_a", "x", "x", BindingType::Direct);
         map.register_cell(cell);
         map.mark_dead(&id)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         map.wire_import(ImportBinding {
             importer: "mod_b".into(),
             local_name: "y".into(),

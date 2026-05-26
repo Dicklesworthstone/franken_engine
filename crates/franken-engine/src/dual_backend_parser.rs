@@ -276,7 +276,7 @@ impl DiagnosticsEnvelope {
 
     /// Compute the canonical hash for a set of diagnostics.
     fn compute_hash(entries: &[NormalizedDiagnostic]) -> String {
-        let canonical = serde_json::to_vec(entries).expect("serde deserialization should succeed");
+        let canonical = serde_json::to_vec(entries).expect("serialization should succeed");
         let hash = ContentHash::compute(&canonical);
         format!("sha256:{}", hash.to_hex())
     }
@@ -1028,13 +1028,13 @@ mod tests {
         );
         parser
             .register_backend(make_registration(BackendId::swc(), 1, true))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parser
             .register_backend(make_registration(BackendId::oxc(), 2, true))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parser
             .register_backend(make_registration(BackendId::franken_canonical(), 3, true))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parser
     }
 
@@ -1397,7 +1397,7 @@ mod tests {
         let mut parser = make_parser();
         let selected = parser
             .select_backend(ParseGoal::Module, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(selected, BackendId::swc());
     }
 
@@ -1406,10 +1406,10 @@ mod tests {
         let mut parser = make_parser();
         parser
             .set_backend_health(&BackendId::swc(), false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let selected = parser
             .select_backend(ParseGoal::Module, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(selected, BackendId::franken_canonical());
         assert_eq!(parser.fallback_count, 1);
     }
@@ -1419,11 +1419,11 @@ mod tests {
         let mut parser = make_parser();
         parser
             .set_backend_health(&BackendId::swc(), false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parser.healthy_backend_count(), 2);
         parser
             .set_backend_health(&BackendId::swc(), true)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parser.healthy_backend_count(), 3);
     }
 
@@ -1459,7 +1459,7 @@ mod tests {
             let reg = make_registration(BackendId(format!("b{i}")), i as u32, true);
             parser
                 .register_backend(reg)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let extra = make_registration(BackendId("extra".into()), 99, true);
         let result = parser.register_backend(extra);
@@ -1479,13 +1479,13 @@ mod tests {
         };
         parser
             .register_backend(updated)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parser.backend_count(), 3); // same count, not duplicated
         let swc = parser
             .backends
             .iter()
             .find(|b| b.backend_id == BackendId::swc())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(swc.version, "2.0.0");
     }
 
@@ -1626,10 +1626,10 @@ mod tests {
         );
         parser
             .register_backend(make_registration(BackendId::swc(), 1, false))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parser
             .register_backend(make_registration(BackendId::franken_canonical(), 2, false))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let result = parser.select_backend(ParseGoal::Module, None);
         assert!(matches!(
             result,
@@ -2086,16 +2086,16 @@ mod tests {
         );
         parser
             .register_backend(make_registration(BackendId::swc(), 1, false))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parser
             .register_backend(make_registration(BackendId::franken_canonical(), 2, false))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parser
             .register_backend(make_registration(BackendId::oxc(), 3, true))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let selected = parser
             .select_backend(ParseGoal::Module, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(selected, BackendId::oxc());
     }
 
@@ -2300,14 +2300,14 @@ mod tests {
         let mut parser = make_parser();
         parser
             .set_backend_health(&BackendId::swc(), false)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Each select_backend when primary is unhealthy increments fallback_count
         parser
             .select_backend(ParseGoal::Module, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         parser
             .select_backend(ParseGoal::Script, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parser.fallback_count, 2);
     }
 }

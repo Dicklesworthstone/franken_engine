@@ -523,13 +523,13 @@ mod tests {
         // advance() only fails on invalid transitions or duplicate IDs (impossible in test sequence).
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::RevocationFrontierAdvance, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::GuardrailConfigChange, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(tracker.current().as_u64(), 3);
         assert_eq!(tracker.transition_count(), 3);
     }
@@ -539,7 +539,7 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::LossMatrixUpdate, "trace-abc")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let records = tracker.transitions();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].previous_epoch, SecurityEpoch::GENESIS);
@@ -553,13 +553,13 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::GuardrailConfigChange, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let counts = tracker.transition_counts();
         assert_eq!(counts["policy_key_rotation"], 2);
@@ -598,7 +598,7 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(tracker.current().as_u64(), 1);
 
         // Persisted epoch is higher — this means the persisted state
@@ -637,7 +637,7 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let meta = tracker.stamp_open_ended();
         assert!(tracker.validate_artifact(&meta).is_ok());
     }
@@ -647,13 +647,13 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let meta = tracker.stamp_open_ended();
 
         // Advance further — the old artifact should still be valid (open-ended).
         tracker
             .advance(TransitionReason::RevocationFrontierAdvance, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(tracker.validate_artifact(&meta).is_ok());
     }
 
@@ -868,10 +868,10 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::GuardrailConfigChange, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&tracker).expect("serialize derived Serialize");
         let restored: EpochTracker =
@@ -926,7 +926,7 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json1 = serde_json::to_string(&tracker).expect("serialize derived Serialize");
         let json2 = serde_json::to_string(&tracker).expect("serialize derived Serialize");
         assert_eq!(json1, json2);
@@ -1100,10 +1100,10 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::GuardrailConfigChange, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let meta = tracker.stamp_open_ended();
         assert_eq!(meta.epoch_id, SecurityEpoch::from_raw(2));
         assert_eq!(meta.valid_from_epoch, SecurityEpoch::from_raw(2));
@@ -1203,10 +1203,10 @@ mod tests {
         let mut tracker = EpochTracker::from_persisted(SecurityEpoch::from_raw(5));
         tracker
             .verify_persisted(SecurityEpoch::from_raw(10))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let new = tracker
             .advance(TransitionReason::PolicyKeyRotation, "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(new.as_u64(), 11);
     }
 
@@ -1216,7 +1216,7 @@ mod tests {
         for _ in 0..5 {
             tracker
                 .advance(TransitionReason::RevocationFrontierAdvance, "t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(
             tracker.transition_counts()["revocation_frontier_advance"],
@@ -1242,13 +1242,13 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::LossMatrixUpdate, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::OperatorManualBump, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let records = tracker.transitions();
         assert_eq!(records.len(), 3);
         assert_eq!(records[0].reason, TransitionReason::PolicyKeyRotation);
@@ -1380,7 +1380,7 @@ mod tests {
         assert_eq!(tracker.current(), SecurityEpoch::GENESIS);
         let new = tracker
             .advance(TransitionReason::OperatorManualBump, "genesis-bump")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(new.as_u64(), 1);
         let record = &tracker.transitions()[0];
         assert_eq!(record.previous_epoch, SecurityEpoch::GENESIS);
@@ -1422,7 +1422,7 @@ mod tests {
         for (i, reason) in reasons.iter().enumerate() {
             tracker
                 .advance(reason.clone(), &format!("t{i}"))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(tracker.transition_counts().len(), 6);
         for reason in &reasons {
@@ -1466,7 +1466,7 @@ mod tests {
         for _ in 0..100 {
             tracker
                 .advance(TransitionReason::PolicyKeyRotation, "t")
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(tracker.current().as_u64(), 100);
         assert!(tracker.validate_artifact(&meta).is_ok());
@@ -1477,10 +1477,10 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "first")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::LossMatrixUpdate, "second")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let transitions = tracker.transitions();
         assert_eq!(transitions[0].trace_id, "first");
         assert_eq!(transitions[1].trace_id, "second");
@@ -1529,13 +1529,13 @@ mod tests {
         let mut tracker = EpochTracker::new();
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::PolicyKeyRotation, "t2")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .advance(TransitionReason::LossMatrixUpdate, "t3")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&tracker).expect("serialize derived Serialize");
         let restored: EpochTracker =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

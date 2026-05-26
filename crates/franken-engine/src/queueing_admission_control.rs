@@ -595,7 +595,7 @@ impl AdmissionControlPolicy {
     pub fn policy_hash(&self) -> ContentHash {
         // SAFETY: AdmissionPolicy derives Serialize and has no non-serializable fields.
         // to_vec on derived Serialize types only fails on writer errors (impossible with Vec<u8>).
-        let bytes = serde_json::to_vec(self).expect("serde deserialization should succeed");
+        let bytes = serde_json::to_vec(self).expect("serialization should succeed");
         ContentHash::compute(&bytes)
     }
 }
@@ -1765,7 +1765,7 @@ mod tests {
         let partition = ctrl
             .partitions
             .get(&ExecutionStage::ModuleLoad)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(partition.total_shed, 1);
     }
 

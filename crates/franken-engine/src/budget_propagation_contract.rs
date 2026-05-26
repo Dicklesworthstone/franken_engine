@@ -978,7 +978,7 @@ mod tests {
                 10_000,
                 BudgetBoundaryKind::ParentToChildExtension,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.derived_budget_ms > 0);
         assert!(result.derived_budget_ms <= 10_000);
         assert!(result.carved_from_parent);
@@ -1053,7 +1053,7 @@ mod tests {
                 10_000,
                 BudgetBoundaryKind::OrchestratorToCellClose,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.derived_budget_ms, 10_000);
     }
 
@@ -1062,7 +1062,7 @@ mod tests {
         let mut validator = BudgetPropagationValidator::with_defaults();
         let alloc = validator
             .validate_cleanup("trace-parent", 10_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(alloc.total_cleanup_ms <= 10_000);
         assert!(!validator.has_violations());
     }
@@ -1081,7 +1081,7 @@ mod tests {
                     remaining,
                     BudgetBoundaryKind::ParentToChildSession,
                 )
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             remaining = result.parent_remaining_after_ms;
         }
 
@@ -1230,7 +1230,7 @@ mod tests {
                 6000,
                 BudgetBoundaryKind::ParentToChildExtension,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Should have been capped to maintain reserve
         assert!(result.parent_remaining_after_ms >= 5000 || !result.carved_from_parent);
@@ -1241,10 +1241,10 @@ mod tests {
         let policy = BudgetPropagationPolicy::default();
         let ext_rule = policy
             .rule_for(BudgetBoundaryKind::ParentToChildExtension)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let del_rule = policy
             .rule_for(BudgetBoundaryKind::ParentToChildDelegate)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let parent = 10_000;
         let ext_budget = ext_rule.derivation.derive(parent);
@@ -1298,14 +1298,14 @@ mod tests {
                 10_000,
                 BudgetBoundaryKind::ParentToChildExtension,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(result.derived_budget_ms, 8_000);
         assert_eq!(
             validator
                 .events()
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .sequence,
             u64::MAX
         );
@@ -1693,7 +1693,7 @@ mod tests {
                 5000,
                 BudgetBoundaryKind::ParentToChildExtension,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.derived_budget_ms > 0);
         if result.carved_from_parent {
             assert!(result.parent_remaining_after_ms < 5000);

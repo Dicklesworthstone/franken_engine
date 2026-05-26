@@ -318,7 +318,7 @@ impl DegradedModeOverride {
             &override_schema_id(),
             &canonical_bytes,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let mut token = Self {
             override_id,
@@ -927,7 +927,7 @@ mod tests {
             0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5, 0xB6, 0xB7, 0xB8, 0xB9, 0xBA, 0xBB, 0xBC,
             0xBD, 0xBE, 0xBF, 0xC0,
         ])
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     fn make_config() -> FreshnessConfig {
@@ -1027,7 +1027,7 @@ mod tests {
             0x3F, 0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C,
             0x4D, 0x4E, 0x4F, 0x50,
         ])
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     // ---------------------------------------------------------------
@@ -1082,7 +1082,7 @@ mod tests {
         let result = ctrl.evaluate(OperationType::SafeOperation, "t-safe");
         assert!(result.is_ok());
         assert_eq!(
-            result.expect("serde deserialization should succeed"),
+            result.expect("operation should succeed for valid inputs"),
             FreshnessDecision::Proceed
         );
     }
@@ -1096,7 +1096,7 @@ mod tests {
         let result = ctrl.evaluate(OperationType::SafeOperation, "t-safe-deg");
         assert!(result.is_ok());
         assert_eq!(
-            result.expect("serde deserialization should succeed"),
+            result.expect("operation should succeed for valid inputs"),
             FreshnessDecision::Proceed
         );
     }
@@ -1186,7 +1186,7 @@ mod tests {
             "t-override",
         );
         assert!(result.is_ok());
-        match result.expect("serde deserialization should succeed") {
+        match result.expect("operation should succeed for valid inputs") {
             FreshnessDecision::OverrideGranted { operator_id, .. } => {
                 assert_eq!(operator_id, "ops-admin-01");
             }
@@ -1411,7 +1411,7 @@ mod tests {
 
         let override_token = make_override(OperationType::ExtensionActivation, 2000);
         let wrong_vk =
-            VerificationKey::from_bytes([0xFF; 32]).expect("serde deserialization should succeed");
+            VerificationKey::from_bytes([0xFF; 32]).expect("operation should succeed for valid inputs");
 
         let result = ctrl.evaluate_with_override(
             OperationType::ExtensionActivation,
@@ -1599,7 +1599,7 @@ mod tests {
             &vk,
             "t-override-audit",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let events = ctrl.drain_decision_events();
         assert_eq!(events.len(), 1);

@@ -1717,7 +1717,7 @@ mod tests {
         // SAFETY: DecisionExplanation derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&decision.explanation)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DecisionExplanation,
         // so from_str back to DecisionExplanation cannot fail (valid format + matching schema).
         let restored: DecisionExplanation =
@@ -2766,7 +2766,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!((1..=MILLION).contains(&score.alien_risk_envelope.conformal_p_value_millionths));
         assert!(score.alien_risk_envelope.e_value_millionths >= MILLION);
         assert_eq!(score.alien_risk_envelope.regime_shift_score_millionths, 0);
@@ -2782,13 +2782,13 @@ mod tests {
         let roi = input
             .attacker_cost_model
             .expected_roi()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         input.extension_roi_history_millionths = vec![roi; 50];
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             score.alien_risk_envelope.regime_shift_score_millionths, 0,
             "stable history matching current ROI should have zero regime shift"
@@ -2815,7 +2815,7 @@ mod tests {
             // fails on missing/invalid fields, which are controlled by the test setup.
             let score = selector
                 .score_runtime_decision(&input)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(
                 score.confidence_interval.lower_millionths
                     <= score.selected_expected_loss_millionths,
@@ -2842,7 +2842,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for candidate in &score.candidate_actions {
             let sum: i64 = candidate.state_contributions_millionths.values().sum();
             assert_eq!(
@@ -2874,7 +2874,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: RuntimeDecisionScore derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
         let json = serde_json::to_string(&score).expect("serialize derived Serialize");
@@ -2894,7 +2894,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Malicious posterior → severe action; if alien recommends Suspend,
         // Quarantine or Terminate already meet/exceed that.
         if score.selected_action.severity()
@@ -2921,7 +2921,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             score.alien_risk_envelope.alert_level != AlienRiskAlertLevel::Nominal
                 || score.alien_risk_envelope.regime_shift_score_millionths > 0,
@@ -2948,13 +2948,13 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(selector.decisions_made(), 1);
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
         selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(selector.decisions_made(), 2);
     }
 
@@ -2967,7 +2967,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(score.epoch, SecurityEpoch::from_raw(99));
     }
 
@@ -3020,12 +3020,12 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score1 = s1
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score2 = s2
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(score1.receipt_preimage_hash, score2.receipt_preimage_hash);
     }
 
@@ -3039,12 +3039,12 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score1 = selector
             .score_runtime_decision(&input1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test provides valid input with required fields set; score_runtime_decision only
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score2 = selector
             .score_runtime_decision(&input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(score1.receipt_preimage_hash, score2.receipt_preimage_hash);
     }
 
@@ -3100,7 +3100,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 3 fleet entries (ext-a, ext-b, ext-other) + current extension = 4
         assert_eq!(
             score.fleet_roi_summary.extension_count, 4,
@@ -3116,7 +3116,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score_unblocked = selector
             .score_runtime_decision(&input_unblocked)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let optimal = score_unblocked.selected_action;
 
         let mut input_blocked = sample_runtime_input(certain_benign());
@@ -3125,7 +3125,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score_blocked = selector
             .score_runtime_decision(&input_blocked)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(score_blocked.selected_action, optimal);
         assert!(
             score_blocked.selected_expected_loss_millionths
@@ -3144,7 +3144,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for candidate in &score.candidate_actions {
             if input.blocked_actions.contains(&candidate.action) {
                 assert!(
@@ -3186,7 +3186,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             score
                 .selection_rationale
@@ -3206,7 +3206,7 @@ mod tests {
         // fails on missing/invalid fields, which are controlled by the test setup.
         let score = selector
             .score_runtime_decision(&input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         if score.alien_risk_envelope.alert_level == AlienRiskAlertLevel::Nominal {
             assert!(
                 score.alien_risk_envelope.recommended_floor_action.is_none(),

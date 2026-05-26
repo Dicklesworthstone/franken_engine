@@ -1374,7 +1374,7 @@ mod tests {
         assert!(be.consume(BudgetKind::TimeMs, 1000));
         let time = be
             .get(BudgetKind::TimeMs)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(time.current_value, 1000);
     }
 
@@ -1384,7 +1384,7 @@ mod tests {
         be.consume(BudgetKind::TimeMs, 4999);
         let mc = be
             .most_constrained()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(mc.kind, BudgetKind::TimeMs);
     }
 
@@ -1482,7 +1482,7 @@ mod tests {
     fn campaign_add_rule() {
         let mut c = make_campaign("c1");
         c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.rules.len(), 1);
         assert_eq!(c.ready_rule_count(), 1);
     }
@@ -1491,7 +1491,7 @@ mod tests {
     fn campaign_add_duplicate_rule_fails() {
         let mut c = make_campaign("c1");
         c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = c
             .add_rule(make_rule("r1", RewriteFamily::DeadCodeElimination))
             .unwrap_err();
@@ -1502,7 +1502,7 @@ mod tests {
     fn campaign_lifecycle() {
         let mut c = make_campaign("c1");
         c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.status, CampaignStatus::Pending);
 
         c.record_saturation(make_egraph_snapshot());
@@ -1526,9 +1526,9 @@ mod tests {
     fn campaign_families() {
         let mut c = make_campaign("c1");
         c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         c.add_rule(make_rule("r2", RewriteFamily::DeadCodeElimination))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let fams = c.families();
         assert_eq!(fams.len(), 2);
         assert!(fams.contains(&RewriteFamily::AlgebraicSimplification));
@@ -1539,7 +1539,7 @@ mod tests {
     fn campaign_serde_roundtrip() {
         let mut c = make_campaign("c1");
         c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: OptimizationCampaign =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1616,7 +1616,7 @@ mod tests {
     fn stack_register_campaign() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s.campaign_count(), 1);
         assert!(s.get_campaign("c1").is_some());
     }
@@ -1625,7 +1625,7 @@ mod tests {
     fn stack_register_duplicate_campaign_fails() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = s.register_campaign(make_campaign("c1")).unwrap_err();
         assert!(matches!(err, OptimizationError::DuplicateCampaign(_)));
     }
@@ -1634,9 +1634,9 @@ mod tests {
     fn stack_campaign_ids_sorted() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("beta"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(make_campaign("alpha"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ids = s.campaign_ids();
         assert_eq!(ids[0], "alpha");
         assert_eq!(ids[1], "beta");
@@ -1646,12 +1646,12 @@ mod tests {
     fn stack_record_saturation() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_saturation("c1", make_egraph_snapshot())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let c = s
             .get_campaign("c1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.status, CampaignStatus::Extracting);
     }
 
@@ -1659,16 +1659,16 @@ mod tests {
     fn stack_non_success_saturation_fails_closed() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut snapshot = make_egraph_snapshot();
         snapshot.outcome = SaturationOutcome::NodeLimitReached;
 
         s.record_saturation("c1", snapshot)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let c = s
             .get_campaign("c1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.status, CampaignStatus::Failed);
         assert!(c.extraction_result.is_none());
         assert!(
@@ -1690,20 +1690,20 @@ mod tests {
     fn stack_pathological_growth_saturation_fails_closed() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_saturation("c1", make_egraph_snapshot())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut pathological = make_egraph_snapshot();
         pathological.node_count = 50_506;
         pathological.iteration_count = 15;
         pathological.outcome = SaturationOutcome::Saturated;
 
         s.record_saturation("c1", pathological)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let c = s
             .get_campaign("c1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.status, CampaignStatus::Failed);
         assert!(
             s.events()
@@ -1718,14 +1718,14 @@ mod tests {
     fn stack_record_extraction() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_saturation("c1", make_egraph_snapshot())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_extraction("c1", make_extraction_result())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let c = s
             .get_campaign("c1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.status, CampaignStatus::Completed);
     }
 
@@ -1734,14 +1734,14 @@ mod tests {
         let mut s = BudgetedOptimizationStack::new();
         let mut c1 = make_campaign("c1");
         c1.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut c2 = make_campaign("c2");
         c2.add_rule(make_rule("r2", RewriteFamily::DeadCodeElimination))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(c1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(c2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let check = s.check_interference("c1", "c2");
         assert_eq!(check.kind, InterferenceKind::None);
         assert!(!check.blocking);
@@ -1752,14 +1752,14 @@ mod tests {
         let mut s = BudgetedOptimizationStack::new();
         let mut c1 = make_campaign("c1");
         c1.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut c2 = make_campaign("c2");
         c2.add_rule(make_rule("r2", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(c1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(c2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let check = s.check_interference("c1", "c2");
         assert_eq!(check.kind, InterferenceKind::RewriteConflict);
         assert!(check.blocking);
@@ -1769,12 +1769,12 @@ mod tests {
     fn stack_rollback() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_rollback("c1", make_rollback("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let c = s
             .get_campaign("c1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.status, CampaignStatus::RolledBack);
     }
 
@@ -1782,13 +1782,13 @@ mod tests {
     fn stack_campaigns_by_status() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(make_campaign("c2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_saturation("c1", make_egraph_snapshot())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_extraction("c1", make_extraction_result())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let completed = s.campaigns_by_status(CampaignStatus::Completed);
         assert_eq!(completed.len(), 1);
         let pending = s.campaigns_by_status(CampaignStatus::Pending);
@@ -1801,13 +1801,13 @@ mod tests {
         let mut c1 = make_campaign("c1");
         c1.expected_gain_millionths = 200_000;
         s.register_campaign(c1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_saturation("c1", make_egraph_snapshot())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_extraction("c1", make_extraction_result())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(make_campaign("c2"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let summary = s.summary();
         assert_eq!(summary.total_campaigns, 2);
         assert_eq!(summary.completed_campaigns, 1);
@@ -1818,7 +1818,7 @@ mod tests {
     fn stack_events_tracked() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             s.events()
                 .iter()
@@ -1830,13 +1830,13 @@ mod tests {
     fn stack_global_budget_consumed() {
         let mut s = BudgetedOptimizationStack::new();
         s.register_campaign(make_campaign("c1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_saturation("c1", make_egraph_snapshot())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let time = s
             .global_budget()
             .get(BudgetKind::TimeMs)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(time.current_value > 0);
     }
 
@@ -1845,9 +1845,9 @@ mod tests {
         let mut s = BudgetedOptimizationStack::new();
         let mut c = make_campaign("c1");
         c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(c)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&s).expect("serialize derived Serialize");
         let back: BudgetedOptimizationStack =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2063,9 +2063,9 @@ mod tests {
         for s in [&mut s1, &mut s2] {
             let mut c = make_campaign("c1");
             c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             s.register_campaign(c)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let json1 = serde_json::to_string(&s1).expect("serialize derived Serialize");
         let json2 = serde_json::to_string(&s2).expect("serialize derived Serialize");
@@ -2233,14 +2233,14 @@ mod tests {
         let mut s = BudgetedOptimizationStack::new();
         let mut c1 = make_campaign("c1");
         c1.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut c2 = make_campaign("c2");
         c2.add_rule(make_rule("r2", RewriteFamily::DeadCodeElimination))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(c1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.register_campaign(c2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(s.interference_checks().is_empty());
         s.check_interference("c1", "c2");
         assert_eq!(s.interference_checks().len(), 1);
@@ -2254,27 +2254,27 @@ mod tests {
         let mut c1 = make_campaign("c1");
         c1.expected_gain_millionths = 100_000;
         s.register_campaign(c1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_saturation("c1", make_egraph_snapshot())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_extraction("c1", make_extraction_result())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Failed campaign
         let c2 = make_campaign("c2");
         s.register_campaign(c2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // manually fail it
         s.campaigns
             .get_mut("c2")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .record_failure();
 
         // Rolled back campaign
         s.register_campaign(make_campaign("c3"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         s.record_rollback("c3", make_rollback("c3"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary = s.summary();
         assert_eq!(summary.total_campaigns, 3);
@@ -2356,15 +2356,15 @@ mod tests {
     fn campaign_ready_rule_count_mixed_sound_unsound() {
         let mut c = make_campaign("c1");
         c.add_rule(make_rule("r1", RewriteFamily::AlgebraicSimplification))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut unsound_rule = make_rule("r2", RewriteFamily::DeadCodeElimination);
         unsound_rule.sound = false;
         c.add_rule(unsound_rule)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut disabled_rule = make_rule("r3", RewriteFamily::PartialEvaluation);
         disabled_rule.enabled = false;
         c.add_rule(disabled_rule)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.ready_rule_count(), 1);
         assert_eq!(c.rules.len(), 3);
     }

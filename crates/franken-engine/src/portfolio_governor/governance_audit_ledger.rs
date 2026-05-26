@@ -1456,7 +1456,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 100,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = ledger
             .append(automatic_input(
                 "d-2",
@@ -1483,7 +1483,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 10,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(entry.previous_hash.is_none());
     }
 
@@ -1497,7 +1497,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 10,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let e2 = ledger
             .append(automatic_input(
                 "d-2",
@@ -1505,7 +1505,7 @@ mod tests {
                 GovernanceDecisionType::Hold,
                 20,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(e2.previous_hash.as_deref(), Some(e1.entry_hash.as_str()));
     }
 
@@ -1516,7 +1516,7 @@ mod tests {
         let mut ledger = ledger();
         let entry = ledger
             .append(override_input("ovr-1", 10))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(entry.is_override);
     }
 
@@ -1530,7 +1530,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 10,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!entry.is_override);
     }
 
@@ -1608,7 +1608,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 10,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .append(automatic_input(
                 "d-2",
@@ -1616,7 +1616,7 @@ mod tests {
                 GovernanceDecisionType::Kill,
                 20,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let results = ledger.query(&GovernanceLedgerQuery::all());
         assert_eq!(results.len(), 2);
     }
@@ -1631,7 +1631,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 10,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .append(automatic_input(
                 "d-2",
@@ -1639,7 +1639,7 @@ mod tests {
                 GovernanceDecisionType::Kill,
                 20,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let q = GovernanceLedgerQuery {
             decision_types: Some(BTreeSet::from([GovernanceDecisionType::Kill])),
             ..GovernanceLedgerQuery::all()
@@ -1659,7 +1659,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 10,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .append(automatic_input(
                 "d-2",
@@ -1667,7 +1667,7 @@ mod tests {
                 GovernanceDecisionType::Hold,
                 100,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let q = GovernanceLedgerQuery {
             start_time_ns: Some(50),
             ..GovernanceLedgerQuery::all()
@@ -1689,9 +1689,9 @@ mod tests {
             GovernanceDecisionType::Resume,
             GovernanceDecisionType::Override,
         ] {
-            let json = serde_json::to_value(dt).expect("serde deserialization should succeed");
+            let json = serde_json::to_value(dt).expect("serialization should succeed");
             let back: GovernanceDecisionType =
-                serde_json::from_value(json).expect("serde deserialization should succeed");
+                serde_json::from_value(json).expect("deserialization should succeed");
             assert_eq!(dt, back);
         }
     }
@@ -1753,7 +1753,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 10,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         let back: GovernanceLedgerEntry =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1782,7 +1782,7 @@ mod tests {
         ];
         let entry = ledger
             .append(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.artifact_references, vec!["a-ref", "z-ref"]);
     }
 
@@ -1799,7 +1799,7 @@ mod tests {
                     GovernanceDecisionType::Promote,
                     i * 10,
                 ))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert_eq!(entry.sequence, i);
         }
     }
@@ -2009,7 +2009,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 10,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let cloned = entry.clone();
         assert_eq!(entry, cloned);
         assert_eq!(entry.entry_hash, cloned.entry_hash);
@@ -2056,7 +2056,7 @@ mod tests {
                 GovernanceDecisionType::Kill,
                 50,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&entry).expect("serialize derived Serialize");
         assert!(json.contains("\"sequence\""));
         assert!(json.contains("\"decision_id\""));
@@ -2114,7 +2114,7 @@ mod tests {
                 GovernanceDecisionType::Promote,
                 10,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .append(automatic_input(
                 "rt-2",
@@ -2122,10 +2122,10 @@ mod tests {
                 GovernanceDecisionType::Hold,
                 20,
             ))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         ledger
             .append(override_input("rt-3", 30))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         let back: GovernanceAuditLedger =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2173,7 +2173,7 @@ mod tests {
         input.rationale.risk_of_harm_millionths = 1_000_000;
         let entry = ledger
             .append(input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.rationale.confidence_millionths, 1_000_000);
         assert_eq!(entry.rationale.risk_of_harm_millionths, 1_000_000);
 
@@ -2183,7 +2183,7 @@ mod tests {
         input2.rationale.risk_of_harm_millionths = 0;
         let entry2 = ledger
             .append(input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry2.rationale.confidence_millionths, 0);
         assert_eq!(entry2.rationale.risk_of_harm_millionths, 0);
     }

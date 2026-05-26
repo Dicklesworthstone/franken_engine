@@ -2262,7 +2262,7 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     // SAFETY: Path was just verified to have a parent, so file_name() returns Some
     let mut tmp_name = path
         .file_name()
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
         .to_owned();
     tmp_name.push(".tmp");
     let tmp = parent.join(tmp_name);
@@ -2480,7 +2480,7 @@ tracking_bead = "bd-42"
 expiry_date = "2030-01-01"
 "#;
         // SAFETY: Test uses valid TOML that matches expected waiver format
-        let set = parse_waiver_toml(toml).expect("serde deserialization should succeed");
+        let set = parse_waiver_toml(toml).expect("operation should succeed for valid inputs");
         assert_eq!(set.waivers.len(), 1);
         assert_eq!(set.waivers[0].asset_id, "test-001");
         assert_eq!(set.waivers[0].reason_code, WaiverReasonCode::HarnessGap);
@@ -2504,7 +2504,7 @@ tracking_bead = "bd-2"
 expiry_date = "2031-06-15"
 "#;
         // SAFETY: Test uses valid TOML that matches expected waiver format
-        let set = parse_waiver_toml(toml).expect("serde deserialization should succeed");
+        let set = parse_waiver_toml(toml).expect("operation should succeed for valid inputs");
         assert_eq!(set.waivers.len(), 2);
         assert_eq!(set.waivers[1].asset_id, "test-002");
         assert_eq!(
@@ -2524,7 +2524,7 @@ tracking_bead = "bd-1"
 expiry_date = "2030-01-01"
 "#;
         // SAFETY: Test uses valid TOML that matches expected waiver format
-        let set = parse_waiver_toml(toml).expect("serde deserialization should succeed");
+        let set = parse_waiver_toml(toml).expect("operation should succeed for valid inputs");
         assert_eq!(set.waivers.len(), 1);
         assert_eq!(set.waivers[0].asset_id, "test-001");
     }
@@ -2532,7 +2532,7 @@ expiry_date = "2030-01-01"
     #[test]
     fn parse_waiver_toml_empty_content() {
         // SAFETY: Empty string should parse successfully to empty waiver set
-        let set = parse_waiver_toml("").expect("serde deserialization should succeed");
+        let set = parse_waiver_toml("").expect("operation should succeed for valid inputs");
         assert!(set.waivers.is_empty());
     }
 
@@ -2598,7 +2598,7 @@ expiry_date = "2030-01-01"
         // SAFETY: Just verified found.is_some() so unwrap() is safe
         assert_eq!(
             found
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .asset_id,
             "asset-1"
         );
@@ -2737,7 +2737,7 @@ expiry_date = "2030-01-01"
         rec.expected_evidence_type = Some("none".to_string());
         let meta = rec
             .ifc_metadata()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(meta.category, "benign");
         assert_eq!(meta.flow_path_type, "direct");
     }
@@ -3140,14 +3140,14 @@ expiry_date = "2030-01-01"
     #[test]
     fn parse_props_fields_basic() {
         let result = parse_props_fields("props: beta, alpha, gamma")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, vec!["alpha", "beta", "gamma"]);
     }
 
     #[test]
     fn parse_props_fields_deduplicates() {
         let result =
-            parse_props_fields("props: a, b, a").expect("serde deserialization should succeed");
+            parse_props_fields("props: a, b, a").expect("operation should succeed for valid inputs");
         assert_eq!(result, vec!["a", "b"]);
     }
 
@@ -3159,7 +3159,7 @@ expiry_date = "2030-01-01"
     #[test]
     fn parse_props_fields_multiline_finds_first() {
         let payload = "line1\nprops: x, y\nline3";
-        let result = parse_props_fields(payload).expect("serde deserialization should succeed");
+        let result = parse_props_fields(payload).expect("operation should succeed for valid inputs");
         assert_eq!(result, vec!["x", "y"]);
     }
 
@@ -3168,7 +3168,7 @@ expiry_date = "2030-01-01"
     #[test]
     fn extract_error_signature_found() {
         let payload = "line1\nTypeError|undefined is not a function\nline3";
-        let sig = extract_error_signature(payload).expect("serde deserialization should succeed");
+        let sig = extract_error_signature(payload).expect("operation should succeed for valid inputs");
         assert!(sig.contains("Error|"));
     }
 
@@ -4355,7 +4355,7 @@ expiry_date = "2030-01-01"
             minimized_repros: vec![],
         };
         let summary =
-            build_ifc_conformance_summary(&run).expect("serde deserialization should succeed");
+            build_ifc_conformance_summary(&run).expect("operation should succeed for valid inputs");
         assert_eq!(summary.run_id, "run-1");
         assert!(summary.category_counts.contains_key("benign"));
         assert!(summary.category_counts.contains_key("exfil"));
@@ -4405,7 +4405,7 @@ expiry_date = "2030-01-01"
             minimized_repros: vec![],
         };
         let summary =
-            build_ifc_conformance_summary(&run).expect("serde deserialization should succeed");
+            build_ifc_conformance_summary(&run).expect("operation should succeed for valid inputs");
         assert_eq!(summary.false_positive_count, 1);
         assert_eq!(summary.ci_blocking_failures, 1);
     }
@@ -4450,7 +4450,7 @@ expiry_date = "2030-01-01"
             minimized_repros: vec![],
         };
         let summary =
-            build_ifc_conformance_summary(&run).expect("serde deserialization should succeed");
+            build_ifc_conformance_summary(&run).expect("operation should succeed for valid inputs");
         let benign = &summary.category_counts["benign"];
         assert_eq!(benign.waived, 1);
         assert_eq!(benign.total, 1);
@@ -4496,7 +4496,7 @@ expiry_date = "2030-01-01"
             minimized_repros: vec![],
         };
         let summary =
-            build_ifc_conformance_summary(&run).expect("serde deserialization should succeed");
+            build_ifc_conformance_summary(&run).expect("operation should succeed for valid inputs");
         let exfil = &summary.category_counts["exfil"];
         assert_eq!(exfil.errored, 1);
     }
@@ -4715,7 +4715,7 @@ expiry_date = "2030-01-01"
     #[test]
     fn canonical_json_bytes_round_trip() {
         let value = serde_json::json!({"key": "value"});
-        let bytes = canonical_json_bytes(&value).expect("serde deserialization should succeed");
+        let bytes = canonical_json_bytes(&value).expect("operation should succeed for valid inputs");
         let back: serde_json::Value =
             serde_json::from_slice(&bytes).expect("deserialize known-valid JSON");
         assert_eq!(back, value);
@@ -4728,8 +4728,8 @@ expiry_date = "2030-01-01"
         let dir = std::env::temp_dir().join("franken_test_write_atomic");
         let _ = fs::remove_dir_all(&dir);
         let path = dir.join("sub/test.txt");
-        write_atomic(&path, b"hello world").expect("serde deserialization should succeed");
-        let content = fs::read_to_string(&path).expect("serde deserialization should succeed");
+        write_atomic(&path, b"hello world").expect("operation should succeed for valid inputs");
+        let content = fs::read_to_string(&path).expect("operation should succeed for valid inputs");
         assert_eq!(content, "hello world");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -4738,11 +4738,11 @@ expiry_date = "2030-01-01"
     fn write_atomic_overwrites_existing() {
         let dir = std::env::temp_dir().join("franken_test_write_atomic_overwrite");
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).expect("serde deserialization should succeed");
+        fs::create_dir_all(&dir).expect("operation should succeed for valid inputs");
         let path = dir.join("file.txt");
-        write_atomic(&path, b"first").expect("serde deserialization should succeed");
-        write_atomic(&path, b"second").expect("serde deserialization should succeed");
-        let content = fs::read_to_string(&path).expect("serde deserialization should succeed");
+        write_atomic(&path, b"first").expect("operation should succeed for valid inputs");
+        write_atomic(&path, b"second").expect("operation should succeed for valid inputs");
+        let content = fs::read_to_string(&path).expect("operation should succeed for valid inputs");
         assert_eq!(content, "second");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -5090,7 +5090,7 @@ expiry_date = "2030-01-01"
             assets: vec![create_valid_asset()],
         };
 
-        let temp_dir = tempfile::tempdir().expect("serde deserialization should succeed");
+        let temp_dir = tempfile::tempdir().expect("operation should succeed for valid inputs");
         let manifest_path = temp_dir.path().join("manifest.json");
 
         let result = manifest.validate_and_resolve(&manifest_path);
@@ -5118,7 +5118,7 @@ expiry_date = "2030-01-01"
             assets: vec![], // Empty asset set
         };
 
-        let temp_dir = tempfile::tempdir().expect("serde deserialization should succeed");
+        let temp_dir = tempfile::tempdir().expect("operation should succeed for valid inputs");
         let manifest_path = temp_dir.path().join("manifest.json");
 
         let result = manifest.validate_and_resolve(&manifest_path);
@@ -5165,7 +5165,7 @@ expiry_date = "2030-01-01"
                 assets: vec![asset],
             };
 
-            let temp_dir = tempfile::tempdir().expect("serde deserialization should succeed");
+            let temp_dir = tempfile::tempdir().expect("operation should succeed for valid inputs");
             let manifest_path = temp_dir.path().join("manifest.json");
 
             let result = manifest.validate_and_resolve(&manifest_path);
@@ -5204,7 +5204,7 @@ expiry_date = "2030-01-01"
                 assets: vec![asset],
             };
 
-            let temp_dir = tempfile::tempdir().expect("serde deserialization should succeed");
+            let temp_dir = tempfile::tempdir().expect("operation should succeed for valid inputs");
             let manifest_path = temp_dir.path().join("manifest.json");
 
             let result = manifest.validate_and_resolve(&manifest_path);
@@ -5261,7 +5261,7 @@ expiry_date = "2030-01-01"
                 assets: vec![asset],
             };
 
-            let temp_dir = tempfile::tempdir().expect("serde deserialization should succeed");
+            let temp_dir = tempfile::tempdir().expect("operation should succeed for valid inputs");
             let manifest_path = temp_dir.path().join("manifest.json");
 
             let result = manifest.validate_and_resolve(&manifest_path);
@@ -5293,7 +5293,7 @@ expiry_date = "2030-01-01"
 
     #[test]
     fn missing_fixture_files_fail_with_io_error() {
-        let temp_dir = tempfile::tempdir().expect("serde deserialization should succeed");
+        let temp_dir = tempfile::tempdir().expect("operation should succeed for valid inputs");
         let manifest_path = temp_dir.path().join("manifest.json");
 
         // Create asset pointing to non-existent fixture file
@@ -5343,7 +5343,7 @@ expiry_date = "2030-01-01"
     fn fixture_hash_mismatch_fails_deterministically() {
         use std::fs;
 
-        let temp_dir = tempfile::tempdir().expect("serde deserialization should succeed");
+        let temp_dir = tempfile::tempdir().expect("operation should succeed for valid inputs");
         let manifest_path = temp_dir.path().join("manifest.json");
 
         // Create fixture file with known content
@@ -5351,9 +5351,9 @@ expiry_date = "2030-01-01"
         let fixture_path = temp_dir.path().join("fixture.bin");
         let expected_path = temp_dir.path().join("expected.bin");
 
-        fs::write(&fixture_path, fixture_content).expect("serde deserialization should succeed");
+        fs::write(&fixture_path, fixture_content).expect("operation should succeed for valid inputs");
         fs::write(&expected_path, b"expected output")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Calculate correct hashes
         let actual_fixture_hash = sha256_hex(fixture_content);
@@ -5406,7 +5406,7 @@ expiry_date = "2030-01-01"
     fn expected_output_hash_mismatch_fails_deterministically() {
         use std::fs;
 
-        let temp_dir = tempfile::tempdir().expect("serde deserialization should succeed");
+        let temp_dir = tempfile::tempdir().expect("operation should succeed for valid inputs");
         let manifest_path = temp_dir.path().join("manifest.json");
 
         // Create files with known content
@@ -5415,8 +5415,8 @@ expiry_date = "2030-01-01"
         let fixture_path = temp_dir.path().join("fixture.bin");
         let expected_path = temp_dir.path().join("expected.bin");
 
-        fs::write(&fixture_path, fixture_content).expect("serde deserialization should succeed");
-        fs::write(&expected_path, expected_content).expect("serde deserialization should succeed");
+        fs::write(&fixture_path, fixture_content).expect("operation should succeed for valid inputs");
+        fs::write(&expected_path, expected_content).expect("operation should succeed for valid inputs");
 
         // Calculate correct hashes
         let actual_fixture_hash = sha256_hex(fixture_content);
@@ -5475,7 +5475,7 @@ expiry_date = "2030-01-01"
             assets: vec![],
         };
 
-        let temp_dir = tempfile::tempdir().expect("serde deserialization should succeed");
+        let temp_dir = tempfile::tempdir().expect("operation should succeed for valid inputs");
         let manifest_path = temp_dir.path().join("manifest.json");
 
         let result1 = manifest.validate_and_resolve(&manifest_path);

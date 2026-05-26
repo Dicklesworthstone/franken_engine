@@ -2296,7 +2296,7 @@ mod tests {
         );
         assert!(record.is_some());
         // SAFETY: Just verified record.is_some() above
-        let record = record.expect("serde deserialization should succeed");
+        let record = record.expect("operation should succeed for valid inputs");
         assert_eq!(record.trigger, RollbackTrigger::OperatorInitiated);
         assert_eq!(record.consecutive_count, 1);
     }
@@ -2344,7 +2344,7 @@ mod tests {
         let state = ev
             .site_states()
             .get("site-s")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.consecutive_rollbacks, 0);
         assert!(!state.permanently_denied);
     }

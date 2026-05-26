@@ -767,7 +767,7 @@ mod tests {
             0xBD, 0xBE, 0xBF, 0xC0,
         ])
         // SAFETY: Fixed 32-byte array is valid signing key format for test helper
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
     }
 
     /// Derive a valid Ed25519 VerificationKey from a seed byte.
@@ -796,7 +796,7 @@ mod tests {
             target_bytes.as_slice(),
         )
         // SAFETY: Test helper uses valid domain, zone, schema, and bytes for ID derivation
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         let mut rev = Revocation {
             revocation_id,
@@ -811,7 +811,7 @@ mod tests {
 
         let preimage = rev.preimage_bytes();
         // SAFETY: Test helper uses valid signing key and preimage for signature creation
-        let sig = sign_preimage(&sk, &preimage).expect("serde deserialization should succeed");
+        let sig = sign_preimage(&sk, &preimage).expect("operation should succeed for valid inputs");
         rev.signature = sig;
         rev
     }
@@ -832,7 +832,7 @@ mod tests {
         enforcer
             .chain_mut()
             .append(rev, &sk, "t-revoke")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
 
     // ---------------------------------------------------------------
@@ -1621,7 +1621,7 @@ mod tests {
         enforcer
             .chain_mut()
             .append(rev, &sk, "t-mut")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(enforcer.chain().len(), 1);
     }
 

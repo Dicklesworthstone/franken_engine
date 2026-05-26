@@ -5965,7 +5965,7 @@ fn rustc_verbose_field(verbose: Option<&str>, field: &str) -> Option<String> {
 fn current_unix_ns() -> u64 {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .expect("serde deserialization should succeed")
+        .expect("operation should succeed for valid inputs")
         .as_nanos();
     u64::try_from(nanos).unwrap_or(u64::MAX)
 }
@@ -6974,7 +6974,7 @@ mod tests {
                     .collect(),
             })
             .expect("catalog entry should be added");
-        write_json_file(&catalog_path, &catalog).expect("serde deserialization should succeed");
+        write_json_file(&catalog_path, &catalog).expect("operation should succeed for valid inputs");
 
         let exit_code = execute_react_doctor(ReactDoctorArgs {
             catalog: catalog_path.clone(),
@@ -7356,7 +7356,7 @@ mod tests {
             observability_mode: default_capture_observability_mode(),
         };
 
-        let json = serde_json::to_value(&output).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&output).expect("serialization should succeed");
         assert_eq!(json["receipt_id"].as_str(), Some("rcpt-1"));
         assert_eq!(json["trace_id"].as_str(), Some("trace-verify-01"));
         assert_eq!(
@@ -7409,7 +7409,7 @@ mod tests {
             observability_mode: default_capture_observability_mode(),
         };
 
-        let json = serde_json::to_value(&output).expect("serde deserialization should succeed");
+        let json = serde_json::to_value(&output).expect("serialization should succeed");
         assert_eq!(json["claim_type"].as_str(), Some("benchmark"));
         assert_eq!(
             json["report_path"].as_str(),
@@ -8065,7 +8065,7 @@ mod tests {
         ];
         let result = parse_command(&args);
         assert!(result.is_err());
-        let error = result.expect_err("serde deserialization should succeed");
+        let error = result.expect_err("operation should return an error");
         assert!(error.contains("unknown zero-placeholder flag `--unknown-flag`"));
     }
 
@@ -8079,7 +8079,7 @@ mod tests {
         ];
         let result = parse_command(&args);
         assert!(result.is_err());
-        let error = result.expect_err("serde deserialization should succeed");
+        let error = result.expect_err("operation should return an error");
         assert!(error.contains("runtime diagnostics requires --input <file>"));
     }
 }

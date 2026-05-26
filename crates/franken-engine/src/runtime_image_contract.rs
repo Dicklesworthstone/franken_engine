@@ -1432,7 +1432,7 @@ mod tests {
     fn registry_register_duplicate_error() {
         let mut reg = ImageRegistry::new(test_policy());
         reg.register(test_manifest("dup"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = reg.register(test_manifest("dup")).unwrap_err();
         assert!(matches!(err, ImageRegistryError::ImageAlreadyExists { .. }));
     }
@@ -1445,9 +1445,9 @@ mod tests {
         };
         let mut reg = ImageRegistry::new(policy);
         reg.register(test_manifest("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.register(test_manifest("b"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = reg.register(test_manifest("c")).unwrap_err();
         assert!(matches!(err, ImageRegistryError::CapacityExceeded { .. }));
     }
@@ -1460,7 +1460,7 @@ mod tests {
         };
         let mut reg = ImageRegistry::new(policy);
         reg.register(test_manifest("a"))
-            .expect("serde deserialization should succeed"); // 1024 bytes
+            .expect("operation should succeed for valid inputs"); // 1024 bytes
         let err = reg.register(test_manifest("b")).unwrap_err(); // would be 2048
         assert!(matches!(err, ImageRegistryError::CapacityExceeded { .. }));
     }
@@ -1522,7 +1522,7 @@ mod tests {
     fn registry_lookup_found() {
         let mut reg = ImageRegistry::new(test_policy());
         reg.register(test_manifest("look"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reg.lookup("look").is_some());
     }
 
@@ -1538,11 +1538,11 @@ mod tests {
     fn registry_ready_images() {
         let mut reg = ImageRegistry::new(test_policy());
         reg.register(test_manifest("r1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut m2 = test_manifest("r2");
         m2.state = ImageState::Building;
         reg.register(m2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ready = reg.ready_images();
         assert_eq!(ready.len(), 1);
         assert_eq!(ready[0].image_id, "r1");
@@ -1554,14 +1554,14 @@ mod tests {
     fn registry_evict_success() {
         let mut reg = ImageRegistry::new(test_policy());
         reg.register(test_manifest("ev"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = reg
             .evict(
                 "ev",
                 ImageEvictionReason::TtlExpired,
                 SecurityEpoch::from_raw(5),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.image_id, "ev");
         assert_eq!(record.reason, ImageEvictionReason::TtlExpired);
         assert_eq!(record.bytes_freed, 1024);
@@ -1591,17 +1591,17 @@ mod tests {
         m1.warm_start_mode = WarmStartMode::PrewarmedPool;
         m1.kind = ImageKind::Prewarmed;
         reg.register(m1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut m2 = test_manifest("aot");
         m2.warm_start_mode = WarmStartMode::AotRestore;
         m2.kind = ImageKind::AotCompiled;
         reg.register(m2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let best = reg
             .best_warm_start()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(best.image_id, "aot");
     }
 
@@ -1609,7 +1609,7 @@ mod tests {
     fn registry_best_warm_start_none_when_all_cold() {
         let mut reg = ImageRegistry::new(test_policy());
         reg.register(test_manifest("cold"))
-            .expect("serde deserialization should succeed"); // WarmStartMode::Cold
+            .expect("operation should succeed for valid inputs"); // WarmStartMode::Cold
         assert!(reg.best_warm_start().is_none());
     }
 
@@ -1621,7 +1621,7 @@ mod tests {
         m.kind = ImageKind::AotCompiled;
         m.state = ImageState::Stale;
         reg.register(m)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(reg.best_warm_start().is_none());
     }
 
@@ -1631,9 +1631,9 @@ mod tests {
     fn registry_total_bytes() {
         let mut reg = ImageRegistry::new(test_policy());
         reg.register(test_manifest("a"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.register(test_manifest("b"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(reg.total_bytes(), 2048);
     }
 
@@ -1643,10 +1643,10 @@ mod tests {
     fn registry_content_hash_determinism() {
         let mut r1 = ImageRegistry::new(test_policy());
         r1.register(test_manifest("x"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut r2 = ImageRegistry::new(test_policy());
         r2.register(test_manifest("x"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.content_hash(), r2.content_hash());
     }
 
@@ -1654,10 +1654,10 @@ mod tests {
     fn registry_content_hash_differs_with_different_images() {
         let mut r1 = ImageRegistry::new(test_policy());
         r1.register(test_manifest("x"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut r2 = ImageRegistry::new(test_policy());
         r2.register(test_manifest("y"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.content_hash(), r2.content_hash());
     }
 
@@ -1668,14 +1668,14 @@ mod tests {
         x1.kind = ImageKind::Prewarmed;
         x1.warm_start_mode = WarmStartMode::PrewarmedPool;
         r1.register(x1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut r2 = ImageRegistry::new(test_policy());
         let mut x2 = test_manifest("x");
         x2.kind = ImageKind::AotCompiled;
         x2.warm_start_mode = WarmStartMode::AotRestore;
         r2.register(x2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r1.content_hash(), r2.content_hash());
     }
@@ -1686,13 +1686,13 @@ mod tests {
         let mut x1 = test_manifest("x");
         x1.integrity_status = ImageIntegrityStatus::Verified;
         r1.register(x1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut r2 = ImageRegistry::new(test_policy());
         let mut x2 = test_manifest("x");
         x2.integrity_status = ImageIntegrityStatus::Unverified;
         r2.register(x2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r1.content_hash(), r2.content_hash());
     }
@@ -1727,13 +1727,13 @@ mod tests {
     fn registry_serde_roundtrip() {
         let mut reg = ImageRegistry::new(test_policy());
         reg.register(test_manifest("s1"))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.evict(
             "s1",
             ImageEvictionReason::ManualEviction,
             SecurityEpoch::from_raw(10),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&reg).expect("serialize derived Serialize");
         let back: ImageRegistry =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1750,18 +1750,18 @@ mod tests {
         m1.kind = ImageKind::Zygote;
         m1.creation_epoch = SecurityEpoch::from_raw(1);
         reg.register(m1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut m2 = test_manifest("z2");
         m2.warm_start_mode = WarmStartMode::ZygoteFork;
         m2.kind = ImageKind::Zygote;
         m2.creation_epoch = SecurityEpoch::from_raw(5);
         reg.register(m2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let best = reg
             .best_warm_start()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(best.image_id, "z2");
     }
 

@@ -1040,7 +1040,7 @@ mod tests {
             let request = test_request(SafetyAction::ExtensionQuarantine, 42);
             let result = router
                 .evaluate(&mut cx, &request)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(
                 result.verdict.is_allow(),
                 "{action_name} should permit the safety action"
@@ -1065,7 +1065,7 @@ mod tests {
             let request = test_request(SafetyAction::ExtensionQuarantine, 43);
             let result = router
                 .evaluate(&mut cx, &request)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(
                 matches!(result.verdict, SafetyVerdict::Deny { .. }),
                 "{action_name} should deny the safety action"
@@ -1137,7 +1137,7 @@ mod tests {
         let req = test_request(SafetyAction::ExtensionQuarantine, 1);
         let result = r
             .evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // With uniform prior and safety-biased loss, expect deny.
         assert!(
             matches!(result.verdict, SafetyVerdict::Deny { .. }),
@@ -1156,14 +1156,14 @@ mod tests {
         // Force the posterior to strongly favor "safe".
         *r.posteriors
             .get_mut(&SafetyAction::BudgetOverride)
-            .expect("serde deserialization should succeed") =
+            .expect("operation should succeed for valid inputs") =
             Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
 
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::BudgetOverride, 2);
         let result = r
             .evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.verdict.is_allow());
     }
 
@@ -1174,7 +1174,7 @@ mod tests {
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::ForcedTermination, 3);
         r.evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r.evidence().len(), 1);
     }
 
@@ -1185,7 +1185,7 @@ mod tests {
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::CapabilityRevocation, 4);
         r.evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let events = r.drain_events();
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].component, "safety_decision_router");
@@ -1199,7 +1199,7 @@ mod tests {
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::PrivilegeEscalation, 5);
         r.evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             cx.budget().remaining_ms(),
             100 - SAFETY_DECISION_BUDGET_COST_MS
@@ -1234,7 +1234,7 @@ mod tests {
         assert_eq!(
             r.results()
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .sequence_number,
             u64::MAX
         );
@@ -1259,7 +1259,7 @@ mod tests {
         let req = test_request(SafetyAction::ExtensionQuarantine, 8);
         let result = r
             .evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.trace_id, trace_str);
     }
 
@@ -1273,15 +1273,15 @@ mod tests {
         r.register_all_defaults();
         let before = r
             .posterior(SafetyAction::ExtensionQuarantine)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .probs()
             .to_vec();
         // Observe "safe" state.
         r.observe(SafetyAction::ExtensionQuarantine, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let after = r
             .posterior(SafetyAction::ExtensionQuarantine)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .probs()
             .to_vec();
         // P(safe) should have increased.
@@ -1302,13 +1302,13 @@ mod tests {
         // Many "safe" observations should shift posterior toward allow.
         for _ in 0..20 {
             r.observe(SafetyAction::BudgetOverride, 0)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::BudgetOverride, 9);
         let result = r
             .evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // After many safe observations, should allow.
         assert!(result.verdict.is_allow());
     }
@@ -1324,7 +1324,7 @@ mod tests {
         // Force safe posterior so normal eval would allow.
         *r.posteriors
             .get_mut(&SafetyAction::BudgetOverride)
-            .expect("serde deserialization should succeed") =
+            .expect("operation should succeed for valid inputs") =
             Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
 
         let mut cx = test_cx(100);
@@ -1334,7 +1334,7 @@ mod tests {
 
         let result = r
             .evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(result.verdict, SafetyVerdict::Fallback { .. }));
         assert!(result.fallback_active);
         assert_eq!(r.fallback_count(), 1);
@@ -1346,7 +1346,7 @@ mod tests {
         r.register_all_defaults();
         *r.posteriors
             .get_mut(&SafetyAction::PrivilegeEscalation)
-            .expect("serde deserialization should succeed") =
+            .expect("operation should succeed for valid inputs") =
             Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
 
         let mut cx = test_cx(100);
@@ -1356,7 +1356,7 @@ mod tests {
 
         let result = r
             .evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(result.verdict, SafetyVerdict::Fallback { .. }));
     }
 
@@ -1517,7 +1517,7 @@ mod tests {
             let mut cx = test_cx(100);
             let req = test_request(SafetyAction::ExtensionQuarantine, 1);
             r.evaluate(&mut cx, &req)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
         let r1 = run();
         let r2 = run();
@@ -1546,7 +1546,7 @@ mod tests {
         let req = test_request(SafetyAction::CrossExtensionShare, 20);
         let result = r
             .evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.verdict.is_allow());
     }
 
@@ -1566,14 +1566,14 @@ mod tests {
         // the Bayes-optimal action.
         *r.posteriors
             .get_mut(&SafetyAction::ForcedTermination)
-            .expect("serde deserialization should succeed") =
+            .expect("operation should succeed for valid inputs") =
             Posterior::new(vec![0.99, 0.01]).expect("constructor with valid inputs");
 
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::ForcedTermination, 21);
         let result = r
             .evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             matches!(result.verdict, SafetyVerdict::Deny { .. }),
             "expected deny with highly asymmetric loss"
@@ -1702,7 +1702,7 @@ mod tests {
         let mut cx = test_cx(100);
         let req = test_request(SafetyAction::ExtensionQuarantine, 1);
         r.evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r.drain_events().len(), 1);
         assert!(
             r.drain_events().is_empty(),
@@ -1725,7 +1725,7 @@ mod tests {
             let req = test_request(SafetyAction::ExtensionQuarantine, i);
             let result = r
                 .evaluate(&mut cx, &req)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             assert!(
                 result.sequence_number > last_seq,
                 "sequence must be monotonically increasing"
@@ -1874,7 +1874,7 @@ mod tests {
         for (i, action) in actions.iter().enumerate() {
             let req = test_request(*action, i as u64);
             r.evaluate(&mut cx, &req)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         assert_eq!(r.decision_count(), 3);
@@ -1888,7 +1888,7 @@ mod tests {
         let mut cx = test_cx(200);
         let req = test_request(SafetyAction::ExtensionQuarantine, 0);
         r.evaluate(&mut cx, &req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = r.drain_events();
         assert!(!events.is_empty());

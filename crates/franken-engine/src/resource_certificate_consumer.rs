@@ -1608,7 +1608,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let receipt = enforcer.enforce(
             "ext-1",
             EnforcementScope::General {
@@ -1625,7 +1625,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Use 91% of time budget (above 90% throttle threshold).
         let receipt = enforcer.enforce(
@@ -1647,7 +1647,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Exceed time budget.
         let receipt = enforcer.enforce(
@@ -1724,7 +1724,7 @@ mod tests {
             .retain(|bound| bound.dimension == EnforcedDimension::Time);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1754,7 +1754,7 @@ mod tests {
             .retain(|bound| bound.dimension == EnforcedDimension::Time);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1772,7 +1772,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1798,7 +1798,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // First call: 50%.
         enforcer.enforce(
@@ -1829,7 +1829,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Reject: over budget.
         enforcer.enforce(
@@ -1843,11 +1843,11 @@ mod tests {
         // Usage should NOT have been recorded.
         let state = enforcer
             .extension_state("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let time_budget = state
             .budgets
             .get(&EnforcedDimension::Time)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(time_budget.current_usage_millionths, 0);
     }
 
@@ -1859,7 +1859,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1878,7 +1878,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // GcPressure has no budget in the certificate and fail_closed_on_missing
         // is true, so the enforcer rejects with MissingBudgetDimensions.
@@ -1901,7 +1901,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // ModuleLoadCount has no budget in the certificate and fail_closed_on_missing
         // is true, so the enforcer rejects with MissingBudgetDimensions.
@@ -1924,7 +1924,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1942,7 +1942,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1962,7 +1962,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -1981,7 +1981,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipt = enforcer.enforce(
             "ext-1",
@@ -2005,7 +2005,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for i in 0..5 {
             enforcer.enforce(
@@ -2027,7 +2027,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!enforcer.is_throttled("ext-1"));
         enforcer.enforce(
@@ -2046,7 +2046,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!enforcer.is_exhausted("ext-1"));
         // Enforcement rejects when projected ratio exceeds reject_threshold, so usage
@@ -2064,7 +2064,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         enforcer.enforce(
             "ext-1",
@@ -2095,7 +2095,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // One allow.
         enforcer.enforce(
@@ -2108,7 +2108,7 @@ mod tests {
 
         let state = enforcer
             .extension_state("ext-1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.allow_count, 1);
         assert_eq!(state.throttle_count, 0);
         assert_eq!(state.reject_count, 0);
@@ -2123,7 +2123,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         enforcer.enforce(
             "ext-1",
             EnforcementScope::General {
@@ -2155,7 +2155,7 @@ mod tests {
         let digest = make_digest("cert-1", CertificateVerdict::Certified);
         enforcer
             .install_certificate("ext-1", digest)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         enforcer.policy.emit_violation_details = false;
 
         let receipt = enforcer.enforce(
@@ -2176,7 +2176,7 @@ mod tests {
             let digest = make_digest("cert-1", CertificateVerdict::Certified);
             enforcer
                 .install_certificate("ext-1", digest)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             enforcer.policy.emit_violation_details = emit_violation_details;
             enforcer.enforce(
                 "ext-1",
@@ -2203,7 +2203,7 @@ mod tests {
                 "ext-1",
                 make_digest("cert-1", CertificateVerdict::Certified),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let baseline_manifest = ResourceConsumerManifest::from_enforcer(&baseline);
 
         let mut with_receipt = make_enforcer();
@@ -2212,7 +2212,7 @@ mod tests {
                 "ext-1",
                 make_digest("cert-1", CertificateVerdict::Certified),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         with_receipt.enforce(
             "ext-1",
             EnforcementScope::General {
@@ -2391,7 +2391,7 @@ mod tests {
         let budget = state
             .budgets
             .get(&EnforcedDimension::Time)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(budget.current_usage_millionths, 1_000_000);
     }
 

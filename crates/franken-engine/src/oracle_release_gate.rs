@@ -862,7 +862,7 @@ fn compute_report_hash(
         inconclusive_count,
         evaluations,
     };
-    let bytes = serde_json::to_vec(&payload).expect("serde deserialization should succeed");
+    let bytes = serde_json::to_vec(&payload).expect("serialization should succeed");
     ContentHash::compute(&bytes)
 }
 
@@ -892,7 +892,7 @@ fn compute_triage_hash(
         info_count,
         entries,
     };
-    let bytes = serde_json::to_vec(&payload).expect("serde deserialization should succeed");
+    let bytes = serde_json::to_vec(&payload).expect("serialization should succeed");
     ContentHash::compute(&bytes)
 }
 
@@ -1650,25 +1650,25 @@ mod tests {
         let scenario = conditions
             .iter()
             .find(|condition| condition.condition_id == "scenario-pass-rate")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(scenario.threshold.threshold_value, 910_000);
 
         let contract = conditions
             .iter()
             .find(|condition| condition.condition_id == "contract-pass-rate")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(contract.threshold.threshold_value, 910_000);
 
         let metric = conditions
             .iter()
             .find(|condition| condition.condition_id == "perf-regression")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(metric.threshold.threshold_value, 25_000);
 
         let obligations = conditions
             .iter()
             .find(|condition| condition.condition_id == "obligation-resolution")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(obligations.threshold.threshold_value, 2);
     }
 
@@ -1793,7 +1793,7 @@ mod tests {
         assert!(metric.is_some());
         assert!(
             !metric
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .threshold
                 .is_hard_blocker
         );

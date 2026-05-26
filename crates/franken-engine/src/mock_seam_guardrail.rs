@@ -940,7 +940,7 @@ mod tests {
             PatternCategory::MockContextType,
             "custom mock type".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(reg.total_count, before + 1);
     }
 
@@ -1097,7 +1097,7 @@ mod tests {
             epoch(1),
             Some(epoch(100)),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(p.waivers.len(), 1);
     }
 
@@ -1113,7 +1113,7 @@ mod tests {
             epoch(1),
             None,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let err = add_waiver(
             &mut p,
             "w-001".to_string(),
@@ -1153,7 +1153,7 @@ mod tests {
             epoch(1),
             None,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(is_waived(&p, "src/legacy.rs", "MockCx", epoch(5)));
         assert!(!is_waived(&p, "src/legacy.rs", "MockBudget", epoch(5)));
         assert!(!is_waived(&p, "src/other.rs", "MockCx", epoch(5)));
@@ -1171,7 +1171,7 @@ mod tests {
             epoch(1),
             Some(epoch(10)),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(is_waived(&p, "src/legacy.rs", "MockCx", epoch(5)));
         assert!(!is_waived(&p, "src/legacy.rs", "MockCx", epoch(11)));
     }
@@ -1189,7 +1189,7 @@ mod tests {
             epoch(1),
             None,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let content = "let cx = MockCx::new();\n";
         let result = scan_file_content("src/waived.rs", content, &reg, &waiver, epoch(1));
         // MockCx should be waived, but MockBudget etc. should not appear.
@@ -1208,7 +1208,7 @@ mod tests {
             epoch(1),
             Some(epoch(100)),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&p).expect("serialize derived Serialize");
         let back: WaiverPolicy = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(p.waivers.len(), back.waivers.len());
@@ -1223,7 +1223,7 @@ mod tests {
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("src/a.rs", "fn a() {}"), ("src/b.rs", "fn b() {}")];
         let report = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.decision, GateDecision::Pass);
         assert_eq!(report.files_scanned, 2);
         assert_eq!(report.clean_files, 2);
@@ -1235,7 +1235,7 @@ mod tests {
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("src/bad.rs", "let cx = MockCx::new();")];
         let report = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.decision, GateDecision::Fail);
         assert_eq!(report.files_with_violations, 1);
         assert!(report.total_production_violations > 0);
@@ -1247,7 +1247,7 @@ mod tests {
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("tests/test_a.rs", "use MockCx;\nuse MockBudget;")];
         let report = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.decision, GateDecision::Pass);
         assert_eq!(report.files_with_test_only, 1);
         assert_eq!(report.total_production_violations, 0);
@@ -1259,9 +1259,9 @@ mod tests {
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("src/a.rs", "fn a() {}")];
         let r1 = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.report_hash, r2.report_hash);
     }
 
@@ -1271,7 +1271,7 @@ mod tests {
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![("src/bad.rs", "let cx = MockCx::new();")];
         let report = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: GuardReport = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report.decision, back.decision);
@@ -1285,7 +1285,7 @@ mod tests {
         let files: Vec<(&str, &str)> =
             vec![("src/bad.rs", "MockCx::new();\ntrace_id_from_seed(42);\n")];
         let report = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(report.violation_categories.contains("mock_context_type"));
         assert!(report.violation_categories.contains("seed_derived_trace"));
     }
@@ -1399,7 +1399,7 @@ mod tests {
         let waiver = empty_waiver_policy();
         let files: Vec<(&str, &str)> = vec![];
         let report = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.decision, GateDecision::Pass);
         assert_eq!(report.files_scanned, 0);
     }
@@ -1414,7 +1414,7 @@ mod tests {
             ("tests/ok.rs", "use MockCx;"),
         ];
         let report = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.decision, GateDecision::Fail);
         assert_eq!(report.files_scanned, 3);
         assert_eq!(report.clean_files, 1);
@@ -1435,13 +1435,13 @@ mod tests {
             epoch(1),
             None,
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let files: Vec<(&str, &str)> = vec![(
             "src/legacy.rs",
             "let cx = MockCx::new();\nlet b = MockBudget::new(10);",
         )];
         let report = run_guard_sweep(&files, &reg, &waiver, epoch(1))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.decision, GateDecision::Pass);
     }
 
@@ -1472,7 +1472,7 @@ mod tests {
             PatternCategory::HardcodedSentinel,
             "test sentinel".to_string(),
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let waiver = empty_waiver_policy();
         let content = "let ctx = BOGUS_CONTEXT;\n";
         let result = scan_file_content("src/custom.rs", content, &reg, &waiver, epoch(1));

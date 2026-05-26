@@ -2051,7 +2051,7 @@ fn bad_fn(data: &[u8]) {
         ];
         let result = extract_fn_signature(lines[0].trim(), &lines, 0);
         assert!(result.is_some());
-        let sig = result.expect("serde deserialization should succeed");
+        let sig = result.expect("operation should succeed for valid inputs");
         assert!(sig.contains("ContextAdapter"));
     }
 

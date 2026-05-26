@@ -1128,11 +1128,11 @@ mod tests {
             // SAFETY: Test-only unwrap with valid arm index and reward
             state
                 .update(0, 900_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Test-only unwrap with valid arm index and reward
             state
                 .update(1, 100_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let probs = state.arm_probabilities();
         assert!(probs[0] > probs[1], "arm 0 should have higher probability");
@@ -1241,15 +1241,15 @@ mod tests {
             // SAFETY: Test-only unwrap with valid arm index and reward
             state
                 .update(0, 200_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Test-only unwrap with valid arm index and reward
             state
                 .update(1, 300_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
             // SAFETY: Test-only unwrap with valid arm index and reward
             state
                 .update(2, 800_000)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let probs = state.arm_probabilities();
         assert!(probs[2] > probs[0]);
@@ -1270,13 +1270,13 @@ mod tests {
         let mut state = FtrlState::new(2).expect("constructor with valid inputs");
         state
             .update(0, 400_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .update(0, 600_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         state
             .update(1, 800_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let means = state.mean_rewards();
         assert_eq!(means[0], 500_000);
         assert_eq!(means[1], 800_000);
@@ -1318,7 +1318,7 @@ mod tests {
         };
         let receipt = router
             .observe_reward(&signal)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.round, 1);
         assert!(!receipt.exact_regret_available);
         assert!(!receipt.regret_within_bound);
@@ -1340,7 +1340,7 @@ mod tests {
         };
         let receipt = router
             .observe_reward(&signal)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(receipt.exact_regret_available);
         assert!(receipt.regret_within_bound);
@@ -1363,7 +1363,7 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(1),
                 counterfactual_rewards_millionths: Some(vec![1_000_000, 0]),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Round 2: arm 1 is better, but router still pulls arm 0.
         router
@@ -1375,7 +1375,7 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(2),
                 counterfactual_rewards_millionths: Some(vec![0, 1_000_000]),
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Best dynamic oracle would score 2_000_000, but best fixed arm scores
         // only 1_000_000. Exact fixed-arm regret is therefore zero.
@@ -1491,7 +1491,7 @@ mod tests {
             };
             router
                 .observe_reward(&signal)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let cert = router.regret_certificate();
@@ -1523,7 +1523,7 @@ mod tests {
             };
             router
                 .observe_reward(&signal)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // After enough rounds, regime should be detected.
@@ -1777,11 +1777,11 @@ mod tests {
         // SAFETY: Test-only unwrap with valid arm index and reward
         state
             .update(0, 600_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test-only unwrap with valid arm index and reward
         state
             .update(1, 400_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
@@ -1806,7 +1806,7 @@ mod tests {
         // SAFETY: Test-only unwrap with valid arm index and reward
         state
             .update(0, 700_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(&state).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip
@@ -1820,7 +1820,7 @@ mod tests {
         let mut state = Exp3State::new(2, 100_000).expect("constructor with valid inputs");
         state
             .update(0, 0)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.rounds, 1);
     }
 
@@ -1829,7 +1829,7 @@ mod tests {
         let mut state = Exp3State::new(2, 100_000).expect("constructor with valid inputs");
         state
             .update(0, MILLION)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(state.rounds, 1);
     }
 
@@ -1889,7 +1889,7 @@ mod tests {
             };
             router
                 .observe_reward(&signal)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // All arms have equal counterfactual rewards, so exact regret is 0.
@@ -1915,7 +1915,7 @@ mod tests {
             };
             router
                 .observe_reward(&signal)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // High variance should trigger adversarial regime or leave unknown.
@@ -1943,7 +1943,7 @@ mod tests {
             };
             router
                 .observe_reward(&signal)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // Should detect stochastic regime.
@@ -1973,7 +1973,7 @@ mod tests {
             };
             router
                 .observe_reward(&signal)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         if !router.regime_history.is_empty() {
@@ -1997,7 +1997,7 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(1),
                 counterfactual_rewards_millionths: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary = router.summary();
         assert_eq!(summary.schema, ROUTING_SCHEMA_VERSION);
@@ -2041,7 +2041,7 @@ mod tests {
             };
             router
                 .observe_reward(&signal)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let cert = router.regret_certificate();
@@ -2069,7 +2069,7 @@ mod tests {
             };
             router
                 .observe_reward(&signal)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         let cert = router.regret_certificate();
@@ -2106,7 +2106,7 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(1),
                 counterfactual_rewards_millionths: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let json = serde_json::to_string(&router).expect("serialize derived Serialize");
         let restored: RegretBoundedRouter =
@@ -2128,7 +2128,7 @@ mod tests {
                 epoch: SecurityEpoch::from_raw(1),
                 counterfactual_rewards_millionths: None,
             })
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.schema, ROUTING_SCHEMA_VERSION);
     }
 

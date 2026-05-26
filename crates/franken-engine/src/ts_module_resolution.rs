@@ -2231,7 +2231,7 @@ mod tests {
         let req = import_request("./helper").with_referrer("/project/src/main.ts");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.resolved_path, "/project/src/helper.ts");
         assert_eq!(outcome.style, TsRequestStyle::Import);
     }
@@ -2245,7 +2245,7 @@ mod tests {
         let req = import_request("../utils").with_referrer("/project/src/deep/file.ts");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.resolved_path, "/project/src/utils.ts");
     }
 
@@ -2256,7 +2256,7 @@ mod tests {
         let req = import_request("/project/absolute");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.resolved_path, "/project/absolute.ts");
     }
 
@@ -2267,7 +2267,7 @@ mod tests {
         let req = import_request("./components").with_referrer("/project/src/main.ts");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.resolved_path, "/project/src/components/index.ts");
     }
 
@@ -2278,7 +2278,7 @@ mod tests {
         let req = import_request("./App").with_referrer("/project/src/main.ts");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.resolved_path, "/project/src/App.tsx");
     }
 
@@ -2289,7 +2289,7 @@ mod tests {
         let req = require_request("./config").with_referrer("/project/src/main.ts");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.resolved_path, "/project/src/config.cts");
     }
 
@@ -2364,7 +2364,7 @@ mod tests {
         let req = import_request("react");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             outcome.resolved_path,
             "/project/node_modules/react/dist/index.mjs"
@@ -2391,7 +2391,7 @@ mod tests {
         let req = require_request("lodash");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             outcome.resolved_path,
             "/project/node_modules/lodash/dist/index.cjs"
@@ -2414,7 +2414,7 @@ mod tests {
         let req = import_request("fallback-pkg");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             outcome.resolved_path,
             "/project/node_modules/fallback-pkg/lib/main.js"
@@ -2438,7 +2438,7 @@ mod tests {
         let req = import_request("@scope/pkg");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.package_name.as_deref(), Some("@scope/pkg"));
     }
 
@@ -2459,7 +2459,7 @@ mod tests {
         let req = import_request("toolkit/utils");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             outcome.resolved_path,
             "/project/node_modules/toolkit/utils.mjs"
@@ -2500,7 +2500,7 @@ mod tests {
         let req = import_request("@utils/math");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.resolved_path, "/project/src/utils/math.ts");
     }
 
@@ -2523,7 +2523,7 @@ mod tests {
         let req = import_request("@lib/foo");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(outcome.resolved_path, "/project/lib/foo.ts");
     }
 
@@ -2536,7 +2536,7 @@ mod tests {
         let req = import_request("./src/found").with_referrer("/project/package.json");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!outcome.traces.is_empty());
         for trace in &outcome.traces {
             assert_eq!(trace.trace_id, "trace-test");
@@ -2561,7 +2561,7 @@ mod tests {
         let req = import_request("./a").with_referrer("/project/src/main.ts");
         let outcome = resolver
             .resolve(&req, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let probes = outcome.probe_sequence();
         assert!(!probes.is_empty());
     }
@@ -2747,7 +2747,7 @@ mod tests {
     #[test]
     fn parse_package_specifier_bare() {
         let (name, key) =
-            parse_package_specifier("react").expect("serde deserialization should succeed");
+            parse_package_specifier("react").expect("operation should succeed for valid inputs");
         assert_eq!(name, "react");
         assert_eq!(key, ".");
     }
@@ -2755,7 +2755,7 @@ mod tests {
     #[test]
     fn parse_package_specifier_subpath() {
         let (name, key) = parse_package_specifier("react/jsx-runtime")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(name, "react");
         assert_eq!(key, "./jsx-runtime");
     }
@@ -2763,7 +2763,7 @@ mod tests {
     #[test]
     fn parse_package_specifier_scoped() {
         let (name, key) =
-            parse_package_specifier("@scope/pkg").expect("serde deserialization should succeed");
+            parse_package_specifier("@scope/pkg").expect("operation should succeed for valid inputs");
         assert_eq!(name, "@scope/pkg");
         assert_eq!(key, ".");
     }
@@ -2771,7 +2771,7 @@ mod tests {
     #[test]
     fn parse_package_specifier_scoped_subpath() {
         let (name, key) = parse_package_specifier("@scope/pkg/utils")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(name, "@scope/pkg");
         assert_eq!(key, "./utils");
     }
@@ -2882,7 +2882,7 @@ mod tests {
             &drift,
         );
         assert!(result.is_ok());
-        let manifest = result.expect("serde deserialization should succeed");
+        let manifest = result.expect("operation should succeed for valid inputs");
         assert_eq!(manifest.schema_version, SCHEMA_VERSION);
         assert_eq!(manifest.trace_count, 1);
         assert!(dir.join("run_manifest.json").exists());
@@ -2973,7 +2973,7 @@ mod tests {
         let package = bundle
             .export_map_hash_catalog
             .package("react")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(package.exact_export_mphf.is_none());
         assert!(package.hot_subpath_mphf.is_none());
@@ -3002,10 +3002,10 @@ mod tests {
         let request = import_request("react/jsx-runtime");
         let direct = resolver
             .resolve(&request, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let indexed = resolver
             .resolve_with_index_or_fallback(&request, &ctx(), &bundle, 150, 300)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(direct.resolved_path, indexed.resolved_path);
         assert_eq!(direct.package_name, indexed.package_name);
@@ -3032,10 +3032,10 @@ mod tests {
         let request = import_request("react");
         let direct = resolver
             .resolve(&request, &ctx())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let indexed = resolver
             .resolve_with_index_or_fallback(&request, &ctx(), &bundle, 500, 60)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!validation.accepted);
         assert_eq!(
@@ -3082,7 +3082,7 @@ mod tests {
                 contents: "rch step log".to_string(),
             }],
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(manifest.schema_version, INDEX_MANIFEST_SCHEMA_VERSION);
         assert!(dir.join("run_manifest.json").exists());

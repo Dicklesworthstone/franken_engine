@@ -1516,7 +1516,7 @@ mod tests {
         assert!(bundle.is_some());
         assert_eq!(
             bundle
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .trigger_id,
             "t-bf"
         );
@@ -1532,7 +1532,7 @@ mod tests {
         ));
         let bundle = pipeline
             .bundle_for_trigger("t-ent")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!bundle.entries.is_empty());
         assert!(bundle.total_cost_millionths > 0);
     }
@@ -1547,7 +1547,7 @@ mod tests {
         ));
         let bundle = pipeline
             .bundle_for_trigger("t-emg")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bundle.entries.len(), BundleContentKind::ALL.len());
     }
 
@@ -1688,7 +1688,7 @@ mod tests {
         ));
         let bundle = pipeline
             .bundle_for_trigger("t-red")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // In emergency, boundary capture and state snapshot should be plaintext
         for entry in &bundle.entries {
             if matches!(
@@ -1712,7 +1712,7 @@ mod tests {
         ));
         let bundle = pipeline
             .bundle_for_trigger("t-nered")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         for entry in &bundle.entries {
             if entry.kind == BundleContentKind::FullBoundaryCapture {
                 assert_eq!(entry.redaction, RedactionTreatment::DigestOnly);

@@ -1873,7 +1873,7 @@ mod tests {
     fn tracker_unmount_is_terminal() {
         let mut t = ComponentPhaseTracker::new("App");
         t.transition_to(RenderPhase::Unmounting)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(t.transition_to(RenderPhase::Idle).is_err());
         assert!(t.transition_to(RenderPhase::Rendering).is_err());
     }
@@ -1882,7 +1882,7 @@ mod tests {
     fn tracker_serde_roundtrip() {
         let mut t = ComponentPhaseTracker::new("Counter");
         t.run_full_cycle()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&t).expect("serialize derived Serialize");
         let t2: ComponentPhaseTracker =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1902,7 +1902,7 @@ mod tests {
         let insertion = bounds
             .iter()
             .find(|b| b.timing == EffectTiming::Insertion)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(insertion.synchronous);
         assert!(!insertion.dom_mutations_visible);
     }
@@ -1913,7 +1913,7 @@ mod tests {
         let layout = bounds
             .iter()
             .find(|b| b.timing == EffectTiming::Layout)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(layout.synchronous);
         assert!(layout.dom_mutations_visible);
     }
@@ -1924,7 +1924,7 @@ mod tests {
         let passive = bounds
             .iter()
             .find(|b| b.timing == EffectTiming::Passive)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!passive.synchronous);
         assert!(passive.dom_mutations_visible);
     }
@@ -2129,10 +2129,10 @@ mod tests {
         let mut tracker = ComponentPhaseTracker::new("App");
         tracker
             .transition_to(RenderPhase::Rendering)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .transition_to(RenderPhase::InsertionEffectsPending)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Drain insertion effects
         let (c, r) = scheduler.drain_for_timing(EffectTiming::Insertion);
@@ -2140,22 +2140,22 @@ mod tests {
 
         tracker
             .transition_to(RenderPhase::LayoutEffectsPending)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let (c, r) = scheduler.drain_for_timing(EffectTiming::Layout);
         assert_eq!(c.len() + r.len(), 1);
 
         tracker
             .transition_to(RenderPhase::PaintPending)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         tracker
             .transition_to(RenderPhase::PassiveEffectsPending)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let (c, r) = scheduler.drain_for_timing(EffectTiming::Passive);
         assert_eq!(c.len() + r.len(), 1);
 
         tracker
             .transition_to(RenderPhase::Idle)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(tracker.render_count, 1);
         assert_eq!(scheduler.pending_count(), 0);
     }

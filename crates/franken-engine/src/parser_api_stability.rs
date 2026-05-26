@@ -924,7 +924,7 @@ mod tests {
         let m = ApiStabilityManifest::current();
         let ast = m
             .entry("ast.contract")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ast.current_version, CANONICAL_AST_CONTRACT_VERSION);
         assert_eq!(ast.evolution_rule, EvolutionRule::AdditiveOnly);
     }
@@ -1042,7 +1042,7 @@ mod tests {
 
     #[test]
     fn parse_script_simple() {
-        let tree = parse_script("42;").expect("serde deserialization should succeed");
+        let tree = parse_script("42;").expect("operation should succeed for valid inputs");
         assert_eq!(tree.goal, ParseGoal::Script);
         assert!(!tree.body.is_empty());
     }
@@ -1050,7 +1050,7 @@ mod tests {
     #[test]
     fn parse_module_import() {
         let tree =
-            parse_module("import x from 'y';").expect("serde deserialization should succeed");
+            parse_module("import x from 'y';").expect("operation should succeed for valid inputs");
         assert_eq!(tree.goal, ParseGoal::Module);
         assert!(!tree.body.is_empty());
     }
@@ -1094,7 +1094,7 @@ mod tests {
         let (result, event_ir, mat_result) = parse_with_full_provenance("42;", ParseGoal::Script);
         assert!(result.is_ok());
         assert!(!event_ir.events.is_empty());
-        let mat = mat_result.expect("serde deserialization should succeed");
+        let mat = mat_result.expect("operation should succeed for valid inputs");
         assert_eq!(
             mat.contract_version,
             PARSE_EVENT_AST_MATERIALIZER_CONTRACT_VERSION
@@ -1113,21 +1113,21 @@ mod tests {
 
     #[test]
     fn ast_canonical_hash_deterministic() {
-        let t1 = parse_script("42;").expect("serde deserialization should succeed");
-        let t2 = parse_script("42;").expect("serde deserialization should succeed");
+        let t1 = parse_script("42;").expect("operation should succeed for valid inputs");
+        let t2 = parse_script("42;").expect("operation should succeed for valid inputs");
         assert_eq!(t1.canonical_hash(), t2.canonical_hash());
     }
 
     #[test]
     fn ast_canonical_hash_differs_for_different_input() {
-        let t1 = parse_script("42;").expect("serde deserialization should succeed");
-        let t2 = parse_script("43;").expect("serde deserialization should succeed");
+        let t1 = parse_script("42;").expect("operation should succeed for valid inputs");
+        let t2 = parse_script("43;").expect("operation should succeed for valid inputs");
         assert_ne!(t1.canonical_hash(), t2.canonical_hash());
     }
 
     #[test]
     fn ast_serde_roundtrip() {
-        let tree = parse_script("42;").expect("serde deserialization should succeed");
+        let tree = parse_script("42;").expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&tree).expect("serialize derived Serialize");
         let restored: SyntaxTree =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1136,7 +1136,7 @@ mod tests {
 
     #[test]
     fn ast_canonical_hash_stable_across_serde_roundtrip() {
-        let tree = parse_script("42;").expect("serde deserialization should succeed");
+        let tree = parse_script("42;").expect("operation should succeed for valid inputs");
         let hash_before = tree.canonical_hash();
         let json = serde_json::to_string(&tree).expect("serialize derived Serialize");
         let restored: SyntaxTree =
@@ -1214,7 +1214,7 @@ mod tests {
         assert_eq!(
             ir.events
                 .first()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .kind,
             ParseEventKind::ParseStarted
         );
@@ -1222,7 +1222,7 @@ mod tests {
         assert_eq!(
             ir.events
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .kind,
             ParseEventKind::ParseCompleted
         );
@@ -1233,7 +1233,7 @@ mod tests {
     #[test]
     fn materialised_ast_serde_roundtrip() {
         let (_, _, mat_result) = parse_with_full_provenance("42;", ParseGoal::Script);
-        let mat = mat_result.expect("serde deserialization should succeed");
+        let mat = mat_result.expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&mat).expect("serialize derived Serialize");
         let restored: MaterializedSyntaxTree =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1243,7 +1243,7 @@ mod tests {
     #[test]
     fn materialised_ast_node_ids_have_stable_prefix() {
         let (_, _, mat_result) = parse_with_full_provenance("42;", ParseGoal::Script);
-        let mat = mat_result.expect("serde deserialization should succeed");
+        let mat = mat_result.expect("operation should succeed for valid inputs");
         assert!(
             mat.root_node_id
                 .starts_with(PARSE_EVENT_AST_MATERIALIZER_NODE_ID_PREFIX)
@@ -1261,9 +1261,9 @@ mod tests {
         let (_, _, m1) = parse_with_full_provenance("42;", ParseGoal::Script);
         let (_, _, m2) = parse_with_full_provenance("42;", ParseGoal::Script);
         assert_eq!(
-            m1.expect("serde deserialization should succeed")
+            m1.expect("operation should succeed for valid inputs")
                 .canonical_hash(),
-            m2.expect("serde deserialization should succeed")
+            m2.expect("operation should succeed for valid inputs")
                 .canonical_hash()
         );
     }
@@ -1332,7 +1332,7 @@ mod tests {
     #[test]
     fn assess_migration_current_is_compatible() {
         let a = assess_migration("ast.contract", CANONICAL_AST_CONTRACT_VERSION)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(a.compatible);
         assert!(!a.needs_migration);
     }
@@ -1348,7 +1348,7 @@ mod tests {
             "event_ir.contract",
             "franken-engine.parser-event-ir.contract.v1",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(a.needs_migration);
     }
 
@@ -1357,7 +1357,7 @@ mod tests {
     #[test]
     fn integration_log_success() {
         let (result, ir) = parse_with_audit("42;", ParseGoal::Script);
-        let tree = result.expect("serde deserialization should succeed");
+        let tree = result.expect("operation should succeed for valid inputs");
         let log = IntegrationLogEntry::from_parse_success("test.js", ParseGoal::Script, &tree, &ir);
         assert_eq!(log.outcome, IntegrationOutcome::Success);
         assert!(log.ast_hash.is_some());
@@ -1377,7 +1377,7 @@ mod tests {
     #[test]
     fn integration_log_canonical_value_deterministic() {
         let (result, ir) = parse_with_audit("42;", ParseGoal::Script);
-        let tree = result.expect("serde deserialization should succeed");
+        let tree = result.expect("operation should succeed for valid inputs");
         let l1 = IntegrationLogEntry::from_parse_success("test.js", ParseGoal::Script, &tree, &ir);
         let l2 = IntegrationLogEntry::from_parse_success("test.js", ParseGoal::Script, &tree, &ir);
         let b1 = deterministic_serde::encode_value(&l1.canonical_value());
@@ -1388,7 +1388,7 @@ mod tests {
     #[test]
     fn integration_log_serde_roundtrip() {
         let (result, ir) = parse_with_audit("42;", ParseGoal::Script);
-        let tree = result.expect("serde deserialization should succeed");
+        let tree = result.expect("operation should succeed for valid inputs");
         let log = IntegrationLogEntry::from_parse_success("test.js", ParseGoal::Script, &tree, &ir);
         let json = serde_json::to_string(&log).expect("serialize derived Serialize");
         let restored: IntegrationLogEntry =
@@ -1511,15 +1511,15 @@ mod tests {
     #[test]
     fn module_export_parses_correctly() {
         let tree =
-            parse_module("export default 42;").expect("serde deserialization should succeed");
+            parse_module("export default 42;").expect("operation should succeed for valid inputs");
         assert_eq!(tree.goal, ParseGoal::Module);
         assert_eq!(tree.body.len(), 1);
     }
 
     #[test]
     fn script_and_module_produce_different_hashes_for_same_source() {
-        let s = parse_script("42;").expect("serde deserialization should succeed");
-        let m = parse_module("42;").expect("serde deserialization should succeed");
+        let s = parse_script("42;").expect("operation should succeed for valid inputs");
+        let m = parse_module("42;").expect("operation should succeed for valid inputs");
         assert_ne!(s.canonical_hash(), m.canonical_hash());
     }
 
@@ -1608,7 +1608,7 @@ mod tests {
         let source = "import x from 'y';\n42;";
         let (result, ir) = parse_with_audit(source, ParseGoal::Module);
         assert!(result.is_ok());
-        let tree = result.expect("serde deserialization should succeed");
+        let tree = result.expect("operation should succeed for valid inputs");
         // 1 ParseStarted + N StatementParsed + 1 ParseCompleted = N + 2
         assert_eq!(ir.events.len(), tree.body.len() + 2);
     }
@@ -1617,8 +1617,8 @@ mod tests {
     fn multi_statement_materialised_nodes_match_tree() {
         let source = "import x from 'y';\n42;";
         let (result, _, mat_result) = parse_with_full_provenance(source, ParseGoal::Module);
-        let tree = result.expect("serde deserialization should succeed");
-        let mat = mat_result.expect("serde deserialization should succeed");
+        let tree = result.expect("operation should succeed for valid inputs");
+        let mat = mat_result.expect("operation should succeed for valid inputs");
         assert_eq!(mat.statement_nodes.len(), tree.body.len());
     }
 

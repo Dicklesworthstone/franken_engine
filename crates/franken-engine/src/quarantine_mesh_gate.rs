@@ -630,7 +630,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "partition-ext-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(partition.passed);
         assert_eq!(partition.fault_type, FaultType::NetworkPartition);
         assert!(partition.isolation_verified);
@@ -646,7 +646,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "byzantine-ext-b")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(byzantine.passed);
         assert_eq!(byzantine.fault_type, FaultType::ByzantineBehavior);
     }
@@ -661,7 +661,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "cascade-ext-c")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(cascade.passed);
         assert_eq!(cascade.fault_type, FaultType::CascadingFailure);
     }
@@ -676,7 +676,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "exhaustion-ext-d")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(exhaustion.passed);
         assert_eq!(exhaustion.fault_type, FaultType::ResourceExhaustion);
     }
@@ -691,7 +691,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "skew-ext-e")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(skew.passed);
         assert_eq!(skew.fault_type, FaultType::ClockSkew);
     }
@@ -710,7 +710,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "degraded-coordinator")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(degraded.passed);
         assert!(degraded.detection_latency_ns <= DETECTION_SLA_NS);
     }
@@ -729,7 +729,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "benign-no-quarantine")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(benign.passed);
         assert_eq!(benign.final_state, Some(ContainmentState::Running));
         assert_eq!(benign.receipts_emitted, 0);
@@ -869,7 +869,7 @@ mod tests {
         let final_event = result
             .events
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(final_event.event, "gate_validation_complete");
         assert_eq!(final_event.outcome, "pass");
     }
@@ -1185,7 +1185,7 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.scenario_id == "benign-no-quarantine")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(benign.detection_latency_ns, 0);
     }
 
@@ -1408,7 +1408,7 @@ mod tests {
         let final_ev = result
             .events
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(final_ev.error_code.is_none());
     }
 

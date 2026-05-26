@@ -1473,7 +1473,7 @@ mod tests {
         let strict = table
             .iter()
             .find(|e| e.mode == RecoveryMode::Strict)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!strict.edits_applied);
         assert!(!strict.execution_uses_recovery);
     }
@@ -1484,7 +1484,7 @@ mod tests {
         let exec = table
             .iter()
             .find(|e| e.mode == RecoveryMode::Execution)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(exec.execution_uses_recovery);
         assert!(exec.min_confidence_millionths > 0);
         assert!(exec.max_fpr_millionths <= 20_000); // 2%
@@ -1865,10 +1865,10 @@ mod tests {
             features_hash: ContentHash::compute(b"test"),
         };
         let val: serde_json::Value =
-            serde_json::to_value(&ef).expect("serde deserialization should succeed");
+            serde_json::to_value(&ef).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("tokens_before_error"));
         assert!(obj.contains_key("tokens_after_error"));
         assert!(obj.contains_key("error_offset"));
@@ -1884,10 +1884,10 @@ mod tests {
     fn state_probabilities_json_field_names() {
         let sp = StateProbabilities::default();
         let val: serde_json::Value =
-            serde_json::to_value(&sp).expect("serde deserialization should succeed");
+            serde_json::to_value(&sp).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("recoverable"));
         assert!(obj.contains_key("ambiguous"));
         assert!(obj.contains_key("unrecoverable"));
@@ -1898,10 +1898,10 @@ mod tests {
     fn loss_matrix_json_field_names() {
         let lm = LossMatrix::default();
         let val: serde_json::Value =
-            serde_json::to_value(&lm).expect("serde deserialization should succeed");
+            serde_json::to_value(&lm).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("recover_recoverable"));
         assert!(obj.contains_key("recover_ambiguous"));
         assert!(obj.contains_key("recover_unrecoverable"));
@@ -1922,10 +1922,10 @@ mod tests {
             fail_strict: 30,
         };
         let val: serde_json::Value =
-            serde_json::to_value(&el).expect("serde deserialization should succeed");
+            serde_json::to_value(&el).expect("serialization should succeed");
         let obj = val
             .as_object()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("recover_continue"));
         assert!(obj.contains_key("partial_recover"));
         assert!(obj.contains_key("fail_strict"));

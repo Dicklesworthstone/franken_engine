@@ -1532,7 +1532,7 @@ mod tests {
         };
         engine
             .execute_decision(&terminate, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Attempt sandbox (lower severity) — should be rejected.
         let sandbox = ConvergenceDecision {
@@ -1564,7 +1564,7 @@ mod tests {
         // Inject evidence exceeding sandbox threshold (200_000).
         fleet
             .process_evidence(&test_evidence("remote-1", "ext-1", 1, 300_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipts = engine.process_fleet_state(&fleet, 1_000_000_000);
         assert_eq!(receipts.len(), 1);
@@ -1579,10 +1579,10 @@ mod tests {
 
         fleet
             .process_evidence(&test_evidence("remote-1", "ext-1", 1, 300_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         fleet
             .process_evidence(&test_evidence("remote-1", "ext-2", 2, 600_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let receipts = engine.process_fleet_state(&fleet, 1_000_000_000);
         assert_eq!(receipts.len(), 2);
@@ -1602,10 +1602,10 @@ mod tests {
         // Register heartbeats from two remote nodes.
         fleet
             .process_heartbeat(&test_heartbeat("remote-1", 1, 1_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         fleet
             .process_heartbeat(&test_heartbeat("remote-2", 1, 1_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // At time 20s with 15s timeout, both are partitioned.
         engine.update_partition_state(&fleet, 20_000_000_000);
@@ -1624,7 +1624,7 @@ mod tests {
         // Register heartbeats.
         fleet
             .process_heartbeat(&test_heartbeat("remote-1", 1, 1_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Trigger partition.
         engine.update_partition_state(&fleet, 20_000_000_000);
@@ -1633,7 +1633,7 @@ mod tests {
         // Update heartbeat to be recent.
         fleet
             .process_heartbeat(&test_heartbeat("remote-1", 2, 19_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Heal: nodes are reachable again.
         engine.update_partition_state(&fleet, 20_000_000_000);
@@ -1691,12 +1691,12 @@ mod tests {
         };
         engine
             .execute_decision(&decision, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Escalate due to sandbox failure.
         let receipt = engine
             .escalate("ext-1", 300_000, 5, 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.action_type, ContainmentAction::Suspend);
         assert_eq!(receipt.escalation_depth, 1);
     }
@@ -1717,12 +1717,12 @@ mod tests {
         };
         engine
             .execute_decision(&sandbox, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // First escalation succeeds.
         engine
             .escalate("ext-1", 300_000, 5, 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Second escalation exceeds max depth.
         let err = engine
@@ -1746,7 +1746,7 @@ mod tests {
         };
         engine
             .execute_decision(&quarantine, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let err = engine
             .escalate("ext-1", 1_000_000, 50, 2_000_000_000)
@@ -1763,7 +1763,7 @@ mod tests {
 
         fleet
             .process_evidence(&test_evidence("remote-1", "ext-1", 1, 300_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let summary_hash = fleet.evidence.summary_hash();
         let checkpoint = make_checkpoint(1, summary_hash, vec![]);
@@ -1837,7 +1837,7 @@ mod tests {
         };
         engine
             .execute_decision(&quarantine, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Checkpoint from other partition says sandbox.
         let decisions = vec![ResolvedContainmentDecision {
@@ -1903,14 +1903,14 @@ mod tests {
             events[0]
                 .fields
                 .get("extension_id")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "ext-1"
         );
         assert_eq!(
             events[0]
                 .fields
                 .get("action")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "sandbox"
         );
     }
@@ -1922,7 +1922,7 @@ mod tests {
 
         fleet
             .process_heartbeat(&test_heartbeat("remote-1", 1, 1_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Trigger partition.
         engine.update_partition_state(&fleet, 20_000_000_000);
@@ -1932,7 +1932,7 @@ mod tests {
         // Heal.
         fleet
             .process_heartbeat(&test_heartbeat("remote-1", 2, 19_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.update_partition_state(&fleet, 20_000_000_000);
         // Healing state, then normal.
         engine.update_partition_state(&fleet, 20_000_000_001);
@@ -1948,13 +1948,13 @@ mod tests {
 
         fleet
             .process_heartbeat(&test_heartbeat("remote-1", 1, 10_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         fleet
             .process_heartbeat(&test_heartbeat("remote-2", 1, 10_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         fleet
             .process_heartbeat(&test_heartbeat("remote-3", 1, 10_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine.update_partition_state(&fleet, 10_000_000_000);
 
@@ -1964,7 +1964,7 @@ mod tests {
             events[0]
                 .fields
                 .get("healthy_nodes")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "3"
         );
         assert!(events[0].fields.contains_key("spectral_gap_millionths"));
@@ -2078,10 +2078,10 @@ mod tests {
         // Accumulate evidence past suspend threshold (500_000).
         fleet
             .process_evidence(&test_evidence("node-a", "ext-1", 1, 300_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         fleet
             .process_evidence(&test_evidence("node-b", "ext-1", 1, 250_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Process fleet state.
         let receipts = engine.process_fleet_state(&fleet, 5_000_000_000);
@@ -2103,13 +2103,13 @@ mod tests {
         for (i, name) in ["n1", "n2", "n3"].iter().enumerate() {
             fleet
                 .process_heartbeat(&test_heartbeat(name, (i + 1) as u64, 1_000_000_000))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
 
         // Partition: only n1 still alive.
         fleet
             .process_heartbeat(&test_heartbeat("n1", 4, 19_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.update_partition_state(&fleet, 20_000_000_000);
         assert!(matches!(engine.partition_mode, PartitionMode::Degraded(_)));
 
@@ -2121,7 +2121,7 @@ mod tests {
         // but DOES trigger in degraded mode.
         fleet
             .process_evidence(&test_evidence("n1", "ext-1", 5, 170_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let receipts = engine.process_fleet_state(&fleet, 20_000_000_001);
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].action_type, ContainmentAction::Sandbox);
@@ -2131,7 +2131,7 @@ mod tests {
         for (i, name) in ["n1", "n2", "n3"].iter().enumerate() {
             fleet
                 .process_heartbeat(&test_heartbeat(name, (i + 10) as u64, 25_000_000_000))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         engine.update_partition_state(&fleet, 26_000_000_000);
         // Healing.
@@ -2155,25 +2155,25 @@ mod tests {
         };
         let r0 = engine
             .execute_decision(&sandbox, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r0.action_type, ContainmentAction::Sandbox);
 
         // Escalate: sandbox → suspend.
         let r1 = engine
             .escalate("ext-1", 300_000, 5, 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.action_type, ContainmentAction::Suspend);
 
         // Escalate: suspend → terminate.
         let r2 = engine
             .escalate("ext-1", 300_000, 5, 3_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r2.action_type, ContainmentAction::Terminate);
 
         // Escalate: terminate → quarantine.
         let r3 = engine
             .escalate("ext-1", 300_000, 5, 4_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r3.action_type, ContainmentAction::Quarantine);
 
         // No further escalation possible.
@@ -2430,7 +2430,7 @@ mod tests {
 
         let got = reg
             .get_receipt("ext-1", ContainmentAction::Sandbox)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(got.action_id, "a1");
     }
 
@@ -2580,7 +2580,7 @@ mod tests {
             engine.events[0]
                 .fields
                 .get("extension_id")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 != "ext-0"
         );
     }
@@ -2612,10 +2612,10 @@ mod tests {
 
         fleet
             .process_evidence(&test_evidence("n1", "ext-1", 1, 300_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         fleet
             .process_evidence(&test_evidence("n1", "ext-2", 2, 100_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let decisions = engine.evaluate_all(&fleet);
         assert_eq!(decisions.len(), 2);
@@ -2664,21 +2664,21 @@ mod tests {
             conflicts[0]
                 .fields
                 .get("resolved_action")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "terminate"
         );
         assert_eq!(
             conflicts[0]
                 .fields
                 .get("local_action")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "sandbox"
         );
         assert_eq!(
             conflicts[0]
                 .fields
                 .get("remote_action")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "terminate"
         );
     }
@@ -2690,7 +2690,7 @@ mod tests {
 
         fleet
             .process_heartbeat(&test_heartbeat("remote-1", 1, 1_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Trigger partition.
         engine.update_partition_state(&fleet, 20_000_000_000);
@@ -2699,14 +2699,14 @@ mod tests {
         // Heal: fresh heartbeat.
         fleet
             .process_heartbeat(&test_heartbeat("remote-1", 2, 19_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.update_partition_state(&fleet, 20_000_000_000);
         assert!(matches!(engine.partition_mode, PartitionMode::Healing(_)));
 
         // Re-partition: remote-1 goes stale again, remote-2 also stale.
         fleet
             .process_heartbeat(&test_heartbeat("remote-2", 1, 1_000_000_000))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         engine.update_partition_state(&fleet, 40_000_000_000);
         // Should revert from Healing to Degraded.
         assert!(matches!(engine.partition_mode, PartitionMode::Degraded(_)));
@@ -2728,7 +2728,7 @@ mod tests {
             events[0]
                 .fields
                 .get("checkpoint_seq")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "42"
         );
     }
@@ -2749,7 +2749,7 @@ mod tests {
             events[0]
                 .fields
                 .get("checkpoint_seq")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "99"
         );
         assert!(events[0].fields.contains_key("local_hash"));
@@ -2762,12 +2762,12 @@ mod tests {
         let d1 = engine.evaluate_extension("ext-1", 300_000, 5);
         let r1 = engine
             .execute_decision(&d1, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let d2 = engine.evaluate_extension("ext-2", 600_000, 10);
         let r2 = engine
             .execute_decision(&d2, 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r1.action_id, r2.action_id);
         assert!(r1.action_id.contains("local"));
@@ -2788,11 +2788,11 @@ mod tests {
         };
         engine
             .execute_decision(&sandbox, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         engine
             .escalate("ext-1", 300_000, 5, 2_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = engine.events_of_type(&ConvergenceEventType::EscalationTriggered);
         assert_eq!(events.len(), 1);
@@ -2800,28 +2800,28 @@ mod tests {
             events[0]
                 .fields
                 .get("extension_id")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "ext-1"
         );
         assert_eq!(
             events[0]
                 .fields
                 .get("from_action")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "sandbox"
         );
         assert_eq!(
             events[0]
                 .fields
                 .get("to_action")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "suspend"
         );
         assert_eq!(
             events[0]
                 .fields
                 .get("depth")
-                .expect("serde deserialization should succeed"),
+                .expect("operation should succeed for valid inputs"),
             "1"
         );
     }
@@ -2842,7 +2842,7 @@ mod tests {
         // No prior action — escalation from Allow to Sandbox.
         let receipt = engine
             .escalate("ext-1", 100_000, 2, 1_000_000_000)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.action_type, ContainmentAction::Sandbox);
         assert_eq!(receipt.escalation_depth, 1);
     }

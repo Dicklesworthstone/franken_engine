@@ -1083,7 +1083,7 @@ mod tests {
         // lookup only fails on missing builtin families (impossible with known BuiltinFamily variants).
         let k = cat
             .lookup(BuiltinFamily::TypedArrayFill)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(k.family, BuiltinFamily::TypedArrayFill);
         assert_eq!(k.lane_width, LaneWidth::Lane16);
         assert_eq!(k.callback_fence, CallbackFenceKind::NoCallback);
@@ -1156,7 +1156,7 @@ mod tests {
             None,
         );
         assert!(receipt.is_some());
-        let r = receipt.expect("serde deserialization should succeed");
+        let r = receipt.expect("operation should succeed for valid inputs");
         assert_eq!(r.family, BuiltinFamily::ArrayMap);
         assert_eq!(r.input_length, 500);
         assert!(r.vectorized_count > 0);
@@ -1173,7 +1173,7 @@ mod tests {
             None,
         );
         assert!(receipt.is_some());
-        let r = receipt.expect("serde deserialization should succeed");
+        let r = receipt.expect("operation should succeed for valid inputs");
         assert!(r.vectorized_count > 0);
         assert_eq!(r.scalar_count, 0);
     }
@@ -1295,7 +1295,7 @@ mod tests {
                 CallbackFenceKind::NoCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.vectorization_rate_millionths(), 1_000_000);
     }
 
@@ -1439,7 +1439,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = e2
             .execute(
                 BuiltinFamily::ArrayMap,
@@ -1447,7 +1447,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -1529,7 +1529,7 @@ mod tests {
         assert_eq!(
             parts
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .end,
             999
         );
@@ -1550,7 +1550,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 Some(&sel),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.total_elements, 100);
     }
 
@@ -1569,7 +1569,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 Some(&sel),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // 70 active out of 100
         assert_eq!(receipt.total_elements, 70);
     }
@@ -1588,7 +1588,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 Some(&sel),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.total_elements, 0);
     }
 
@@ -1608,7 +1608,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 Some(&sel),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Partition [0..256]: end=min(256,50)=50, scan [0..50], 0 inactive
         //   => masked=0, processed=256-0=256
         // Partition [256..300]: start=256 >= sel_len=50
@@ -1661,7 +1661,7 @@ mod tests {
                 CallbackFenceKind::ThrowingCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.vectorized_count, 0);
         assert!(receipt.scalar_count > 0);
     }
@@ -1676,7 +1676,7 @@ mod tests {
                 CallbackFenceKind::SideEffectCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SideEffectCallback requires_ordering => one fence per morsel
         assert!(receipt.total_fences > 0);
         assert_eq!(receipt.total_fences, receipt.morsel_count);
@@ -1693,7 +1693,7 @@ mod tests {
                 CallbackFenceKind::MutatingCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.vectorized_count, 0);
         assert_eq!(receipt.scalar_count, 0);
         assert!(receipt.aborted_count > 0);
@@ -1849,7 +1849,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let decoded: KernelExecutionReceipt =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1869,7 +1869,7 @@ mod tests {
         // Verify lookup still works after deserialization
         let k = decoded
             .lookup(BuiltinFamily::ArrayMap)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(k.family, BuiltinFamily::ArrayMap);
     }
 
@@ -1909,7 +1909,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.vectorized_count, 0);
         assert_eq!(receipt.scalar_count, 1);
         assert_eq!(engine.total_scalar_fallbacks, 1);
@@ -2021,7 +2021,7 @@ mod tests {
         // The family_map should point to the latest registered kernel
         let looked_up = catalog
             .lookup(BuiltinFamily::ArrayMap)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(looked_up.lane_width, LaneWidth::Lane8);
         assert_eq!(looked_up.morsel_size, MorselSize::Large);
         // Both kernel_ids remain in the kernels map since they differ
@@ -2095,7 +2095,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(receipt.receipt_id.starts_with("mkr-"));
         // "mkr-" + 16 hex chars = 20 total
         assert_eq!(receipt.receipt_id.len(), 20);
@@ -2112,7 +2112,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = e2
             .execute(
                 BuiltinFamily::ArrayMap,
@@ -2120,7 +2120,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -2135,7 +2135,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = e2
             .execute(
                 BuiltinFamily::ArrayMap,
@@ -2143,7 +2143,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.receipt_hash, r2.receipt_hash);
     }
 
@@ -2258,7 +2258,7 @@ mod tests {
                 CallbackFenceKind::PureCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // PureCallback does not require ordering => no fences
         assert_eq!(receipt.total_fences, 0);
     }
@@ -2273,7 +2273,7 @@ mod tests {
                 CallbackFenceKind::NoCallback,
                 None,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(receipt.total_fences, 0);
     }
 }

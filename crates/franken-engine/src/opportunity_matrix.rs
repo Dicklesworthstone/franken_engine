@@ -876,10 +876,10 @@ mod tests {
     #[test]
     fn opportunity_status_snake_case_rename() {
         let json = serde_json::to_string(&OpportunityStatus::RejectedLowScore)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json.contains("rejected_low_score"));
         let json2 = serde_json::to_string(&OpportunityStatus::RejectedSecurityClearance)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json2.contains("rejected_security_clearance"));
     }
 
@@ -1072,7 +1072,7 @@ mod tests {
         let dispatch = profile
             .iter()
             .find(|e| e.function == "dispatch")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(dispatch.sample_count, 80);
         assert_eq!(profile.len(), 2);
     }
@@ -1322,7 +1322,7 @@ mod tests {
             .ranked_opportunities
             .iter()
             .find(|o| o.opportunity_id == "opp-vm-dispatch")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(opp.estimated_speedup_millionths, 0);
     }
 
@@ -1335,7 +1335,7 @@ mod tests {
             .ranked_opportunities
             .iter()
             .find(|o| o.opportunity_id == "opp-vm-dispatch")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(opp.hotpath_weight_millionths, 500_000);
     }
 
@@ -1455,7 +1455,7 @@ mod tests {
         let last = d
             .events
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.outcome, "fail");
         assert!(last.error_code.is_some());
     }
@@ -1667,7 +1667,7 @@ mod tests {
     fn scored_opportunity_json_field_names() {
         let d = run_opportunity_matrix_scoring(&base_request());
         let json = serde_json::to_string(&d.ranked_opportunities[0])
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json.contains("\"opportunity_id\""));
         assert!(json.contains("\"score_millionths\""));
         assert!(json.contains("\"threshold_met\""));
@@ -1895,10 +1895,10 @@ mod tests {
     #[test]
     fn opportunity_status_rename_all_snake_case() {
         let j = serde_json::to_string(&OpportunityStatus::RejectedLowScore)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(j, "\"rejected_low_score\"");
         let j2 = serde_json::to_string(&OpportunityStatus::RejectedSecurityClearance)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert_eq!(j2, "\"rejected_security_clearance\"");
     }
 

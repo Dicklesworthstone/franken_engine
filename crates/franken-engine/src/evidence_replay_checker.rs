@@ -1122,7 +1122,7 @@ mod tests {
             // cannot fail under normal test conditions.
             emitter
                 .emit(&mut cx, &req)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         emitter.entries().to_vec()
     }
@@ -1279,7 +1279,7 @@ mod tests {
             .violations
             .iter()
             .find(|v| v.violation_type == ReplayViolationType::SequenceGap)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gap_v.expected.as_deref(), Some("1"));
         assert_eq!(gap_v.actual.as_deref(), Some("5"));
     }
@@ -1535,7 +1535,7 @@ mod tests {
         let last = checker
             .events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "replay_complete");
         assert_eq!(last.outcome, "pass");
     }
@@ -1549,7 +1549,7 @@ mod tests {
         let last = checker
             .events()
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "replay_complete");
         assert_eq!(last.outcome, "fail");
     }
@@ -1905,11 +1905,11 @@ mod tests {
             result
                 .diagnostics
                 .first_ts
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 <= result
                     .diagnostics
                     .last_ts
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1922,7 +1922,7 @@ mod tests {
         let (lo, hi) = result
             .diagnostics
             .epoch_range
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(lo <= hi);
     }
 
@@ -2256,7 +2256,7 @@ mod tests {
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let result = checker.replay(&ledger, None);
         let json = serde_json::to_string(&result.diagnostics)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         let back: ReplayDiagnostics =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.diagnostics, back);

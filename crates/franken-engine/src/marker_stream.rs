@@ -1591,7 +1591,7 @@ mod tests {
         append_security_marker(&mut stream, "1");
         append_security_marker(&mut stream, "2");
 
-        let m = stream.get(2).expect("serde deserialization should succeed");
+        let m = stream.get(2).expect("operation should succeed for valid inputs");
         assert_eq!(m.marker_id, 2);
     }
 
@@ -1900,7 +1900,7 @@ mod tests {
         let mut stream = make_stream();
         append_security_marker(&mut stream, "1");
         let json = serde_json::to_string(&stream.markers()[0])
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         for field in &[
             "marker_id",
             "timestamp_ticks",
@@ -2507,7 +2507,7 @@ mod tests {
         stream.append(input1);
         let head1 = stream
             .chain_head()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .head_marker_id;
         let input2 = make_input(DecisionType::SecurityAction {
             action: SecurityActionKind::Suspend,
@@ -2515,7 +2515,7 @@ mod tests {
         stream.append(input2);
         let head2 = stream
             .chain_head()
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .head_marker_id;
         assert!(head2 > head1);
     }
@@ -2549,7 +2549,7 @@ mod tests {
             action: SecurityActionKind::Quarantine,
         });
         stream.append(input);
-        let marker = stream.get(1).expect("serde deserialization should succeed");
+        let marker = stream.get(1).expect("operation should succeed for valid inputs");
         let dbg = format!("{marker:?}");
         assert!(!dbg.is_empty());
         assert!(dbg.contains("DecisionMarker"));

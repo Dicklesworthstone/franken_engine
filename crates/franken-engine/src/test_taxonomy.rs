@@ -1027,7 +1027,7 @@ mod tests {
     #[test]
     fn fixture_derive_id() {
         let f = make_fixture("core-003", TestClass::Core);
-        let id = f.derive_id().expect("serde deserialization should succeed");
+        let id = f.derive_id().expect("operation should succeed for valid inputs");
         assert!(!id.to_hex().is_empty());
     }
 
@@ -1059,7 +1059,7 @@ mod tests {
     fn registry_register_and_lookup() {
         let mut r = FixtureRegistry::new();
         r.register(make_fixture("f1", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r.len(), 1);
         assert!(r.lookup("f1").is_some());
         assert!(r.lookup("f2").is_none());
@@ -1069,7 +1069,7 @@ mod tests {
     fn registry_rejects_duplicate() {
         let mut r = FixtureRegistry::new();
         r.register(make_fixture("f1", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = r.register(make_fixture("f1", TestClass::Edge)).unwrap_err();
         assert_eq!(err, RegistryError::DuplicateFixtureId("f1".to_string()));
     }
@@ -1078,11 +1078,11 @@ mod tests {
     fn registry_by_class() {
         let mut r = FixtureRegistry::new();
         r.register(make_fixture("c1", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r.register(make_fixture("c2", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r.register(make_fixture("e1", TestClass::Edge))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r.by_class(TestClass::Core).len(), 2);
         assert_eq!(r.by_class(TestClass::Edge).len(), 1);
         assert_eq!(r.by_class(TestClass::Adversarial).len(), 0);
@@ -1093,9 +1093,9 @@ mod tests {
         let mut r = FixtureRegistry::new();
         let mut f = make_fixture("s1", TestClass::Core);
         f.surfaces = BTreeSet::from([TestSurface::Compiler, TestSurface::Runtime]);
-        r.register(f).expect("serde deserialization should succeed");
+        r.register(f).expect("operation should succeed for valid inputs");
         r.register(make_fixture("s2", TestClass::Core))
-            .expect("serde deserialization should succeed"); // Parser only
+            .expect("operation should succeed for valid inputs"); // Parser only
         assert_eq!(r.by_surface(TestSurface::Compiler).len(), 1);
         assert_eq!(r.by_surface(TestSurface::Parser).len(), 1);
         assert_eq!(r.by_surface(TestSurface::Runtime).len(), 1);
@@ -1105,9 +1105,9 @@ mod tests {
     fn registry_validate_all_clean() {
         let mut r = FixtureRegistry::new();
         r.register(make_fixture("v1", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r.register(make_fixture("v2", TestClass::Adversarial))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.validate_all().is_empty());
     }
 
@@ -1117,7 +1117,7 @@ mod tests {
         let mut bad = make_fixture("bad1", TestClass::Adversarial);
         bad.seed = None;
         r.register(bad)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let results = r.validate_all();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "bad1");
@@ -1127,11 +1127,11 @@ mod tests {
     fn registry_coverage_matrix() {
         let mut r = FixtureRegistry::new();
         r.register(make_fixture("m1", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r.register(make_fixture("m2", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r.register(make_fixture("m3", TestClass::Edge))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let matrix = r.coverage_matrix();
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Parser)], 2);
         assert_eq!(matrix[&(TestClass::Edge, TestSurface::Parser)], 1);
@@ -1150,7 +1150,7 @@ mod tests {
         let mut r = FixtureRegistry::new();
         let initial_gaps = r.coverage_gaps().len();
         r.register(make_fixture("g1", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let after_one = r.coverage_gaps().len();
         assert!(after_one < initial_gaps);
     }
@@ -1159,9 +1159,9 @@ mod tests {
     fn registry_serde_roundtrip() {
         let mut r = FixtureRegistry::new();
         r.register(make_fixture("sr1", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r.register(make_fixture("sr2", TestClass::Adversarial))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: FixtureRegistry =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1200,9 +1200,9 @@ mod tests {
     fn ownership_map_unowned_fixtures() {
         let mut reg = FixtureRegistry::new();
         reg.register(make_fixture("f1", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.register(make_fixture("f2", TestClass::Edge))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut m = OwnershipMap::new();
         m.add(OwnershipEntry {
@@ -1461,7 +1461,7 @@ mod tests {
                 let mut f = make_fixture(&id, *class);
                 f.surfaces = BTreeSet::from([TestSurface::Parser, TestSurface::Runtime]);
                 reg.register(f)
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
             }
         }
         assert_eq!(reg.len(), 25);
@@ -1497,9 +1497,9 @@ mod tests {
     fn ownership_map_complete_coverage() {
         let mut reg = FixtureRegistry::new();
         reg.register(make_fixture("f1", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         reg.register(make_fixture("f2", TestClass::Edge))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut m = OwnershipMap::new();
         m.add(OwnershipEntry {
@@ -1548,7 +1548,7 @@ mod tests {
         ]);
         let mut reg = FixtureRegistry::new();
         reg.register(f)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let matrix = reg.coverage_matrix();
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Compiler)], 1);
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Runtime)], 1);
@@ -1813,8 +1813,8 @@ mod tests {
     #[test]
     fn fixture_derive_id_deterministic() {
         let f = make_fixture("det-001", TestClass::Core);
-        let id1 = f.derive_id().expect("serde deserialization should succeed");
-        let id2 = f.derive_id().expect("serde deserialization should succeed");
+        let id1 = f.derive_id().expect("operation should succeed for valid inputs");
+        let id2 = f.derive_id().expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2, "derive_id must be deterministic");
     }
 
@@ -1824,10 +1824,10 @@ mod tests {
         let f2 = make_fixture("distinct-b", TestClass::Core);
         let id1 = f1
             .derive_id()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let id2 = f2
             .derive_id()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(
             id1, id2,
             "different fixture_ids should produce different IDs"
@@ -1874,7 +1874,7 @@ mod tests {
                 let id = format!("{}-{}", class.as_str(), surface.as_str());
                 let mut f = make_fixture(&id, *class);
                 f.surfaces = BTreeSet::from([*surface]);
-                r.register(f).expect("serde deserialization should succeed");
+                r.register(f).expect("operation should succeed for valid inputs");
             }
         }
         assert_eq!(r.len(), 40);
@@ -1893,7 +1893,7 @@ mod tests {
             TestSurface::Runtime,
             TestSurface::Parser,
         ]);
-        r.register(f).expect("serde deserialization should succeed");
+        r.register(f).expect("operation should succeed for valid inputs");
         let matrix = r.coverage_matrix();
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Compiler)], 1);
         assert_eq!(matrix[&(TestClass::Core, TestSurface::Runtime)], 1);
@@ -1905,11 +1905,11 @@ mod tests {
     fn registry_validate_all_with_mixed_valid_invalid() {
         let mut r = FixtureRegistry::new();
         r.register(make_fixture("good", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut bad = make_fixture("bad-adv", TestClass::Adversarial);
         bad.seed = None;
         r.register(bad)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let results = r.validate_all();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "bad-adv");
@@ -1919,7 +1919,7 @@ mod tests {
     fn registry_by_class_empty_for_missing() {
         let mut r = FixtureRegistry::new();
         r.register(make_fixture("c", TestClass::Core))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(r.by_class(TestClass::FaultInjection).is_empty());
     }
 
@@ -1927,7 +1927,7 @@ mod tests {
     fn registry_by_surface_empty_for_missing() {
         let mut r = FixtureRegistry::new();
         r.register(make_fixture("p", TestClass::Core))
-            .expect("serde deserialization should succeed"); // Parser only
+            .expect("operation should succeed for valid inputs"); // Parser only
         assert!(r.by_surface(TestSurface::Governance).is_empty());
     }
 
@@ -1936,7 +1936,7 @@ mod tests {
         let mut r = FixtureRegistry::new();
         for i in 0..200 {
             r.register(make_fixture(&format!("large-{i}"), TestClass::ALL[i % 5]))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(r.len(), 200);
         assert_eq!(r.by_class(TestClass::Core).len(), 40);
@@ -1949,7 +1949,7 @@ mod tests {
         for i in 0..50 {
             let mut f = make_fixture(&format!("rt-{i}"), TestClass::ALL[i % 5]);
             f.tags = BTreeSet::from([format!("tag-{}", i % 3)]);
-            r.register(f).expect("serde deserialization should succeed");
+            r.register(f).expect("operation should succeed for valid inputs");
         }
         let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: FixtureRegistry =
@@ -1985,7 +1985,7 @@ mod tests {
         let mut reg = FixtureRegistry::new();
         for i in 0..5 {
             reg.register(make_fixture(&format!("o-{i}"), TestClass::Core))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let mut m = OwnershipMap::new();
         m.add(OwnershipEntry {
@@ -2003,7 +2003,7 @@ mod tests {
         let mut reg = FixtureRegistry::new();
         for i in 0..4 {
             reg.register(make_fixture(&format!("p-{i}"), TestClass::Core))
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let mut m = OwnershipMap::new();
         m.add(OwnershipEntry {
@@ -2257,7 +2257,7 @@ mod tests {
                 f.surfaces = BTreeSet::from([*surface]);
                 fixture_ids.insert(id.clone());
                 reg.register(f)
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
             }
         }
         assert_eq!(reg.len(), 40);
@@ -2300,7 +2300,7 @@ mod tests {
                         .surfaces
                         .iter()
                         .next()
-                        .expect("serde deserialization should succeed"),
+                        .expect("operation should succeed for valid inputs"),
                     outcome,
                     seed: f.seed,
                     duration_us: 100 + (i as u64) * 10,
@@ -2319,12 +2319,12 @@ mod tests {
     #[test]
     fn fixture_id_derivation_stability_across_serde() {
         let f = make_fixture("stability-check", TestClass::Adversarial);
-        let id_before = f.derive_id().expect("serde deserialization should succeed");
+        let id_before = f.derive_id().expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let back: FixtureEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let id_after = back
             .derive_id()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             id_before, id_after,
             "ID derivation must survive serde roundtrip"
@@ -2349,7 +2349,7 @@ mod tests {
                 let mut f = make_fixture(&id, *class);
                 f.surfaces = BTreeSet::from([*surface]);
                 reg.register(f)
-                    .expect("serde deserialization should succeed");
+                    .expect("operation should succeed for valid inputs");
                 let new_gaps = reg.coverage_gaps().len();
                 assert!(new_gaps <= prev_gaps, "gaps must be monotone decreasing");
                 prev_gaps = new_gaps;

@@ -712,7 +712,7 @@ mod tests {
         // duration_since only fails if the system clock is set before 1970-01-01 (impossible in practice).
         let ts = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .as_nanos();
         std::env::temp_dir().join(format!("{}-{}", prefix, ts))
     }
@@ -847,9 +847,9 @@ mod tests {
         let cmds = vec!["test".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
         let manifest: FrontierEvidenceRunManifest = serde_json::from_slice(
-            &fs::read(&arts.run_manifest_path).expect("serde deserialization should succeed"),
+            &fs::read(&arts.run_manifest_path).expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert!(manifest.contract_satisfied);
         assert_eq!(manifest.fail_count, 0);
     }
@@ -870,7 +870,7 @@ mod tests {
         let cmds = vec!["test".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
         let events =
-            fs::read_to_string(&arts.events_path).expect("serde deserialization should succeed");
+            fs::read_to_string(&arts.events_path).expect("operation should succeed for valid inputs");
         let corpus = frontier_corpus();
         assert_eq!(events.lines().count(), corpus.len() + 2);
     }
@@ -928,7 +928,7 @@ mod tests {
             let json: String = serde_json::from_str(
                 &serde_json::to_string(family).expect("serialize derived Serialize"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("deserialization should succeed");
             assert_eq!(json, family.as_str());
         }
     }
@@ -1080,14 +1080,14 @@ mod tests {
         assert_eq!(
             events
                 .first()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .event,
             "frontier_evidence_run_started"
         );
         assert_eq!(
             events
                 .last()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .event,
             "frontier_evidence_run_completed"
         );
@@ -1166,9 +1166,9 @@ mod tests {
         let cmds = vec!["test".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
         let manifest: FrontierEvidenceRunManifest = serde_json::from_slice(
-            &fs::read(&arts.run_manifest_path).expect("serde deserialization should succeed"),
+            &fs::read(&arts.run_manifest_path).expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert_eq!(
             manifest.schema_version,
             PARSER_FRONTIER_MANIFEST_SCHEMA_VERSION
@@ -1183,9 +1183,9 @@ mod tests {
         let cmds = vec!["test".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
         let manifest: FrontierEvidenceRunManifest = serde_json::from_slice(
-            &fs::read(&arts.run_manifest_path).expect("serde deserialization should succeed"),
+            &fs::read(&arts.run_manifest_path).expect("operation should succeed for valid inputs"),
         )
-        .expect("serde deserialization should succeed");
+        .expect("deserialization should succeed");
         assert!(!manifest.artifact_paths.evidence_inventory.contains('/'));
         assert!(!manifest.artifact_paths.run_manifest.contains('/'));
         assert!(!manifest.artifact_paths.events_jsonl.contains('/'));
@@ -1198,7 +1198,7 @@ mod tests {
         let cmds = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
         let content =
-            fs::read_to_string(&arts.commands_path).expect("serde deserialization should succeed");
+            fs::read_to_string(&arts.commands_path).expect("operation should succeed for valid inputs");
         assert!(content.contains("alpha"));
         assert!(content.contains("beta"));
         assert!(content.contains("gamma"));

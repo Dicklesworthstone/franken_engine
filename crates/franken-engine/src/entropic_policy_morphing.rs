@@ -1546,10 +1546,10 @@ mod tests {
         let profiles = make_regime_profiles();
         let a = profiles
             .get("normal")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = profiles
             .get("attack")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(a.l1_distance(b), b.l1_distance(a));
     }
 
@@ -2112,7 +2112,7 @@ mod tests {
         let attack_profile = m
             .regime_profiles
             .get("attack")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         let blended = m.interpolate(&attack_profile);
 
@@ -2149,7 +2149,7 @@ mod tests {
         let target = m
             .regime_profiles
             .get("attack")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         let blended = m.interpolate(&target);
         // With rate=0, blended should equal current (anchor).
@@ -2180,7 +2180,7 @@ mod tests {
         let target = m
             .regime_profiles
             .get("attack")
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
             .clone();
         let blended = m.interpolate(&target);
         for (dim, &tgt_val) in &target.dimensions {
@@ -2293,13 +2293,13 @@ mod tests {
         let profiles = make_regime_profiles();
         let a = profiles
             .get("normal")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let b = profiles
             .get("elevated")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let c = profiles
             .get("attack")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ab = a.l1_distance(b);
         let bc = b.l1_distance(c);
         let ac = a.l1_distance(c);

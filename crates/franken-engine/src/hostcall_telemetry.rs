@@ -937,7 +937,7 @@ mod tests {
         let mut recorder = test_recorder();
         let rid = recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(rid, 0);
         assert_eq!(recorder.len(), 1);
         assert!(!recorder.is_empty());
@@ -948,13 +948,13 @@ mod tests {
         let mut recorder = test_recorder();
         let r0 = recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r1 = recorder
             .record(2000, test_input("ext-001", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let r2 = recorder
             .record(3000, test_input("ext-002", HostcallType::NetworkSend))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r0, 0);
         assert_eq!(r1, 1);
         assert_eq!(r2, 2);
@@ -965,11 +965,11 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Same timestamp is allowed (non-decreasing).
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recorder.len(), 2);
     }
 
@@ -978,7 +978,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(2000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = recorder
             .record(1000, test_input("ext-001", HostcallType::FsWrite))
             .unwrap_err();
@@ -1003,13 +1003,13 @@ mod tests {
         let mut recorder = small_recorder(3);
         recorder
             .record(100, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(200, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(300, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let err = recorder
             .record(400, test_input("ext-001", HostcallType::FsRead))
             .unwrap_err();
@@ -1022,11 +1022,11 @@ mod tests {
         assert_eq!(recorder.remaining_capacity(), 5);
         recorder
             .record(100, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recorder.remaining_capacity(), 4);
         recorder
             .record(200, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recorder.remaining_capacity(), 3);
     }
 
@@ -1039,7 +1039,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = &recorder.records()[0];
         assert!(record.verify_integrity());
     }
@@ -1049,7 +1049,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = &recorder.records()[0];
         assert_eq!(
             record.content_hash,
@@ -1063,7 +1063,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut record = recorder.records()[0].clone();
         record.duration_ns = 999_999;
         assert!(!record.verify_integrity());
@@ -1074,10 +1074,10 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(2000, test_input("ext-002", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(recorder.verify_all_integrity().is_empty());
     }
 
@@ -1092,9 +1092,9 @@ mod tests {
 
         let input = test_input("ext-001", HostcallType::FsRead);
         r1.record(1000, input.clone())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r2.record(1000, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(r1.records()[0].content_hash, r2.records()[0].content_hash);
         assert_eq!(r1.rolling_hash(), r2.rolling_hash());
@@ -1107,9 +1107,9 @@ mod tests {
         let mut r2 = test_recorder();
 
         r1.record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r2.record(1000, test_input("ext-002", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(r1.records()[0].content_hash, r2.records()[0].content_hash);
     }
@@ -1126,9 +1126,9 @@ mod tests {
         input2.flow_label = FlowLabel::new("a", "b:c");
 
         r1.record(1000, input1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r2.record(1000, input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_ne!(
             r1.records()[0].content_hash,
@@ -1146,7 +1146,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let snap = recorder.snapshot();
         assert_eq!(snap.record_count, 1);
         assert_eq!(snap.record_id_at_snapshot, Some(0));
@@ -1158,11 +1158,11 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s1 = recorder.snapshot();
         recorder
             .record(2000, test_input("ext-001", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let s2 = recorder.snapshot();
 
         assert_eq!(s1.record_count, 1);
@@ -1180,13 +1180,13 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recorder.records()[0].epoch, SecurityEpoch::GENESIS);
 
         recorder.set_epoch(SecurityEpoch::from_raw(5));
         recorder
             .record(2000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recorder.records()[1].epoch, SecurityEpoch::from_raw(5));
     }
 
@@ -1201,7 +1201,7 @@ mod tests {
         input.decision_id = Some("dec-001".to_string());
         recorder
             .record(1000, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             recorder.records()[0].decision_id,
             Some("dec-001".to_string())
@@ -1221,7 +1221,7 @@ mod tests {
         };
         recorder
             .record(1000, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             recorder.records()[0].result_status,
             HostcallResult::Denied { .. }
@@ -1235,7 +1235,7 @@ mod tests {
         input.result_status = HostcallResult::Error { code: 500 };
         recorder
             .record(1000, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             recorder.records()[0].result_status,
             HostcallResult::Error { code: 500 }
@@ -1249,7 +1249,7 @@ mod tests {
         input.result_status = HostcallResult::Timeout;
         recorder
             .record(1000, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recorder.records()[0].result_status, HostcallResult::Timeout);
     }
 
@@ -1268,7 +1268,7 @@ mod tests {
         };
         recorder
             .record(1000, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recorder.records()[0].resource_delta.memory_bytes, 65536);
     }
 
@@ -1281,7 +1281,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = &recorder.records()[0];
         let json = serde_json::to_string(record).expect("serialize derived Serialize");
         let restored: HostcallTelemetryRecord =
@@ -1296,7 +1296,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder.snapshot();
         let json = serde_json::to_string(&recorder).expect("serialize derived Serialize");
         let restored: TelemetryRecorder =
@@ -1311,7 +1311,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let snap = recorder.snapshot();
         let json = serde_json::to_string(&snap).expect("serialize derived Serialize");
         let restored: TelemetrySnapshot =
@@ -1328,29 +1328,29 @@ mod tests {
         // ext-001: 3 FsRead (1 denied), 1 NetworkSend
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(2000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut denied_input = test_input("ext-001", HostcallType::FsRead);
         denied_input.result_status = HostcallResult::Denied {
             reason: "policy".to_string(),
         };
         recorder
             .record(3000, denied_input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(4000, test_input("ext-001", HostcallType::NetworkSend))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // ext-002: 2 FsWrite, 1 Error
         recorder
             .record(5000, test_input("ext-002", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut err_input = test_input("ext-002", HostcallType::FsWrite);
         err_input.result_status = HostcallResult::Error { code: 13 };
         recorder
             .record(6000, err_input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
     }
 
@@ -1422,13 +1422,13 @@ mod tests {
         input.duration_ns = 500;
         recorder
             .record(1000, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut slow_input = test_input("ext-001", HostcallType::FsWrite);
         slow_input.duration_ns = 10_000;
         recorder
             .record(2000, slow_input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let query = TelemetryQuery::new(recorder.records());
         let slow = query.slow_calls(5_000, 0, 10_000);
@@ -1493,11 +1493,11 @@ mod tests {
         let h0 = *recorder.rolling_hash();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let h1 = *recorder.rolling_hash();
         recorder
             .record(2000, test_input("ext-001", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let h2 = *recorder.rolling_hash();
 
         assert_ne!(h0, h1);
@@ -1514,7 +1514,7 @@ mod tests {
         let h0 = *recorder.rolling_hash();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let h1 = *recorder.rolling_hash();
         // Rolling hash should not change when disabled.
         assert_eq!(h0, h1);
@@ -1529,16 +1529,16 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(2000, test_input("ext-002", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(recorder.get(0).is_some());
         assert_eq!(
             recorder
                 .get(0)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .extension_id,
             "ext-001"
         );
@@ -1546,7 +1546,7 @@ mod tests {
         assert_eq!(
             recorder
                 .get(1)
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .extension_id,
             "ext-002"
         );
@@ -1564,7 +1564,7 @@ mod tests {
         input.capability_used = RuntimeCapability::FsWrite;
         recorder
             .record(1000, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             recorder.records()[0].capability_used,
             RuntimeCapability::FsWrite
@@ -1582,7 +1582,7 @@ mod tests {
         input.flow_label = FlowLabel::new("secret", "top-secret");
         recorder
             .record(1000, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             recorder.records()[0].flow_label,
             FlowLabel::new("secret", "top-secret")
@@ -1733,7 +1733,7 @@ mod tests {
         let h1 = recorder.content_hash();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let h2 = recorder.content_hash();
         assert_ne!(h1, h2);
     }
@@ -1745,13 +1745,13 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(2000, test_input("ext-001", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(3000, test_input("ext-002", HostcallType::NetworkSend))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let snap = recorder.snapshot();
         assert_eq!(snap.record_count, 3);
         assert_eq!(snap.record_id_at_snapshot, Some(2)); // last record_id is 2 (0-indexed)
@@ -1899,7 +1899,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let snap = recorder.snapshot();
         let cloned = snap.clone();
         assert_eq!(snap, cloned);
@@ -1929,10 +1929,10 @@ mod tests {
         });
         recorder
             .record(500, test_input("ext-x", HostcallType::EnvRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(600, test_input("ext-x", HostcallType::MemAlloc))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&recorder).expect("serialize derived Serialize");
         let restored: TelemetryRecorder =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1965,13 +1965,13 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(1000, test_input("ext-a", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(2000, test_input("ext-a", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(3000, test_input("ext-a", HostcallType::NetworkSend))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let query = TelemetryQuery::new(recorder.records());
         // Exact window [2000, 2000] should return only the single record at ts=2000.
         let results = query.recent_by_extension("ext-a", 2000, 2000);
@@ -2003,10 +2003,10 @@ mod tests {
         input.result_status = HostcallResult::Timeout;
         recorder
             .record(100, input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder
             .record(200, test_input("ext-t", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let query = TelemetryQuery::new(recorder.records());
         let summary = query.extension_summary("ext-t", 0, 1000);
         assert_eq!(summary.total_calls, 2);
@@ -2033,9 +2033,9 @@ mod tests {
         let mut input2 = test_input("ext-001", HostcallType::FsRead);
         input2.decision_id = Some("dec-999".to_string());
         r1.record(1000, input1)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         r2.record(1000, input2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // Different decision_id => different content hash
         assert_ne!(r1.records()[0].content_hash, r2.records()[0].content_hash);
     }
@@ -2049,12 +2049,12 @@ mod tests {
         input_exact.duration_ns = 5000; // Exactly at threshold
         recorder
             .record(100, input_exact)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let mut input_over = test_input("ext-001", HostcallType::FsWrite);
         input_over.duration_ns = 5001; // Over threshold
         recorder
             .record(200, input_over)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let query = TelemetryQuery::new(recorder.records());
         // slow_calls uses > threshold (not >=)
         let slow = query.slow_calls(5000, 0, 1000);
@@ -2069,12 +2069,12 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(100, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed"); // Success
+            .expect("operation should succeed for valid inputs"); // Success
         let mut timeout_input = test_input("ext-001", HostcallType::NetworkRecv);
         timeout_input.result_status = HostcallResult::Timeout;
         recorder
             .record(200, timeout_input)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let query = TelemetryQuery::new(recorder.records());
         let anomalies = query.anomaly_candidates(0, 1000);
         assert_eq!(anomalies.len(), 1);
@@ -2088,7 +2088,7 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(42_000, test_input("ext-json", HostcallType::CryptoOp))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let record = &recorder.records()[0];
         let json = serde_json::to_string(record).expect("serialize derived Serialize");
         let v: serde_json::Value =
@@ -2108,15 +2108,15 @@ mod tests {
         let mut recorder = test_recorder();
         recorder
             .record(100, test_input("ext-001", HostcallType::FsRead))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder.set_epoch(SecurityEpoch::from_raw(10));
         recorder
             .record(200, test_input("ext-001", HostcallType::FsWrite))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         recorder.set_epoch(SecurityEpoch::from_raw(20));
         recorder
             .record(300, test_input("ext-001", HostcallType::NetworkSend))
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(recorder.records()[0].epoch, SecurityEpoch::GENESIS);
         assert_eq!(recorder.records()[1].epoch, SecurityEpoch::from_raw(10));
         assert_eq!(recorder.records()[2].epoch, SecurityEpoch::from_raw(20));

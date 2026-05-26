@@ -149,7 +149,7 @@ fn main() {
     match run() {
         Ok(report) => {
             let json = serde_json::to_string_pretty(&report)
-                .expect("serde deserialization should succeed");
+                .expect("serialization should succeed");
             println!("{json}");
         }
         Err(error) => {

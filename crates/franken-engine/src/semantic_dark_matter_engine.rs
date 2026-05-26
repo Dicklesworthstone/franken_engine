@@ -1438,7 +1438,7 @@ mod tests {
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let result = engine
             .discover(&candidates)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.seq, 1);
         assert_eq!(result.candidates_evaluated, 2);
     }
@@ -1459,7 +1459,7 @@ mod tests {
         // SAFETY: Test creates valid high-scoring candidate; discover succeeds in controlled test environment.
         let result = engine
             .discover(&candidates)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
         assert_eq!(result.candidates_promoted, promoted);
         assert_eq!(result.candidates_rejected, rejected);
@@ -1472,7 +1472,7 @@ mod tests {
         // SAFETY: Test creates valid low-scoring candidate; discover succeeds in controlled test environment.
         let result = engine
             .discover(&candidates)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
         assert_eq!(result.candidates_promoted, promoted);
         assert_eq!(result.candidates_rejected, rejected);
@@ -1488,7 +1488,7 @@ mod tests {
         // SAFETY: Test creates valid candidates with different novelty scores; discover succeeds in controlled test environment.
         let result = engine
             .discover(&candidates)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let (_, _, max_novelty, _) = expected_cycle_metrics(&engine.config, &candidates);
         assert_eq!(result.max_novelty_millionths, max_novelty);
     }
@@ -1658,7 +1658,7 @@ mod tests {
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let result = engine
             .discover(&candidates)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let (promoted, rejected, _, _) = expected_cycle_metrics(&engine.config, &candidates);
         assert_eq!(result.candidates_promoted, promoted);
         assert_eq!(result.candidates_rejected, rejected);
@@ -1675,7 +1675,7 @@ mod tests {
 
         let result = engine
             .discover(&candidates)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let expected = expected_candidate_receipts(&engine.config, &candidates);
 
         assert_eq!(result.candidate_receipts, expected);
@@ -1722,10 +1722,10 @@ mod tests {
 
         let first = first_engine
             .discover(&[candidate_obstruction])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let second = second_engine
             .discover(&[candidate_topology])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(first.candidates_promoted, second.candidates_promoted);
         assert_eq!(first.candidates_rejected, second.candidates_rejected);
@@ -1828,7 +1828,7 @@ mod tests {
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let result = engine
             .discover(&candidates)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let (_, _, _, avg_novelty) = expected_cycle_metrics(&engine.config, &candidates);
         assert_eq!(result.avg_novelty_millionths, avg_novelty);
     }
@@ -1839,11 +1839,11 @@ mod tests {
         // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let r1 = engine
             .discover(&[make_candidate("c1", CandidateKind::Program, 800_000)])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let r2 = engine
             .discover(&[make_candidate("c2", CandidateKind::Program, 800_000)])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_ne!(r1.content_hash, r2.content_hash);
     }
 
@@ -1854,7 +1854,7 @@ mod tests {
         // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let result = engine
             .discover(&[make_candidate("x", CandidateKind::Program, 800_000)])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.epoch, epoch);
     }
 
@@ -2052,7 +2052,7 @@ mod tests {
         // SAFETY: Test creates valid candidate; discover succeeds in controlled test environment.
         let result = engine
             .discover(&[make_candidate("solo", CandidateKind::Program, 800_000)])
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.candidates_evaluated, 1);
         let (_, _, max_novelty, _) = expected_cycle_metrics(
             &engine.config,
@@ -2074,7 +2074,7 @@ mod tests {
         // SAFETY: Test creates valid candidates; discover succeeds in controlled test environment.
         let result = engine
             .discover(&candidates)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.candidates_evaluated, 5);
     }
 }

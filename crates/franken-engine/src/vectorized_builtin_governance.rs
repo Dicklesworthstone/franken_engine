@@ -876,7 +876,7 @@ impl GovernanceEvaluator {
                 *categories
                     .iter()
                     .next()
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
             } else {
                 GovernanceVerdict::MultipleViolations
             }

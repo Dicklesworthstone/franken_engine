@@ -293,13 +293,13 @@ fn scenario_normal_shutdown<C: ContextAdapter>(seed: u64, cx: &mut C) -> Scenari
     // Load and create sessions.
     // SAFETY: Test scenario with valid extension ID and context. Load operation should succeed.
     mgr.load_extension("ext-ns-1", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     // SAFETY: Extension just loaded successfully, session creation should succeed.
     mgr.create_session("ext-ns-1", "sess-1", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     // SAFETY: Extension loaded, first session created, second session creation should succeed.
     mgr.create_session("ext-ns-1", "sess-2", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     result.assert_eq("session count is 2", mgr.session_count("ext-ns-1"), 2);
 
     // Close one session explicitly.
@@ -351,10 +351,10 @@ fn scenario_forced_cancel<C: ContextAdapter>(seed: u64, cx: &mut C) -> ScenarioR
     // Load extension and session.
     // SAFETY: Test scenario with valid extension ID and context. Load operation should succeed.
     mgr.load_extension("ext-fc-1", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     // SAFETY: Extension just loaded successfully, session creation should succeed.
     mgr.create_session("ext-fc-1", "sess-1", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
     // Force-cancel with Terminate (zero drain budget).
     let cancel_result = mgr.cancel_extension("ext-fc-1", cx, LifecycleEvent::Terminate);
@@ -386,9 +386,9 @@ fn scenario_quarantine<C: ContextAdapter>(seed: u64, cx: &mut C) -> ScenarioResu
     let mut mgr = ExtensionHostLifecycleManager::new();
 
     mgr.load_extension("ext-q-1", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     mgr.create_session("ext-q-1", "sess-1", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
     // Quarantine the extension.
     let quarantine_result = mgr.cancel_extension("ext-q-1", cx, LifecycleEvent::Quarantine);
@@ -421,9 +421,9 @@ fn scenario_revocation<C: ContextAdapter>(seed: u64, cx: &mut C) -> ScenarioResu
     let mut mgr = ExtensionHostLifecycleManager::new();
 
     mgr.load_extension("ext-r-1", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     mgr.create_session("ext-r-1", "sess-active", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
     // Revoke via Revocation lifecycle event.
     let revoke_result = mgr.cancel_extension("ext-r-1", cx, LifecycleEvent::Revocation);
@@ -452,9 +452,9 @@ fn scenario_degraded_mode<C: ContextAdapter>(seed: u64, cx: &mut C) -> ScenarioR
 
     // Load some extensions normally.
     mgr.load_extension("ext-d-1", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     mgr.load_extension("ext-d-2", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
     // Initiate shutdown (simulates control-plane entering degraded mode).
     let shutdown_results = mgr.shutdown(cx);
@@ -496,19 +496,19 @@ fn scenario_multi_extension<C: ContextAdapter>(seed: u64, cx: &mut C) -> Scenari
     // Load 4 extensions.
     for i in 0..4 {
         mgr.load_extension(&format!("ext-m-{i}"), cx)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
     }
     result.assert_eq("4 extensions loaded", mgr.loaded_extension_count(), 4);
 
     // Create sessions in different extensions.
     mgr.create_session("ext-m-0", "s0a", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     mgr.create_session("ext-m-0", "s0b", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     mgr.create_session("ext-m-1", "s1a", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
     mgr.create_session("ext-m-2", "s2a", cx)
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
     // Cancel ext-m-1 (terminate).
     let cancel_result = mgr.cancel_extension("ext-m-1", cx, LifecycleEvent::Terminate);
@@ -913,7 +913,7 @@ mod tests {
         assert!(
             parsed["total_assertions"]
                 .as_u64()
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 > 0
         );
         assert_eq!(parsed["total_assertions"], parsed["passed_assertions"]);
@@ -1155,13 +1155,13 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         let scenarios = parsed["scenarios"]
             .as_array()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(scenarios.len(), 7);
         for s in scenarios {
             assert!(
                 s["passed"]
                     .as_bool()
-                    .expect("serde deserialization should succeed")
+                    .expect("operation should succeed for valid inputs")
             );
         }
     }
@@ -1297,12 +1297,12 @@ mod tests {
             .scenarios
             .iter()
             .find(|s| s.kind == ScenarioKind::MultiExtension)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let startup = suite
             .scenarios
             .iter()
             .find(|s| s.kind == ScenarioKind::Startup)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(
             multi.assertions.len() >= startup.assertions.len(),
             "multi_extension should have at least as many assertions as startup"
@@ -1478,14 +1478,14 @@ mod tests {
     #[test]
     fn scenario_kind_startup_serde_token() {
         let json = serde_json::to_string(&ScenarioKind::Startup)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(json.contains("Startup"), "expected 'Startup' in {json}");
     }
 
     #[test]
     fn scenario_kind_quarantine_serde_token() {
         let json = serde_json::to_string(&ScenarioKind::Quarantine)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(
             json.contains("Quarantine"),
             "expected 'Quarantine' in {json}"
@@ -1495,7 +1495,7 @@ mod tests {
     #[test]
     fn scenario_kind_multi_extension_serde_token() {
         let json = serde_json::to_string(&ScenarioKind::MultiExtension)
-            .expect("serde deserialization should succeed");
+            .expect("serialization should succeed");
         assert!(
             json.contains("MultiExtension"),
             "expected 'MultiExtension' in {json}"
@@ -1812,7 +1812,7 @@ mod tests {
         let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(77, &mut cx);
         let json =
-            serde_json::to_string_pretty(&suite).expect("serde deserialization should succeed");
+            serde_json::to_string_pretty(&suite).expect("serialization should succeed");
         let back: ScenarioSuiteResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(suite.seed, back.seed);

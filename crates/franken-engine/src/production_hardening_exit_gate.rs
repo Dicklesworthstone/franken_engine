@@ -2232,7 +2232,7 @@ mod tests {
     #[test]
     fn test_production_hardening_gate_creation() {
         let gate = ProductionHardeningGateExecution::new("test-gate-001".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gate.gate_id, "test-gate-001");
         assert_eq!(gate.status, ProductionReadinessStatus::NotStarted);
         assert!(!gate.security_matrix.is_empty());
@@ -2261,7 +2261,7 @@ mod tests {
     fn production_gate_cannot_pass_from_hardcoded_helper_outputs() {
         let mut gate =
             ProductionHardeningGateExecution::new("test-gate-missing-evidence".to_string())
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
 
         let err = gate.execute_production_hardening_gate().unwrap_err();
         assert!(err.contains("missing production hardening evidence artifact"));
@@ -2274,7 +2274,7 @@ mod tests {
     #[test]
     fn test_security_matrix_validation() {
         let gate = ProductionHardeningGateExecution::new("test-gate-002".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Test security matrix validation logic
         assert!(
@@ -2299,7 +2299,7 @@ mod tests {
     #[test]
     fn test_fuzz_campaign_configuration() {
         let gate = ProductionHardeningGateExecution::new("test-gate-003".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify we have fuzz campaigns for all required targets
         let fuzz_targets: BTreeSet<_> = gate.fuzz_campaigns.iter().map(|c| &c.target).collect();
@@ -2325,7 +2325,7 @@ mod tests {
     #[test]
     fn test_property_test_configuration() {
         let gate = ProductionHardeningGateExecution::new("test-gate-004".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify we have property tests for all required property types
         let property_types: BTreeSet<_> = gate
@@ -2344,7 +2344,7 @@ mod tests {
     #[test]
     fn test_rollout_ladder_stages() {
         let gate = ProductionHardeningGateExecution::new("test-gate-005".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify we have all rollout stages
         let stages: BTreeSet<_> = gate.rollout_validation.iter().map(|r| &r.stage).collect();
@@ -2359,12 +2359,12 @@ mod tests {
             .rollout_validation
             .iter()
             .find(|r| r.stage == RolloutStage::Shadow)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let default = gate
             .rollout_validation
             .iter()
             .find(|r| r.stage == RolloutStage::Default)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(shadow.error_rate_threshold_pct < default.error_rate_threshold_pct);
         assert!(shadow.latency_threshold_p99_ms < default.latency_threshold_p99_ms);
@@ -2373,7 +2373,7 @@ mod tests {
     #[test]
     fn test_fault_injection_drill_types() {
         let gate = ProductionHardeningGateExecution::new("test-gate-006".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify we have all required fault types
         let fault_types: BTreeSet<_> = gate
@@ -2392,7 +2392,7 @@ mod tests {
     #[test]
     fn test_quarantine_drill_configuration() {
         let gate = ProductionHardeningGateExecution::new("test-gate-007".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify we have quarantine drills for different malicious extension types
         let extension_types: BTreeSet<_> = gate
@@ -2425,7 +2425,7 @@ mod tests {
     #[test]
     fn test_replay_audit_configuration() {
         let gate = ProductionHardeningGateExecution::new("test-gate-008".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Verify we have replay audits for different severity levels
         let severities: BTreeSet<_> = gate
@@ -2462,7 +2462,7 @@ mod tests {
     #[test]
     fn test_production_readiness_status_transitions() {
         let mut gate = ProductionHardeningGateExecution::new("test-gate-010".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(gate.status, ProductionReadinessStatus::NotStarted);
 
@@ -2483,7 +2483,7 @@ mod tests {
     #[test]
     fn test_validation_status_logic() {
         let mut gate = ProductionHardeningGateExecution::new("test-gate-011".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Initially all validations should be pending
         assert!(!gate.all_validations_passed());
@@ -2500,10 +2500,10 @@ mod tests {
     #[test]
     fn test_operational_readiness_report_generation() {
         let gate = ProductionHardeningGateExecution::new("test-gate-012".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let report = gate
             .generate_operational_readiness_report()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(report.report_id.starts_with("prod-readiness-"));
         assert!(report.generated_at > 0);
@@ -2532,7 +2532,7 @@ mod tests {
     #[test]
     fn operational_readiness_report_uses_evidence_derived_metrics() {
         let mut gate = ProductionHardeningGateExecution::new("test-gate-metrics".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         for (campaign, (cpu_hours, coverage_pct)) in gate.fuzz_campaigns.iter_mut().zip([
             (30, 60.0),
@@ -2599,7 +2599,7 @@ mod tests {
 
         let report = gate
             .generate_operational_readiness_report()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_close(report.performance_assessment.fuzz_coverage_pct, 75.0);
         assert_eq!(report.performance_assessment.fuzz_cpu_hours_total, 210);
@@ -2640,7 +2640,7 @@ mod tests {
     #[test]
     fn test_evidence_artifact_tracking() {
         let mut gate = ProductionHardeningGateExecution::new("test-gate-013".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Test evidence artifact collection
         gate.evidence_artifacts.insert(
@@ -2663,7 +2663,7 @@ mod tests {
     #[test]
     fn test_error_handling_and_failure_scenarios() {
         let mut gate = ProductionHardeningGateExecution::new("test-gate-014".to_string())
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         // Test failure status
         gate.status = ProductionReadinessStatus::ProductionNotReady("Test failure".to_string());

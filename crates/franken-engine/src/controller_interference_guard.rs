@@ -1549,7 +1549,7 @@ mod tests {
         let summary = evaluation
             .logs
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.event, "interference_summary");
         assert_eq!(summary.outcome, "pass");
         assert!(summary.error_code.is_none());
@@ -1578,7 +1578,7 @@ mod tests {
         let summary = evaluation
             .logs
             .last()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(summary.outcome, "fail");
         assert!(summary.error_code.is_some());
     }
@@ -1928,7 +1928,7 @@ mod tests {
         let updates = evaluation
             .subscription_streams
             .get("sub-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(updates.len(), 2);
         assert!(updates[0].sequence < updates[1].sequence);
         assert_eq!(updates[0].sequence, 1);
@@ -2092,7 +2092,7 @@ mod tests {
         let updates = evaluation
             .subscription_streams
             .get("writer")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].value, 55);
     }
@@ -2324,11 +2324,11 @@ mod tests {
         let ctrl_a_updates = eval
             .subscription_streams
             .get("ctrl-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ctrl_z_updates = eval
             .subscription_streams
             .get("ctrl-z")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ctrl_a_updates.len(), 2);
         assert_eq!(ctrl_z_updates.len(), 1);
         // ctrl-a gets cpu (seq 1), mem (seq 2) before ctrl-z cpu (seq 3)
@@ -2492,7 +2492,7 @@ mod tests {
             .final_metrics
             .get("cpu")
             .copied()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(final_cpu, 20);
     }
 
@@ -2953,7 +2953,7 @@ mod tests {
         let updates = eval
             .subscription_streams
             .get("ctrl-a")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].value, 10); // initial cpu value
         assert_eq!(updates[0].metric, "cpu");
@@ -3042,7 +3042,7 @@ mod tests {
         let hex_part = eval
             .decision_id
             .strip_prefix("ctrl-interference-")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(hex_part.len(), 32, "16 bytes = 32 hex chars");
         assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));
     }

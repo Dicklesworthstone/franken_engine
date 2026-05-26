@@ -3188,7 +3188,7 @@ export const version = 1;
         config.compiler_options.module = "commonjs".to_string();
         // SAFETY: Test with valid TypeScript source and config should succeed normalization
         let output = normalize_typescript_to_es2020("const x = 1;", &config, "t", "d", "p")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("const x = 1"));
     }
 
@@ -3212,7 +3212,7 @@ export const version = 1;
         let mut config = TsNormalizationConfig::default();
         config.compiler_options.jsx = "react".to_string();
         let output = normalize_typescript_to_es2020("const x = 1;", &config, "t", "d", "p")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("const x = 1"));
     }
 
@@ -3221,7 +3221,7 @@ export const version = 1;
         let mut config = TsNormalizationConfig::default();
         config.compiler_options.jsx = "preserve".to_string();
         let output = normalize_typescript_to_es2020("<Widget />", &config, "t", "d", "p")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // In preserve mode, JSX is NOT lowered to createElement
         assert!(!output.normalized_source.contains("createElement"));
     }
@@ -3238,7 +3238,7 @@ export const version = 1;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // `!:` is replaced with `:`; then type annotations are stripped
         assert!(!output.normalized_source.contains("!:"));
     }
@@ -3267,7 +3267,7 @@ let value!: string;"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(!output.normalized_source.contains("as const"));
     }
 
@@ -3295,7 +3295,7 @@ const arr = [1, 2, 3] as const;"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(!output.normalized_source.contains("abstract"));
         assert!(output.normalized_source.contains("class Base"));
     }
@@ -3322,7 +3322,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert!(!output.normalized_source.contains("implements Disposable"));
         assert!(
@@ -3344,7 +3344,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("__applyClassDecorator"));
         assert!(output.normalized_source.contains("sealed"));
         assert!(output.normalized_source.contains("let Foo ="));
@@ -3419,7 +3419,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(
             output
                 .normalized_source
@@ -3515,7 +3515,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("ns.a = 1;"));
         assert!(output.normalized_source.contains("ns.b = 2;"));
         // Only one IIFE block for the merged namespace
@@ -3538,7 +3538,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("Up: 10"));
         assert!(output.normalized_source.contains("Down: 11"));
     }
@@ -3553,7 +3553,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Line passes through unchanged when no opening brace
         assert!(output.normalized_source.contains("enum NoBrace"));
     }
@@ -3568,7 +3568,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // Empty body → entries is empty → line passes through
         assert!(output.normalized_source.contains("enum Empty"));
     }
@@ -3583,7 +3583,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("Object.freeze"));
         assert!(output.normalized_source.contains(r#"Red: "RED""#));
         assert!(output.normalized_source.contains(r#"Blue: "BLUE""#));
@@ -3601,7 +3601,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("this.name = name;"));
     }
 
@@ -3615,7 +3615,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("this.id = id;"));
     }
 
@@ -3629,7 +3629,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(!output.normalized_source.contains("this.value"));
     }
 
@@ -3643,7 +3643,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         // No brace → rebuilt ends with semicolon
         assert!(output.normalized_source.contains("constructor("));
         assert!(output.normalized_source.ends_with(';'));
@@ -4005,7 +4005,7 @@ abstract class Base { }"#;
             "decision-1",
             "policy-1",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert_eq!(output.witness.trace_id, "trace-1");
         assert_eq!(output.witness.decision_id, "decision-1");
         assert_eq!(output.witness.policy_id, "policy-1");
@@ -4023,7 +4023,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(output.events.iter().any(|e| e.outcome == "pass"));
     }
 
@@ -4036,7 +4036,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let normalized_line_count = output.normalized_source.lines().count();
         assert_eq!(output.source_map.len(), normalized_line_count);
     }
@@ -4050,7 +4050,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         let steps: Vec<&str> = output
             .witness
             .decisions
@@ -4128,7 +4128,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("ns.x = 1;"));
     }
 
@@ -4142,7 +4142,7 @@ abstract class Base { }"#;
             "d",
             "p",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
         assert!(output.normalized_source.contains("ns.x = 1;"));
     }
 
@@ -4298,7 +4298,7 @@ abstract class Base { }"#;
             "decision-js",
             "policy-js",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             prepared.source_ingestion.source_language,
@@ -4345,7 +4345,7 @@ abstract class Base { }"#;
             "decision-ts",
             "policy-ts",
         )
-        .expect("serde deserialization should succeed");
+        .expect("operation should succeed for valid inputs");
 
         assert_eq!(
             prepared.source_ingestion.source_language,

@@ -2516,7 +2516,7 @@ mod tests {
         let result: EvalResult<i32> = Ok(42);
         let propagated = propagate_result_across_boundary(result, ExceptionBoundary::AsyncJob);
         assert_eq!(
-            propagated.expect("serde deserialization should succeed"),
+            propagated.expect("operation should succeed for valid inputs"),
             42
         );
     }
@@ -2629,7 +2629,7 @@ mod tests {
         let mut engine = QuickJsInspiredNativeEngine;
         let out = engine
             .eval("'hello'")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(out.value, "hello");
         assert_eq!(out.engine, EngineKind::QuickJsInspiredNative);
     }
@@ -2666,7 +2666,7 @@ mod tests {
         let mut engine = V8InspiredNativeEngine;
         let out = engine
             .eval("\"world\"")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(out.value, "world");
         assert_eq!(out.engine, EngineKind::V8InspiredNative);
     }

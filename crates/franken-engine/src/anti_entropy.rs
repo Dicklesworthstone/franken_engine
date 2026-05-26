@@ -1051,9 +1051,9 @@ mod tests {
         // SAFETY: Test subtracting compatible IBLTs with same parameters should succeed
         let diff = iblt
             .subtract(&empty)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test peeling simple difference (1 inserted element) should succeed
-        let (pos, neg) = diff.peel().expect("serde deserialization should succeed");
+        let (pos, neg) = diff.peel().expect("operation should succeed for valid inputs");
         assert_eq!(pos.len(), 1);
         assert_eq!(pos[0], h);
         assert!(neg.is_empty());
@@ -1082,9 +1082,9 @@ mod tests {
         // SAFETY: Test subtracting compatible IBLTs with same parameters should succeed
         let diff = iblt_a
             .subtract(&iblt_b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test peeling symmetric difference with known element counts should succeed
-        let (pos, neg) = diff.peel().expect("serde deserialization should succeed");
+        let (pos, neg) = diff.peel().expect("operation should succeed for valid inputs");
 
         // pos = elements in A but not B (a_only).
         // neg = elements in B but not A (b_only).
@@ -1114,9 +1114,9 @@ mod tests {
         // SAFETY: Test subtracting identical compatible IBLTs should succeed
         let diff = iblt_a
             .subtract(&iblt_b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test peeling empty difference from identical sets should succeed
-        let (pos, neg) = diff.peel().expect("serde deserialization should succeed");
+        let (pos, neg) = diff.peel().expect("operation should succeed for valid inputs");
         assert!(pos.is_empty());
         assert!(neg.is_empty());
     }
@@ -1138,7 +1138,7 @@ mod tests {
         // SAFETY: Test subtracting compatible IBLTs with same parameters should succeed
         let diff = iblt_a
             .subtract(&iblt_b)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(diff.peel().is_err());
     }
 
@@ -1196,7 +1196,7 @@ mod tests {
         let result = session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
             // SAFETY: Test reconciliation with valid IBLT parameters and small difference should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!result.fallback_triggered);
         assert_eq!(result.objects_to_send.len(), 1);
@@ -1219,7 +1219,7 @@ mod tests {
         let result = session
             .reconcile(&objects, &remote_iblt, "peer-1", "t1")
             // SAFETY: Test reconciliation with identical sets should succeed
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert!(!result.fallback_triggered);
         assert!(result.objects_to_send.is_empty());
@@ -1243,7 +1243,7 @@ mod tests {
         let result = session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
             // SAFETY: Test reconciliation with fallback enabled should succeed (even if fallback triggered)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(result.fallback_triggered);
     }
 
@@ -1287,7 +1287,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&objects);
         session
             .reconcile(&objects, &remote_iblt, "peer-1", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = session.drain_events();
         assert_eq!(events.len(), 1);
@@ -1311,7 +1311,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&remote);
         session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let events = session.drain_events();
         assert!(!events.is_empty());
@@ -1319,7 +1319,7 @@ mod tests {
         assert!(fallback.is_some());
         assert!(
             fallback
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
                 .fallback_triggered
         );
     }
@@ -1338,7 +1338,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&objects);
         session
             .reconcile(&objects, &remote_iblt, "peer-1", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(session.event_counts().get("reconcile_success"), Some(&1));
     }
@@ -1464,7 +1464,7 @@ mod tests {
             let remote_iblt = session.build_iblt(&remote);
             session
                 .reconcile(&local, &remote_iblt, "peer-1", "t1")
-                .expect("serde deserialization should succeed")
+                .expect("operation should succeed for valid inputs")
         };
 
         let r1 = run();
@@ -1628,7 +1628,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&remote);
         let iblt_result = session
             .reconcile(&local, &remote_iblt, "peer-1", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let fb_result = fb.execute(FallbackRequest {
             local_hashes: &local,
@@ -1751,7 +1751,7 @@ mod tests {
         }
         let alert = monitor.record(true);
         assert!(alert.is_some());
-        let alert = alert.expect("serde deserialization should succeed");
+        let alert = alert.expect("operation should succeed for valid inputs");
         assert_eq!(alert.threshold_pct, 5);
         assert!(alert.rate_pct > 5);
         assert!(monitor.is_rate_exceeded());
@@ -2308,7 +2308,7 @@ mod tests {
         let remote_iblt = session.build_iblt(&objects);
         session
             .reconcile(&objects, &remote_iblt, "peer", "t1")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!session.drain_events().is_empty());
         assert!(session.drain_events().is_empty());
     }

@@ -630,7 +630,7 @@ impl CharterBuilder {
                 &SchemaId::from_definition(b"runtime_kernel_lane_charter:0.1.0"),
                 content_hash.as_bytes(),
             )
-            .expect("serde deserialization should succeed")
+            .expect("operation should succeed for valid inputs")
         };
 
         RuntimeKernelCharter {

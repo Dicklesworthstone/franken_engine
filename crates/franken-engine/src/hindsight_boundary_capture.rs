@@ -1830,10 +1830,10 @@ mod tests {
         let s2 = make_session();
         let p1 = s1
             .minimal_replay_plans()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let p2 = s2
             .minimal_replay_plans()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p1.len(), p2.len());
     }
 
@@ -1894,7 +1894,7 @@ mod tests {
             let rule = catalog.rule_for(class);
             assert!(rule.is_some(), "rule_for({:?}) should return Some", class);
             assert_eq!(
-                rule.expect("serde deserialization should succeed")
+                rule.expect("operation should succeed for valid inputs")
                     .boundary_class,
                 class
             );
@@ -1981,7 +1981,7 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "hw", 1);
         let record = session
             .capture_hardware_surface_read(&ctx, "gpu", "meas-digest", "drv-digest", None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.schema_version, BOUNDARY_CAPTURE_EVENT_SCHEMA_VERSION);
     }
 
@@ -1991,7 +1991,7 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "rng", 1);
         let record = session
             .capture_randomness_draw(&ctx, "gen-1", 0, "sample-hash", None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.nondeterminism_tag, "randomness_draw");
     }
 
@@ -2001,19 +2001,19 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "rng", 1);
         let record = session
             .capture_randomness_draw(&ctx, "gen-1", 0, "sample-hash", None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // randomness_draw has sample_digest as SecretDigest/DigestOnly
         let sample_redaction = record
             .redaction
             .get("sample_digest")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(sample_redaction.privacy_class, PrivacyClass::SecretDigest);
         assert_eq!(sample_redaction.treatment, RedactionTreatment::DigestOnly);
         // generator_id is PublicMetadata/Plaintext
         let gen_redaction = record
             .redaction
             .get("generator_id")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(gen_redaction.privacy_class, PrivacyClass::PublicMetadata);
         assert_eq!(gen_redaction.treatment, RedactionTreatment::Plaintext);
     }
@@ -2024,7 +2024,7 @@ mod tests {
         let ctx = BoundaryContext::new("t-rt", "d-rt", "p-rt", "policy", 42);
         let record = session
             .capture_external_policy_read(&ctx, "risk-router", "digest-policy", 7, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&record).expect("serialize derived Serialize");
         let back: BoundaryCaptureRecord =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2047,7 +2047,7 @@ mod tests {
             ],
         );
         log.append(&catalog, request)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&log).expect("serialize derived Serialize");
         let back: BoundaryCaptureLog =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2067,7 +2067,7 @@ mod tests {
         let log = BoundaryCaptureLog::new();
         let rendered = log
             .render_jsonl()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(rendered.is_empty());
     }
 
@@ -2080,12 +2080,12 @@ mod tests {
             let ctx = BoundaryContext::new(&trace, &decision, "p", "clock", i);
             session
                 .capture_clock_read(&ctx, "mono", "monotonic", i, None)
-                .expect("serde deserialization should succeed");
+                .expect("operation should succeed for valid inputs");
         }
         let rendered = session
             .log()
             .render_jsonl()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let lines: Vec<&str> = rendered.split('\n').collect();
         assert_eq!(lines.len(), 3);
         for line in &lines {
@@ -2170,31 +2170,31 @@ mod tests {
         let ctx1 = BoundaryContext::new("t", "d", "p", "clock", 1);
         session
             .capture_clock_read(&ctx1, "mono", "monotonic", 1, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let ctx2 = BoundaryContext::new("t", "d", "p", "rng", 2);
         session
             .capture_randomness_draw(&ctx2, "gen-1", 0, "sample", None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         // One capture with a different trace
         let ctx3 = BoundaryContext::new("t-other", "d", "p", "clock", 3);
         session
             .capture_clock_read(&ctx3, "mono", "monotonic", 3, None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let plans = session
             .minimal_replay_plans()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plans.len(), 2);
         // Find the plan for trace "t"
         let plan_t = plans
             .iter()
             .find(|p| p.trace_id == "t")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan_t.inputs.len(), 2);
         let plan_other = plans
             .iter()
             .find(|p| p.trace_id == "t-other")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan_other.inputs.len(), 1);
     }
 
@@ -2204,10 +2204,10 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "scheduler", 999);
         session
             .capture_scheduling_decision(&ctx, "ready", "task-1", "digest", None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let plans = session
             .minimal_replay_plans()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plans[0].inputs[0].virtual_ts, 999);
     }
 
@@ -2347,7 +2347,7 @@ mod tests {
                 "content-digest",
                 Some("filesystem-path-explanation"),
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.sufficiency, ReplaySufficiency::NeedsEscalation);
         assert_eq!(
             record.escalation_reason.as_deref(),
@@ -2361,7 +2361,7 @@ mod tests {
         let ctx = BoundaryContext::new("t", "d", "p", "fs", 1);
         let record = session
             .capture_filesystem_input(&ctx, "read", "path-digest", "content-digest", None)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.sufficiency, ReplaySufficiency::Sufficient);
         assert!(record.escalation_reason.is_none());
     }
@@ -2383,7 +2383,7 @@ mod tests {
             ],
         );
         log.append(&catalog, req)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(log.next_sequence, 1);
         let ctx2 = BoundaryContext::new("t", "d", "p", "clock", 2);
         let req2 = build_request(
@@ -2397,7 +2397,7 @@ mod tests {
             ],
         );
         log.append(&catalog, req2)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(log.next_sequence, 2);
     }
 
@@ -2434,7 +2434,7 @@ mod tests {
         let session = BoundaryCaptureSession::default_v1();
         let plans = session
             .minimal_replay_plans()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(plans.is_empty());
     }
 
@@ -2488,12 +2488,12 @@ mod tests {
         let catalog = BoundaryCatalog::default_v1();
         let rule = catalog
             .rule_for(BoundaryClass::HardwareSurfaceRead)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let driver_fp_entry = rule
             .redaction_rules
             .iter()
             .find(|e| e.field == "driver_fingerprint")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             driver_fp_entry.privacy_class,
             PrivacyClass::HardwareFingerprint
@@ -2503,7 +2503,7 @@ mod tests {
             .redaction_rules
             .iter()
             .find(|e| e.field == "measurement_digest")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             measurement_entry.privacy_class,
             PrivacyClass::HardwareFingerprint
@@ -2515,12 +2515,12 @@ mod tests {
         let catalog = BoundaryCatalog::default_v1();
         let rule = catalog
             .rule_for(BoundaryClass::ExternalPolicyRead)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         let policy_digest_entry = rule
             .redaction_rules
             .iter()
             .find(|e| e.field == "policy_digest")
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             policy_digest_entry.privacy_class,
             PrivacyClass::PolicyDigest

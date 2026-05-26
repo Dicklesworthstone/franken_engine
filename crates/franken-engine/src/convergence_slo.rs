@@ -943,7 +943,7 @@ mod tests {
         let decision = test_decision();
         meter
             .start_measurement(&decision, 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(meter.active_measurements.len(), 1);
         assert_eq!(meter.completed_measurements.len(), 0);
@@ -958,7 +958,7 @@ mod tests {
                 NodeId("instance-1".to_string()),
                 ack_time_1,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!converged);
         assert_eq!(meter.active_measurements.len(), 1);
 
@@ -969,7 +969,7 @@ mod tests {
                 NodeId("instance-2".to_string()),
                 ack_time_2,
             )
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(converged);
         assert_eq!(meter.active_measurements.len(), 0);
         assert_eq!(meter.completed_measurements.len(), 1);
@@ -997,7 +997,7 @@ mod tests {
 
         let statistics = meter
             .compute_statistics()
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert_eq!(statistics.total_measurements, 5);
         assert_eq!(statistics.converged_count, 5);
         assert_eq!(statistics.slo_violations, 2); // 400ms and 500ms exceed 350ms threshold
@@ -1070,7 +1070,7 @@ mod tests {
         let decision = test_decision();
         meter
             .start_measurement(&decision, 3)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
 
         let mut completed_measurement = ConvergenceMeasurement::new(&decision, 2);
         completed_measurement.convergence_duration_ms = Some(100);

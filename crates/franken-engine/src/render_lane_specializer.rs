@@ -1336,7 +1336,7 @@ mod tests {
         let purity = checks
             .iter()
             .find(|c| c.check_kind == SafetyCheckKind::PurityProof)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!purity.passed);
     }
 
@@ -1347,7 +1347,7 @@ mod tests {
         let unsup = checks
             .iter()
             .find(|c| c.check_kind == SafetyCheckKind::UnsupportedPatternAbsence)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!unsup.passed);
     }
 
@@ -1363,7 +1363,7 @@ mod tests {
         let ts = checks
             .iter()
             .find(|c| c.check_kind == SafetyCheckKind::TypeStability)
-            .expect("serde deserialization should succeed");
+            .expect("operation should succeed for valid inputs");
         assert!(!ts.passed);
     }
 
@@ -1388,7 +1388,7 @@ mod tests {
     fn specialize_pure_ssr_applies() {
         let req = pure_ssr_request();
         let cfg = SpecializationConfig::default_config();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         assert!(result.is_applied());
         assert!(result.speedup_millionths > MILLION);
         assert!(result.rejection_reasons.is_empty());
@@ -1398,7 +1398,7 @@ mod tests {
     fn specialize_hook_rejected_with_purity_required() {
         let req = hook_client_request();
         let cfg = SpecializationConfig::default_config();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         assert!(result.is_rejected());
         assert!(!result.rejection_reasons.is_empty());
     }
@@ -1408,7 +1408,7 @@ mod tests {
         let req = lazy_ssr_request();
         let mut cfg = SpecializationConfig::default_config();
         cfg.require_purity_proof = false;
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         // Should be rejected due to unsupported pattern (async + inline).
         assert!(result.is_rejected());
     }
@@ -1422,7 +1422,7 @@ mod tests {
             input_hash: ContentHash::compute(b"memo-input"),
         };
         let cfg = SpecializationConfig::default_config();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         assert!(result.is_applied());
     }
 
@@ -1438,7 +1438,7 @@ mod tests {
     fn specialize_result_serde() {
         let req = pure_ssr_request();
         let cfg = SpecializationConfig::default_config();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: SpecializationResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1449,7 +1449,7 @@ mod tests {
     fn specialize_result_all_checks_passed() {
         let req = pure_ssr_request();
         let cfg = SpecializationConfig::default_config();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         assert!(result.all_checks_passed());
         assert_eq!(result.failed_check_count(), 0);
     }
@@ -1458,7 +1458,7 @@ mod tests {
     fn specialize_hook_permissive_defers() {
         let req = hook_client_request();
         let cfg = SpecializationConfig::permissive();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         // Permissive: no purity requirement, but non-critical checks fail → defer.
         assert!(result.is_deferred());
     }
@@ -1469,7 +1469,7 @@ mod tests {
     fn receipt_hash_deterministic() {
         let req = pure_ssr_request();
         let cfg = SpecializationConfig::default_config();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         let genesis = DecisionReceipt::genesis_hash();
         let r1 = DecisionReceipt::new(epoch(), &req, &result, genesis);
         let r2 = DecisionReceipt::new(epoch(), &req, &result, genesis);
@@ -1480,7 +1480,7 @@ mod tests {
     fn receipt_chains_differ() {
         let req = pure_ssr_request();
         let cfg = SpecializationConfig::default_config();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         let genesis = DecisionReceipt::genesis_hash();
         let r1 = DecisionReceipt::new(epoch(), &req, &result, genesis);
         let r2 = DecisionReceipt::new(epoch(), &req, &result, r1.content_hash);
@@ -1491,7 +1491,7 @@ mod tests {
     fn receipt_fields_populated() {
         let req = pure_ssr_request();
         let cfg = SpecializationConfig::default_config();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         let genesis = DecisionReceipt::genesis_hash();
         let r = DecisionReceipt::new(epoch(), &req, &result, genesis);
         assert_eq!(r.lane_kind, LaneKind::ServerSideRender);
@@ -1508,7 +1508,7 @@ mod tests {
     fn receipt_serde() {
         let req = pure_ssr_request();
         let cfg = SpecializationConfig::default_config();
-        let result = specialize_lane(&req, &cfg).expect("serde deserialization should succeed");
+        let result = specialize_lane(&req, &cfg).expect("operation should succeed for valid inputs");
         let r = DecisionReceipt::new(epoch(), &req, &result, DecisionReceipt::genesis_hash());
         let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let back: DecisionReceipt =
@@ -1522,7 +1522,7 @@ mod tests {
     fn batch_empty() {
         let cfg = SpecializationConfig::default_config();
         let (results, receipts) =
-            specialize_batch(&[], &cfg, epoch()).expect("serde deserialization should succeed");
+            specialize_batch(&[], &cfg, epoch()).expect("operation should succeed for valid inputs");
         assert!(results.is_empty());
         assert!(receipts.is_empty());
     }
@@ -1532,7 +1532,7 @@ mod tests {
         let reqs = vec![pure_ssr_request()];
         let cfg = SpecializationConfig::default_config();
         let (results, receipts) =
-            specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
+            specialize_batch(&reqs, &cfg, epoch()).expect("operation should succeed for valid inputs");
         assert_eq!(results.len(), 1);
         assert_eq!(receipts.len(), 1);
         assert!(results[0].is_applied());
@@ -1551,7 +1551,7 @@ mod tests {
         ];
         let cfg = SpecializationConfig::default_config();
         let (_, receipts) =
-            specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
+            specialize_batch(&reqs, &cfg, epoch()).expect("operation should succeed for valid inputs");
         assert_eq!(receipts.len(), 2);
         assert_eq!(receipts[0].previous_hash, DecisionReceipt::genesis_hash());
         assert_eq!(receipts[1].previous_hash, receipts[0].content_hash);
@@ -1592,7 +1592,7 @@ mod tests {
         let reqs = vec![pure_ssr_request()];
         let cfg = SpecializationConfig::default_config();
         let (results, _) =
-            specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
+            specialize_batch(&reqs, &cfg, epoch()).expect("operation should succeed for valid inputs");
         let s = BatchSummary::from_results(&results);
         assert_eq!(s.total, 1);
         assert_eq!(s.applied, 1);
@@ -1605,7 +1605,7 @@ mod tests {
         let reqs = vec![pure_ssr_request()];
         let cfg = SpecializationConfig::default_config();
         let (results, _) =
-            specialize_batch(&reqs, &cfg, epoch()).expect("serde deserialization should succeed");
+            specialize_batch(&reqs, &cfg, epoch()).expect("operation should succeed for valid inputs");
         let s1 = BatchSummary::from_results(&results);
         let s2 = BatchSummary::from_results(&results);
         assert_eq!(s1.content_hash, s2.content_hash);

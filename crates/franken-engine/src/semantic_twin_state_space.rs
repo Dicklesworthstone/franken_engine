@@ -179,7 +179,7 @@ impl TwinStateSnapshot {
     }
 
     pub fn deterministic_digest(&self) -> String {
-        let payload = serde_json::to_vec(self).expect("serde deserialization should succeed");
+        let payload = serde_json::to_vec(self).expect("serialization should succeed");
         let digest = Sha256::digest(payload);
         format!("sha256:{}", hex::encode(digest))
     }
@@ -673,7 +673,7 @@ impl SemanticTwinSpecification {
 
     /// Deterministic digest for reproducibility and witness linkage.
     pub fn deterministic_digest(&self) -> String {
-        let payload = serde_json::to_vec(self).expect("serde deserialization should succeed");
+        let payload = serde_json::to_vec(self).expect("serialization should succeed");
         let digest = Sha256::digest(payload);
         format!("sha256:{}", hex::encode(digest))
     }

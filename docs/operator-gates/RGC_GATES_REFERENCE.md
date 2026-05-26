@@ -3079,4 +3079,52 @@ and summary under `artifacts/self_replacement_lineage/<ts>/` and
 `artifacts/demotion_inspect/<ts>/`, and ship a deterministic `selftest` mode so
 the parse + verdict logic is verifiable without an engine build.
 
+## RGC Theorem-Backed Compiler Gate (G.9)
+
+`bd-cixqu.7.12` is the proof-recheck capstone for Track G. It consumes the
+G.2..G.8 proof artifacts for the theorem-backed-compiler claims
+(`FE-CLAIM-016`..`FE-CLAIM-021`), rechecks each one — presence, schema version,
+`verdict == proven`, freshness (≤ 30 days), and content-hash integrity — and
+emits a `run_manifest.json` carrying the checked-proof inventory plus a
+per-claim recheck verdict. It is **fail-closed**: a missing, stale, tampered, or
+unproven proof artifact fails the gate.
+
+```bash
+# recheck the real proof bundle (default: artifacts/rgc_theorem_backed_compiler_inputs)
+./scripts/run_rgc_theorem_backed_compiler.sh ci [bundle_dir]
+
+# fixture-driven smoke + fail-closed proof (no bundle, no cargo, no rch)
+./scripts/run_rgc_theorem_backed_compiler.sh selftest
+
+# deterministic replay wrapper
+./scripts/e2e/rgc_theorem_backed_compiler_replay.sh ci
+
+# inspect a specific preserved run directory
+RGC_THEOREM_BACKED_COMPILER_REPLAY_RUN_DIR=artifacts/rgc_theorem_backed_compiler/<ts> \
+  ./scripts/e2e/rgc_theorem_backed_compiler_replay.sh show
+```
+
+Each consumed proof artifact is `<bundle>/<FE-CLAIM-NNN>.proof.json` with schema
+`franken-engine.theorem-backed-compiler.proof.v1` and fields `claim_id`,
+`track`, `proof_kind`, `verdict`, `generated_utc`, `source_module`, and a
+`content_hash` (`sha256:` of the canonical proof body). The six claims map to
+their upstream tracks: 016 → G.2/G.3 (IFC lattice + capability-algebra
+isomorphism), 017 → G.6 (translation validation), 018 → G.6/G.7 (policy
+semantics), 019 → G.8 (optimization-pass proof carriers), 020 → G.7/G.8
+(theorem-backed compiler), 021 → G.7 (policy theorem engine).
+
+Artifacts are written under `artifacts/rgc_theorem_backed_compiler/<ts>/`:
+`run_manifest.json`, `events.jsonl` (one `claim_proof_rechecked` event per claim
+plus a terminal `gate_completed`, per bd-cixqu.45), `proof_inventory.json`,
+`claim_recheck_verdicts.json`, `commands.txt`, and `summary.md`.
+
+**Verdict.** `pass` iff all six proof artifacts are present, schema-valid,
+`proven`, fresh, and content-hash-intact; otherwise `fail` with a per-claim
+`reason_code` (`proof_missing` / `proof_unreadable` / `schema_mismatch` /
+`not_proven` / `content_hash_mismatch` / `stale` / `future_timestamp`). Because
+G.2..G.8 currently emit no live proof artifacts (the claims remain
+`hypothesis`), `ci` fails closed until those artifacts exist; `selftest` proves
+the recheck mechanism end-to-end against a fixture bundle (intact → pass,
+tampered → fail, missing → fail) without an engine build.
+
 ## Limitations

@@ -1,34 +1,50 @@
 //! Translation validation proof carrier for ReplacementReceipts.
 //!
-//! Integrates G.4's translation validation pilot with the V-track self-replacement
-//! infrastructure. For each slot promotion, runs translation validation against
-//! the slot specification and binds the resulting proof into the ReplacementReceipt.
+//! Binds a translation-validation verdict into a `ReplacementReceipt` during a
+//! slot promotion. **This carrier is fail-closed by design:** absent a genuine
+//! per-slot semantic-equivalence engine it emits an UNPROVEN result rather than
+//! fabricating a passing proof, and it refuses to hand a promotion a proof
+//! reference it cannot stand behind.
 //!
-//! ## Architecture
+//! ## Execution modes ([`ValidationExecutionMode`])
 //!
-//! When a slot promotion occurs:
-//! 1. Extract slot specification (source code, IR stages)
-//! 2. Run G.4 translation validation pipeline
-//! 3. Generate proof artifact with validation results
-//! 4. Bind proof into ReplacementReceipt.translation_validation_proof_ref
-//! 5. Store proof artifact for later verification/audit
+//! - `FailClosed` (default): no real per-slot validation pipeline is wired, so
+//!   [`TranslationValidationEngine::validate_slot_promotion`] produces a proof
+//!   whose `validation_result` is [`ValidationResult::Error`] (UNPROVEN), and
+//!   [`validate_promotion_and_get_proof_ref`] returns
+//!   [`TranslationValidationError::ValidationNotProven`]. An unproven
+//!   validation therefore cannot back a constitutional self-replacement
+//!   receipt.
+//! - `ExecutePilotScript`: genuinely executes
+//!   `scripts/run_rgc_translation_validation_pilot.sh` and binds its *real,
+//!   parsed* verdict (passed/failed/total counts plus the script's exit
+//!   status). Any missing/unparseable verdict or non-zero exit maps to
+//!   [`ValidationResult::Error`] — never a fabricated success.
+//!
+//!   NOTE: the current pilot script validates a generic pure-expression corpus
+//!   and does *not* yet specialise on the specific slot under promotion, so its
+//!   `Success` is corpus-level evidence rather than a per-slot equivalence
+//!   proof. That limitation is tracked under FE-CLAIM-017 / FE-CLAIM-018; until
+//!   it is closed, operators should keep the default `FailClosed` mode for
+//!   constitutional promotions.
+//!
+//! ## Proof storage
+//!
+//! [`TranslationValidationEngine::store_proof`] persists the
+//! canonical-serialized proof to a content-addressed file under
+//! `target/translation_validation_proofs/<zone>/<proof_id>.json`;
+//! [`TranslationValidationEngine::retrieve_proof`] reads it back. Proofs
+//! round-trip and are auditable — neither call fabricates a reference.
 //!
 //! ## Proof Format
 //!
 //! Translation validation proofs contain:
 //! - Source slot specification (code digest)
 //! - Target slot specification (code digest)
-//! - IR transformation witness (semantic equivalence proof)
-//! - Test case results (concrete validation)
-//! - Lean 4 formal proof (if available)
-//! - Success/failure status with error details
-//!
-//! ## Integration Points
-//!
-//! - `ReplacementReceipt.translation_validation_proof_ref` points to proof
-//! - `scripts/run_rgc_translation_validation_pilot.sh` provides validation engine
-//! - Lean 4 formal verification (optional but recommended)
-//! - Test case generation for semantic equivalence checking
+//! - Test case digest derived from the source/target specs
+//! - Validation result (genuine script verdict, or fail-closed UNPROVEN)
+//! - Captured validation logs
+//! - Lean 4 formal proof reference (if available)
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -246,6 +262,27 @@ impl TranslationValidationProof {
 // Translation Validation Engine
 // ---------------------------------------------------------------------------
 
+/// How [`TranslationValidationEngine`] obtains a validation verdict.
+///
+/// The default is [`ValidationExecutionMode::FailClosed`]: without a genuine
+/// per-slot validation pipeline the engine refuses to fabricate a passing
+/// result, so a promotion cannot be backed by an unproven proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationExecutionMode {
+    /// Do not run any validation. Emit a fail-closed UNPROVEN result.
+    ///
+    /// This is the safe default for constitutional self-replacement promotions
+    /// while a real per-slot semantic-equivalence engine is not yet wired.
+    FailClosed,
+    /// Genuinely execute the G.4 pilot script and bind its real, parsed verdict.
+    ///
+    /// The script's actual `passed/failed/total` counts and exit status drive
+    /// the result; an unparseable verdict or non-zero exit fails closed to
+    /// [`ValidationResult::Error`]. See the module docs for the per-slot
+    /// scoping caveat (FE-CLAIM-017/018).
+    ExecutePilotScript,
+}
+
 /// Translation validation engine that integrates with G.4 pilot.
 #[derive(Debug, Clone)]
 pub struct TranslationValidationEngine {
@@ -259,6 +296,8 @@ pub struct TranslationValidationEngine {
     pub minimum_success_rate: u32,
     /// Zone for object ID generation.
     pub zone: String,
+    /// How a validation verdict is obtained (default: fail-closed).
+    pub execution_mode: ValidationExecutionMode,
 }
 
 impl Default for TranslationValidationEngine {
@@ -271,12 +310,16 @@ impl Default for TranslationValidationEngine {
             enable_formal_verification: false,
             minimum_success_rate: 95,
             zone: "default".to_string(),
+            execution_mode: ValidationExecutionMode::FailClosed,
         }
     }
 }
 
 impl TranslationValidationEngine {
     /// Create a new validation engine with custom settings.
+    ///
+    /// Defaults to [`ValidationExecutionMode::FailClosed`]; opt into genuine
+    /// script execution with [`TranslationValidationEngine::with_execution_mode`].
     pub fn new(project_root: impl Into<PathBuf>, zone: String) -> Self {
         let root = project_root.into();
         let script = root.join("scripts/run_rgc_translation_validation_pilot.sh");
@@ -287,7 +330,14 @@ impl TranslationValidationEngine {
             enable_formal_verification: false,
             minimum_success_rate: 95,
             zone,
+            execution_mode: ValidationExecutionMode::FailClosed,
         }
+    }
+
+    /// Set the validation execution mode, consuming and returning `self`.
+    pub fn with_execution_mode(mut self, mode: ValidationExecutionMode) -> Self {
+        self.execution_mode = mode;
+        self
     }
 
     /// Run translation validation for a slot promotion.
@@ -313,19 +363,33 @@ impl TranslationValidationEngine {
             TranslationValidationError::InternalError(format!("ID derivation failed: {}", e))
         })?;
 
-        // Run the validation script
-        let validation_result = self.run_validation_script(source_spec, target_spec)?;
+        // Obtain a validation verdict. Fail-closed by default; never fabricated.
+        let (validation_result, validation_logs) =
+            self.run_validation_script(source_spec, target_spec)?;
 
-        // Create proof artifact
+        // Test-case digest is a genuine content digest over the source/target
+        // specs being compared — not a placeholder string.
+        let test_case_digest = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(source_spec.code_digest.as_bytes());
+            hasher.update(b"|");
+            hasher.update(target_spec.code_digest.as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+
+        // Create proof artifact. No semantic-equivalence witness is produced by
+        // either execution mode today, so the witness is empty rather than a
+        // fabricated byte string.
         let proof = TranslationValidationProof {
             proof_id,
             source_spec: source_spec.clone(),
             target_spec: target_spec.clone(),
-            validation_result: validation_result.0,
-            validation_logs: validation_result.1,
-            formal_proof_ref: None, // TODO: Implement Lean 4 integration
-            transformation_witness: b"synthetic_witness_data".to_vec(), // TODO: Generate real witness
-            test_case_digest: "synthetic_test_digest".to_string(), // TODO: Generate real digest
+            validation_result,
+            validation_logs,
+            formal_proof_ref: None,
+            transformation_witness: Vec::new(),
+            test_case_digest,
             validation_timestamp_ns,
             security_epoch: SecurityEpoch::from_raw(1),
             zone: self.zone.clone(),
@@ -334,95 +398,249 @@ impl TranslationValidationEngine {
         Ok(proof)
     }
 
-    /// Run the G.4 validation script and parse results.
+    /// Obtain a validation verdict for a slot promotion.
+    ///
+    /// The slot specifications are accepted for future per-slot specialisation;
+    /// the current pilot script does not yet consume them (see module docs).
+    /// Behaviour is governed by [`TranslationValidationEngine::execution_mode`]:
+    /// `FailClosed` returns an UNPROVEN [`ValidationResult::Error`], while
+    /// `ExecutePilotScript` runs the real script and parses its genuine verdict.
     fn run_validation_script(
         &self,
         _source_spec: &SlotSpecification,
         _target_spec: &SlotSpecification,
     ) -> Result<(ValidationResult, Vec<String>), TranslationValidationError> {
-        // Check if validation script exists
+        // The validation script must exist regardless of mode — its absence is a
+        // configuration error, not a validation failure.
         if !self.validation_script.exists() {
             return Err(TranslationValidationError::ScriptNotFound(
                 self.validation_script.to_string_lossy().to_string(),
             ));
         }
 
-        // For the current implementation, simulate the validation
-        // In production, this would invoke the actual G.4 script with slot specifications
-
-        // Simulate running the script (to avoid actual execution for demo)
-        let simulated_result = self.simulate_validation_run()?;
-
-        Ok(simulated_result)
+        match self.execution_mode {
+            ValidationExecutionMode::FailClosed => Ok(Self::fail_closed_result()),
+            ValidationExecutionMode::ExecutePilotScript => self.execute_pilot_script(),
+        }
     }
 
-    /// Simulate a validation run for development/testing.
-    fn simulate_validation_run(
+    /// Fail-closed verdict: refuse to fabricate a passing result.
+    fn fail_closed_result() -> (ValidationResult, Vec<String>) {
+        let result = ValidationResult::Error {
+            error_message:
+                "translation validation not performed: no per-slot semantic-equivalence \
+                 pipeline is wired. The carrier fails closed (UNPROVEN) instead of \
+                 fabricating a result. Construct the engine with \
+                 ValidationExecutionMode::ExecutePilotScript to bind the G.4 pilot \
+                 script's genuine verdict."
+                    .to_string(),
+            error_code: ValidationErrorCode::InternalError,
+        };
+        let logs = vec![
+            "translation validation carrier: fail-closed mode (default)".to_string(),
+            "no genuine per-slot validation engine wired; refusing to fabricate a passing result"
+                .to_string(),
+        ];
+        (result, logs)
+    }
+
+    /// Genuinely execute the G.4 pilot script and parse its real verdict.
+    fn execute_pilot_script(
         &self,
     ) -> Result<(ValidationResult, Vec<String>), TranslationValidationError> {
-        // Simulate realistic validation results
-        let test_cases_total = 1247;
-        let test_cases_passed = 1223;
-        let success_rate = (test_cases_passed * 100) / test_cases_total;
+        let output = Command::new("bash")
+            .arg(&self.validation_script)
+            .current_dir(&self.project_root)
+            .output()
+            .map_err(|e| {
+                TranslationValidationError::ScriptExecutionFailed(format!(
+                    "failed to spawn {}: {}",
+                    self.validation_script.to_string_lossy(),
+                    e
+                ))
+            })?;
 
-        let result = if success_rate >= self.minimum_success_rate {
-            ValidationResult::Success {
-                test_cases_passed,
-                test_cases_total,
-                success_rate_percent: success_rate,
-            }
-        } else {
-            ValidationResult::Failed {
-                test_cases_passed,
-                test_cases_total,
-                success_rate_percent: success_rate,
-                failure_reasons: vec![
-                    "Arithmetic overflow handling differs between IR stages".to_string(),
-                    "Boolean coercion semantics mismatch in 3 test cases".to_string(),
-                ],
-            }
-        };
+        let mut combined = String::from_utf8_lossy(&output.stdout).into_owned();
+        combined.push_str(&String::from_utf8_lossy(&output.stderr));
 
-        let logs = vec![
-            "Translation validation started".to_string(),
-            "Generated 1247 pure expression test cases".to_string(),
-            "Running IR0 -> IR1 transformation".to_string(),
-            "Running IR1 -> IR2 transformation".to_string(),
-            "Running IR2 -> IR3 transformation".to_string(),
-            "Executing test cases on both source and target".to_string(),
-            "Comparing semantic equivalence results".to_string(),
-            format!(
-                "Validation completed: {}/{} passed",
-                test_cases_passed, test_cases_total
-            ),
-        ];
-
-        Ok((result, logs))
+        Ok(parse_pilot_output(
+            &combined,
+            output.status.success(),
+            self.minimum_success_rate,
+        ))
     }
 
-    /// Store a translation validation proof for later retrieval.
+    /// Directory holding persisted proofs for a given zone.
+    fn proof_store_dir(&self, zone: &str) -> PathBuf {
+        self.project_root
+            .join("target")
+            .join("translation_validation_proofs")
+            .join(zone)
+    }
+
+    /// Persist a translation validation proof and return its content-addressed
+    /// reference.
+    ///
+    /// The proof is canonically serialised to
+    /// `target/translation_validation_proofs/<zone>/<proof_id>.json`, so the
+    /// returned `proof://<zone>/<proof_id>` reference is genuinely retrievable
+    /// via [`TranslationValidationEngine::retrieve_proof`].
     pub fn store_proof(
         &self,
         proof: &TranslationValidationProof,
     ) -> Result<String, TranslationValidationError> {
-        // In a real implementation, this would store the proof in a persistent store
-        // For now, return a reference string
-        Ok(format!(
-            "proof://{}/{}",
-            self.zone,
-            proof.proof_id.to_string()
-        ))
+        let dir = self.proof_store_dir(&proof.zone);
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            TranslationValidationError::StorageFailed(format!(
+                "creating proof dir {}: {}",
+                dir.to_string_lossy(),
+                e
+            ))
+        })?;
+
+        let json = serde_json::to_vec_pretty(proof).map_err(|e| {
+            TranslationValidationError::StorageFailed(format!("serialising proof: {}", e))
+        })?;
+
+        let proof_id = proof.proof_id.to_string();
+        let path = dir.join(format!("{}.json", proof_id));
+        std::fs::write(&path, json).map_err(|e| {
+            TranslationValidationError::StorageFailed(format!(
+                "writing proof {}: {}",
+                path.to_string_lossy(),
+                e
+            ))
+        })?;
+
+        Ok(format!("proof://{}/{}", proof.zone, proof_id))
     }
 
-    /// Retrieve a translation validation proof by reference.
+    /// Retrieve a translation validation proof by its `proof://<zone>/<id>`
+    /// reference, reading it back from persistent storage.
     pub fn retrieve_proof(
         &self,
         proof_ref: &str,
     ) -> Result<TranslationValidationProof, TranslationValidationError> {
-        // In a real implementation, this would retrieve from persistent storage
-        Err(TranslationValidationError::ProofNotFound(
-            proof_ref.to_string(),
-        ))
+        let rest = proof_ref.strip_prefix("proof://").ok_or_else(|| {
+            TranslationValidationError::ProofNotFound(format!("malformed reference: {}", proof_ref))
+        })?;
+        let (zone, proof_id) = rest.split_once('/').ok_or_else(|| {
+            TranslationValidationError::ProofNotFound(format!("malformed reference: {}", proof_ref))
+        })?;
+
+        let path = self
+            .proof_store_dir(zone)
+            .join(format!("{}.json", proof_id));
+        let bytes = std::fs::read(&path)
+            .map_err(|_| TranslationValidationError::ProofNotFound(proof_ref.to_string()))?;
+
+        serde_json::from_slice(&bytes).map_err(|e| {
+            TranslationValidationError::OutputParsingFailed(format!(
+                "deserialising proof {}: {}",
+                proof_ref, e
+            ))
+        })
+    }
+}
+
+/// Parse the genuine verdict emitted by the G.4 pilot script.
+///
+/// Looks for the script's `Results: <P> passed, <F> failed out of <T>` line and
+/// derives a [`ValidationResult`] from the *real* counts plus the script's exit
+/// status. An unparseable verdict or a non-zero exit produces
+/// [`ValidationResult::Error`] — this function never fabricates a success.
+fn parse_pilot_output(
+    output: &str,
+    script_succeeded: bool,
+    minimum_success_rate: u32,
+) -> (ValidationResult, Vec<String>) {
+    // Capture the script's own output as the proof's logs (bounded to the tail
+    // so a verbose run cannot bloat the stored proof).
+    let mut logs: Vec<String> = output
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .collect();
+    const MAX_LOG_LINES: usize = 64;
+    if logs.len() > MAX_LOG_LINES {
+        logs = logs.split_off(logs.len() - MAX_LOG_LINES);
+    }
+
+    let parsed = output.lines().find_map(parse_results_line);
+    let result = match parsed {
+        Some((passed, _failed, total)) if total > 0 => {
+            let success_rate = passed.saturating_mul(100) / total;
+            if script_succeeded && success_rate >= minimum_success_rate {
+                ValidationResult::Success {
+                    test_cases_passed: passed,
+                    test_cases_total: total,
+                    success_rate_percent: success_rate,
+                }
+            } else {
+                let mut failure_reasons = Vec::new();
+                if !script_succeeded {
+                    failure_reasons.push(
+                        "validation script exited non-zero; verdict treated as failed".to_string(),
+                    );
+                }
+                if success_rate < minimum_success_rate {
+                    failure_reasons.push(format!(
+                        "success rate {}% below minimum {}%",
+                        success_rate, minimum_success_rate
+                    ));
+                }
+                ValidationResult::Failed {
+                    test_cases_passed: passed,
+                    test_cases_total: total,
+                    success_rate_percent: success_rate,
+                    failure_reasons,
+                }
+            }
+        }
+        _ => ValidationResult::Error {
+            error_message:
+                "could not parse a 'Results: <P> passed, <F> failed out of <T>' verdict from \
+                 the validation script output; failing closed"
+                    .to_string(),
+            error_code: ValidationErrorCode::InternalError,
+        },
+    };
+
+    (result, logs)
+}
+
+/// Extract `(passed, failed, total)` from a script log line of the form
+/// `... Results: <P> passed, <F> failed out of <T>`.
+fn parse_results_line(line: &str) -> Option<(u32, u32, u32)> {
+    let tokens: Vec<&str> = line.split_whitespace().collect();
+    let mut passed: Option<u32> = None;
+    let mut failed: Option<u32> = None;
+    let mut total: Option<u32> = None;
+
+    for (i, tok) in tokens.iter().enumerate() {
+        if tok.starts_with("passed") && i > 0 {
+            passed = digits(tokens[i - 1]);
+        } else if *tok == "failed" && i > 0 {
+            failed = digits(tokens[i - 1]);
+        } else if *tok == "of" && i + 1 < tokens.len() {
+            total = digits(tokens[i + 1]);
+        }
+    }
+
+    match (passed, failed, total) {
+        (Some(p), Some(f), Some(t)) => Some((p, f, t)),
+        _ => None,
+    }
+}
+
+/// Parse a `u32` from a token after stripping non-digit characters (handles
+/// trailing punctuation like `passed,`).
+fn digits(token: &str) -> Option<u32> {
+    let trimmed: String = token.chars().filter(|c| c.is_ascii_digit()).collect();
+    if trimmed.is_empty() {
+        None
+    } else {
+        trimmed.parse().ok()
     }
 }
 
@@ -443,6 +661,9 @@ pub enum TranslationValidationError {
     StorageFailed(String),
     /// Proof not found during retrieval.
     ProofNotFound(String),
+    /// Validation did not produce a passing proof (fail-closed): the promotion
+    /// must not be backed by this unproven validation.
+    ValidationNotProven(String),
     /// Internal engine error.
     InternalError(String),
 }
@@ -455,6 +676,9 @@ impl std::fmt::Display for TranslationValidationError {
             Self::OutputParsingFailed(err) => write!(f, "Output parsing failed: {}", err),
             Self::StorageFailed(err) => write!(f, "Proof storage failed: {}", err),
             Self::ProofNotFound(ref_str) => write!(f, "Proof not found: {}", ref_str),
+            Self::ValidationNotProven(summary) => {
+                write!(f, "Validation not proven (fail-closed): {}", summary)
+            }
             Self::InternalError(err) => write!(f, "Internal error: {}", err),
         }
     }
@@ -496,7 +720,14 @@ pub fn create_slot_specification(
     }
 }
 
-/// Run translation validation for a slot promotion and return the proof reference.
+/// Run translation validation for a slot promotion and return the proof
+/// reference.
+///
+/// **Fail-closed:** if the validation does not produce a passing proof (the
+/// default state until a real per-slot validation engine is wired), this
+/// returns [`TranslationValidationError::ValidationNotProven`] rather than a
+/// reference. This prevents an unproven validation from being folded into a
+/// constitutional self-replacement receipt.
 pub fn validate_promotion_and_get_proof_ref(
     old_slot_id: SlotId,
     new_slot_id: SlotId,
@@ -511,6 +742,11 @@ pub fn validate_promotion_and_get_proof_ref(
     let target_spec = create_slot_specification(new_slot_id, new_code, "javascript");
 
     let proof = engine.validate_slot_promotion(&source_spec, &target_spec)?;
+    if !proof.is_valid() {
+        return Err(TranslationValidationError::ValidationNotProven(
+            proof.summary(),
+        ));
+    }
     let proof_ref = engine.store_proof(&proof)?;
 
     Ok(proof_ref)
@@ -561,7 +797,7 @@ mod tests {
 
     #[test]
     fn test_slot_specification_creation() {
-        let slot_id = SlotId::new("test_slot").expect("valid slot ID");
+        let slot_id = SlotId::new("test-slot").expect("valid slot ID");
         let code = b"function test() { return 42; }";
 
         let spec = create_slot_specification(slot_id.clone(), code, "javascript");
@@ -604,29 +840,173 @@ mod tests {
     }
 
     #[test]
-    fn test_validation_engine_simulate() {
+    fn test_default_engine_fails_closed_unproven() {
+        // The default engine has no real per-slot validation pipeline, so it must
+        // produce an UNPROVEN result rather than fabricating a passing proof.
         let engine = TranslationValidationEngine::default();
-        let slot_id = SlotId::new("test_slot").expect("valid slot ID");
+        assert_eq!(engine.execution_mode, ValidationExecutionMode::FailClosed);
 
+        let slot_id = SlotId::new("test-slot").expect("valid slot ID");
         let source_spec = create_slot_specification(slot_id.clone(), b"old code", "javascript");
         let target_spec = create_slot_specification(slot_id, b"new code", "javascript");
 
-        let result = engine.simulate_validation_run();
-        assert!(result.is_ok());
+        let proof = engine
+            .validate_slot_promotion(&source_spec, &target_spec)
+            .expect("proof artifact is still produced (just unproven)");
 
-        let (validation_result, logs) = result.unwrap();
-        assert!(logs.len() > 0);
+        assert!(
+            !proof.is_valid(),
+            "fail-closed default must not report a valid proof"
+        );
+        assert!(matches!(
+            proof.validation_result,
+            ValidationResult::Error { .. }
+        ));
+        assert!(proof.summary().contains("ERROR"));
+        // No fabricated witness/digest placeholders.
+        assert!(proof.transformation_witness.is_empty());
+        assert_ne!(proof.test_case_digest, "synthetic_test_digest");
+    }
 
-        // Should succeed with high test success rate
-        match validation_result {
+    #[test]
+    fn test_parse_results_line_extracts_counts() {
+        let line = "[20260526_120000] Results: 1223 passed, 24 failed out of 1247";
+        assert_eq!(parse_results_line(line), Some((1223, 24, 1247)));
+        assert_eq!(parse_results_line("no verdict here"), None);
+    }
+
+    #[test]
+    fn test_parse_pilot_output_success_from_real_counts() {
+        let output = "INFO: starting\n[ts] Results: 980 passed, 20 failed out of 1000\nSUCCESS";
+        let (result, logs) = parse_pilot_output(output, true, 95);
+        match result {
             ValidationResult::Success {
+                test_cases_passed,
+                test_cases_total,
+                success_rate_percent,
+            } => {
+                assert_eq!(test_cases_passed, 980);
+                assert_eq!(test_cases_total, 1000);
+                assert_eq!(success_rate_percent, 98);
+            }
+            other => panic!("expected Success, got {:?}", other),
+        }
+        assert!(logs.iter().any(|l| l.contains("Results:")));
+    }
+
+    #[test]
+    fn test_parse_pilot_output_below_threshold_fails() {
+        let output = "[ts] Results: 50 passed, 50 failed out of 100";
+        let (result, _logs) = parse_pilot_output(output, true, 95);
+        match result {
+            ValidationResult::Failed {
                 success_rate_percent,
                 ..
-            } => {
-                assert!(success_rate_percent >= 95);
-            }
-            _ => panic!("Expected successful validation"),
+            } => assert_eq!(success_rate_percent, 50),
+            other => panic!("expected Failed, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_parse_pilot_output_nonzero_exit_fails_even_if_rate_high() {
+        let output = "[ts] Results: 1000 passed, 0 failed out of 1000";
+        let (result, _logs) = parse_pilot_output(output, false, 95);
+        assert!(
+            matches!(result, ValidationResult::Failed { .. }),
+            "a non-zero script exit must not yield Success"
+        );
+    }
+
+    #[test]
+    fn test_parse_pilot_output_unparseable_fails_closed() {
+        let (result, _logs) = parse_pilot_output("garbage with no verdict", true, 95);
+        assert!(matches!(result, ValidationResult::Error { .. }));
+    }
+
+    #[test]
+    fn test_execute_pilot_script_runs_real_command() {
+        // Hermetic: point the engine at a tiny throwaway script that emits a
+        // genuine Results line. This exercises the real Command path + parser
+        // without touching the repo's pilot script.
+        let dir = std::env::temp_dir().join(format!(
+            "tvpc_exec_{}",
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let script = dir.join("fake_pilot.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/bash\necho \"Results: 100 passed, 0 failed out of 100\"\nexit 0\n",
+        )
+        .expect("write script");
+
+        let mut engine = TranslationValidationEngine::new(&dir, "exec_zone".to_string())
+            .with_execution_mode(ValidationExecutionMode::ExecutePilotScript);
+        engine.validation_script = script;
+
+        let slot_id = SlotId::new("exec-slot").expect("valid slot ID");
+        let source_spec = create_slot_specification(slot_id.clone(), b"a", "javascript");
+        let target_spec = create_slot_specification(slot_id, b"b", "javascript");
+
+        let proof = engine
+            .validate_slot_promotion(&source_spec, &target_spec)
+            .expect("validation should run");
+        assert!(proof.is_valid(), "100% pass should be a valid proof");
+        assert_eq!(proof.validation_result.total_test_cases(), 100);
+    }
+
+    #[test]
+    fn test_store_and_retrieve_proof_round_trip() {
+        // Storage is decoupled from the script-existence check, so we build a
+        // proof artifact directly and exercise persist -> read-back.
+        let dir = std::env::temp_dir().join(format!(
+            "tvpc_store_{}",
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let engine = TranslationValidationEngine::new(&dir, "rt_zone".to_string());
+
+        let slot_id = SlotId::new("rt-slot").expect("valid slot ID");
+        let proof = TranslationValidationProof {
+            proof_id: EngineObjectId([7u8; 32]),
+            source_spec: create_slot_specification(slot_id.clone(), b"old", "javascript"),
+            target_spec: create_slot_specification(slot_id, b"new", "javascript"),
+            validation_result: ValidationResult::Error {
+                error_message: "unproven".to_string(),
+                error_code: ValidationErrorCode::InternalError,
+            },
+            validation_logs: vec!["fail-closed".to_string()],
+            formal_proof_ref: None,
+            transformation_witness: Vec::new(),
+            test_case_digest: "rt_digest".to_string(),
+            validation_timestamp_ns: 42,
+            security_epoch: SecurityEpoch::from_raw(1),
+            zone: "rt_zone".to_string(),
+        };
+
+        let proof_ref = engine.store_proof(&proof).expect("store should persist");
+        assert!(proof_ref.starts_with("proof://rt_zone/"));
+
+        let retrieved = engine
+            .retrieve_proof(&proof_ref)
+            .expect("retrieve should read it back");
+        assert_eq!(retrieved.proof_id, proof.proof_id);
+        assert_eq!(retrieved.test_case_digest, proof.test_case_digest);
+        assert_eq!(retrieved.validation_result, proof.validation_result);
+    }
+
+    #[test]
+    fn test_retrieve_unknown_proof_is_not_found() {
+        let engine = TranslationValidationEngine::default();
+        let err = engine
+            .retrieve_proof("proof://default/deadbeef")
+            .expect_err("unknown proof must not be found");
+        assert!(matches!(err, TranslationValidationError::ProofNotFound(_)));
     }
 
     #[test]

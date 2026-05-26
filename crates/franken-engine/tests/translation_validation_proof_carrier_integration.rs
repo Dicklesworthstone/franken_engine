@@ -1,29 +1,24 @@
-//! Integration tests for translation validation proof carrier.
+//! Integration tests for the translation validation proof carrier.
 //!
-//! Tests the integration between G.4's translation validation pilot and
-//! V-track's ReplacementReceipt system. Demonstrates end-to-end proof
-//! generation and binding during slot promotions.
+//! These tests pin the **fail-closed** contract between G.4's translation
+//! validation pilot and V-track's `ReplacementReceipt` system: absent a genuine
+//! per-slot validation engine the carrier must NOT fabricate a passing proof,
+//! and must refuse to hand a promotion a proof reference it cannot stand behind.
+//! See `bd-4uyi7` (reality-check: fabricated validation backing a constitutional
+//! self-replacement receipt).
 
 use frankenengine_engine::{
     security_epoch::SecurityEpoch,
     self_replacement::{
-        CreateReceiptInput, ReplacementReceipt, SchemaVersion, SignatureBundle,
-        ValidationArtifactRef, ValidationArtifactKind,
+        ReplacementReceipt, SchemaVersion, SignatureBundle, ValidationArtifactKind,
+        ValidationArtifactRef,
     },
-    proof_ingestion::ProofValidationStatus,
-    signature_preimage::{Signature, SigningKey},
     slot_registry::SlotId,
     translation_validation_proof_carrier::{
-        SlotSpecification, TranslationValidationEngine, TranslationValidationProof,
+        TranslationValidationEngine, TranslationValidationError, TranslationValidationProof,
         ValidationResult, create_slot_specification, validate_promotion_and_get_proof_ref,
     },
 };
-
-/// Create a test signing key for demonstrations.
-fn create_test_signing_key() -> SigningKey {
-    let test_seed = [42u8; 32];
-    SigningKey::from_bytes(test_seed).expect("valid test seed")
-}
 
 /// Create a test signature bundle.
 fn create_test_signature_bundle() -> SignatureBundle {
@@ -31,43 +26,48 @@ fn create_test_signature_bundle() -> SignatureBundle {
 }
 
 #[test]
-fn test_translation_validation_engine_basic() {
+fn test_default_engine_is_fail_closed() {
+    // The default engine has no real per-slot validation pipeline wired, so it
+    // must emit an UNPROVEN result rather than fabricating a passing proof.
     let engine = TranslationValidationEngine::default();
 
-    let source_slot = SlotId::new("parser_v1").expect("valid slot ID");
-    let target_slot = SlotId::new("parser_v2").expect("valid slot ID");
+    let source_slot = SlotId::new("parser-v1").expect("valid slot ID");
+    let target_slot = SlotId::new("parser-v2").expect("valid slot ID");
 
     let source_spec = create_slot_specification(
         source_slot,
         b"function parse(input) { return input.split(','); }",
         "javascript",
     );
-
     let target_spec = create_slot_specification(
         target_slot,
         b"function parse(input) { return input.split(/,/); }",
         "javascript",
     );
 
-    let result = engine.validate_slot_promotion(&source_spec, &target_spec);
-    assert!(result.is_ok(), "Validation should succeed: {:?}", result);
+    let proof = engine
+        .validate_slot_promotion(&source_spec, &target_spec)
+        .expect("a (fail-closed) proof artifact is still produced");
 
-    let proof = result.unwrap();
     assert!(
-        proof.is_valid(),
-        "Proof should indicate successful validation"
+        !proof.is_valid(),
+        "fail-closed default must not fabricate a valid proof"
     );
-    assert!(
-        proof.summary().contains("PASSED"),
-        "Summary should indicate success"
-    );
-    assert_eq!(proof.source_spec.slot_id.as_str(), "parser_v1");
-    assert_eq!(proof.target_spec.slot_id.as_str(), "parser_v2");
+    assert!(matches!(
+        proof.validation_result,
+        ValidationResult::Error { .. }
+    ));
+    assert!(proof.summary().contains("ERROR"));
+    assert_eq!(proof.source_spec.slot_id.as_str(), "parser-v1");
+    assert_eq!(proof.target_spec.slot_id.as_str(), "parser-v2");
+    // The witness/digest are no longer fabricated placeholders.
+    assert!(proof.transformation_witness.is_empty());
+    assert_ne!(proof.test_case_digest, "synthetic_test_digest");
 }
 
 #[test]
 fn test_slot_specification_creation() {
-    let slot_id = SlotId::new("test_parser").expect("valid slot ID");
+    let slot_id = SlotId::new("test-parser").expect("valid slot ID");
     let code = b"function identity(x) { return x; }";
 
     let spec = create_slot_specification(slot_id.clone(), code, "javascript");
@@ -83,23 +83,26 @@ fn test_slot_specification_creation() {
 }
 
 #[test]
-fn test_proof_generation_with_different_code() {
+fn test_promotion_helper_refuses_unproven_reference() {
+    // `validate_promotion_and_get_proof_ref` must fail closed: with no genuine
+    // validation it returns ValidationNotProven instead of minting a reference
+    // that would otherwise be folded into a constitutional receipt.
     let old_code = b"function add(a, b) { return a + b; }";
-    let new_code = b"function add(a, b) { return (a | 0) + (b | 0); }"; // Optimized version
+    let new_code = b"function add(a, b) { return (a | 0) + (b | 0); }";
 
-    let old_slot = SlotId::new("math_v1").expect("valid slot ID");
-    let new_slot = SlotId::new("math_v2").expect("valid slot ID");
+    let old_slot = SlotId::new("math-v1").expect("valid slot ID");
+    let new_slot = SlotId::new("math-v2").expect("valid slot ID");
 
-    let proof_ref =
+    let result =
         validate_promotion_and_get_proof_ref(old_slot, new_slot, old_code, new_code, "test_zone");
 
-    assert!(
-        proof_ref.is_ok(),
-        "Proof generation should succeed: {:?}",
-        proof_ref
-    );
-    let proof_ref_str = proof_ref.unwrap();
-    assert!(proof_ref_str.starts_with("proof://test_zone/"));
+    match result {
+        Err(TranslationValidationError::ValidationNotProven(_)) => {}
+        other => panic!(
+            "expected ValidationNotProven (fail-closed), got {:?}",
+            other
+        ),
+    }
 }
 
 #[test]
@@ -127,58 +130,116 @@ fn test_validation_result_types() {
 }
 
 #[test]
-fn test_replacement_receipt_with_translation_validation() {
-    // Create slot specifications
-    let old_slot = SlotId::new("legacy_parser").expect("valid slot ID");
-    let new_slot = SlotId::new("optimized_parser").expect("valid slot ID");
+fn test_store_and_retrieve_proof_round_trip() {
+    // store_proof / retrieve_proof genuinely persist and read back a proof —
+    // they no longer fabricate a reference / always return ProofNotFound.
+    let engine = TranslationValidationEngine::default();
+
+    let slot_id = SlotId::new("rt-slot").expect("valid slot ID");
+    let proof = TranslationValidationProof {
+        proof_id: frankenengine_engine::engine_object_id::EngineObjectId([9u8; 32]),
+        source_spec: create_slot_specification(slot_id.clone(), b"old", "javascript"),
+        target_spec: create_slot_specification(slot_id, b"new", "javascript"),
+        validation_result: ValidationResult::Error {
+            error_message: "fail-closed unproven".to_string(),
+            error_code:
+                frankenengine_engine::translation_validation_proof_carrier::ValidationErrorCode::InternalError,
+        },
+        validation_logs: vec!["fail-closed".to_string()],
+        formal_proof_ref: None,
+        transformation_witness: Vec::new(),
+        test_case_digest: "integration_rt_digest".to_string(),
+        validation_timestamp_ns: 7,
+        security_epoch: SecurityEpoch::from_raw(1),
+        zone: "default".to_string(),
+    };
+
+    let proof_ref = engine.store_proof(&proof).expect("store should persist");
+    assert!(proof_ref.starts_with("proof://default/"));
+
+    let retrieved = engine
+        .retrieve_proof(&proof_ref)
+        .expect("retrieve should read the proof back");
+    assert_eq!(retrieved.proof_id, proof.proof_id);
+    assert_eq!(retrieved.test_case_digest, proof.test_case_digest);
+    assert_eq!(retrieved.validation_result, proof.validation_result);
+
+    // An unknown reference is genuinely not found (not a hard-coded error).
+    assert!(matches!(
+        engine.retrieve_proof("proof://default/0000000000000000"),
+        Err(TranslationValidationError::ProofNotFound(_))
+    ));
+}
+
+#[test]
+fn test_receipt_records_unproven_equivalence_honestly() {
+    // When validation is unproven, the convenience producer refuses a ref, and
+    // any receipt assembled for audit must record the equivalence artifact as
+    // NOT passed — never a fabricated `passed: true`.
+    let engine = TranslationValidationEngine::default();
+
+    let old_slot = SlotId::new("legacy-parser").expect("valid slot ID");
+    let new_slot = SlotId::new("optimized-parser").expect("valid slot ID");
     let old_code = b"function parseData(input) { return JSON.parse(input); }";
     let new_code =
         b"function parseData(input) { try { return JSON.parse(input); } catch { return null; } }";
 
-    // Generate translation validation proof
-    let proof_ref = validate_promotion_and_get_proof_ref(
+    // The producer fails closed.
+    let refused = validate_promotion_and_get_proof_ref(
         old_slot.clone(),
         new_slot.clone(),
         old_code,
         new_code,
         "production",
-    )
-    .expect("proof generation should succeed");
+    );
+    assert!(matches!(
+        refused,
+        Err(TranslationValidationError::ValidationNotProven(_))
+    ));
 
-    // Create replacement receipt with translation validation proof reference
+    // A proof artifact is still produced (unproven) and is genuinely storable.
+    let source_spec = create_slot_specification(old_slot.clone(), old_code, "javascript");
+    let target_spec = create_slot_specification(new_slot.clone(), new_code, "javascript");
+    let proof = engine
+        .validate_slot_promotion(&source_spec, &target_spec)
+        .expect("unproven proof artifact");
+    assert!(!proof.is_valid());
+    let proof_ref = engine.store_proof(&proof).expect("store proof");
+
     let receipt_id = ReplacementReceipt::derive_receipt_id(
-        &old_slot, // slot_id for backward compatibility
-        &old_slot, // old_slot_id
-        &new_slot, // new_slot_id
+        &old_slot,
+        &old_slot,
+        &new_slot,
         "digest_legacy_abc123",
         "digest_optimized_def456",
-        &proof_ref, // translation_validation_proof_ref
+        &proof_ref,
         "genesis_chain_001",
-        1640995200000000000u64, // 2022-01-01 00:00:00 UTC
+        1640995200000000000u64,
         "production",
     )
     .expect("valid receipt ID");
 
+    // The equivalence artifact honestly reflects proof.is_valid() (= false).
     let validation_artifacts = vec![
         ValidationArtifactRef {
             kind: ValidationArtifactKind::PerformanceBenchmark,
             artifact_digest: "perf_evidence_hash".to_string(),
             passed: true,
-            summary: "Performance benchmark completed successfully by benchmark_runner".to_string(),
+            summary: "Performance benchmark completed successfully".to_string(),
         },
         ValidationArtifactRef {
             kind: ValidationArtifactKind::EquivalenceResult,
             artifact_digest: proof_ref.clone(),
-            passed: true,
-            summary: "Semantic equivalence validated by g4_validation_engine".to_string(),
+            passed: proof.is_valid(),
+            summary: format!("translation validation UNPROVEN: {}", proof.summary()),
         },
     ];
 
     let receipt = ReplacementReceipt {
         receipt_id,
         schema_version: SchemaVersion::V1,
-        slot_id: old_slot.clone(), // For backward compatibility
-        old_slot_id: old_slot.clone(),
+        slot_id: old_slot.clone(),
+        old_slot_id: old_slot,
         new_slot_id: new_slot,
         old_cell_digest: "digest_legacy_abc123".to_string(),
         new_cell_digest: "digest_optimized_def456".to_string(),
@@ -193,19 +254,19 @@ fn test_replacement_receipt_with_translation_validation() {
         signature_bundle: create_test_signature_bundle(),
     };
 
-    // Verify the receipt contains the translation validation proof reference
     assert_eq!(receipt.translation_validation_proof_ref, proof_ref);
 
-    // Verify that validation artifacts include the translation validation
     let translation_artifact = receipt
         .validation_artifacts
         .iter()
         .find(|a| matches!(a.kind, ValidationArtifactKind::EquivalenceResult))
-        .expect("Translation validation artifact should exist");
+        .expect("translation validation artifact should exist");
 
-    assert!(translation_artifact.passed);
+    assert!(
+        !translation_artifact.passed,
+        "an unproven equivalence must not be recorded as passed"
+    );
     assert_eq!(translation_artifact.artifact_digest, proof_ref);
-    assert!(translation_artifact.summary.contains("g4_validation_engine"));
 }
 
 #[test]
@@ -227,36 +288,28 @@ fn test_proof_id_determinism() {
 }
 
 #[test]
-fn test_proof_summary_formatting() {
+fn test_proof_summary_formatting_for_unproven() {
     let engine = TranslationValidationEngine::default();
-    let slot_id = SlotId::new("test_slot").expect("valid slot ID");
+    let slot_id = SlotId::new("test-slot").expect("valid slot ID");
 
     let source_spec = create_slot_specification(slot_id.clone(), b"let x = 1 + 2;", "javascript");
-
-    let target_spec = create_slot_specification(
-        slot_id,
-        b"let x = 3;", // Constant folding optimization
-        "javascript",
-    );
+    let target_spec = create_slot_specification(slot_id, b"let x = 3;", "javascript");
 
     let proof = engine
         .validate_slot_promotion(&source_spec, &target_spec)
-        .expect("validation should succeed");
+        .expect("proof artifact");
 
     let summary = proof.summary();
-
-    // Should contain key information about validation results
+    // Fail-closed default summarises as an ERROR, never a fabricated PASS.
     assert!(summary.contains("Translation validation"));
-    assert!(summary.contains("test cases"));
-
-    // Should indicate success for high pass rate
-    if proof.validation_result.success_rate_percent() >= 95 {
-        assert!(summary.contains("PASSED"));
-    }
+    assert!(summary.contains("ERROR"));
+    assert!(!summary.contains("PASSED"));
 }
 
 #[test]
 fn test_engine_configuration() {
+    use frankenengine_engine::translation_validation_proof_carrier::ValidationExecutionMode;
+
     let custom_project_root = "/custom/path";
     let custom_zone = "staging";
 
@@ -266,20 +319,26 @@ fn test_engine_configuration() {
     assert_eq!(engine.zone, custom_zone);
     assert_eq!(engine.minimum_success_rate, 95); // Default value
     assert!(!engine.enable_formal_verification); // Default value
+    // Fail-closed is the safe default execution mode.
+    assert_eq!(engine.execution_mode, ValidationExecutionMode::FailClosed);
 
     let expected_script = format!(
         "{}/scripts/run_rgc_translation_validation_pilot.sh",
         custom_project_root
     );
-    assert_eq!(engine.validation_script.to_str(), Some(expected_script.as_str()));
+    assert_eq!(
+        engine.validation_script.to_str(),
+        Some(expected_script.as_str())
+    );
 }
 
-/// Test that demonstrates the full workflow: promotion request -> validation -> receipt creation.
+/// Full workflow: a fail-closed validation must block the promotion path from
+/// obtaining a proof reference, so a constitutional receipt cannot silently
+/// carry a fabricated equivalence proof.
 #[test]
-fn test_full_promotion_workflow() {
-    // Step 1: Prepare slot promotion data
-    let old_slot = SlotId::new("json_parser_v1").expect("valid slot ID");
-    let new_slot = SlotId::new("json_parser_v2").expect("valid slot ID");
+fn test_full_promotion_workflow_blocks_on_unproven() {
+    let old_slot = SlotId::new("json-parser-v1").expect("valid slot ID");
+    let new_slot = SlotId::new("json-parser-v2").expect("valid slot ID");
 
     let old_implementation = br#"
     function parseJson(input) {
@@ -298,91 +357,19 @@ fn test_full_promotion_workflow() {
     }
     "#;
 
-    // Step 2: Run translation validation
     let proof_ref = validate_promotion_and_get_proof_ref(
-        old_slot.clone(),
-        new_slot.clone(),
+        old_slot,
+        new_slot,
         old_implementation,
         new_implementation,
         "integration_test",
-    )
-    .expect("translation validation should succeed");
-
-    // Step 3: Create replacement receipt with proof binding
-    let receipt_id = ReplacementReceipt::derive_receipt_id(
-        &old_slot, // slot_id for backward compatibility
-        &old_slot,
-        &new_slot,
-        "impl_v1_hash_abc123",
-        "impl_v2_hash_def456",
-        &proof_ref,
-        "promotion_chain_001",
-        1640995200000000000u64,
-        "integration_test",
-    )
-    .expect("valid receipt ID");
-
-    let validation_artifacts = vec![
-        ValidationArtifactRef {
-            kind: ValidationArtifactKind::AdversarialSurvival,
-            artifact_digest: "security_audit_hash".to_string(),
-            passed: true,
-            summary: "Security audit completed successfully by security_team".to_string(),
-        },
-        ValidationArtifactRef {
-            kind: ValidationArtifactKind::EquivalenceResult,
-            artifact_digest: proof_ref.clone(),
-            passed: true,
-            summary: "Semantic equivalence validated by g4_pilot_engine".to_string(),
-        },
-    ];
-
-    let receipt = ReplacementReceipt {
-        receipt_id,
-        schema_version: SchemaVersion::V1,
-        slot_id: old_slot.clone(),
-        old_slot_id: old_slot,
-        new_slot_id: new_slot,
-        old_cell_digest: "impl_v1_hash_abc123".to_string(),
-        new_cell_digest: "impl_v2_hash_def456".to_string(),
-        translation_validation_proof_ref: proof_ref.clone(),
-        content_hash_chain_into_lineage: "promotion_chain_001".to_string(),
-        validation_artifacts,
-        rollback_token: "rollback_v1_abc123".to_string(),
-        promotion_rationale: "Add error handling to JSON parsing for improved reliability"
-            .to_string(),
-        timestamp_ns: 1640995200000000000u64,
-        epoch: SecurityEpoch::from_raw(1),
-        zone: "integration_test".to_string(),
-        signature_bundle: create_test_signature_bundle(),
-    };
-
-    // Step 4: Verify the complete workflow
-    assert!(proof_ref.starts_with("proof://integration_test/"));
-    assert_eq!(receipt.translation_validation_proof_ref, proof_ref);
-
-    // Verify translation validation is properly recorded as an artifact
-    let translation_artifact = receipt
-        .validation_artifacts
-        .iter()
-        .find(|a| matches!(a.kind, ValidationArtifactKind::EquivalenceResult))
-        .expect("Should have translation validation artifact");
-
-    assert!(translation_artifact.passed);
-    assert_eq!(translation_artifact.artifact_digest, proof_ref);
-
-    // Verify both security and translation validation are required
-    assert_eq!(receipt.validation_artifacts.len(), 2);
-    assert!(
-        receipt
-            .validation_artifacts
-            .iter()
-            .any(|a| matches!(a.kind, ValidationArtifactKind::AdversarialSurvival))
     );
-    assert!(
-        receipt
-            .validation_artifacts
-            .iter()
-            .any(|a| matches!(a.kind, ValidationArtifactKind::EquivalenceResult))
-    );
+
+    // The promotion cannot proceed with a fabricated proof: it is refused.
+    match proof_ref {
+        Err(TranslationValidationError::ValidationNotProven(summary)) => {
+            assert!(summary.contains("ERROR") || summary.contains("Translation validation"));
+        }
+        other => panic!("expected fail-closed ValidationNotProven, got {:?}", other),
+    }
 }

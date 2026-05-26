@@ -25,6 +25,17 @@ use e2e_harness::{
     validate_replay_input, verify_replay,
 };
 
+// Real-engine surface (bd-bg9l1.6): drives a genuine parse -> lower -> execute
+// so replay is exercised against traces the interpreter actually captured,
+// rather than the fixture simulation above.
+use frankenengine_engine::baseline_interpreter::{ExecutionResult, QuickJsLane};
+use frankenengine_engine::deterministic_replay::{
+    NondeterminismSource, NondeterminismTrace, ReplayEngine, ReplayMode,
+};
+use frankenengine_engine::ir_contract::Ir0Module;
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser_api_stability::parse_script;
+
 fn test_temp_dir(suffix: &str) -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -773,4 +784,213 @@ fn golden_store_verify_detects_digest_mismatch() {
     );
 
     fs::remove_dir_all(store_dir).ok();
+}
+
+// =========================================================================
+// Real-engine replay (bd-bg9l1.6)
+//
+// Every test above drives `DeterministicRunner`, which replays a *simulation*:
+// it reads pre-baked `step.metadata['outcome']`, advances a virtual clock,
+// pulls a seeded RNG and hashes. It never compiles or executes JS/IR, so its
+// "replay verification" only proves the simulation is deterministic — not that
+// the real interpreter is, and not that a real behavioural change is even
+// observable.
+//
+// The tests below close that gap (the bead's option (b): a parallel suite that
+// replays real captured traces, enabled by bd-bg9l1.1 exposing
+// `ExecutionResult::nondeterminism_trace`). They parse real source, lower it
+// through the full IR0->IR3 pipeline, run it on a real `QuickJsLane`, and
+// replay the `NondeterminismTrace` the interpreter actually captured through
+// the real `ReplayEngine`. Because the recorded bytes come from real execution
+// rather than author-supplied literals, a real counterfactual produces a
+// genuinely different trace and the engine detects the divergence — so a bug in
+// how real execution produces an outcome is now visible.
+// =========================================================================
+
+/// Baseline program: three successful prototype-chain property reads. Each
+/// `config.<key>` read drives the interpreter through `prototype_chain_get`,
+/// which captures a `PropertyResolution` event keyed by the property name.
+const BASELINE_SOURCE: &str = r#"
+var config = { mode: 1, level: 2, name: 3 };
+var a = config.mode;
+var b = config.level;
+var c = config.name;
+a;
+"#;
+
+/// Counterfactual program: a behavioural change. It reads a *different* set of
+/// properties — one of which is absent — so the interpreter captures a
+/// genuinely different `PropertyResolution` trace, differing in both content
+/// (`property_not_found` vs `property_found`, different keys) and in length.
+const COUNTERFACTUAL_SOURCE: &str = r#"
+var config = { mode: 1, level: 2, name: 3 };
+var a = config.mode;
+var b = config.threshold;
+a;
+"#;
+
+/// Parse + lower + execute a real source string on a fresh interpreter lane,
+/// returning the full `ExecutionResult` (including the captured, finalised
+/// `nondeterminism_trace`).
+fn execute_real(source: &str, trace_id: &str) -> ExecutionResult {
+    let tree = parse_script(source).expect("real test source should parse as a script");
+    let ir0 = Ir0Module::from_syntax_tree(tree, "replay_counterfactual_real.js");
+    let context = LoweringContext::new("rc-trace", "rc-decision", "rc-policy");
+    let module = lower_ir0_to_ir3(&ir0, &context)
+        .expect("real test source should lower IR0->IR3")
+        .ir3;
+    QuickJsLane::new()
+        .execute(&module, trace_id)
+        .expect("real execution should succeed")
+}
+
+/// Replay `live`'s captured events against the `recorded` trace through a real
+/// Strict `ReplayEngine`. Returns `true` iff every event echoes without
+/// divergence AND the whole recorded trace is consumed. Any value divergence,
+/// source mismatch, exhaustion, or a short live run yields `false` — the
+/// distinction that gives a counterfactual teeth.
+fn strict_round_trips_cleanly(recorded: &NondeterminismTrace, live: &NondeterminismTrace) -> bool {
+    let mut engine = ReplayEngine::new(recorded.clone(), ReplayMode::Strict);
+    for event in &live.events {
+        if engine.replay_next(event.source.clone(), &event.value).is_err() {
+            return false;
+        }
+    }
+    engine.is_complete() && engine.divergence_count() == 0
+}
+
+#[test]
+fn real_execution_exposes_a_replayable_trace() {
+    let result = execute_real(BASELINE_SOURCE, "rc-real-expose");
+    let trace = &result.nondeterminism_trace;
+
+    // Guards against the original write-only bug: if the field were never
+    // populated this is exactly zero.
+    assert!(
+        trace.event_count() > 0,
+        "a property-access program must capture at least one nondeterminism event \
+         from real execution; got {}",
+        trace.event_count()
+    );
+    assert!(
+        trace.is_finalised(),
+        "the exposed trace must be finalised so it is replay-ready"
+    );
+    trace
+        .validate_for_replay()
+        .expect("a real, finalised trace must validate for replay");
+    assert!(
+        trace
+            .events
+            .iter()
+            .any(|e| e.source == NondeterminismSource::PropertyResolution),
+        "property reads must capture PropertyResolution events; sources seen: {:?}",
+        trace
+            .events
+            .iter()
+            .map(|e| e.source.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn real_replay_of_identical_source_is_deterministic() {
+    let recorded = execute_real(BASELINE_SOURCE, "rc-real-record");
+    let live = execute_real(BASELINE_SOURCE, "rc-real-live");
+
+    // Real determinism: two runs of the same source capture the identical
+    // trace — the guarantee the fixture simulation can only mimic.
+    assert_eq!(
+        recorded.nondeterminism_trace.events, live.nondeterminism_trace.events,
+        "two runs of the same real source must capture identical trace events"
+    );
+
+    // And that recorded trace round-trips cleanly through the real ReplayEngine
+    // against an independent live re-execution: zero divergence, fully consumed.
+    assert!(
+        strict_round_trips_cleanly(&recorded.nondeterminism_trace, &live.nondeterminism_trace),
+        "a faithful real re-execution must replay against the recorded trace with \
+         zero divergence and full consumption"
+    );
+}
+
+#[test]
+fn real_counterfactual_produces_a_detectable_divergence() {
+    let baseline = execute_real(BASELINE_SOURCE, "rc-cf-baseline");
+    let counterfactual = execute_real(COUNTERFACTUAL_SOURCE, "rc-cf-variant");
+
+    // Teeth #1: a real behavioural change yields a genuinely different trace.
+    // Under the fixture simulation this would require hand-editing
+    // step.metadata; here it falls out of real execution.
+    assert_ne!(
+        baseline.nondeterminism_trace.events, counterfactual.nondeterminism_trace.events,
+        "a counterfactual program must capture a different real trace"
+    );
+
+    // Teeth #2: the real ReplayEngine detects the divergence. The Strict
+    // round-trip of the counterfactual against the baseline trace must NOT be
+    // clean — the direct contrast with the identical-source case above.
+    assert!(
+        !strict_round_trips_cleanly(
+            &baseline.nondeterminism_trace,
+            &counterfactual.nondeterminism_trace,
+        ),
+        "replaying the counterfactual run against the baseline trace must diverge"
+    );
+
+    // Teeth #3: in BestEffort mode the engine records the divergence(s) rather
+    // than bailing, paralleling the fixture suite's `compare_counterfactual`
+    // changed-events count — but driven by real captured bytes.
+    let mut engine = ReplayEngine::new(
+        baseline.nondeterminism_trace.clone(),
+        ReplayMode::BestEffort,
+    );
+    let mut errored = false;
+    for event in &counterfactual.nondeterminism_trace.events {
+        // BestEffort returns the recorded value on a value divergence;
+        // TraceExhausted (counterfactual longer than baseline) is itself a
+        // detected structural divergence.
+        if engine.replay_next(event.source.clone(), &event.value).is_err() {
+            errored = true;
+            break;
+        }
+    }
+    assert!(
+        errored || engine.divergence_count() > 0 || !engine.is_complete(),
+        "a real counterfactual must surface at least one divergence against the \
+         baseline trace (divergences={}, complete={})",
+        engine.divergence_count(),
+        engine.is_complete()
+    );
+}
+
+#[test]
+fn strict_replay_rejects_a_corrupted_real_capture() {
+    // Negative control: proves the round-trips above are not vacuous — the
+    // engine genuinely compares the recorded bytes.
+    let recorded = execute_real(BASELINE_SOURCE, "rc-corrupt");
+    let trace = recorded.nondeterminism_trace;
+    let first = trace
+        .events
+        .first()
+        .expect("a real trace must have at least one event");
+
+    let mut engine = ReplayEngine::new(trace.clone(), ReplayMode::Strict);
+    let mut corrupted = first.value.clone();
+    if let Some(byte) = corrupted.first_mut() {
+        *byte ^= 0xFF;
+    } else {
+        corrupted.push(0xAB);
+    }
+
+    let result = engine.replay_next(first.source.clone(), &corrupted);
+    assert!(
+        result.is_err(),
+        "Strict replay must reject a byte-divergent value for a real capture"
+    );
+    assert_eq!(
+        engine.divergence_count(),
+        1,
+        "the rejected divergence must be recorded on the engine"
+    );
 }

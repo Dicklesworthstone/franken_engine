@@ -3127,4 +3127,39 @@ G.2..G.8 currently emit no live proof artifacts (the claims remain
 the recheck mechanism end-to-end against a fixture bundle (intact → pass,
 tampered → fail, missing → fail) without an engine build.
 
+## Proof Bundle Export (Y.1)
+
+`bd-cixqu.25.1` packages a **third-party-verifiable proof bundle** alongside the
+release artifact — the bundle is the trust artifact, re-checkable without the
+FrankenEngine source tree (consumed by Y.2's docker verifier).
+
+```bash
+# export a bundle from a proof-source directory
+./scripts/export_proof_bundle.sh export <proof_source_dir> [out_dir]
+
+# fixture-driven smoke + tamper-detection proof (no engine build)
+./scripts/export_proof_bundle.sh selftest
+```
+
+The bundle tar (`proof_bundle.tar.gz`, deterministically packed) contains:
+
+- `proof_source/` — the `<FE-CLAIM-NNN>.proof.json` proof artifacts (the same
+  schema the G.9 gate rechecks) plus any `*.lean` / `*.v` proof sources present;
+- `proof_assistant_versions.json` — Lean 4 / Coq + recheck-tool version pins a
+  verifier must reproduce;
+- `recheck_expected.sha256` — the trust anchor: the expected recheck digest;
+- `bundle_manifest.json` (schema `franken-engine.proof-bundle.v1`) — per-proof
+  content hashes, the recheck digest, the claim inventory, and the recheck
+  instructions.
+
+The **recheck digest** is `sha256` over the sorted JSON array of
+`[claim_id, sha256(canonical proof body), stated_verdict]` for every proof — a
+pure function of the proof-source content, so it is reproducible across machines
+and independent of wall-clock freshness. A third party re-derives it from the
+bundled `proof_source/` and confirms it equals `recheck_expected.sha256`; any
+post-export tamper of a proof body breaks the match (tamper-evident). The
+`selftest` proves export → complete, deterministic tar entries, digest
+reproducibility across re-exports, and tamper detection — without an engine
+build.
+
 ## Limitations

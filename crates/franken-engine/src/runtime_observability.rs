@@ -1,13 +1,35 @@
-//! Mandatory runtime security observability surface.
+//! Runtime security observability surface.
 //!
-//! This module defines the required counters/gauge and structured log schema
-//! for security-critical runtime failures:
+//! This module defines the counters/gauge and structured log schema for
+//! security-critical runtime failures:
 //! - authentication failures
 //! - capability denials
 //! - replay drops
 //! - checkpoint violations
 //! - revocation freshness/revocation checks
 //! - cross-zone reference decisions
+//!
+//! # Wiring status (honest accounting — see `bd-unc29`)
+//!
+//! These are not all fed by the runtime yet. The schema and counters exist as
+//! a complete surface, but only the sites below currently call into it:
+//! - **capability denials** — WIRED. The live capability gate in
+//!   `baseline_interpreter::check_hostcall_capability_gate` calls
+//!   [`RuntimeSecurityObservability::record_capability_denial`] on every real
+//!   denial, so `capability_denial_total` and the structured security log
+//!   reflect actual runtime denials (exposed via
+//!   `InterpreterCore::security_metrics` / `security_observability`).
+//! - **authentication failures, replay drops, checkpoint violations,
+//!   revocation checks, cross-zone references** — NOT YET WIRED. These
+//!   `record_*` methods are presently invoked only from this module's tests.
+//!   Their real failure sites (signature/attestation verification, the replay
+//!   engine, checkpoint enforcement, revocation freshness checks, cross-zone
+//!   reference decisions) must still be wired before the counters reflect
+//!   production events. Tracked as follow-up to `bd-unc29`.
+//!
+//! Note: capability denials also remain observable through the interpreter's
+//! `WitnessEventKind::CapabilityChecked` witness stream; this surface adds the
+//! typed, Prometheus-exportable counter and redaction-safe structured log.
 //!
 //! Plan reference: Section 10.10 item 22 (`bd-3s6`).
 

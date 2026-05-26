@@ -70,6 +70,10 @@ use crate::iterator_protocol::{
 use crate::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use crate::parser::{CanonicalEs2020Parser, ParserOptions, ParserSource};
 use crate::runtime_config::ExecutionConfig;
+use crate::runtime_observability::{
+    CapabilityDenialReason, RuntimeSecurityMetrics, RuntimeSecurityObservability,
+    SecurityEventContext,
+};
 use crate::stdlib::normalize_unicode_string;
 
 // ---------------------------------------------------------------------------
@@ -241,6 +245,17 @@ fn check_hostcall_capability_gate(
             allowed: false,
             instruction_index,
         });
+        // Feed the mandatory runtime security observability surface from the
+        // real failure site: the live capability gate. The denial here is an
+        // authority gap (the required capability is absent from the granted
+        // set, or the tag is unknown and fails closed), which maps to
+        // `InsufficientAuthority`.
+        let denial_context = interpreter.capability_denial_event_context(instruction_index);
+        interpreter.security_observability.record_capability_denial(
+            denial_context,
+            CapabilityDenialReason::InsufficientAuthority,
+            capability_tag,
+        );
         return Err(InterpreterError::CapabilityDenied {
             capability: capability_tag.to_string(),
         });
@@ -2310,6 +2325,11 @@ pub struct InterpreterCore {
     witness_events: Vec<WitnessEvent>,
     /// Hostcall decisions.
     hostcall_decisions: Vec<HostcallDecisionRecord>,
+    /// Mandatory runtime security observability surface. The runtime capability
+    /// gate feeds real `record_capability_denial` calls here so the
+    /// `capability_denial_total` counter and structured security log reflect
+    /// actual denials on the live execution path (not just a schema surface).
+    security_observability: RuntimeSecurityObservability,
     /// Structured events.
     events: Vec<InterpreterEvent>,
     /// Witness sequence counter.
@@ -2443,6 +2463,7 @@ impl InterpreterCore {
             instructions_executed: 0,
             witness_events: Vec::new(),
             hostcall_decisions: Vec::new(),
+            security_observability: RuntimeSecurityObservability::new(),
             events: Vec::new(),
             witness_seq: 0,
             trace_id,
@@ -20009,6 +20030,35 @@ impl InterpreterCore {
         self.witness_seq += 1;
     }
 
+    /// Build a deterministic [`SecurityEventContext`] for a runtime security
+    /// observability record emitted from the live execution path. The
+    /// timestamp is the deterministic instruction tick (not wall-clock) so the
+    /// resulting structured log replays byte-identically.
+    fn capability_denial_event_context(&self, instruction_index: u32) -> SecurityEventContext {
+        SecurityEventContext {
+            timestamp_ns: self.instructions_executed,
+            trace_id: self.trace_id.clone(),
+            principal_id: String::new(),
+            decision_id: format!("instr-{instruction_index}"),
+            policy_id: String::new(),
+            zone_id: String::new(),
+            component: COMPONENT.to_string(),
+        }
+    }
+
+    /// Mandatory runtime security metrics accumulated during this execution
+    /// (e.g. `capability_denial_total`), fed from the real runtime failure
+    /// sites. See [`RuntimeSecurityObservability`].
+    pub fn security_metrics(&self) -> &RuntimeSecurityMetrics {
+        self.security_observability.metrics()
+    }
+
+    /// The full runtime security observability surface (metrics + structured
+    /// security log) populated by this interpreter on the live execution path.
+    pub fn security_observability(&self) -> &RuntimeSecurityObservability {
+        &self.security_observability
+    }
+
     // -- Structured events -------------------------------------------------
 
     fn push_event(&mut self, event: &str, outcome: &str, err_code: Option<&str>) {
@@ -21047,6 +21097,85 @@ mod active_builtin_regressions {
             specialization: None,
             required_capabilities: Vec::new(),
         }
+    }
+
+    #[test]
+    fn capability_denial_feeds_runtime_security_observability() {
+        // A hostcall requiring `fs` while only the baseline execution
+        // capabilities (VmDispatch + HeapAllocate) are granted: the live
+        // capability gate must deny it AND feed the mandatory runtime security
+        // observability surface (bd-unc29 wired record_capability_denial into
+        // the real gate).
+        let mut module = halted_test_module();
+        module.instructions = vec![
+            Ir3Instruction::HostCall {
+                capability: CapabilityTag("fs".to_string()),
+                args: RegRange { start: 0, count: 0 },
+                dst: 0,
+            },
+            Ir3Instruction::Halt,
+        ];
+        module.required_capabilities = vec![CapabilityTag("fs".to_string())];
+
+        // test_core() grants VmDispatch + HeapAllocate but NOT FsRead.
+        let mut core = test_core();
+        let result = core.execute(&module);
+        assert!(
+            matches!(result, Err(InterpreterError::CapabilityDenied { .. })),
+            "withheld capability must be denied, got {result:?}"
+        );
+
+        // The mandatory counter is now populated from the real failure site.
+        let metrics = core.security_metrics();
+        let total_denials: u64 = metrics.capability_denial_total.values().sum();
+        assert_eq!(
+            total_denials, 1,
+            "exactly one capability denial should be recorded by the runtime"
+        );
+        assert_eq!(
+            metrics
+                .capability_denial_total
+                .get(&CapabilityDenialReason::InsufficientAuthority)
+                .copied()
+                .unwrap_or(0),
+            1,
+            "the denial must be classified as InsufficientAuthority"
+        );
+
+        // And the structured security log carries one complete denial event
+        // naming the requested capability.
+        let logs = core.security_observability().logs();
+        assert_eq!(logs.len(), 1, "one structured security log event expected");
+        assert!(
+            logs[0].required_fields_present(),
+            "structured security log event must have all required fields"
+        );
+        assert_eq!(
+            logs[0]
+                .metadata
+                .get("requested_capability")
+                .map(String::as_str),
+            Some("fs"),
+            "the denial event must record the requested capability tag"
+        );
+        assert_eq!(logs[0].event_type, "capability_denial");
+        assert_eq!(logs[0].outcome, "denied");
+    }
+
+    #[test]
+    fn no_capability_denial_recorded_on_clean_run() {
+        // Negative control: a run with no denied hostcall leaves the mandatory
+        // capability_denial counter at zero (no spurious increments).
+        let mut core = test_core();
+        core.execute(&halted_test_module())
+            .expect("clean run without hostcalls should succeed");
+        let total_denials: u64 = core
+            .security_metrics()
+            .capability_denial_total
+            .values()
+            .sum();
+        assert_eq!(total_denials, 0, "no denial should be recorded on a clean run");
+        assert!(core.security_observability().logs().is_empty());
     }
 
     #[test]

@@ -27,7 +27,7 @@ without the H7.1 change.
 
 | # | gate | exit | meaning |
 |---|---|---|---|
-| 1 | `cargo test --lib -p frankenengine-engine` | **101** | 232 failures — see below (pre-existing) |
+| 1 | `cargo test --lib -p frankenengine-engine` | **101** | aborted (stack overflow) + 232 live-FAILED — see below (pre-existing) |
 | 2 | `cargo clippy --all-targets -- -D warnings` | **101** | pre-existing compile error (see below) |
 | 3 | `cargo fmt --check` | **1** | tree-wide formatting drift (see below) |
 | 4 | `./scripts/run_replay_coverage_metric_gate.sh ci` | **0** | pass |
@@ -51,14 +51,23 @@ These failures exist at HEAD `55845b8b` independent of the allocator and would
 be present with the system allocator too. They are tree-wide debt, not H7
 regressions:
 
-- **Gate 1 — 232 lib-test failures**, concentrated in persistence / revocation
-  subsystems: `replacement_lineage_log` (56), `demotion_rollback` (46),
-  `revocation_chain` (31), `capability_witness` (31), `revocation_enforcement`
-  (27), plus scattered others. The repo "green" gate (bd-84lcn) is
-  **compile-only and never runs the lib tests**, so these runtime failures have
-  accumulated unobserved. None are in the allocator path; none are in
-  `moonshot_weekly_report` / `expected_info_value_scoring` (this session's EIV
-  fix, which passes).
+- **Gate 1 — the lib-test process ABORTS via stack overflow, plus 232
+  live-FAILED tests.** The run reaches `tee_live_quote::tests::detect_tee_capability_error`,
+  which **overflows its stack** and aborts the whole test process
+  (`SIGABRT`, signal 6) — so no `failures:` detail block and no `test result:`
+  summary are ever printed (the per-failure panic messages are buffered and
+  lost on abort). Before the abort, 232 tests had already printed `... FAILED`
+  status live, concentrated in persistence / revocation subsystems:
+  `replacement_lineage_log` (56), `demotion_rollback` (46), `revocation_chain`
+  (31), `capability_witness` (31), `revocation_enforcement` (27), plus scattered
+  others. Because the abort destroyed the detail summary, the *reasons* for
+  those 232 are uncharacterized here — but all are on the system allocator and
+  none are in `moonshot_weekly_report` / `expected_info_value_scoring` (this
+  session's EIV fix, which passes). The repo "green" gate (bd-84lcn) is
+  **compile-only and never runs the lib tests**, so both the stack-overflow
+  crash and the 232 failures have accumulated unobserved. The stack-overflow
+  crash is filed as **bd-g63gw** (it makes `cargo test --lib` un-completable on
+  this tree regardless of the failures).
 - **Gate 2 — clippy** fails on a pre-existing **compile error** `E0107: missing
   generics for struct GenericStruct` in `franken-engine-deterministic-derive`
   (test `integration_tests`) — a proc-macro crate, not the engine, not a lint,

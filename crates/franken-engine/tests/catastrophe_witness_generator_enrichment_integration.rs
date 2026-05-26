@@ -322,15 +322,20 @@ fn boundary_serde_roundtrip() {
 fn detect_boundary_between_regions() {
     let source = vec![coord("x", 100_000)];
     let target = vec![coord("x", 200_000)];
-    let result = detect_boundary(&source, &target, 800_000, 200_000);
-    match result {
-        Ok(boundary) => {
-            assert!(boundary.is_critical() || !boundary.is_critical()); // just verify no panic
-        }
-        Err(_) => {
-            // Also acceptable if detection criteria not met
-        }
-    }
+    // detect_boundary classifies the metric args against threshold=0,
+    // margin=1_000_000:
+    //   source_metric 800_000 -> BrittleWin (0 < delta <= margin)
+    //   target_metric 200_000 -> Neutral    (|delta| <= margin/4)
+    // The regions differ, so a boundary must be detected, and crossing out of a
+    // winning region into a non-winning one is critical.
+    let boundary = detect_boundary(&source, &target, 800_000, 200_000)
+        .expect("distinct regions (BrittleWin vs Neutral) must yield a boundary");
+    assert_eq!(boundary.source_region, PhaseRegion::BrittleWin);
+    assert_eq!(boundary.target_region, PhaseRegion::Neutral);
+    assert!(
+        boundary.is_critical(),
+        "a win -> non-win crossing must be flagged critical"
+    );
 }
 
 #[test]

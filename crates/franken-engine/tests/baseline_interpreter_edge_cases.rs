@@ -1526,12 +1526,21 @@ fn test_array_prototype_some_duplicate_removal_regression() {
 
     // Test 4: some on non-array - test type coercion behavior
     let result = interpreter.evaluate_expression("Array.prototype.some.call('abc', function() {})");
-    if result.is_ok() {
-        // If it succeeds, behavior should be consistent
-        assert!(true, "some on string handled without crash");
-    } else {
-        // Error is acceptable for type validation
-        eprintln!("some on non-array failed as expected: {:?}", result);
+    match result {
+        // Array.prototype.some always yields a boolean predicate result; applying
+        // it to a string receiver must still produce a Bool, not some other
+        // coerced value.
+        Ok(value) => assert!(
+            matches!(value, Value::Bool(_)),
+            "some on string must return a boolean, got {value:?}"
+        ),
+        // The current engine fail-closes string-receiver coercion. That is
+        // acceptable, but it must be a controlled TypeError, never a panic or a
+        // different/silent outcome.
+        Err(err) => assert!(
+            matches!(err, InterpreterError::TypeError { .. }),
+            "some on non-array must fail-closed with a TypeError, got {err:?}"
+        ),
     }
 
     // Test 5: Consistency check - multiple calls should behave identically
@@ -2140,9 +2149,15 @@ fn test_console_level_info_dispatch_integration() {
     // Test console.info() doesn't crash - validates missing Info match arm was added
     let result = interpreter.evaluate_expression("console.info('test message')");
 
-    // Should succeed without panic (Info level now handled in dispatch)
-    if result.is_ok() {
-        assert!(true, "console.info handled without crash");
+    // Should succeed without panic (Info level now handled in dispatch) and,
+    // like every console.* sink, evaluate to undefined rather than echoing the
+    // logged argument.
+    if let Ok(value) = result {
+        assert_eq!(
+            value,
+            Value::Undefined,
+            "console.info must evaluate to undefined, got {value:?}"
+        );
     } else {
         // Error acceptable if console not fully implemented, but not panic
         eprintln!("console.info failed gracefully: {:?}", result);

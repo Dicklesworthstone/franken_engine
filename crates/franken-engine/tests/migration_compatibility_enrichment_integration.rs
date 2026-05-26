@@ -1241,9 +1241,18 @@ fn enrichment_object_class_btreeset_deterministic_order() {
     set.insert(ObjectClass::KeyFormat);
     set.insert(ObjectClass::SerializationSchema);
     let ordered: Vec<ObjectClass> = set.iter().copied().collect();
-    // BTreeSet uses Ord, so order should be stable
-    assert_eq!(ordered[0], ordered[0]); // at least verify no panic
-    assert_eq!(ordered.len(), 3);
+    // BTreeSet iterates in Ord order, which follows enum declaration order
+    // (SerializationSchema < KeyFormat < ... < PolicyFormat) and is therefore
+    // independent of the insertion order used above.
+    assert_eq!(
+        ordered,
+        vec![
+            ObjectClass::SerializationSchema,
+            ObjectClass::KeyFormat,
+            ObjectClass::PolicyFormat,
+        ],
+        "BTreeSet must yield a deterministic Ord-sorted order"
+    );
 }
 
 // ===========================================================================

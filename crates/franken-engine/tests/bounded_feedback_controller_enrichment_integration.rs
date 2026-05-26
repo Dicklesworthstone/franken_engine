@@ -231,7 +231,19 @@ fn pi_controller_state_initial_zeros() {
 #[test]
 fn feedback_policy_default_valid() {
     let policy = FeedbackPolicy::default();
-    assert!(!policy.controllers.is_empty() || policy.controllers.is_empty()); // just no panic
+    // The default is a well-formed, enabled policy carrying the current schema
+    // version and the documented 3x emergency multiplier. It intentionally
+    // ships with no controllers registered (operators add them per actuator),
+    // so validate() reports NoControllers until at least one is configured.
+    assert_eq!(policy.schema_version, FEEDBACK_SCHEMA_VERSION);
+    assert_eq!(policy.policy_id, "default");
+    assert!(policy.enabled, "feedback system defaults to enabled");
+    assert!(
+        policy.controllers.is_empty(),
+        "default ships no controllers"
+    );
+    assert_eq!(policy.emergency_multiplier_millionths, 3_000_000);
+    assert_eq!(policy.validate(), Err(PolicyValidationError::NoControllers));
 }
 
 #[test]

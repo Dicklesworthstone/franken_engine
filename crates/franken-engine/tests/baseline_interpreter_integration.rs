@@ -11134,12 +11134,22 @@ fn test_array_prototype_foreach_duplicate_removal_integration() {
     // Test 3: forEach on non-array - should handle type coercion
     let result =
         interpreter.evaluate_expression("Array.prototype.forEach.call('hello', function(x) {})");
-    if result.is_ok() {
-        // Current implementation may handle this scenario
-        assert!(true, "forEach on string handled without crash");
-    } else {
-        // Error is acceptable for type validation
-        eprintln!("forEach on non-array failed as expected: {:?}", result);
+    match result {
+        // forEach is a pure side-effecting iterator: regardless of receiver
+        // coercion it must evaluate to undefined (matching the in-array cases
+        // asserted above), never the receiver or an element count.
+        Ok(value) => assert_eq!(
+            value,
+            Value::Undefined,
+            "forEach on string must return undefined, got {value:?}"
+        ),
+        // The current engine fail-closes string-receiver coercion. That is
+        // acceptable, but it must be a controlled TypeError, never a panic or a
+        // different/silent outcome.
+        Err(err) => assert!(
+            matches!(err, InterpreterError::TypeError { .. }),
+            "forEach on non-array must fail-closed with a TypeError, got {err:?}"
+        ),
     }
 
     // Test 4: Verify no duplicate implementations cause issues by testing consistent behavior

@@ -487,10 +487,15 @@ impl PersistenceComputer {
             hash_data.extend_from_slice(&bar.feature_weight.millionths.to_le_bytes());
         }
 
-        // Add metadata
+        // Add structural metadata. NOTE: only content-derived, deterministic
+        // fields participate in the content hash. `computation_time_us` is
+        // wall-clock telemetry that varies run-to-run and is deliberately
+        // EXCLUDED — folding it in would make `content_hash` (and the derived
+        // `authenticity_hash`) non-deterministic, violating the load-bearing
+        // "same DAG -> byte-identical diagram" invariant that NN.2 Wasserstein
+        // comparisons depend on.
         hash_data.extend_from_slice(&metadata.node_count.to_le_bytes());
         hash_data.extend_from_slice(&metadata.edge_count.to_le_bytes());
-        hash_data.extend_from_slice(&metadata.computation_time_us.to_le_bytes());
 
         Ok(ContentHash::compute(&hash_data))
     }
@@ -1409,7 +1414,9 @@ mod tests {
         let l1_dist = point_distance(&p1, &p2, 1);
         let l2_dist = point_distance(&p1, &p2, 2);
 
-        assert_eq!(l1_dist, 0.2); // |0.1-0.2| + |0.3-0.4| = 0.1 + 0.1 = 0.2
+        // |0.1-0.2| + |0.3-0.4| = 0.1 + 0.1 = 0.2 (compared with tolerance:
+        // 0.3_f64 - 0.4_f64 is not exactly -0.1, so the sum is 0.20000000000000004)
+        assert!((l1_dist - 0.2).abs() < 1e-10);
         assert!((l2_dist - ((0.1_f64.powi(2) + 0.1_f64.powi(2)).sqrt())).abs() < 1e-10);
     }
 
@@ -1704,5 +1711,171 @@ mod tests {
                 filter_range: (FilterValue::ZERO, FilterValue::ZERO),
             },
         }
+    }
+
+    // ---------------------------------------------------------------------------
+    // End-to-end `compute_diagram` tests (NN.1 entry point)
+    //
+    // These exercise the actual extraction path on real CausationGraphs. The
+    // load-bearing invariant is determinism: same DAG -> byte-identical diagram,
+    // because NN.2 Wasserstein comparisons treat the diagram fingerprint as a
+    // stable identity for historical incidents.
+    // ---------------------------------------------------------------------------
+
+    fn build_evidence_node(id: u64, ts: u64) -> CausationNode {
+        use crate::causation_graph_schema::NodeType;
+        use crate::minimal_causal_set_inference::{CausalDependency, DecisionFactor};
+        CausationNode {
+            id: NodeId(id),
+            node_type: NodeType::EvidenceAtom {
+                dependency: CausalDependency {
+                    evidence_atom_id: format!("atom-{id}"),
+                    evidence_type: "test_evidence".to_string(),
+                    influenced_factor: DecisionFactor::PosteriorProbability,
+                    influence_magnitude_millionths: 500_000,
+                    evidence_content_hash: ContentHash::compute(format!("ev-{id}").as_bytes()),
+                },
+                evidence_hash: ContentHash::compute(format!("evh-{id}").as_bytes()),
+                confidence_millionths: 900_000,
+            },
+            content_hash: ContentHash::compute(format!("node-{id}").as_bytes()),
+            authenticity_hash: AuthenticityHash::compute_keyed(b"node", format!("{id}").as_bytes()),
+            timestamp_ns: ts,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    fn build_edge(id: u64, src: u64, tgt: u64, weight_millionths: u32, ts: u64) -> CausationEdge {
+        use crate::causation_graph_schema::CausationType;
+        CausationEdge {
+            id: EdgeId(id),
+            source: NodeId(src),
+            target: NodeId(tgt),
+            weight: InfluenceWeight::from_millionths(weight_millionths),
+            causation_type: CausationType::Direct,
+            content_hash: ContentHash::compute(format!("edge-{id}").as_bytes()),
+            timestamp_ns: ts,
+            metadata: BTreeMap::new(),
+        }
+    }
+
+    /// Build an acyclic chain DAG with `node_count` nodes (N1 -> N2 -> ... ).
+    fn build_chain_dag(node_count: u64) -> CausationGraph {
+        let mut graph = CausationGraph::new();
+        for i in 1..=node_count {
+            graph
+                .add_node(build_evidence_node(i, 1_000_000 * i))
+                .unwrap();
+        }
+        for i in 1..node_count {
+            graph
+                .add_edge(build_edge(i, i, i + 1, 250_000, 3_000_000 * i))
+                .unwrap();
+        }
+        graph
+    }
+
+    #[test]
+    fn test_content_hash_excludes_computation_time() {
+        // Precise regression guard: the content hash must NOT depend on the
+        // volatile `computation_time_us` telemetry field. Two diagrams that
+        // differ ONLY in timing must hash identically, otherwise the diagram
+        // fingerprint is non-deterministic and Wasserstein-based incident
+        // matching becomes meaningless.
+        let computer = PersistenceComputer::new();
+        let bars = vec![PersistenceBar {
+            birth: FilterValue::from_millionths(0),
+            death: Some(FilterValue::from_millionths(750_000)),
+            dimension: 0,
+            representative: FeatureRepresentative::Component {
+                root_node: NodeId(2),
+                nodes: vec![NodeId(2)],
+            },
+            feature_weight: InfluenceWeight::from_millionths(100_000),
+        }];
+
+        let make_meta = |time_us: u64| ComputationMetadata {
+            algorithm: "ripser-style".to_string(),
+            node_count: 2,
+            edge_count: 1,
+            computation_time_us: time_us,
+            feature_counts: BTreeMap::new(),
+            filter_range: (FilterValue::ZERO, FilterValue::from_millionths(750_000)),
+        };
+
+        let hash_fast = computer.compute_diagram_hash(&bars, &make_meta(1)).unwrap();
+        let hash_slow = computer
+            .compute_diagram_hash(&bars, &make_meta(999_999))
+            .unwrap();
+
+        assert_eq!(
+            hash_fast, hash_slow,
+            "content_hash must be invariant to computation_time_us"
+        );
+    }
+
+    #[test]
+    fn test_compute_diagram_end_to_end_deterministic() {
+        // Same DAG computed twice must yield a byte-identical diagram identity.
+        let graph = build_chain_dag(3);
+        let computer = PersistenceComputer::new();
+
+        let diagram_a = computer.compute_diagram(&graph).unwrap();
+        let diagram_b = computer.compute_diagram(&graph).unwrap();
+
+        assert_eq!(
+            diagram_a.content_hash, diagram_b.content_hash,
+            "content_hash must be deterministic across runs"
+        );
+        assert_eq!(
+            diagram_a.authenticity_hash, diagram_b.authenticity_hash,
+            "authenticity_hash (derived from content_hash) must be deterministic"
+        );
+        assert_eq!(diagram_a.bars, diagram_b.bars, "bars must be deterministic");
+        assert_eq!(
+            diagram_a.computation_metadata.feature_counts,
+            diagram_b.computation_metadata.feature_counts
+        );
+    }
+
+    #[test]
+    fn test_compute_diagram_known_small_dag() {
+        // A 2-node chain N1 -> N2 under the InfluenceWeight filtration:
+        //   - both nodes are born at filter value 0
+        //   - the edge (inverted weight = 1_000_000 - 250_000 = 750_000) merges
+        //     the two components, killing the younger root (N2) at 750_000
+        //   - one connected component survives forever (infinite bar)
+        let graph = build_chain_dag(2);
+        let diagram = PersistenceComputer::new().compute_diagram(&graph).unwrap();
+
+        assert_eq!(diagram.computation_metadata.node_count, 2);
+        assert_eq!(diagram.computation_metadata.edge_count, 1);
+        assert_eq!(diagram.bars.len(), 2, "two 0-dim bars expected");
+        assert!(
+            diagram.bars.iter().all(|b| b.dimension == 0),
+            "a 2-node chain has no 1-cycles"
+        );
+
+        let infinite: Vec<_> = diagram.bars.iter().filter(|b| b.is_infinite()).collect();
+        assert_eq!(infinite.len(), 1, "exactly one component survives forever");
+
+        let finite: Vec<_> = diagram.bars.iter().filter(|b| !b.is_infinite()).collect();
+        assert_eq!(finite.len(), 1);
+        assert_eq!(
+            finite[0].death.unwrap().millionths,
+            750_000,
+            "merge happens at the inverted edge weight"
+        );
+    }
+
+    #[test]
+    fn test_compute_diagram_distinct_graphs_distinct_hash() {
+        let computer = PersistenceComputer::new();
+        let small = computer.compute_diagram(&build_chain_dag(2)).unwrap();
+        let large = computer.compute_diagram(&build_chain_dag(3)).unwrap();
+        assert_ne!(
+            small.content_hash, large.content_hash,
+            "structurally different DAGs must produce different diagram hashes"
+        );
     }
 }

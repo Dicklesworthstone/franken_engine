@@ -295,7 +295,10 @@ fn unfinalised_trace_is_rejected_for_replay() {
 
     let mut engine = ReplayEngine::new(trace, ReplayMode::Strict);
     let err = engine
-        .replay_next(NondeterminismSource::PropertyResolution, b"property_found:key=x")
+        .replay_next(
+            NondeterminismSource::PropertyResolution,
+            b"property_found:key=x",
+        )
         .expect_err("an unfinalised trace must not be replayable");
     assert!(
         matches!(err, ReplayError::TraceNotFinalised),

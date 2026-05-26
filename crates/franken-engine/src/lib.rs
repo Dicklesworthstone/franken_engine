@@ -236,6 +236,7 @@ pub mod hindsight_trace_escalator;
 pub mod hole_witness_generator;
 pub mod hook_effect_contract;
 pub mod hostcall_batch_transport;
+pub mod hostcall_capability_translation_validator;
 pub mod hostcall_conformance_governance;
 pub mod hostcall_effects_migration;
 pub mod hostcall_session_governance_gate;

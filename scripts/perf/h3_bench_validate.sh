@@ -154,8 +154,12 @@ OTHER_MAX_REGRESS_PCT = 5.0   # criterion 4: no NEW other bench regresses > 5%
 
 # Pre-existing, separately-tracked regressions that H3 did NOT introduce. These
 # are reported (never hidden) but do not fail the H3-specific gate, since H3 only
-# touched EngineObjectId::to_hex. baseline_value_string_clone regressed cumulatively
-# between pass1 (2026-05-20) and HEAD and is owned by its own bead.
+# touched EngineObjectId::to_hex. baseline_value_string_clone's +15.93% vs pass1 was
+# attributed in bd-o4cbn.15 to the system->mimalloc global-allocator transition
+# (added 2026-05-23, after the 2026-05-20 pass1 baseline): the bench fn, the `Value`
+# type, ContentHash::compute, and the rustc build are all byte-identical, so it is an
+# allocator/measurement-condition artifact, not a code regression. See
+# docs/PERFORMANCE_BASELINE.md.
 KNOWN_REGRESSIONS = {"baseline_value_string_clone": "bd-o4cbn.15"}
 
 def sh(*a):

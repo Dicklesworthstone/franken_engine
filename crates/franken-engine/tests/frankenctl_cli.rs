@@ -216,6 +216,27 @@ fn sample_receipt_policy(
     }
 }
 
+/// Inject a real Ed25519 trust anchor for `quote`'s trust root into `policy`
+/// and return a detached signature over the quote's signing preimage, so the
+/// pipeline's `verify_quote_attestation` crypto binding accepts the quote.
+/// (bd-bg9l1.26)
+fn attest_policy_quote(
+    policy: &mut TeeAttestationPolicy,
+    quote: &PolicyAttestationQuote,
+) -> Signature {
+    let signing_key = SigningKey::from_bytes([0x5a; 32]).expect("policy anchor signing key");
+    let anchor = format!(
+        "-----BEGIN FRANKENENGINE TRUST ANCHOR-----\n{}\n-----END FRANKENENGINE TRUST ANCHOR-----",
+        hex::encode(signing_key.verification_key().as_bytes())
+    );
+    for root in &mut policy.platform_trust_roots {
+        if root.platform == quote.platform && root.root_id == quote.trust_root_id {
+            root.trust_anchor_pem = anchor.clone();
+        }
+    }
+    sign_preimage(&signing_key, &quote.signing_preimage()).expect("sign policy quote preimage")
+}
+
 fn build_valid_receipt_verifier_input() -> (String, ReceiptVerifierCliInput) {
     let receipt_id = "rcpt-001".to_string();
     let signer_key_id = EngineObjectId([0x44; 32]);
@@ -319,7 +340,7 @@ fn build_valid_receipt_verifier_input() -> (String, ReceiptVerifierCliInput) {
     checkpoint.signature = sign_preimage(&operator_signing_key, &preimage).expect("checkpoint sig");
 
     let measurement_digest_hex = measurement.composite_hash().to_hex();
-    let policy =
+    let mut policy =
         sample_receipt_policy(SecurityEpoch::from_raw(5), measurement_digest_hex, "root-1");
     let mut revocation_observations = BTreeMap::new();
     revocation_observations.insert("intel_pcs".to_string(), RevocationProbeStatus::Good);
@@ -335,6 +356,7 @@ fn build_valid_receipt_verifier_input() -> (String, ReceiptVerifierCliInput) {
         trust_root_id: "root-1".to_string(),
         revocation_observations,
     };
+    let policy_quote_signature = attest_policy_quote(&mut policy, &policy_quote);
 
     let request = UnifiedReceiptVerificationRequest {
         trace_id: "trace-verify-01".to_string(),
@@ -371,6 +393,7 @@ fn build_valid_receipt_verifier_input() -> (String, ReceiptVerifierCliInput) {
         attestation: AttestationLayerInput {
             attestation_quote,
             policy_quote,
+            policy_quote_signature,
             policy,
             decision_impact: DecisionImpact::HighImpact,
             runtime_epoch: SecurityEpoch::from_raw(5),

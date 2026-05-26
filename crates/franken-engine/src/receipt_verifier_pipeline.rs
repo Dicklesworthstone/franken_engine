@@ -217,6 +217,12 @@ pub struct LogOperatorKey {
 pub struct AttestationLayerInput {
     pub attestation_quote: CellAttestationQuote,
     pub policy_quote: PolicyAttestationQuote,
+    /// Detached Ed25519 signature over `policy_quote.signing_preimage()`. The
+    /// pipeline verifies it against the pinned trust anchor for the quote's trust
+    /// root via [`TeeAttestationPolicy::verify_quote_attestation`], so a forged
+    /// quote that merely *names* an approved measurement and a known trust root is
+    /// rejected fail-closed rather than admitted. (bd-bg9l1.26)
+    pub policy_quote_signature: Signature,
     pub policy: TeeAttestationPolicy,
     pub decision_impact: DecisionImpact,
     pub runtime_epoch: SecurityEpoch,
@@ -864,6 +870,29 @@ fn verify_attestation_layer(receipt: &OptReceipt, input: &AttestationLayerInput)
         ),
     }
 
+    // Cryptographically bind the policy quote to its trust anchor. evaluate_quote
+    // above only checks that the quote *names* an approved measurement and a known
+    // trust root, so a forged quote that echoes an approved digest and a known
+    // trust_root_id would pass every structural check. The detached Ed25519
+    // signature must verify under the trust-anchor key over the quote's signing
+    // preimage; admission is fail-closed against forgery, expired/unknown roots,
+    // unusable anchors, and the unsigned sentinel signature. (bd-bg9l1.26)
+    match input.policy.verify_quote_attestation(
+        &input.policy_quote,
+        &input.policy_quote_signature,
+        input.runtime_epoch,
+    ) {
+        Ok(()) => result.record_pass(
+            "policy_quote_signature_verifies",
+            "policy quote signature verified against pinned trust anchor",
+        ),
+        Err(error) => result.record_fail(
+            "policy_quote_signature_verifies",
+            error.error_code(),
+            format!("policy quote signature verification failed: {error}"),
+        ),
+    }
+
     result
 }
 
@@ -1282,6 +1311,27 @@ mod tests {
         }
     }
 
+    /// Inject a real Ed25519 trust anchor for `quote`'s trust root into `policy`
+    /// and return a detached signature over the quote's signing preimage, so the
+    /// pipeline's `verify_quote_attestation` crypto binding accepts a legitimately
+    /// signed quote. (bd-bg9l1.26)
+    fn attest_policy_quote(
+        policy: &mut TeeAttestationPolicy,
+        quote: &PolicyAttestationQuote,
+    ) -> Signature {
+        let signing_key = SigningKey::from_bytes([0x5a; 32]).expect("policy anchor signing key");
+        let anchor = format!(
+            "-----BEGIN FRANKENENGINE TRUST ANCHOR-----\n{}\n-----END FRANKENENGINE TRUST ANCHOR-----",
+            hex::encode(signing_key.verification_key().as_bytes())
+        );
+        for root in &mut policy.platform_trust_roots {
+            if root.platform == quote.platform && root.root_id == quote.trust_root_id {
+                root.trust_anchor_pem = anchor.clone();
+            }
+        }
+        sign_preimage(&signing_key, &quote.signing_preimage()).expect("sign policy quote preimage")
+    }
+
     fn build_valid_fixture() -> (String, UnifiedReceiptVerificationRequest) {
         let receipt_id = "rcpt-001".to_string();
         let signer_key_id = EngineObjectId([0x44; 32]);
@@ -1383,7 +1433,8 @@ mod tests {
         };
 
         let measurement_digest_hex = measurement.composite_hash().to_hex();
-        let policy = sample_policy(SecurityEpoch::from_raw(5), measurement_digest_hex, "root-1");
+        let mut policy =
+            sample_policy(SecurityEpoch::from_raw(5), measurement_digest_hex, "root-1");
         let mut revocation_observations = BTreeMap::new();
         revocation_observations.insert("intel_pcs".to_string(), RevocationProbeStatus::Good);
         revocation_observations.insert("internal_ledger".to_string(), RevocationProbeStatus::Good);
@@ -1397,6 +1448,7 @@ mod tests {
             trust_root_id: "root-1".to_string(),
             revocation_observations,
         };
+        let policy_quote_signature = attest_policy_quote(&mut policy, &policy_quote);
 
         let request = UnifiedReceiptVerificationRequest {
             trace_id: "trace-verify-01".to_string(),
@@ -1433,6 +1485,7 @@ mod tests {
             attestation: AttestationLayerInput {
                 attestation_quote,
                 policy_quote,
+                policy_quote_signature,
                 policy,
                 decision_impact: DecisionImpact::HighImpact,
                 runtime_epoch: SecurityEpoch::from_raw(5),

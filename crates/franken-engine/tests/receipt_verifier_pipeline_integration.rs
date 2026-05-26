@@ -411,6 +411,27 @@ fn sample_policy(
 }
 
 /// Build a fully valid verification request that passes all three layers.
+/// Inject a real Ed25519 trust anchor for `quote`'s trust root into `policy`
+/// and return a detached signature over the quote's signing preimage, so the
+/// pipeline's `verify_quote_attestation` crypto binding accepts the quote.
+/// (bd-bg9l1.26)
+fn attest_policy_quote(
+    policy: &mut TeeAttestationPolicy,
+    quote: &frankenengine_engine::tee_attestation_policy::AttestationQuote,
+) -> Signature {
+    let signing_key = SigningKey::from_bytes([0x5a; 32]).expect("policy anchor signing key");
+    let anchor = format!(
+        "-----BEGIN FRANKENENGINE TRUST ANCHOR-----\n{}\n-----END FRANKENENGINE TRUST ANCHOR-----",
+        hex::encode(signing_key.verification_key().as_bytes())
+    );
+    for root in &mut policy.platform_trust_roots {
+        if root.platform == quote.platform && root.root_id == quote.trust_root_id {
+            root.trust_anchor_pem = anchor.clone();
+        }
+    }
+    sign_preimage(&signing_key, &quote.signing_preimage()).expect("sign policy quote preimage")
+}
+
 fn build_valid_fixture() -> (String, UnifiedReceiptVerificationRequest) {
     let receipt_id = "rcpt-001".to_string();
     let signer_key_id = EngineObjectId([0x44; 32]);
@@ -508,7 +529,7 @@ fn build_valid_fixture() -> (String, UnifiedReceiptVerificationRequest) {
     };
 
     let measurement_digest_hex = measurement.composite_hash().to_hex();
-    let policy = sample_policy(SecurityEpoch::from_raw(5), measurement_digest_hex, "root-1");
+    let mut policy = sample_policy(SecurityEpoch::from_raw(5), measurement_digest_hex, "root-1");
 
     let mut revocation_observations = BTreeMap::new();
     revocation_observations.insert("intel_pcs".to_string(), RevocationProbeStatus::Good);
@@ -523,6 +544,7 @@ fn build_valid_fixture() -> (String, UnifiedReceiptVerificationRequest) {
         trust_root_id: "root-1".to_string(),
         revocation_observations,
     };
+    let policy_quote_signature = attest_policy_quote(&mut policy, &policy_quote);
 
     let request = UnifiedReceiptVerificationRequest {
         trace_id: "trace-verify-01".to_string(),
@@ -559,6 +581,7 @@ fn build_valid_fixture() -> (String, UnifiedReceiptVerificationRequest) {
         attestation: AttestationLayerInput {
             attestation_quote: cell_attestation_quote,
             policy_quote,
+            policy_quote_signature,
             policy,
             decision_impact: DecisionImpact::HighImpact,
             runtime_epoch: SecurityEpoch::from_raw(5),
@@ -622,6 +645,91 @@ fn valid_request_logs_have_correct_trace_ids() {
         assert_eq!(log.decision_id, "decision-verify-01");
         assert_eq!(log.policy_id, "policy-verify-01");
     }
+}
+
+// ── Attestation layer: policy-quote signature binding (bd-bg9l1.26) ──────
+
+#[test]
+fn forged_policy_quote_signature_fails_attestation_layer() {
+    let (receipt_id, mut request) = build_valid_fixture();
+
+    // The fixture is structurally valid AND correctly signed: it passes.
+    let baseline = verify_receipt_request(&receipt_id, &request);
+    assert!(
+        baseline.passed,
+        "baseline fixture must pass before tampering: {:?}",
+        baseline.attestation
+    );
+
+    // Re-sign the (unchanged, structurally-approved) policy quote with a key that
+    // is NOT the configured trust anchor. Every structural check still passes —
+    // the quote names an approved measurement and a known trust root — so only the
+    // cryptographic binding can catch this forgery. It must fail closed.
+    let forging_key = SigningKey::from_bytes([0x99; 32]).expect("forging key");
+    request.attestation.policy_quote_signature = sign_preimage(
+        &forging_key,
+        &request.attestation.policy_quote.signing_preimage(),
+    )
+    .expect("forge policy-quote signature");
+
+    let verdict = verify_receipt_request(&receipt_id, &request);
+
+    assert!(
+        !verdict.passed,
+        "a policy quote whose signature does not verify under the trust anchor must be rejected"
+    );
+    assert_eq!(
+        verdict.failure_class,
+        Some(VerificationFailureClass::Attestation)
+    );
+    assert_eq!(verdict.exit_code, EXIT_CODE_ATTESTATION_FAILURE);
+
+    // The structural policy evaluation still passes — proving the rejection comes
+    // *only* from the new cryptographic binding, not from any structural check.
+    assert!(
+        verdict
+            .attestation
+            .checks
+            .iter()
+            .any(|c| c.check == "policy_quote_evaluation_passes" && c.outcome == "pass"),
+        "structural policy evaluation should still pass for a structurally-valid forged quote"
+    );
+    // ...and the signature-binding check is the one that fails closed.
+    assert!(
+        verdict
+            .attestation
+            .checks
+            .iter()
+            .any(|c| c.check == "policy_quote_signature_verifies" && c.outcome == "fail"),
+        "the policy_quote_signature_verifies check must fail for a forged signature"
+    );
+}
+
+#[test]
+fn unsigned_sentinel_policy_quote_signature_fails_attestation_layer() {
+    let (receipt_id, mut request) = build_valid_fixture();
+    // The all-zero sentinel signature represents "unsigned"; the attested path
+    // must never admit it.
+    request.attestation.policy_quote_signature = Signature::from_bytes([0u8; 64]);
+
+    let verdict = verify_receipt_request(&receipt_id, &request);
+
+    assert!(
+        !verdict.passed,
+        "an unsigned (sentinel) policy-quote signature must be rejected"
+    );
+    assert_eq!(
+        verdict.failure_class,
+        Some(VerificationFailureClass::Attestation)
+    );
+    assert!(
+        verdict
+            .attestation
+            .checks
+            .iter()
+            .any(|c| c.check == "policy_quote_signature_verifies" && c.outcome == "fail"),
+        "the policy_quote_signature_verifies check must fail for the unsigned sentinel"
+    );
 }
 
 // ── Signature layer failures ────────────────────────────────────────────

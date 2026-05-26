@@ -1996,6 +1996,12 @@ pub struct ExecutionResult {
     pub console_output: Vec<ConsoleEntry>,
     /// Replay-visible iterator protocol traces emitted by production execution.
     pub iteration_traces: Vec<IterationTrace>,
+    /// Nondeterminism trace captured during this execution, finalised and ready
+    /// for deterministic replay via [`crate::deterministic_replay::ReplayEngine`].
+    /// Records every nondeterministic decision (security violations, stack-limit
+    /// enforcement, array-cache invalidation, property/prototype resolution) in
+    /// capture order so callers can replay or cross-validate the run.
+    pub nondeterminism_trace: NondeterminismTrace,
 }
 
 // ExecutionSeed moved to line 2266 as an enum for lazy materialization (PERF-H2.2)
@@ -2825,6 +2831,11 @@ impl InterpreterCore {
         value: Value,
         requested_hook_action: Option<HookAction>,
     ) -> ExecutionResult {
+        // Finalise the nondeterminism trace at the end-of-execution virtual
+        // timestamp so the exposed copy is replay-ready: `validate_for_replay`
+        // and `ReplayEngine` both require a finalised trace.
+        self.nondeterminism_trace
+            .finalise(self.instructions_executed);
         ExecutionResult {
             value,
             instructions_executed: self.instructions_executed,
@@ -2834,6 +2845,7 @@ impl InterpreterCore {
             events: std::mem::take(&mut self.events),
             console_output: std::mem::take(&mut self.console_output),
             iteration_traces: std::mem::take(&mut self.iteration_traces),
+            nondeterminism_trace: self.nondeterminism_trace.clone(),
         }
     }
 

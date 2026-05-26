@@ -287,20 +287,59 @@ impl FullIrValidationContext {
             && result.statement_validation_successful
             && result.global_invariants_maintained;
 
-        // End-to-end semantic equivalence
+        // Structural end-to-end translation-validation verdict: every step is
+        // backed by a well-formed proof-obligation set and coverage spans all
+        // IR levels and feature classes. This certifies the obligation graph is
+        // complete and well formed, NOT a runtime-observed execution
+        // equivalence — no program is parsed or executed here.
         result.semantic_equivalence_end_to_end =
             result.pipeline_validation_successful && result.complete_coverage_achieved;
 
         result
     }
 
-    /// Validate a single transformation step.
+    /// Validate a single transformation step's structural translation obligations.
+    ///
+    /// This is a *structural* translation-validation check, not a runtime,
+    /// execution-based semantic-equivalence proof: it does not parse or execute
+    /// the program. A step is accepted only when it actually rewrites the
+    /// program (`source_representation != target_representation`) across a
+    /// genuine IR level transition and is backed by at least one *well-formed*
+    /// validation lemma — i.e. a lemma that maps a non-empty set of source
+    /// nodes to a non-empty set of target nodes, states an invariant, and
+    /// discharges at least one proof obligation whose premise and conclusion are
+    /// both stated. An unproven step (no lemmas) or one carrying vacuous lemmas
+    /// (no node mapping, blank invariant, or empty/blank obligations) is
+    /// rejected rather than rubber-stamped.
     fn validate_transformation_step(&self, step: &IrTransformationStep) -> bool {
-        // Simplified validation - in reality would invoke formal verification tools
-        !step.source_representation.is_empty()
-            && !step.target_representation.is_empty()
-            && step.source_level != step.target_level
-            && !step.validation_lemmas.is_empty()
+        // A real transformation must rewrite the representation across a genuine
+        // IR level transition; a no-op relabel or same-level "transition" is not
+        // a transformation worth proving.
+        if step.source_representation.is_empty()
+            || step.target_representation.is_empty()
+            || step.source_representation == step.target_representation
+            || step.source_level == step.target_level
+        {
+            return false;
+        }
+        // It must be backed by at least one validation lemma, and every lemma
+        // must be well formed: map a non-empty source-node set to a non-empty
+        // target-node set, state an invariant, and discharge at least one proof
+        // obligation whose premise and conclusion are both stated. This rejects
+        // vacuous "proofs" that assert nothing relating source to target.
+        if step.validation_lemmas.is_empty() {
+            return false;
+        }
+        step.validation_lemmas.iter().all(|lemma| {
+            !lemma.source_nodes.is_empty()
+                && !lemma.target_nodes.is_empty()
+                && !lemma.invariant.trim().is_empty()
+                && !lemma.proof_obligations.is_empty()
+                && lemma
+                    .proof_obligations
+                    .iter()
+                    .all(|ob| !ob.premise.trim().is_empty() && !ob.conclusion.trim().is_empty())
+        })
     }
 
     /// Validate expression semantics (G.4 coverage).
@@ -1349,6 +1388,26 @@ pub fn generate_feature_programs() -> Vec<FeatureWitness> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::statement_translation_validator::LemmaType;
+
+    /// Build a minimal *well-formed* validation lemma so a transformation step
+    /// passes [`FullIrValidationContext::validate_transformation_step`]: it maps
+    /// real source/target nodes and discharges a stated proof obligation.
+    fn well_formed_lemma(id: &str) -> ValidationLemma {
+        ValidationLemma {
+            lemma_id: id.to_string(),
+            lemma_type: LemmaType::ControlFlowPreservation,
+            source_nodes: BTreeSet::from([0, 1]),
+            target_nodes: BTreeSet::from([0, 1]),
+            invariant: format!("{id} preserves observable semantics"),
+            proof_obligations: vec![ProofObligation {
+                obligation_id: format!("{id}_equiv"),
+                premise: "source-level semantics".to_string(),
+                conclusion: "target-level semantics".to_string(),
+                verification_method: VerificationMethod::SymbolicExecution,
+            }],
+        }
+    }
 
     #[test]
     fn full_ir_validation_context_creation() {
@@ -1425,7 +1484,7 @@ mod tests {
                 transformation_name: "scope_resolution".to_string(),
                 source_representation: "AST".to_string(),
                 target_representation: "Scoped IR".to_string(),
-                validation_lemmas: vec![], // Would contain actual lemmas
+                validation_lemmas: vec![well_formed_lemma("scope_resolution")],
             },
             IrTransformationStep {
                 source_level: IrLevel::IR1,
@@ -1433,7 +1492,7 @@ mod tests {
                 transformation_name: "capability_annotation".to_string(),
                 source_representation: "Scoped IR".to_string(),
                 target_representation: "IFC-annotated IR".to_string(),
-                validation_lemmas: vec![],
+                validation_lemmas: vec![well_formed_lemma("capability_annotation")],
             },
             IrTransformationStep {
                 source_level: IrLevel::IR2,
@@ -1441,7 +1500,7 @@ mod tests {
                 transformation_name: "instruction_lowering".to_string(),
                 source_representation: "IFC IR".to_string(),
                 target_representation: "Flat instructions".to_string(),
-                validation_lemmas: vec![],
+                validation_lemmas: vec![well_formed_lemma("instruction_lowering")],
             },
         ];
 

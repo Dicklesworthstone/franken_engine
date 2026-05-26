@@ -152,9 +152,9 @@ fn valid_attestation_policy() -> TeeAttestationPolicy {
         platform_trust_roots,
     };
 
-    policy
-        .validate()
-        .expect("integration-test attestation policy must satisfy TeeAttestationPolicy::validate()");
+    policy.validate().expect(
+        "integration-test attestation policy must satisfy TeeAttestationPolicy::validate()",
+    );
     policy
 }
 

@@ -60,12 +60,12 @@ Operator workflow, failure triage, and comparison steps live in
 | `FE-CLAIM-013` | replay | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:60` | `observed` | allow observed replay coverage gate plus byte-identical fixed-input CLI artifact proof | `bd-2488a` |
 | `FE-CLAIM-014` | capability | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:61` | `observed` | three named production feature proof bundles ship (IFC declassification, deterministic replay, red-team compromise rate) — F.5 gate `scripts/run_rgc_production_feature_catalog.sh` validates all three with per-feature sha256 manifest hashes | `bd-cixqu.6.6` |
 | `FE-CLAIM-015` | ifc | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:96` | `observed` | allow observed IFC with signed declassification receipts | `bd-dpfvh` |
-| `FE-CLAIM-016` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:50` | `hypothesis` | downgrade until formal mathematical specification exists | `bd-csnqb` |
-| `FE-CLAIM-017` | compiler | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:593` | `hypothesis` | downgrade until proof-carrying compilation artifacts exist | `bd-csnqb` |
-| `FE-CLAIM-018` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:611` | `hypothesis` | downgrade until formal policy semantics proofs exist | `bd-csnqb` |
-| `FE-CLAIM-019` | optimization | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:636` | `hypothesis` | downgrade until isomorphism equivalence proofs exist | `bd-csnqb` |
-| `FE-CLAIM-020` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:744` | `hypothesis` | downgrade until theorem-backed compiler exists | `bd-csnqb` |
-| `FE-CLAIM-021` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:828-898` | `hypothesis` | downgrade until Policy Theorem Engine with formal verification exists | `bd-csnqb` |
+| `FE-CLAIM-016` | security | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:50` | `hypothesis` | STAY_HYPOTHESIS (G.10): real Lean 4 proofs exist under `proofs/lean4/` but are unwired to the G.9 bundle (no `lake`/`lean` here, no `.proof.json` emitter) | `bd-csnqb` |
+| `FE-CLAIM-017` | compiler | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:593` | `hypothesis` | STAY_HYPOTHESIS (G.10): G.6 differential translation validators run and reject semantics-breaking transforms but emit no `.proof.json` witness | `bd-csnqb` |
+| `FE-CLAIM-018` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:611` | `hypothesis` | STAY_HYPOTHESIS (G.10): `policy_theorem_engine.rs` SMT verification is simulated (string-matched, no Z3/CVC5/Yices) | `bd-csnqb` |
+| `FE-CLAIM-019` | optimization | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:636` | `hypothesis` | STAY_HYPOTHESIS (G.10): `optimization_proof_carriers.rs` returns Verified unconditionally — no real model checker or differential oracle | `bd-csnqb` |
+| `FE-CLAIM-020` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:744` | `hypothesis` | STAY_HYPOTHESIS (G.10): end-to-end compiler composes 018/019/021 and inherits their simulated verdicts | `bd-csnqb` |
+| `FE-CLAIM-021` | policy | `docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md:828-898` | `hypothesis` | STAY_HYPOTHESIS (G.10): Policy Theorem Engine monotonicity/non-interference/attenuation checks are simulated, not solver-backed | `bd-csnqb` |
 | `FE-CLAIM-024` | integration | `README.md:2027` | `observed` | sibling-repo integration verification across all 6 declared siblings (bd-cixqu.13.1 full-integration lane records pass/skipped/failed per sibling) | `bd-cixqu.13.3` |
 
 ## Failure Output

@@ -306,7 +306,7 @@
       "downgrade_text": "Hypothesis: security decisions may use mathematically explicit specifications after formal modeling artifacts land.",
       "freshness_days": null,
       "owning_bead": "bd-csnqb",
-      "reason": "No formal mathematical specification or proof artifacts exist for security decision algorithms.",
+      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): real Lean 4 proofs exist under proofs/lean4/ (IFCLatticeSpecification, IFCLatticeIsomorphism, CapabilityAlgebraSpecification, CapabilityAlgebraIsomorphism) but are not wired to the G.9 proof bundle — no lake/lean toolchain runs here and nothing emits a .proof.json from a successful 'lake build'. Promotion to observed is deferred to bd-cixqu.7.17.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 50,
@@ -326,7 +326,7 @@
       "downgrade_text": "Hypothesis: compilation may include proof-carrying contracts after formal verification infrastructure lands.",
       "freshness_days": null,
       "owning_bead": "bd-csnqb",
-      "reason": "No formal proof-carrying code implementation or verification artifacts exist.",
+      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): the G.6 differential translation validators (exception/iterator/hostcall/async/generator/ifc-label/full-ir) run real abstract interpreters that reject semantics-breaking transforms, but emit no .proof.json into the G.9 bundle, so no machine-checkable witness is re-runnable today. Promotion to observed is deferred to bd-cixqu.7.17.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 593,
@@ -346,7 +346,7 @@
       "downgrade_text": "Hypothesis: policy evaluation may include formal semantics and mathematical proofs after specification artifacts land.",
       "freshness_days": null,
       "owning_bead": "bd-csnqb",
-      "reason": "No formal semantics specification or mathematical proofs for policy operations exist.",
+      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): policy_theorem_engine.rs::verify_single_theorem simulates SMT verification by string-matching the formula ('forall' / 'not (influences' / 'not (exists') — no Z3/CVC5/Yices is invoked and the default backend is SmtSolver::Internal, so the Proven verdict is not real evidence. Promotion to observed is deferred to bd-cixqu.7.17.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 611,
@@ -366,7 +366,7 @@
       "downgrade_text": "Hypothesis: optimization fast paths may include mathematical equivalence proofs after formal verification artifacts land.",
       "freshness_days": null,
       "owning_bead": "bd-csnqb",
-      "reason": "No mathematical isomorphism proofs or equivalence verification artifacts exist.",
+      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): optimization_proof_carriers.rs::verify_proof_obligation simulates verification — every VerificationMethod arm (ModelChecking, TheoremProving, SymbolicExecution, PropertyTesting, DifferentialTesting) returns Verified once premise/conclusion are non-empty, with no real model checker or differential oracle invoked. Promotion to observed is deferred to bd-cixqu.7.17.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 636,
@@ -386,7 +386,7 @@
       "downgrade_text": "Hypothesis: policy compilation may use theorem-backed approaches after formal theorem artifacts land.",
       "freshness_days": null,
       "owning_bead": "bd-csnqb",
-      "reason": "No formal theorems or theorem-backed compilation implementation exists.",
+      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): the end-to-end theorem-backed compiler composes FE-CLAIM-018/019/021 and therefore inherits their simulated verdicts (string-matched SMT and unconditional optimization equivalence). No live theorem proof is emitted. Promotion to observed is deferred to bd-cixqu.7.17.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 744,
@@ -406,7 +406,7 @@
       "downgrade_text": "Hypothesis: policy evaluation may include a theorem engine after formal verification infrastructure lands.",
       "freshness_days": null,
       "owning_bead": "bd-csnqb",
-      "reason": "No formal theorem engine implementation or theorem validation artifacts exist.",
+      "reason": "STAY_HYPOTHESIS (G.10, docs/operator-gates/FE_CLAIM_016_021_PROMOTION_DECISION.md): the Policy Theorem Engine monotonicity / non-interference / attenuation checks are simulated by policy_theorem_engine.rs (string-matched SMT formulas, not a real solver), so the theorem verdicts are not machine-checked evidence. Promotion to observed is deferred to bd-cixqu.7.17.",
       "source_path": "docs/plans/PLAN_TO_CREATE_FRANKEN_ENGINE.md",
       "source_span": {
         "end_line": 898,

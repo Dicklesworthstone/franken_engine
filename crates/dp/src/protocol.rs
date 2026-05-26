@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Core protocol implementation for secure aggregation
 
-use crate::{participant::ParticipantId, Result, SecureAggregationError};
+use crate::{Result, SecureAggregationError, participant::ParticipantId};
 use serde::{Deserialize, Serialize};
 
 /// Phases of the secure aggregation protocol
@@ -170,11 +170,17 @@ impl AggregationProtocol {
         Ok(result)
     }
 
-    /// Check if the protocol can handle participant dropout
+    /// Check if the protocol can handle participant dropout.
+    ///
+    /// Returns `false` when `active_participants` is already below the required
+    /// minimum (previously `saturating_sub` clamped the underflow to `0`, which
+    /// made the predicate spuriously report that a sub-minimum round was still
+    /// recoverable). The headroom `active - min` must additionally be within the
+    /// configured dropout threshold.
     pub fn can_handle_dropouts(&self, active_participants: usize) -> bool {
-        let max_dropouts =
-            active_participants.saturating_sub(self.security_params.min_participants);
-        max_dropouts <= self.security_params.dropout_threshold
+        let min = self.security_params.min_participants;
+        active_participants >= min
+            && (active_participants - min) <= self.security_params.dropout_threshold
     }
 
     /// Transition to the next round of the protocol

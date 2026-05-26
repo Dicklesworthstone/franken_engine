@@ -19,6 +19,7 @@
         "k": 8
       }
     ],
+    "honest_majority_min_participants": 3,
     "dropout_policy": "fail_closed_reject",
     "malicious_peer_policy": "fail_closed_reject"
   },
@@ -29,5 +30,21 @@
     "receipt_type": "SecureAggregationRoundReceipt",
     "mask_domain": "FrankenEngine.SecureAggregationMask.v1",
     "receipt_domain": "FrankenEngine.SecureAggregationReceipt.v1"
+  },
+  "protocol_module": {
+    "comment": "QQ.2 protocol orchestration. Wraps the vetted /dp/ sibling crate (Bonawitz 2017 primitive, T.3 / bd-cixqu.20.3) rather than inlining ad-hoc crypto.",
+    "rust_surface": "crates/franken-engine/src/secure_aggregation.rs",
+    "primitive_crate": "crates/dp",
+    "round_coordinator_type": "SecureAggregationRound",
+    "peer_input_type": "PeerInput",
+    "outcome_type": "SecureAggregationOutcome",
+    "reject_reason_type": "SecureAggregationReject",
+    "collusion_threshold_fn": "collusion_threshold_k",
+    "event_type": "SecureAggregationEvent",
+    "event_kinds": [
+      "secure_aggregation_round_aggregated",
+      "secure_aggregation_round_rejected"
+    ],
+    "events_sink": "events.jsonl"
   }
 }

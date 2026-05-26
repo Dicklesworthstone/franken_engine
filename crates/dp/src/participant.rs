@@ -111,7 +111,7 @@ impl Participant {
             let share = SecretShare {
                 recipient: other_id.clone(),
                 share_values: share_values.clone(),
-                share_hash: self.compute_share_hash(&share_values),
+                share_hash: Self::compute_share_hash(other_id, &share_values),
             };
 
             self.generated_shares
@@ -134,8 +134,9 @@ impl Participant {
             return Err(SecureAggregationError::InvalidShare);
         }
 
-        // Verify the share hash
-        let computed_hash = self.compute_share_hash(&share.share_values);
+        // Verify the share hash (keyed on the recipient, which is `self.id`
+        // here since we checked `share.recipient == self.id` above).
+        let computed_hash = Self::compute_share_hash(&self.id, &share.share_values);
         if computed_hash != share.share_hash {
             return Err(SecureAggregationError::InvalidShare);
         }
@@ -259,10 +260,17 @@ impl Participant {
         Ok(share_values)
     }
 
-    /// Compute hash of share values for integrity verification
-    fn compute_share_hash(&self, share_values: &[i64]) -> Vec<u8> {
+    /// Compute hash of share values for integrity verification.
+    ///
+    /// The hash is keyed on the share's *recipient* identity (a value both the
+    /// generating peer and the receiving peer agree on) rather than the local
+    /// `self.id`. Keying on `self.id` was a latent bug: the generator hashed
+    /// with the sender's id while the receiver re-derived with its own id, so
+    /// every legitimately exchanged share was rejected as `InvalidShare` and
+    /// the Bonawitz pairwise-mask round-trip could never complete.
+    fn compute_share_hash(recipient: &ParticipantId, share_values: &[i64]) -> Vec<u8> {
         let mut hasher = Sha256::new();
-        hasher.update(self.id.as_str());
+        hasher.update(recipient.as_str());
         for &value in share_values {
             hasher.update(&value.to_le_bytes());
         }
@@ -357,7 +365,7 @@ mod tests {
         let dummy_share = SecretShare {
             recipient: alice.id.clone(),
             share_values: vec![10, 20, 30],
-            share_hash: alice.compute_share_hash(&[10, 20, 30]),
+            share_hash: Participant::compute_share_hash(&alice.id, &[10, 20, 30]),
         };
         alice
             .receive_secret_share(ParticipantId("bob".into()), dummy_share)

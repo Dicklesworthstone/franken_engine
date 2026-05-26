@@ -249,6 +249,10 @@ fp-frame = { path = "/dp/frankenpandas/crates/fp-frame" }
 fp-columnar = { path = "/dp/frankenpandas/crates/fp-columnar" }
 fp-index = { path = "/dp/frankenpandas/crates/fp-index" }
 fp-types = { path = "/dp/frankenpandas/crates/fp-types" }
+# Bonawitz 2017 secure aggregation primitive (T.3). The QQ.2 protocol module
+# (`secure_aggregation.rs`) wraps this vetted sibling crate rather than inlining
+# ad-hoc cryptography.
+dp = { path = "../dp" }
 
 [dev-dependencies]
 proptest = "1.6"

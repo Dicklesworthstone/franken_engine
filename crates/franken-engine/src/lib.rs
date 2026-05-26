@@ -170,6 +170,7 @@ pub mod evidence_emission;
 pub mod evidence_ledger;
 pub mod evidence_ordering;
 pub mod evidence_replay_checker;
+pub mod exception_translation_validator;
 pub mod execution_cell;
 pub mod execution_orchestrator;
 pub mod expected_info_value_scoring;

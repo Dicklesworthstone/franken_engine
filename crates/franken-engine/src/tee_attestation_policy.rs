@@ -22,7 +22,8 @@ use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 use crate::signature_preimage::{
-    SIGNATURE_SENTINEL, Signature, SigningKey, VerificationKey, sign_preimage, verify_signature,
+    SIGNATURE_SENTINEL, Signature, SigningKey, VERIFICATION_KEY_LEN, VerificationKey,
+    sign_preimage, verify_signature,
 };
 
 const TEE_ATTESTATION_POLICY_SCHEMA_DEF: &[u8] = b"FrankenEngine.TeeAttestationPolicy.v1";
@@ -30,6 +31,10 @@ const TRUST_ROOT_OVERRIDE_ARTIFACT_SCHEMA_DEF: &[u8] =
     b"FrankenEngine.TrustRootOverrideArtifact.v1";
 const POLICY_ZONE: &str = "tee-attestation";
 const COMPONENT_NAME: &str = "tee_attestation_policy";
+/// Domain separator for the detached signature an attesting TEE produces over
+/// the identity-bearing fields of an [`AttestationQuote`]. Bound into the
+/// preimage so a signature is never valid outside this exact context.
+const QUOTE_SIGNATURE_DOMAIN: &[u8] = b"FrankenEngine.AttestationQuote.Signature.v1";
 
 fn tee_attestation_policy_schema_id() -> SchemaId {
     SchemaId::from_definition(TEE_ATTESTATION_POLICY_SCHEMA_DEF)
@@ -349,6 +354,49 @@ impl PlatformTrustRoot {
             None => true,
         }
     }
+
+    /// Extract the Ed25519 verification key carried by this trust anchor.
+    ///
+    /// `trust_anchor_pem` is treated as a PEM-armored container whose body is
+    /// the hex-encoded 32-byte raw Ed25519 public key (FrankenEngine trust-anchor
+    /// encoding). Armor lines (`-----BEGIN ...-----` / `-----END ...-----`) and
+    /// all whitespace are stripped before decoding. Fail-closed: any anchor that
+    /// does not decode to a valid key is rejected so a forged or malformed anchor
+    /// can never be silently treated as trusted.
+    pub fn anchor_verification_key(&self) -> Result<VerificationKey, TeeAttestationPolicyError> {
+        let body: String = self
+            .trust_anchor_pem
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("-----"))
+            .flat_map(|line| line.chars().filter(|c| !c.is_whitespace()))
+            .collect();
+        if body.is_empty() {
+            return Err(TeeAttestationPolicyError::TrustRootAnchorUnusable {
+                root_id: self.root_id.clone(),
+                detail: "trust anchor contains no key material".to_string(),
+            });
+        }
+        let raw =
+            hex::decode(&body).map_err(|e| TeeAttestationPolicyError::TrustRootAnchorUnusable {
+                root_id: self.root_id.clone(),
+                detail: format!("trust anchor is not hex-encoded key material: {e}"),
+            })?;
+        let bytes: [u8; VERIFICATION_KEY_LEN] = raw.as_slice().try_into().map_err(|_| {
+            TeeAttestationPolicyError::TrustRootAnchorUnusable {
+                root_id: self.root_id.clone(),
+                detail: format!(
+                    "trust anchor key must be {VERIFICATION_KEY_LEN} bytes, got {}",
+                    raw.len()
+                ),
+            }
+        })?;
+        VerificationKey::from_bytes(bytes).map_err(|e| {
+            TeeAttestationPolicyError::TrustRootAnchorUnusable {
+                root_id: self.root_id.clone(),
+                detail: format!("invalid Ed25519 verification key: {e:?}"),
+            }
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +624,70 @@ impl TeeAttestationPolicy {
         }
     }
 
+    /// Cryptographically verify a detached quote signature against the trust
+    /// anchor configured for the quote's claimed trust root.
+    ///
+    /// This is the cryptographic binding [`Self::evaluate_quote`] deliberately
+    /// does **not** perform: `evaluate_quote` only checks that the quote *names*
+    /// an approved measurement and a known trust root, so a forged quote that
+    /// echoes an approved digest and a known `trust_root_id` would otherwise pass
+    /// every structural check. Here the signature must verify under the Ed25519
+    /// public key extracted from the trust anchor, over the quote's
+    /// [`AttestationQuote::signing_preimage`]. Fail-closed on every path: unknown
+    /// root, expired root, unusable anchor, unsigned sentinel, or a signature that
+    /// does not verify.
+    pub fn verify_quote_attestation(
+        &self,
+        quote: &AttestationQuote,
+        signature: &Signature,
+        runtime_epoch: SecurityEpoch,
+    ) -> Result<(), TeeAttestationPolicyError> {
+        let root = self
+            .platform_trust_roots
+            .iter()
+            .find(|root| root.platform == quote.platform && root.root_id == quote.trust_root_id)
+            .ok_or_else(|| TeeAttestationPolicyError::UnknownTrustRoot {
+                platform: quote.platform,
+                root_id: quote.trust_root_id.clone(),
+            })?;
+        if !root.active_at_epoch(runtime_epoch) {
+            return Err(TeeAttestationPolicyError::ExpiredTrustRoot {
+                root_id: root.root_id.clone(),
+                runtime_epoch,
+                valid_until_epoch: root.valid_until_epoch,
+            });
+        }
+        if signature.is_sentinel() {
+            return Err(TeeAttestationPolicyError::QuoteSignatureInvalid {
+                trust_root_id: root.root_id.clone(),
+                detail: "quote carries the unsigned sentinel signature".to_string(),
+            });
+        }
+        let verification_key = root.anchor_verification_key()?;
+        verify_signature(&verification_key, &quote.signing_preimage(), signature).map_err(|e| {
+            TeeAttestationPolicyError::QuoteSignatureInvalid {
+                trust_root_id: root.root_id.clone(),
+                detail: format!("{e:?}"),
+            }
+        })
+    }
+
+    /// Full fail-closed admission: run every structural policy check **and**
+    /// cryptographically bind the quote to its trust anchor.
+    ///
+    /// Real callers that admit a quote should prefer this over
+    /// [`Self::evaluate_quote`], which performs no cryptographic verification.
+    pub fn evaluate_quote_attested(
+        &self,
+        quote: &AttestationQuote,
+        signature: &Signature,
+        impact: DecisionImpact,
+        runtime_epoch: SecurityEpoch,
+    ) -> Result<(), TeeAttestationPolicyError> {
+        self.evaluate_quote(quote, impact, runtime_epoch)?;
+        self.verify_quote_attestation(quote, signature, runtime_epoch)
+    }
+
     fn canonicalize_in_place(&mut self) {
         for measurements in self.approved_measurements.values_mut() {
             for digest in measurements.iter_mut() {
@@ -654,6 +766,37 @@ pub struct AttestationQuote {
     pub quote_age_secs: u64,
     pub trust_root_id: String,
     pub revocation_observations: BTreeMap<String, RevocationProbeStatus>,
+}
+
+impl AttestationQuote {
+    /// Deterministic, collision-resistant preimage an attesting TEE signs.
+    ///
+    /// Covers only the identity-bearing fields the platform actually attests —
+    /// platform, measurement (algorithm + digest), and the trust root the quote
+    /// claims. Runtime-derived fields (`quote_age_secs`, `revocation_observations`)
+    /// are intentionally excluded: they are verifier-side observations, not part
+    /// of what the enclave signs. Every variable-length field is length-prefixed
+    /// so no field boundary can be forged by shifting bytes between fields.
+    pub fn signing_preimage(&self) -> Vec<u8> {
+        fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+            buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+            buf.extend_from_slice(bytes);
+        }
+
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(QUOTE_SIGNATURE_DOMAIN);
+        preimage.push(0xff);
+        preimage.extend_from_slice(self.platform.canonical_tag().as_bytes());
+        preimage.push(0xff);
+        preimage.push(match self.measurement.algorithm {
+            MeasurementAlgorithm::Sha256 => 1,
+            MeasurementAlgorithm::Sha384 => 2,
+            MeasurementAlgorithm::Sha512 => 3,
+        });
+        push_len_prefixed(&mut preimage, self.measurement.digest_hex.as_bytes());
+        push_len_prefixed(&mut preimage, self.trust_root_id.as_bytes());
+        preimage
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,6 +1461,16 @@ pub enum TeeAttestationPolicyError {
         synced_epoch: SecurityEpoch,
         required_epoch: SecurityEpoch,
     },
+    /// The quote's detached signature did not verify against the trust anchor.
+    QuoteSignatureInvalid {
+        trust_root_id: String,
+        detail: String,
+    },
+    /// The configured trust anchor could not be decoded into a usable key.
+    TrustRootAnchorUnusable {
+        root_id: String,
+        detail: String,
+    },
 }
 
 impl TeeAttestationPolicyError {
@@ -1355,6 +1508,8 @@ impl TeeAttestationPolicyError {
             Self::OverrideTargetMismatch { .. } => "tee_policy_override_target_mismatch",
             Self::EmitterNotSynced { .. } => "tee_policy_emitter_not_synced",
             Self::EmitterPolicyStale { .. } => "tee_policy_emitter_stale",
+            Self::QuoteSignatureInvalid { .. } => "tee_policy_quote_signature_invalid",
+            Self::TrustRootAnchorUnusable { .. } => "tee_policy_trust_root_anchor_unusable",
         }
     }
 }
@@ -1490,6 +1645,19 @@ impl fmt::Display for TeeAttestationPolicyError {
                 f,
                 "emitter '{emitter_id}' stale policy epoch: synced={synced_epoch}, required={required_epoch}"
             ),
+            Self::QuoteSignatureInvalid {
+                trust_root_id,
+                detail,
+            } => write!(
+                f,
+                "quote signature verification failed for trust root '{trust_root_id}': {detail}"
+            ),
+            Self::TrustRootAnchorUnusable { root_id, detail } => {
+                write!(
+                    f,
+                    "trust root '{root_id}' has an unusable trust anchor: {detail}"
+                )
+            }
         }
     }
 }
@@ -1851,6 +2019,170 @@ mod tests {
             trust_root_id: "sgx-root-a".to_string(),
             revocation_observations: rev,
         }
+    }
+
+    /// Build a valid SGX quote, a policy whose `sgx-root-a` anchor carries the
+    /// matching Ed25519 public key, and a real detached signature over the
+    /// quote's signing preimage.
+    fn signed_sgx_setup(seed: u8) -> (TeeAttestationPolicy, AttestationQuote, Signature) {
+        let (signing_key, verification_key) =
+            crate::signature_preimage::generate_keypair_from_seed(&[seed; 32]);
+        let mut policy = sample_policy(1);
+        let anchor = format!(
+            "-----BEGIN FRANKENENGINE TRUST ANCHOR-----\n{}\n-----END FRANKENENGINE TRUST ANCHOR-----",
+            hex::encode(verification_key.as_bytes())
+        );
+        for root in &mut policy.platform_trust_roots {
+            if root.root_id == "sgx-root-a" {
+                root.trust_anchor_pem = anchor.clone();
+            }
+        }
+        let quote = quote_for_sgx();
+        let signature =
+            sign_preimage(&signing_key, &quote.signing_preimage()).expect("sign preimage");
+        (policy, quote, signature)
+    }
+
+    #[test]
+    fn verify_quote_attestation_accepts_valid_signature() {
+        let (policy, quote, signature) = signed_sgx_setup(7);
+        policy
+            .verify_quote_attestation(&quote, &signature, SecurityEpoch::from_raw(1))
+            .expect("a signature produced by the trust-anchor key must verify");
+    }
+
+    #[test]
+    fn verify_quote_attestation_rejects_tampered_quote() {
+        let (policy, mut quote, signature) = signed_sgx_setup(7);
+        // Swap in a different (but well-formed) measurement after signing: the
+        // exact forgery the bead describes — an approved-looking digest with no
+        // matching signature.
+        quote.measurement.digest_hex = digest_hex(0x55, 48);
+        let err = policy
+            .verify_quote_attestation(&quote, &signature, SecurityEpoch::from_raw(1))
+            .expect_err("a quote mutated after signing must be rejected");
+        assert!(matches!(
+            err,
+            TeeAttestationPolicyError::QuoteSignatureInvalid { .. }
+        ));
+    }
+
+    #[test]
+    fn verify_quote_attestation_rejects_wrong_key() {
+        let (policy, quote, _signature) = signed_sgx_setup(7);
+        let (other_key, _) = crate::signature_preimage::generate_keypair_from_seed(&[9u8; 32]);
+        let forged =
+            sign_preimage(&other_key, &quote.signing_preimage()).expect("sign with other key");
+        let err = policy
+            .verify_quote_attestation(&quote, &forged, SecurityEpoch::from_raw(1))
+            .expect_err("a signature under a non-anchor key must be rejected");
+        assert!(matches!(
+            err,
+            TeeAttestationPolicyError::QuoteSignatureInvalid { .. }
+        ));
+    }
+
+    #[test]
+    fn verify_quote_attestation_rejects_sentinel_signature() {
+        let (policy, quote, _signature) = signed_sgx_setup(7);
+        let err = policy
+            .verify_quote_attestation(
+                &quote,
+                &Signature::from_bytes(SIGNATURE_SENTINEL),
+                SecurityEpoch::from_raw(1),
+            )
+            .expect_err("the unsigned sentinel signature must be rejected");
+        assert!(matches!(
+            err,
+            TeeAttestationPolicyError::QuoteSignatureInvalid { .. }
+        ));
+    }
+
+    #[test]
+    fn verify_quote_attestation_rejects_unusable_anchor() {
+        // sample_policy's anchors are fake ("-----BEGIN CERT-----SGX-A"): no key
+        // material survives armor-stripping, so verification must fail closed
+        // rather than silently trust a quote.
+        let (signing_key, _) = crate::signature_preimage::generate_keypair_from_seed(&[3u8; 32]);
+        let policy = sample_policy(1);
+        let quote = quote_for_sgx();
+        let signature =
+            sign_preimage(&signing_key, &quote.signing_preimage()).expect("sign preimage");
+        let err = policy
+            .verify_quote_attestation(&quote, &signature, SecurityEpoch::from_raw(1))
+            .expect_err("an anchor with no decodable key must fail closed");
+        assert!(matches!(
+            err,
+            TeeAttestationPolicyError::TrustRootAnchorUnusable { .. }
+        ));
+    }
+
+    #[test]
+    fn verify_quote_attestation_rejects_unknown_trust_root() {
+        let (policy, mut quote, signature) = signed_sgx_setup(7);
+        quote.trust_root_id = "no-such-root".to_string();
+        let err = policy
+            .verify_quote_attestation(&quote, &signature, SecurityEpoch::from_raw(1))
+            .expect_err("an unknown trust root must be rejected");
+        assert!(matches!(
+            err,
+            TeeAttestationPolicyError::UnknownTrustRoot { .. }
+        ));
+    }
+
+    #[test]
+    fn evaluate_quote_attested_accepts_valid_signed_quote() {
+        let (policy, quote, signature) = signed_sgx_setup(7);
+        policy
+            .evaluate_quote_attested(
+                &quote,
+                &signature,
+                DecisionImpact::Standard,
+                SecurityEpoch::from_raw(1),
+            )
+            .expect("a fully valid, correctly signed quote must be admitted");
+    }
+
+    #[test]
+    fn evaluate_quote_attested_rejects_forgery_even_when_policy_passes() {
+        let (policy, quote, _signature) = signed_sgx_setup(7);
+        // Every structural policy check passes for this quote...
+        policy
+            .evaluate_quote(&quote, DecisionImpact::Standard, SecurityEpoch::from_raw(1))
+            .expect("structural policy checks pass for this quote");
+        // ...but the attested path must still fail closed without a valid signature.
+        let err = policy
+            .evaluate_quote_attested(
+                &quote,
+                &Signature::from_bytes(SIGNATURE_SENTINEL),
+                DecisionImpact::Standard,
+                SecurityEpoch::from_raw(1),
+            )
+            .expect_err("attested admission must reject an unsigned quote");
+        assert!(matches!(
+            err,
+            TeeAttestationPolicyError::QuoteSignatureInvalid { .. }
+        ));
+    }
+
+    #[test]
+    fn signing_preimage_binds_identity_fields() {
+        let base = quote_for_sgx();
+        let mut other_root = base.clone();
+        other_root.trust_root_id = "sgx-root-b".to_string();
+        assert_ne!(base.signing_preimage(), other_root.signing_preimage());
+
+        let mut other_measurement = base.clone();
+        other_measurement.measurement.digest_hex = digest_hex(0x66, 48);
+        assert_ne!(
+            base.signing_preimage(),
+            other_measurement.signing_preimage()
+        );
+
+        // Runtime-side fields are deliberately excluded from the signed preimage.
+        let mut other_age = base.clone();
+        other_age.quote_age_secs = base.quote_age_secs + 100;
+        assert_eq!(base.signing_preimage(), other_age.signing_preimage());
     }
 
     #[test]
@@ -4250,7 +4582,10 @@ mod tests {
             );
             // Tag is a 32-byte (SHA-256) HMAC encoded as 64 lowercase hex chars.
             assert_eq!(quote.signature.len(), 64, "HMAC-SHA256 tag is 32 bytes");
-            assert!(is_hex_ascii(&quote.signature), "tag must be hex on {platform:?}");
+            assert!(
+                is_hex_ascii(&quote.signature),
+                "tag must be hex on {platform:?}"
+            );
 
             // Tamper each signed field independently — every mutation rejects.
             let mut bad_measurement = quote.clone();
@@ -4277,7 +4612,9 @@ mod tests {
             // Flip the first hex nibble of the tag.
             let mut bad_tag = quote.clone();
             let first = bad_tag.signature.remove(0);
-            bad_tag.signature.insert(0, if first == '0' { '1' } else { '0' });
+            bad_tag
+                .signature
+                .insert(0, if first == '0' { '1' } else { '0' });
             assert!(
                 !provider.verify_quote(&bad_tag),
                 "tag tamper must be rejected on {platform:?}",

@@ -304,17 +304,56 @@ fn new_target_meta_property_fails_closed_until_supported() {
     assert_eq!(err.message, "new.target meta-property is not supported");
 }
 
-#[cfg(any())]
-mod legacy_private_api_tests {
-    use frankenengine_engine::baseline_interpreter::{
-        InterpreterConfig, InterpreterCore, ObjectId,
-    };
-    use frankenengine_engine::ir_contract::{
-        Ir3FunctionDesc, Ir3Instruction, RegRange, RuntimeCapability, Value,
-    };
-    use std::collections::BTreeMap;
+mod class_runtime_execution_tests {
+    //! Real-source class-feature RUNTIME tests (bd-bg9l1.7).
+    //!
+    //! Replaces the dead `#[cfg(any())] mod legacy_private_api_tests` block, which
+    //! hand-built obsolete IR3 modules against a removed interpreter surface
+    //! (`InterpreterCore::read_reg`, per-function `Ir3FunctionDesc.instructions`) and
+    //! so was never compiled — class-feature *runtime* execution had no live coverage
+    //! here, only lowering.
+    //!
+    //! Each test drives REAL JavaScript class source through the full pipeline
+    //! (parse -> IR0 -> IR1 -> IR2 -> IR3 -> interpreter execution) and asserts on the
+    //! observable `ExecutionResult.value` (the value left in r0 at `Halt`). No mocks,
+    //! no hand-built IR.
+    //!
+    //! Coverage is split into two fail-closed halves:
+    //!   * Positive — class declaration, `new` construction, and a constructor-assigned
+    //!     instance field execute and are observable from the constructed instance.
+    //!   * Boundary — features the engine does NOT yet execute from source are pinned
+    //!     to their current fail-closed errors: `super` (rejected by the parser),
+    //!     static-method access and prototype/instance-method dispatch (the interpreter
+    //!     does not treat function values as property-bearing objects). Constructor
+    //!     *parameter* flow into a field is likewise not yet observable from source.
+    //!     If the engine gains these, the boundary tests break and must be upgraded to
+    //!     positive assertions. Tracked by bd-a7kpw.
 
-    fn quickjs_test_core() -> InterpreterCore {
+    use frankenengine_engine::ast::ParseGoal;
+    use frankenengine_engine::baseline_interpreter::{
+        ExecutionResult, InterpreterConfig, InterpreterCore, Value,
+    };
+    use frankenengine_engine::capability::RuntimeCapability;
+    use frankenengine_engine::ir_contract::Ir0Module;
+    use frankenengine_engine::lowering_pipeline::{
+        lower_ir0_to_ir1, lower_ir1_to_ir2, lower_ir2_to_ir3,
+    };
+    use frankenengine_engine::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+    /// Drive real JS source through the full lowering + execution pipeline.
+    /// Returns the interpreter `ExecutionResult`, or a stage-labelled error string
+    /// (`parse:` / `ir0->ir1:` / ... / `execute:`) so a regression surfaces with its
+    /// failing stage.
+    fn run_source(source: &str) -> Result<ExecutionResult, String> {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse(source, ParseGoal::Script)
+            .map_err(|e| format!("parse: {e:?}"))?;
+        let ir0 = Ir0Module::from_syntax_tree(tree, "class-features-runtime");
+        let ir1 = lower_ir0_to_ir1(&ir0).map_err(|e| format!("ir0->ir1: {e:?}"))?;
+        let ir2 = lower_ir1_to_ir2(&ir1.module).map_err(|e| format!("ir1->ir2: {e:?}"))?;
+        let ir3 = lower_ir2_to_ir3(&ir2.module).map_err(|e| format!("ir2->ir3: {e:?}"))?;
+
         let mut config = InterpreterConfig::quickjs_defaults();
         config
             .granted_capabilities
@@ -322,646 +361,125 @@ mod legacy_private_api_tests {
         config
             .granted_capabilities
             .insert(RuntimeCapability::HeapAllocate);
-        InterpreterCore::new(config, "class-features-test")
+        config
+            .granted_capabilities
+            .insert(RuntimeCapability::Builtin);
+        let mut core = InterpreterCore::new(config, "class-features-runtime");
+        core.execute(&ir3.module)
+            .map_err(|e| format!("execute: {e:?}"))
     }
 
-    fn test_module_with_functions(
-        instructions: Vec<Ir3Instruction>,
-        functions: Vec<Ir3FunctionDesc>,
-    ) -> frankenengine_engine::ir_contract::Ir3Module {
-        use frankenengine_engine::ir_contract::{Ir3Module, IrHeader, IrLevel, IrSchemaVersion};
-
-        Ir3Module {
-            header: IrHeader {
-                schema_version: IrSchemaVersion::CURRENT,
-                level: IrLevel::Ir3,
-                source_hash: None,
-                source_label: "class-features-test".to_string(),
-            },
-            instructions,
-            constant_pool: Vec::new(),
-            function_table: functions,
-            bindings: Vec::new(),
-            debug_info: None,
-        }
+    /// Run source and require successful execution, returning the result.
+    fn run_ok(source: &str) -> ExecutionResult {
+        run_source(source).unwrap_or_else(|e| panic!("class source should execute cleanly: {e}"))
     }
 
-    #[test]
-    fn test_static_method_on_constructor() {
-        let mut core = quickjs_test_core();
-
-        // Test that static methods are properties of the constructor function
-        let module = test_module_with_functions(
-            vec![
-                // Load constructor function
-                Ir3Instruction::LoadConstant {
-                    dst: 0,
-                    value: Value::Function(0), // Constructor
-                },
-                // Load static method
-                Ir3Instruction::LoadConstant {
-                    dst: 1,
-                    value: Value::Function(1), // Static method
-                },
-                // Set static method on constructor
-                Ir3Instruction::SetProperty {
-                    object: 0,
-                    key: "staticMethod".to_string(),
-                    value: 1,
-                },
-                // Call static method
-                Ir3Instruction::GetProperty {
-                    object: 0,
-                    key: "staticMethod".to_string(),
-                    dst: 2,
-                },
-                Ir3Instruction::Call {
-                    callee: 2,
-                    args: RegRange { start: 3, count: 0 },
-                    dst: 3,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec![
-                // Constructor function
-                Ir3FunctionDesc {
-                    id: 0,
-                    name: "TestClass".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::Undefined,
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-                // Static method
-                Ir3FunctionDesc {
-                    id: 1,
-                    name: "staticMethod".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::String("static called".to_string()),
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-            ],
-        );
-
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-
-        // Verify static method was called
-        let static_result = core.read_reg(3).unwrap();
-        match static_result {
-            Value::String(s) if s == "static called" => {
-                // Static method called successfully
-            }
-            _ => panic!(
-                "Static method should return 'static called', got {:?}",
-                static_result
+    /// Run source and require a fail-closed rejection, returning the error string.
+    fn run_err(source: &str) -> String {
+        match run_source(source) {
+            Ok(result) => panic!(
+                "expected a fail-closed rejection, but execution produced {:?}",
+                result.value
             ),
+            Err(err) => err,
         }
     }
 
+    // -- Positive: real class semantics that execute end-to-end --
+
+    /// A class declaration binds a callable constructor at runtime.
     #[test]
-    fn test_private_field_access_pattern() {
-        let mut core = quickjs_test_core();
-
-        // Test private field simulation using closure-based pattern
-        let module = test_module_with_functions(
-            vec![
-                // Create constructor that sets up private fields via closures
-                Ir3Instruction::LoadConstant {
-                    dst: 0,
-                    value: Value::Function(0), // Constructor with private field
-                },
-                // Create instance
-                Ir3Instruction::Construct {
-                    callee: 0,
-                    args: RegRange { start: 1, count: 0 },
-                    dst: 1,
-                },
-                // Try to access private field getter
-                Ir3Instruction::GetProperty {
-                    object: 1,
-                    key: "_getPrivate".to_string(),
-                    dst: 2,
-                },
-                // Call private field getter
-                Ir3Instruction::Call {
-                    callee: 2,
-                    args: RegRange { start: 1, count: 1 }, // Pass this
-                    dst: 3,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec![
-                // Constructor with private field pattern
-                Ir3FunctionDesc {
-                    id: 0,
-                    name: "ClassWithPrivate".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        // Set up "private" field using naming convention
-                        Ir3Instruction::LoadThis { dst: 0 },
-                        Ir3Instruction::LoadConstant {
-                            dst: 1,
-                            value: Value::String("private_value".to_string()),
-                        },
-                        Ir3Instruction::SetProperty {
-                            object: 0,
-                            key: "_privateField".to_string(),
-                            value: 1,
-                        },
-                        // Add getter method for private field
-                        Ir3Instruction::LoadConstant {
-                            dst: 2,
-                            value: Value::Function(1), // Getter function
-                        },
-                        Ir3Instruction::SetProperty {
-                            object: 0,
-                            key: "_getPrivate".to_string(),
-                            value: 2,
-                        },
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::Undefined,
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-                // Private field getter
-                Ir3FunctionDesc {
-                    id: 1,
-                    name: "_getPrivate".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        // Get this from parameter
-                        Ir3Instruction::LoadArg { dst: 0, index: 0 },
-                        // Return private field
-                        Ir3Instruction::GetProperty {
-                            object: 0,
-                            key: "_privateField".to_string(),
-                            dst: 1,
-                        },
-                        Ir3Instruction::Return { value: 1 },
-                    ],
-                },
-            ],
+    fn class_declaration_binds_callable_constructor() {
+        let result = run_ok("class Widget { constructor() {} }\nWidget;\n");
+        assert!(
+            matches!(result.value, Value::Closure(_) | Value::Function(_)),
+            "a class declaration should bind a callable constructor, got {:?}",
+            result.value
         );
-
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-
-        // Verify private field access worked
-        let private_value = core.read_reg(3).unwrap();
-        match private_value {
-            Value::String(s) if s == "private_value" => {
-                // Private field access pattern works
-            }
-            _ => panic!(
-                "Private field should be accessible via getter, got {:?}",
-                private_value
-            ),
-        }
     }
 
+    /// `new C()` allocates and returns a fresh instance object.
     #[test]
-    fn test_super_method_call_inheritance() {
-        let mut core = quickjs_test_core();
-
-        // Test that super.method() calls work correctly
-        let module = test_module_with_functions(
-            vec![
-                // Set up inheritance chain with method override
-                Ir3Instruction::LoadConstant {
-                    dst: 0,
-                    value: Value::Function(0), // Parent with method
-                },
-                Ir3Instruction::LoadConstant {
-                    dst: 1,
-                    value: Value::Function(1), // Child overrides method
-                },
-                // Set up parent method
-                Ir3Instruction::GetProperty {
-                    object: 0,
-                    key: "prototype".to_string(),
-                    dst: 2,
-                },
-                Ir3Instruction::LoadConstant {
-                    dst: 3,
-                    value: Value::Function(2), // Parent method
-                },
-                Ir3Instruction::SetProperty {
-                    object: 2,
-                    key: "testMethod".to_string(),
-                    value: 3,
-                },
-                // Create child instance
-                Ir3Instruction::Construct {
-                    callee: 1,
-                    args: RegRange { start: 4, count: 0 },
-                    dst: 4,
-                },
-                // Call overridden method (which calls super)
-                Ir3Instruction::GetProperty {
-                    object: 4,
-                    key: "testMethod".to_string(),
-                    dst: 5,
-                },
-                Ir3Instruction::Call {
-                    callee: 5,
-                    args: RegRange { start: 4, count: 1 },
-                    dst: 6,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec![
-                // Parent constructor
-                Ir3FunctionDesc {
-                    id: 0,
-                    name: "Parent".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::Undefined,
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-                // Child constructor
-                Ir3FunctionDesc {
-                    id: 1,
-                    name: "Child".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        // Override testMethod
-                        Ir3Instruction::LoadThis { dst: 0 },
-                        Ir3Instruction::LoadConstant {
-                            dst: 1,
-                            value: Value::Function(3), // Child override
-                        },
-                        Ir3Instruction::SetProperty {
-                            object: 0,
-                            key: "testMethod".to_string(),
-                            value: 1,
-                        },
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::Undefined,
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-                // Parent method
-                Ir3FunctionDesc {
-                    id: 2,
-                    name: "parentMethod".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::String("parent_result".to_string()),
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-                // Child method override that calls super
-                Ir3FunctionDesc {
-                    id: 3,
-                    name: "childOverride".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        // Simulate super call by calling parent version
-                        Ir3Instruction::LoadSuper { dst: 0 },
-                        Ir3Instruction::LoadConstant {
-                            dst: 1,
-                            value: Value::String("child_calls_super".to_string()),
-                        },
-                        Ir3Instruction::Return { value: 1 },
-                    ],
-                },
-            ],
+    fn new_expression_constructs_instance_object() {
+        let result = run_ok(concat!(
+            "class Widget { constructor() { this.ready = true; } }\n",
+            "new Widget();\n",
+        ));
+        assert!(
+            matches!(result.value, Value::Object(_)),
+            "`new` should allocate and return an instance object, got {:?}",
+            result.value
         );
-
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-
-        // Verify method override with super call
-        let method_result = core.read_reg(6).unwrap();
-        match method_result {
-            Value::String(s) if s == "child_calls_super" => {
-                // Super method call pattern works
-            }
-            _ => panic!("Child method should call super, got {:?}", method_result),
-        }
     }
 
+    /// The constructor body runs on `new`, and a field it assigns is readable from
+    /// the constructed instance. (This is the runtime substance the old
+    /// `test_private_field_access_pattern` / `test_new_target_in_constructor` /
+    /// `test_constructor_chain_validation` cases were reaching for.)
     #[test]
-    fn test_constructor_chain_validation() {
-        let mut core = quickjs_test_core();
-
-        // Test proper constructor chain with multiple inheritance levels
-        let module = test_module_with_functions(
-            vec![
-                // Create grandparent -> parent -> child hierarchy
-                Ir3Instruction::LoadConstant {
-                    dst: 0,
-                    value: Value::Function(0), // Grandparent
-                },
-                Ir3Instruction::LoadConstant {
-                    dst: 1,
-                    value: Value::Function(1), // Parent extends Grandparent
-                },
-                Ir3Instruction::LoadConstant {
-                    dst: 2,
-                    value: Value::Function(2), // Child extends Parent
-                },
-                // Create child instance
-                Ir3Instruction::Construct {
-                    callee: 2,
-                    args: RegRange { start: 3, count: 0 },
-                    dst: 3,
-                },
-                // Verify constructor chain by checking properties set by each level
-                Ir3Instruction::GetProperty {
-                    object: 3,
-                    key: "grandparentInit".to_string(),
-                    dst: 4,
-                },
-                Ir3Instruction::GetProperty {
-                    object: 3,
-                    key: "parentInit".to_string(),
-                    dst: 5,
-                },
-                Ir3Instruction::GetProperty {
-                    object: 3,
-                    key: "childInit".to_string(),
-                    dst: 6,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec![
-                // Grandparent constructor
-                Ir3FunctionDesc {
-                    id: 0,
-                    name: "Grandparent".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        Ir3Instruction::LoadThis { dst: 0 },
-                        Ir3Instruction::LoadConstant {
-                            dst: 1,
-                            value: Value::Bool(true),
-                        },
-                        Ir3Instruction::SetProperty {
-                            object: 0,
-                            key: "grandparentInit".to_string(),
-                            value: 1,
-                        },
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::Undefined,
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-                // Parent constructor
-                Ir3FunctionDesc {
-                    id: 1,
-                    name: "Parent".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        Ir3Instruction::LoadThis { dst: 0 },
-                        Ir3Instruction::LoadConstant {
-                            dst: 1,
-                            value: Value::Bool(true),
-                        },
-                        Ir3Instruction::SetProperty {
-                            object: 0,
-                            key: "parentInit".to_string(),
-                            value: 1,
-                        },
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::Undefined,
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-                // Child constructor
-                Ir3FunctionDesc {
-                    id: 2,
-                    name: "Child".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        Ir3Instruction::LoadThis { dst: 0 },
-                        Ir3Instruction::LoadConstant {
-                            dst: 1,
-                            value: Value::Bool(true),
-                        },
-                        Ir3Instruction::SetProperty {
-                            object: 0,
-                            key: "childInit".to_string(),
-                            value: 1,
-                        },
-                        // Call parent constructor
-                        Ir3Instruction::LoadConstant {
-                            dst: 2,
-                            value: Value::Function(1),
-                        },
-                        Ir3Instruction::Call {
-                            callee: 2,
-                            args: RegRange { start: 0, count: 1 },
-                            dst: 3,
-                        },
-                        // Call grandparent constructor
-                        Ir3Instruction::LoadConstant {
-                            dst: 2,
-                            value: Value::Function(0),
-                        },
-                        Ir3Instruction::Call {
-                            callee: 2,
-                            args: RegRange { start: 0, count: 1 },
-                            dst: 3,
-                        },
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::Undefined,
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-            ],
-        );
-
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-
-        // Verify all levels of constructor chain executed
-        let grandparent_init = core.read_reg(4).unwrap();
-        let parent_init = core.read_reg(5).unwrap();
-        let child_init = core.read_reg(6).unwrap();
-
+    fn constructor_body_assigns_readable_instance_field() {
+        let result = run_ok(concat!(
+            "class ClassWithField {\n",
+            "  constructor() { this.storedField = \"private_value\"; }\n",
+            "}\n",
+            "var instance = new ClassWithField();\n",
+            "instance.storedField;\n",
+        ));
         assert_eq!(
-            grandparent_init,
-            Value::Bool(true),
-            "Grandparent constructor should have been called"
-        );
-        assert_eq!(
-            parent_init,
-            Value::Bool(true),
-            "Parent constructor should have been called"
-        );
-        assert_eq!(
-            child_init,
-            Value::Bool(true),
-            "Child constructor should have been called"
+            result.value,
+            Value::str("private_value"),
+            "a field assigned in the constructor must be readable from the instance"
         );
     }
 
+    // -- Boundary: current fail-closed behavior (real engine, no mocks; bd-a7kpw) --
+
+    /// `super` expressions are rejected fail-closed by the parser today.
+    /// (The AST `Expression::Super` lowers fine, but the source parser never emits it.)
     #[test]
-    fn test_class_expression_vs_declaration() {
-        let mut core = quickjs_test_core();
-
-        // Test that class expressions work like class declarations for basic functionality
-        let module = test_module_with_functions(
-            vec![
-                // Create class expression (represented as function)
-                Ir3Instruction::LoadConstant {
-                    dst: 0,
-                    value: Value::Function(0), // Class expression
-                },
-                // Assign to variable (like: const MyClass = class { ... })
-                // Create instance
-                Ir3Instruction::Construct {
-                    callee: 0,
-                    args: RegRange { start: 1, count: 0 },
-                    dst: 1,
-                },
-                // Verify it works like normal class
-                Ir3Instruction::GetProperty {
-                    object: 1,
-                    key: "classType".to_string(),
-                    dst: 2,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec![
-                // Class expression constructor
-                Ir3FunctionDesc {
-                    id: 0,
-                    name: "".to_string(), // Anonymous class expression
-                    param_count: 0,
-                    instructions: vec![
-                        Ir3Instruction::LoadThis { dst: 0 },
-                        Ir3Instruction::LoadConstant {
-                            dst: 1,
-                            value: Value::String("class_expression".to_string()),
-                        },
-                        Ir3Instruction::SetProperty {
-                            object: 0,
-                            key: "classType".to_string(),
-                            value: 1,
-                        },
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::Undefined,
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-            ],
+    fn super_expression_fails_closed_at_parser() {
+        let err = run_err(concat!(
+            "class Parent { testMethod() { return 1; } }\n",
+            "class Child extends Parent {\n",
+            "  testMethod() { return super.testMethod(); }\n",
+            "}\n",
+            "new Child();\n",
+        ));
+        assert!(
+            err.starts_with("parse:") && err.contains("super expressions are not supported"),
+            "super source must be rejected fail-closed by the parser, got: {err}"
         );
-
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-
-        // Verify class expression works
-        let class_type = core.read_reg(2).unwrap();
-        match class_type {
-            Value::String(s) if s == "class_expression" => {
-                // Class expression works correctly
-            }
-            _ => panic!(
-                "Class expression should work like declaration, got {:?}",
-                class_type
-            ),
-        }
     }
 
+    /// Static-method access on a class constructor fails closed: statics lower onto
+    /// the constructor function, but the interpreter does not treat function values
+    /// as property-bearing objects, so the access raises a `TypeError` rather than
+    /// silently mis-resolving. Pinned until bd-a7kpw lands.
     #[test]
-    fn test_new_target_in_constructor() {
-        let mut core = quickjs_test_core();
-
-        // Test new.target behavior in constructors (simplified version)
-        let module = test_module_with_functions(
-            vec![
-                // Call constructor with new
-                Ir3Instruction::LoadConstant {
-                    dst: 0,
-                    value: Value::Function(0), // Constructor that checks new.target
-                },
-                Ir3Instruction::Construct {
-                    callee: 0,
-                    args: RegRange { start: 1, count: 0 },
-                    dst: 1,
-                },
-                // Check property set by constructor based on new.target
-                Ir3Instruction::GetProperty {
-                    object: 1,
-                    key: "calledWithNew".to_string(),
-                    dst: 2,
-                },
-                Ir3Instruction::Halt,
-            ],
-            vec![
-                // Constructor that simulates new.target check
-                Ir3FunctionDesc {
-                    id: 0,
-                    name: "NewTargetTest".to_string(),
-                    param_count: 0,
-                    instructions: vec![
-                        Ir3Instruction::LoadThis { dst: 0 },
-                        // Simulate new.target check (in real implementation, this would check
-                        // if called with 'new' vs direct function call)
-                        Ir3Instruction::LoadConstant {
-                            dst: 1,
-                            value: Value::Bool(true), // Assume called with new in Construct context
-                        },
-                        Ir3Instruction::SetProperty {
-                            object: 0,
-                            key: "calledWithNew".to_string(),
-                            value: 1,
-                        },
-                        Ir3Instruction::LoadConstant {
-                            dst: 0,
-                            value: Value::Undefined,
-                        },
-                        Ir3Instruction::Return { value: 0 },
-                    ],
-                },
-            ],
+    fn static_method_access_fails_closed() {
+        let err = run_err(concat!(
+            "class TestClass { static staticMethod() { return \"static called\"; } }\n",
+            "TestClass.staticMethod;\n",
+        ));
+        assert!(
+            err.starts_with("execute:") && err.contains("TypeError") && err.contains("function"),
+            "static access on a class constructor must fail closed today, got: {err}"
         );
+    }
 
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-
-        // Verify new.target detection worked
-        let called_with_new = core.read_reg(2).unwrap();
-        match called_with_new {
-            Value::Bool(true) => {
-                // new.target detection works
-            }
-            _ => panic!(
-                "Constructor should detect new.target, got {:?}",
-                called_with_new
-            ),
-        }
+    /// Prototype/instance method dispatch from source fails closed today: the method
+    /// is reached through the constructor function (not a property object), so the
+    /// call raises a `TypeError`. Pinned until bd-a7kpw lands.
+    #[test]
+    fn instance_method_dispatch_fails_closed() {
+        let err = run_err(concat!(
+            "class Greeter { greet() { return \"hi\"; } }\n",
+            "var g = new Greeter();\n",
+            "g.greet();\n",
+        ));
+        assert!(
+            err.starts_with("execute:") && err.contains("TypeError"),
+            "instance-method dispatch from source must fail closed today, got: {err}"
+        );
     }
 }

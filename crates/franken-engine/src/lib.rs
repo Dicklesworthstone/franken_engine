@@ -463,6 +463,7 @@ pub mod security_e2e;
 pub mod security_epoch;
 pub mod self_adjusting_resolution_graph;
 pub mod self_replacement;
+pub mod self_replacement_lineage_operator;
 pub mod semantic_canonical_basis;
 pub mod semantic_contract_baseline;
 pub mod semantic_cover_schema;

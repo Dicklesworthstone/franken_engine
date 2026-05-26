@@ -215,6 +215,14 @@ _h4_profile = []
 # exists purely so integration tests can — and those activate it via the self
 # dev-dependency below (which a plain `cargo build`/`--release` does not pull).
 tee-test-mock = []
+# Real hardware-backed TEE quote path for `tee_live_quote`. OFF by default
+# because no Intel SGX / AMD SEV / Intel TDX SDK is integrated yet. With this
+# feature OFF, `TeeQuoteGenerator::generate_quote` only ever yields
+# `TeeQuoteResult::SimulatedQuote` for the "TEE available" path — never
+# `Success` — so a simulated quote can never be mistaken for real hardware
+# attestation. With it ON, the real-SDK seam fails closed until an SDK is wired,
+# so enabling it cannot fabricate a `Success` either (bd-kppha).
+tee-real-sdk = []
 
 [dependencies]
 # NOTE: frankenengine-core dependency temporarily removed — franken-core crate

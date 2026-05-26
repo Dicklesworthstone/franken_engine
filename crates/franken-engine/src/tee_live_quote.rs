@@ -1,9 +1,24 @@
 //! Live TEE quote integration for decision receipt attestation.
 //!
 //! This module provides the interface between FrankenEngine decision receipts
-//! and live TEE (Trusted Execution Environment) attestation quotes. When running
-//! on TEE-capable hardware, this module generates cryptographic proof that
-//! decision-making occurred within a verified trusted environment.
+//! and TEE (Trusted Execution Environment) attestation quotes.
+//!
+//! ## Simulated by default — no hardware root of trust (bd-kppha)
+//!
+//! No real TEE SDK (Intel SGX / AMD SEV / Intel TDX) is integrated in this
+//! repository. By default ([`tee-real-sdk`](crate) feature OFF) every quote is
+//! **simulated**: it hashes a JSON structure rather than calling attestation
+//! hardware. To keep a simulated quote from being mistaken for a real one, the
+//! "TEE available" path returns [`TeeQuoteResult::SimulatedQuote`] (tagged
+//! `quote_algorithm = "sha256-simulated"`), which is a distinct variant from
+//! [`TeeQuoteResult::Success`]. `Success` is reserved for, and only reachable
+//! from, a real SDK-backed quote (`tee-real-sdk` feature). With that feature
+//! enabled but no SDK wired, the real path fails closed rather than fabricating
+//! a `Success`.
+//!
+//! When this module is later given a real SDK and `Success` becomes reachable,
+//! it will generate a cryptographic proof that decision-making occurred within
+//! a verified trusted environment.
 //!
 //! For non-TEE environments, this module implements graceful degradation to
 //! evidence-only paths with proper signed acknowledgment of the capability gap.
@@ -59,8 +74,27 @@ pub enum TeeCapability {
 /// Live TEE quote generation result.
 #[derive(Debug, Clone)]
 pub enum TeeQuoteResult {
-    /// Successfully generated TEE quote with attestation binding.
+    /// Successfully generated a **hardware-backed** TEE quote with attestation
+    /// binding.
+    ///
+    /// INVARIANT: this variant is produced ONLY by the real TEE SDK path,
+    /// which is compiled in via the `tee-real-sdk` cargo feature. A quote that
+    /// was merely simulated (no hardware root of trust) is returned as
+    /// [`TeeQuoteResult::SimulatedQuote`] and is *never* reported as `Success`.
+    /// A consumer that matches on `Success` can therefore rely on a real
+    /// hardware attestation, not a fabricated one (bd-kppha).
     Success {
+        binding: TeeAttestationBinding,
+        raw_quote: Vec<u8>,
+    },
+    /// A **simulated** (non-hardware) quote, produced when no real TEE SDK is
+    /// integrated (the default build, `tee-real-sdk` feature off).
+    ///
+    /// This is a distinct variant from [`TeeQuoteResult::Success`] precisely so
+    /// downstream code cannot mistake a simulated quote for a real hardware
+    /// attestation. The carried binding's `quote_algorithm` is additionally
+    /// tagged `sha256-simulated` as defense-in-depth.
+    SimulatedQuote {
         binding: TeeAttestationBinding,
         raw_quote: Vec<u8>,
     },
@@ -162,59 +196,109 @@ impl TeeQuoteGenerator {
         }
     }
 
-    /// Generate a live TEE quote (when TEE hardware is available).
+    /// Generate a live TEE quote (when TEE hardware is reported available).
+    ///
+    /// There is no hardware root of trust in this repository, so the result a
+    /// caller receives is gated on the `tee-real-sdk` cargo feature:
+    ///
+    /// * Feature OFF (default): there is no SDK to call, so the quote is
+    ///   explicitly simulated and returned as [`TeeQuoteResult::SimulatedQuote`]
+    ///   — it can never be mistaken for a real [`TeeQuoteResult::Success`].
+    /// * Feature ON: this is the seam for a real Intel SGX / AMD SEV / Intel TDX
+    ///   SDK call. Until that SDK is wired, the path **fails closed** rather than
+    ///   fabricating a `Success`, so enabling the feature alone cannot produce a
+    ///   trusted attestation out of thin air (bd-kppha).
     fn generate_live_quote(
         &self,
         decision_data: &[u8],
         nonce: &str,
         platform: TeePlatform,
     ) -> TeeQuoteResult {
-        // In a real implementation, this would call into TEE SDK
-        // For now, we simulate quote generation
-
-        let quote_data = self.simulate_quote_generation(decision_data, nonce, platform);
-        match quote_data {
-            Ok((quote_bytes, measurement_id)) => {
-                let quote_digest = hex::encode(ContentHash::compute(&quote_bytes).as_bytes());
-
-                let now = SystemTime::now();
-                let valid_from = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
-                let valid_until = (now + self.config.freshness_window)
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-
-                let binding = TeeAttestationBinding {
-                    quote_digest,
-                    measurement_id,
-                    attested_signer_key_id: hex::encode(
-                        self.signing_key.verification_key().as_bytes(),
-                    ),
-                    nonce: nonce.to_string(),
-                    validity_window: AttestationValidityWindow {
-                        valid_from: chrono::DateTime::from_timestamp(valid_from as i64, 0)
-                            .unwrap()
-                            .to_rfc3339(),
-                        valid_until: chrono::DateTime::from_timestamp(valid_until as i64, 0)
-                            .unwrap()
-                            .to_rfc3339(),
-                    },
-                    tee_platform: platform.canonical_tag().to_string(),
-                    quote_algorithm: "sha256".to_string(),
-                };
-
-                TeeQuoteResult::Success {
-                    binding,
-                    raw_quote: quote_bytes,
-                }
+        #[cfg(feature = "tee-real-sdk")]
+        {
+            // Real hardware path. A genuine SDK quote call belongs here and is
+            // the ONLY place permitted to construct `TeeQuoteResult::Success`.
+            // No SDK is integrated yet, so fail closed instead of simulating.
+            let _ = (decision_data, nonce, platform);
+            TeeQuoteResult::Failed {
+                error: TeeQuoteError::GenerationFailed {
+                    reason: "tee-real-sdk feature enabled but no hardware TEE SDK is integrated; \
+                             refusing to fabricate a Success quote"
+                        .to_string(),
+                },
             }
-            Err(error) => TeeQuoteResult::Failed { error },
+        }
+
+        #[cfg(not(feature = "tee-real-sdk"))]
+        {
+            // No real SDK compiled in: produce an explicitly SIMULATED quote.
+            match self.simulate_quote_generation(decision_data, nonce, platform) {
+                Ok((quote_bytes, measurement_id)) => {
+                    let binding = self.build_attestation_binding(
+                        &quote_bytes,
+                        measurement_id,
+                        nonce,
+                        platform,
+                        "sha256-simulated",
+                    );
+                    TeeQuoteResult::SimulatedQuote {
+                        binding,
+                        raw_quote: quote_bytes,
+                    }
+                }
+                Err(error) => TeeQuoteResult::Failed { error },
+            }
+        }
+    }
+
+    /// Build a [`TeeAttestationBinding`] over a freshly generated quote.
+    ///
+    /// `quote_algorithm` identifies how the quote was produced (e.g. the real
+    /// hardware algorithm, or `sha256-simulated` for the simulated path) so the
+    /// provenance of a binding is self-describing.
+    #[cfg(not(feature = "tee-real-sdk"))]
+    fn build_attestation_binding(
+        &self,
+        quote_bytes: &[u8],
+        measurement_id: String,
+        nonce: &str,
+        platform: TeePlatform,
+        quote_algorithm: &str,
+    ) -> TeeAttestationBinding {
+        let quote_digest = hex::encode(ContentHash::compute(quote_bytes).as_bytes());
+
+        let now = SystemTime::now();
+        let valid_from = now.duration_since(UNIX_EPOCH).unwrap().as_secs();
+        let valid_until = (now + self.config.freshness_window)
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        TeeAttestationBinding {
+            quote_digest,
+            measurement_id,
+            attested_signer_key_id: hex::encode(self.signing_key.verification_key().as_bytes()),
+            nonce: nonce.to_string(),
+            validity_window: AttestationValidityWindow {
+                valid_from: chrono::DateTime::from_timestamp(valid_from as i64, 0)
+                    .unwrap()
+                    .to_rfc3339(),
+                valid_until: chrono::DateTime::from_timestamp(valid_until as i64, 0)
+                    .unwrap()
+                    .to_rfc3339(),
+            },
+            tee_platform: platform.canonical_tag().to_string(),
+            quote_algorithm: quote_algorithm.to_string(),
         }
     }
 
     /// Simulate quote generation for testing/development.
     ///
-    /// In production, this would be replaced with actual TEE SDK calls.
+    /// This is **not** a hardware quote: it hashes a JSON structure over the
+    /// decision data and nonce. Its output is only ever surfaced as
+    /// [`TeeQuoteResult::SimulatedQuote`], never as `Success`. Compiled out when
+    /// the real SDK path (`tee-real-sdk`) is enabled.
+    #[cfg(not(feature = "tee-real-sdk"))]
     fn simulate_quote_generation(
         &self,
         decision_data: &[u8],
@@ -447,8 +531,12 @@ mod tests {
         remove_test_env("FRANKEN_TEE_ERROR");
     }
 
+    // Default build: no real TEE SDK is compiled in (`tee-real-sdk` off), so a
+    // "TEE available" request yields an explicitly SIMULATED quote — never a
+    // `Success`, which is reserved for a real hardware-backed quote (bd-kppha).
+    #[cfg(not(feature = "tee-real-sdk"))]
     #[test]
-    fn generate_quote_tee_available() {
+    fn generate_quote_tee_available_is_simulated_not_success() {
         let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
         set_test_env("FRANKEN_TEE_ENABLED", "true");
         remove_test_env("FRANKEN_TEE_QUOTE_FAIL");
@@ -458,7 +546,42 @@ mod tests {
         let nonce = "test_nonce_123";
 
         let result = generator.generate_quote(decision_data, nonce);
-        assert!(matches!(result, TeeQuoteResult::Success { .. }));
+        // A simulated quote must NOT masquerade as a real hardware attestation.
+        assert!(
+            !matches!(result, TeeQuoteResult::Success { .. }),
+            "simulated path must never produce Success"
+        );
+        match result {
+            TeeQuoteResult::SimulatedQuote { binding, raw_quote } => {
+                assert_eq!(
+                    binding.quote_algorithm, "sha256-simulated",
+                    "simulated binding must be tagged as such"
+                );
+                assert_eq!(binding.nonce, nonce);
+                assert!(!binding.quote_digest.is_empty());
+                assert!(!raw_quote.is_empty());
+            }
+            other => panic!("expected SimulatedQuote, got {other:?}"),
+        }
+
+        remove_test_env("FRANKEN_TEE_ENABLED");
+    }
+
+    // With the real-SDK feature enabled but no hardware SDK integrated, the live
+    // path fails closed instead of fabricating a `Success` (bd-kppha).
+    #[cfg(feature = "tee-real-sdk")]
+    #[test]
+    fn generate_quote_real_sdk_without_hardware_fails_closed() {
+        let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        set_test_env("FRANKEN_TEE_ENABLED", "true");
+        remove_test_env("FRANKEN_TEE_QUOTE_FAIL");
+
+        let generator = TeeQuoteGenerator::new(test_config(), test_signing_key());
+        let result = generator.generate_quote(b"test decision data", "test_nonce_123");
+        assert!(
+            matches!(result, TeeQuoteResult::Failed { .. }),
+            "real-SDK path with no hardware must fail closed, never Success"
+        );
 
         remove_test_env("FRANKEN_TEE_ENABLED");
     }

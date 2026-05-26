@@ -32,6 +32,9 @@
 use crate::expected_info_value_scoring::EivScore;
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::{
+    Signature, SigningKey, VerificationKey, sign_preimage, verify_signature,
+};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt;
@@ -290,6 +293,108 @@ impl WeeklyRankedReport {
         }
         ContentHash::compute(&buf)
     }
+
+    /// The domain-separated preimage the report signature is computed
+    /// over: a context tag followed by the report's [`content_hash`].
+    ///
+    /// Signing the content hash (rather than the raw struct) keeps the
+    /// signature stable under any serde representation change while
+    /// still committing to every decision-relevant field, since the
+    /// content hash already commits to them.
+    ///
+    /// [`content_hash`]: WeeklyRankedReport::content_hash
+    fn signature_preimage(&self) -> Vec<u8> {
+        let digest = self.content_hash();
+        let mut preimage = Vec::with_capacity(REPORT_SIGNATURE_DOMAIN.len() + 1 + 32);
+        preimage.extend_from_slice(REPORT_SIGNATURE_DOMAIN);
+        preimage.push(0);
+        preimage.extend_from_slice(digest.as_bytes());
+        preimage
+    }
+
+    /// Sign this report with `signing_key`, producing a verifiable
+    /// [`SignedWeeklyReport`]. This is what makes the W.2 artifact a
+    /// *signed* reproducible report: the content hash gives
+    /// reproducibility (a deterministic commitment), and the Ed25519
+    /// signature over it gives authenticity.
+    ///
+    /// Key *management* (custody, rotation, role binding) is out of
+    /// scope here and remains a Track-G concern; this method signs with
+    /// whatever key the operator surface supplies.
+    ///
+    /// # Errors
+    /// Returns [`ReportError::Signing`] if the signing key is rejected
+    /// by the signature primitive (e.g. an all-zero key).
+    pub fn sign(self, signing_key: &SigningKey) -> Result<SignedWeeklyReport, ReportError> {
+        let content_hash = self.content_hash();
+        let preimage = self.signature_preimage();
+        let signature = sign_preimage(signing_key, &preimage)
+            .map_err(|e| ReportError::Signing(e.to_string()))?;
+        Ok(SignedWeeklyReport {
+            report: self,
+            content_hash,
+            verification_key: signing_key.verification_key(),
+            signature,
+        })
+    }
+}
+
+/// Domain-separation tag for the weekly-report signature preimage, so a
+/// report signature can never be confused with a signature over any
+/// other engine object.
+const REPORT_SIGNATURE_DOMAIN: &[u8] = b"moonshot-weekly-report-signature-v1";
+
+/// A [`WeeklyRankedReport`] bound to an Ed25519 signature over its
+/// content hash, together with the committed hash and the verification
+/// key needed to check it. This is the fail-closed, operator-consumable
+/// artifact W.2 ships: integrity (content hash) plus authenticity
+/// (signature).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedWeeklyReport {
+    /// The ranked report that was signed.
+    pub report: WeeklyRankedReport,
+    /// The content hash committed to at signing time. [`verify`] requires
+    /// the embedded report to still hash to this value.
+    ///
+    /// [`verify`]: SignedWeeklyReport::verify
+    pub content_hash: ContentHash,
+    /// The verification key corresponding to the signing key.
+    pub verification_key: VerificationKey,
+    /// The Ed25519 signature over the domain-separated content hash.
+    pub signature: Signature,
+}
+
+impl SignedWeeklyReport {
+    /// Verify the signed report fail-closed, in order:
+    ///
+    /// 1. recompute the content hash from the embedded report and require
+    ///    it equals the committed [`content_hash`] (tamper check — a
+    ///    mutated report is rejected even if the signature itself is
+    ///    well-formed over the old hash);
+    /// 2. verify the Ed25519 signature over the domain-separated preimage
+    ///    with the embedded verification key.
+    ///
+    /// [`content_hash`]: SignedWeeklyReport::content_hash
+    ///
+    /// # Errors
+    /// - [`ReportError::ContentHashMismatch`] if the embedded report no
+    ///   longer hashes to the committed content hash.
+    /// - [`ReportError::SignatureInvalid`] if the signature does not
+    ///   verify under the embedded verification key.
+    pub fn verify(&self) -> Result<(), ReportError> {
+        let recomputed = self.report.content_hash();
+        if recomputed != self.content_hash {
+            return Err(ReportError::ContentHashMismatch);
+        }
+        let preimage = self.report.signature_preimage();
+        verify_signature(&self.verification_key, &preimage, &self.signature)
+            .map_err(|e| ReportError::SignatureInvalid(e.to_string()))
+    }
+
+    /// Read-only access to the signed report.
+    pub fn report(&self) -> &WeeklyRankedReport {
+        &self.report
+    }
 }
 
 fn effort_byte(e: EffortEstimate) -> u8 {
@@ -341,6 +446,13 @@ pub enum ReportError {
     TopKZero,
     /// `invest_at_eiv` < `hold_below_eiv` in the supplied config.
     ConfigInvertedThresholds,
+    /// The signature primitive rejected the signing key (detail string).
+    Signing(String),
+    /// A signed report's embedded report no longer hashes to its
+    /// committed content hash (tamper detected).
+    ContentHashMismatch,
+    /// A signed report's signature failed verification (detail string).
+    SignatureInvalid(String),
 }
 
 impl fmt::Display for ReportError {
@@ -349,6 +461,13 @@ impl fmt::Display for ReportError {
             Self::TopKZero => f.write_str("report top_k must be strictly positive"),
             Self::ConfigInvertedThresholds => {
                 f.write_str("invest_at_eiv must be >= hold_below_eiv")
+            }
+            Self::Signing(detail) => write!(f, "report signing failed: {detail}"),
+            Self::ContentHashMismatch => {
+                f.write_str("signed report content hash does not match committed hash")
+            }
+            Self::SignatureInvalid(detail) => {
+                write!(f, "signed report signature verification failed: {detail}")
             }
         }
     }
@@ -390,6 +509,35 @@ mod tests {
 
     fn default_config() -> ReportConfig {
         ReportConfig::default()
+    }
+
+    /// Build an input with a directly-specified EIV (millionths-of-a-bit),
+    /// bypassing `EivScore::compute`. The single-observation EIV from
+    /// `compute` peaks near 0.082 bits (at a uniform prior) — well below
+    /// the default invest/hold thresholds — so recommendation tests that
+    /// need to cross the invest threshold construct the EIV they intend to
+    /// exercise rather than relying on an unreachable compute value. The
+    /// threshold-vs-compute-range mismatch is tracked as a separate bug.
+    fn input_with_eiv(
+        id: &str,
+        eiv_millimillibits: i64,
+        effort: EffortEstimate,
+        unlocks: u32,
+    ) -> WeeklyReportInput {
+        WeeklyReportInput {
+            eiv_score: EivScore {
+                moonshot_id: id.to_string(),
+                prior_entropy_millimillibits: 1_000_000,
+                expected_post_entropy_millimillibits: 1_000_000 - eiv_millimillibits,
+                eiv_millimillibits,
+                p_success_millionths: 500_000,
+                prior_total_count: 2,
+                computed_at_ns: 0,
+                epoch: epoch(),
+            },
+            effort,
+            dependency_unlocks: unlocks,
+        }
     }
 
     // ----- Config -----
@@ -494,9 +642,8 @@ mod tests {
 
     #[test]
     fn invest_now_for_high_eiv_small_effort() {
-        // Uniform prior gives near-1.0-bit EIV — above the
-        // invest_at threshold.
-        let inputs = vec![input("m", 1, 1, EffortEstimate::Small, 5)];
+        // EIV above the invest_at threshold + small effort → InvestNow.
+        let inputs = vec![input_with_eiv("m", 700_000, EffortEstimate::Small, 5)];
         let r = WeeklyRankedReport::assemble(inputs, default_config(), 1, 100, epoch()).unwrap();
         assert_eq!(
             r.rankings[0].recommended_action,
@@ -506,9 +653,9 @@ mod tests {
 
     #[test]
     fn watch_for_high_eiv_large_effort() {
-        let inputs = vec![input("m", 1, 1, EffortEstimate::Large, 5)];
+        // Large effort gates InvestNow even above the invest_at threshold → Watch.
+        let inputs = vec![input_with_eiv("m", 700_000, EffortEstimate::Large, 5)];
         let r = WeeklyRankedReport::assemble(inputs, default_config(), 1, 100, epoch()).unwrap();
-        // Large effort even with high EIV → Watch, not InvestNow.
         assert_eq!(r.rankings[0].recommended_action, RecommendedAction::Watch);
     }
 
@@ -665,5 +812,134 @@ mod tests {
     fn error_display_messages() {
         assert!(format!("{}", ReportError::TopKZero).contains("positive"));
         assert!(format!("{}", ReportError::ConfigInvertedThresholds).contains(">="));
+    }
+
+    // ----- Signing (W.2 signed reproducible report) -----
+
+    fn signing_key(seed: u8) -> SigningKey {
+        SigningKey::from_bytes([seed; 32]).expect("non-zero signing key")
+    }
+
+    fn sample_report() -> WeeklyRankedReport {
+        let inputs = vec![
+            input("m_high", 1, 1, EffortEstimate::Small, 5),
+            input("m_mid", 3, 1, EffortEstimate::Medium, 2),
+            input("m_low", 100, 1, EffortEstimate::Large, 0),
+        ];
+        WeeklyRankedReport::assemble(inputs, default_config(), 7, 12_345, epoch()).unwrap()
+    }
+
+    #[test]
+    fn signed_report_verifies() {
+        let key = signing_key(7);
+        let report = sample_report();
+        let signed = report.clone().sign(&key).unwrap();
+        assert_eq!(signed.report(), &report);
+        assert_eq!(signed.content_hash, report.content_hash());
+        assert_eq!(signed.verification_key, key.verification_key());
+        assert!(signed.verify().is_ok());
+    }
+
+    #[test]
+    fn signing_does_not_alter_report() {
+        let key = signing_key(7);
+        let report = sample_report();
+        let signed = report.clone().sign(&key).unwrap();
+        // The embedded report is identical to the unsigned one.
+        assert_eq!(signed.report(), &report);
+    }
+
+    #[test]
+    fn signature_is_deterministic() {
+        // Ed25519 is deterministic: same report + key => same signature.
+        let key = signing_key(7);
+        let a = sample_report().sign(&key).unwrap();
+        let b = sample_report().sign(&key).unwrap();
+        assert_eq!(a.signature, b.signature);
+        assert_eq!(a.content_hash, b.content_hash);
+    }
+
+    #[test]
+    fn tampered_report_fails_content_hash_check() {
+        let key = signing_key(7);
+        let mut signed = sample_report().sign(&key).unwrap();
+        // Mutate the embedded report so it no longer hashes to the committed hash.
+        signed.report.rankings[0].dependency_unlocks += 1;
+        assert!(matches!(
+            signed.verify(),
+            Err(ReportError::ContentHashMismatch)
+        ));
+    }
+
+    #[test]
+    fn truncating_signed_report_fails_content_hash_check() {
+        let key = signing_key(7);
+        let mut signed = sample_report().sign(&key).unwrap();
+        signed.report.rankings.pop();
+        assert!(matches!(
+            signed.verify(),
+            Err(ReportError::ContentHashMismatch)
+        ));
+    }
+
+    #[test]
+    fn wrong_verification_key_fails_signature_check() {
+        let key_a = signing_key(7);
+        let key_b = signing_key(9);
+        let mut signed = sample_report().sign(&key_a).unwrap();
+        // Content hash still matches, but the wrong key must reject the signature.
+        signed.verification_key = key_b.verification_key();
+        assert!(matches!(
+            signed.verify(),
+            Err(ReportError::SignatureInvalid(_))
+        ));
+    }
+
+    #[test]
+    fn corrupted_signature_fails_signature_check() {
+        let key = signing_key(7);
+        let mut signed = sample_report().sign(&key).unwrap();
+        // Flip a byte in the signature; the content hash still matches.
+        let mut bytes = signed.signature.to_bytes();
+        bytes[0] ^= 0xFF;
+        signed.signature = Signature::from_bytes(bytes);
+        assert!(matches!(
+            signed.verify(),
+            Err(ReportError::SignatureInvalid(_))
+        ));
+    }
+
+    #[test]
+    fn distinct_reports_have_distinct_signatures() {
+        let key = signing_key(7);
+        let a = sample_report().sign(&key).unwrap();
+        let other = WeeklyRankedReport::assemble(
+            vec![input("only", 1, 1, EffortEstimate::Small, 0)],
+            default_config(),
+            8,
+            99,
+            epoch(),
+        )
+        .unwrap();
+        let b = other.sign(&key).unwrap();
+        assert_ne!(a.signature, b.signature);
+        assert_ne!(a.content_hash, b.content_hash);
+    }
+
+    #[test]
+    fn signed_report_serde_round_trips_and_verifies() {
+        let key = signing_key(7);
+        let signed = sample_report().sign(&key).unwrap();
+        let json = serde_json::to_string(&signed).unwrap();
+        let restored: SignedWeeklyReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(signed, restored);
+        assert!(restored.verify().is_ok());
+    }
+
+    #[test]
+    fn signing_error_display_messages() {
+        assert!(format!("{}", ReportError::Signing("x".into())).contains("signing"));
+        assert!(format!("{}", ReportError::ContentHashMismatch).contains("content hash"));
+        assert!(format!("{}", ReportError::SignatureInvalid("y".into())).contains("verification"));
     }
 }

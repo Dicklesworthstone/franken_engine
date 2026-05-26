@@ -3,6 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use bumpalo::collections::Vec as ArenaVec;
+
+use crate::lowering_arena::LoweringArena;
+
 /// Optimized constant pool with O(log n) deduplication instead of O(n) linear search.
 struct ConstantPool {
     pool: Vec<String>,
@@ -3006,7 +3010,7 @@ fn lower_assign_op_to_ir3(
     }
 }
 
-fn pop_lowering_value(stack: &mut Vec<Reg>) -> Result<Reg, LoweringPipelineError> {
+fn pop_lowering_value(stack: &mut ArenaVec<'_, Reg>) -> Result<Reg, LoweringPipelineError> {
     stack
         .pop()
         .ok_or(LoweringPipelineError::ValueStackUnderflow)
@@ -3064,8 +3068,15 @@ pub fn lower_ir2_to_ir3(
     let mut register_cursor: Reg = 0;
     let mut binding_registers = BTreeMap::<BindingId, Reg>::new();
     let mut required_capabilities = BTreeSet::<String>::new();
+    // ALIEN-2.2 (bd-o4cbn.10.2): region arena scoped to this IR2→IR3 pass. The
+    // evaluation stack is pure scratch (audit top candidate, lives end-of-pass;
+    // its `Reg` contents are copied into `ir3.instructions`), so it is served
+    // from the arena rather than the global allocator. The whole region drops
+    // when the pass returns. Allocating from the arena is byte-for-byte
+    // transparent to the emitted IR3.
+    let arena = LoweringArena::new();
     // perf: pre-size value stack based on estimated expression nesting depth
-    let mut value_stack: Vec<Reg> = Vec::with_capacity(32);
+    let mut value_stack: ArenaVec<'_, Reg> = arena.alloc_vec_with_capacity::<Reg>(32);
     let mut label_targets = BTreeMap::<u32, u32>::new();
     let mut iterator_cleanup_labels = BTreeMap::<u32, Reg>::new();
     let mut pending_jumps = Vec::<PendingJump>::new();
@@ -4310,8 +4321,11 @@ pub fn lower_ir2_to_ir3(
         let arity = param_names.len() as u32;
         let mut fn_reg: Reg = 0;
         let mut fn_binding_regs = BTreeMap::<BindingId, Reg>::new();
-        // perf: pre-size function value stack for expression nesting
-        let mut fn_value_stack: Vec<Reg> = Vec::with_capacity(16);
+        // perf: pre-size function value stack for expression nesting.
+        // ALIEN-2.2: this per-deferred-body evaluation stack is the same pure
+        // end-of-pass scratch as the top-level `value_stack`, served from the
+        // pass-scoped region arena.
+        let mut fn_value_stack: ArenaVec<'_, Reg> = arena.alloc_vec_with_capacity::<Reg>(16);
         let mut fn_label_targets = BTreeMap::<u32, u32>::new();
         let mut fn_pending_jumps = Vec::<PendingJump>::new();
         let mut fn_catch_entry_labels = BTreeSet::<u32>::new();

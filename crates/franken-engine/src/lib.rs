@@ -273,6 +273,7 @@ pub mod law_promotion_pack;
 pub mod law_proof_refutation;
 pub mod lease_tracker;
 pub mod live_revocation_first_gate_example;
+pub mod lowering_arena;
 pub mod lowering_gap_inventory;
 pub mod lowering_parity_evidence;
 pub mod lowering_pipeline;

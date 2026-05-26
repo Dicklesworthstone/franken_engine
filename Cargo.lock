@@ -1481,6 +1481,7 @@ dependencies = [
 name = "frankenengine-engine"
 version = "0.1.0"
 dependencies = [
+ "bumpalo",
  "chrono",
  "clap",
  "criterion",

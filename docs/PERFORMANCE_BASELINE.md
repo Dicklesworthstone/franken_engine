@@ -240,6 +240,74 @@ problem entirely because there is exactly one buffer and recursion only appends.
 - Recursion-safety property stated explicitly (§4, and the "Reality check"). ✅
 - No code change in this bead (implementation is `bd-o4cbn.5.3`). ✅
 
+## Hot-path capacity-hint sweep (H6)
+
+The H6 pass (`bd-o4cbn.4`) pre-sizes the backing allocation of hot-path
+`Vec`/`String` constructors so they stop growing through repeated
+`RawVecInner::finish_grow` — a top-10 self-time symbol in the pass1 profile
+(`flat_iterator_protocol_trace.txt` 5.86 %, `flat_scheduler_queue_commit.txt`
+2.68 %). A capacity hint is pure metadata: it changes *when* the backing memory
+is reserved, never the length, order, or contents of the produced collection.
+
+### Sites (H6.1 audit / H6.2 sweep)
+
+| constructor | collection(s) | capacity |
+|---|---|---|
+| `iterator_protocol::IterationTrace::new` | `events` | 16 |
+| `deterministic_sim_scheduler::SimReplayLog::new` | `entries` | 128 |
+| `evidence_ledger::EvidenceEntryBuilder::new` | candidates / constraints / witnesses | 4 / 8 / 4 |
+| `lowering_pipeline::lower_ir0_to_ir3` | destructure_params / body_bindings | input-sized |
+
+### Verification (two reproducible gates)
+
+- **E2E smoke** — `scripts/perf/run_perf_h6_smoke.sh` (PERF-H6.4,
+  `bd-o4cbn.4.4`) builds the `hot_paths` bench with the canonical pass1 flags,
+  runs the two H6 target sub-benches under a short Criterion budget, and runs
+  the H6.5 public-API golden test (`perf_h6_capacity_hints_integration`), which
+  asserts `frankenctl run` output is byte-identical to the pre-H6 golden — i.e.
+  the capacity hints are pure metadata. A `--self-check` mode validates the
+  pipeline without a build (CI-able on a contended/red tree); `--quick` runs the
+  output-unchanged golden only.
+- **Statistical gate** — `scripts/perf/h6_bench_validate.sh` (PERF-H6.3,
+  `bd-o4cbn.4.3`) runs the full `real_runtime_hot_paths` Criterion group and
+  diffs every sub-bench against the frozen `pass1` baseline, emitting an
+  H1.4-schema `events.jsonl` + `summary.md` evidence bundle.
+
+### Measured result
+
+Full Criterion group, HEAD `ed2af01b` vs the frozen `pass1` baseline
+(`tests/artifacts/perf/20260520T214829Z-prof-pass1`), bench run-id
+`20260526T042834Z`, verdict run-id `20260526T043031Z`:
+
+| sub-bench | pass1 (ns) | current (ns) | Δ% |
+|---|---:|---:|---:|
+| parser_arena_materialization | 31354.0 | 25518.7 | −18.61 |
+| lowering_pipeline_ir3 | 87916.5 | 69230.9 | −21.25 |
+| baseline_interpreter_eval | 494406.8 | 326906.2 | −33.88 |
+| baseline_value_string_clone | 245111.9 | 284165.8 | **+15.93** |
+| iterator_protocol_trace *(H6 target)* | 6098.0 | 1437.1 | −76.43 |
+| scheduler_queue_commit *(H6 target)* | 58223.3 | 48821.1 | −16.15 |
+| evidence_ledger_bundle | 225145.0 | 147416.0 | −34.52 |
+| transport_certificate_serialization | 6674.7 | 6005.7 | −10.02 |
+
+**Combined drop (mean Δ across the 8 sub-benches): −24.37 %.** Both H6 profiling
+targets clear the ≥ 5 % bar decisively, and the H6.5 golden confirms output is
+unchanged. Two caveats are recorded per the **What counts as a perf win**
+standard above, and they are why this is logged as a **measurement, not a
+promoted win**:
+
+1. **Attribution is cumulative, not H6-isolated.** The `pass1` baseline predates
+   the entire perf-pass-v1 stack, so these deltas combine H1/H2/H4/H6 and every
+   other merged optimisation. The `iterator_protocol_trace` −76 % in particular
+   includes iterator-path work beyond H6's capacity hint; H6 cannot claim the
+   full delta.
+2. **One sub-bench regressed.** `baseline_value_string_clone` is +15.93 % slower
+   than `pass1` (tight CI, not noise). H6 touched no string-clone path, so this
+   is a pre-existing cumulative regression — tracked in `bd-o4cbn.15` — and it
+   fails the no-regression gate criterion (4). Until it is attributed and fixed,
+   the combined sweep stays in the *hypothesis* state of the claim-to-proof
+   matrix rather than being recorded as a clean win.
+
 ## Future Performance Roadmap
 
 ### Planned Optimizations (Future Releases)

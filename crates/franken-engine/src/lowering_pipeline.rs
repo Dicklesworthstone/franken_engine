@@ -8895,6 +8895,107 @@ mod tests {
     }
 
     #[test]
+    fn alien2_ir3_output_is_byte_identical_golden() {
+        // bd-o4cbn.10.3 (PERF-ALIEN-2.3): the bumpalo `LoweringArena` introduced in
+        // ALIEN-2.2 is a pure allocation-strategy refactor and MUST NOT change the
+        // emitted IR3 (ExecIR). These goldens freeze the canonical instruction bytes
+        // (`Ir3Module::canonical_bytes`) and the content hash of `lower_ir0_to_ir3` for
+        // fixed pure programs, so any future arena/region change that perturbs ExecIR is
+        // caught. The frozen values are byte-identical to the pre-ALIEN-2 output: the
+        // arena change is allocation-only, and the unmodified `lowering_pipeline` suite
+        // confirms transparency.
+        let cases: Vec<(&str, Ir0Module, &str, &str)> = vec![
+            ("numeric_literal", script_ir0(), "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000010000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000010000000570617463680100000000000000000000000b736f757263655f686173680400000020303f14373b30ea41b4eadad1a514630f613e6f59054da50b4510c5844f2e2e3c0000000c736f757263655f6c6162656c050000000a666978747572652e6a730000000c696e737472756374696f6e730600000003070000000300000003647374010000000000000000000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a0700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08", "sha256:87397fe67e7627b7f99f80d48911198ad9b87dc8bbf024dc2b60c3c9ccd78058"),
+            (
+                "let_decl",
+                {
+                    let tree = SyntaxTree {
+                        goal: ParseGoal::Script,
+                        body: vec![Statement::VariableDeclaration(VariableDeclaration {
+                            kind: VariableDeclarationKind::Let,
+                            declarations: vec![VariableDeclarator {
+                                pattern: BindingPattern::Identifier("value".to_string()),
+                                initializer: Some(Expression::NumericLiteral(7)),
+                                span: span(),
+                            }],
+                            span: span(),
+                        })],
+                        span: span(),
+                    };
+                    Ir0Module::from_syntax_tree(tree, "alien2_let.js")
+                },
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000020000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000010000000570617463680100000000000000000000000b736f757263655f6861736804000000201f4e6470141fbc348c5c2244e17f3d3ba964438077bca3e4372adf422f688e7d0000000c736f757263655f6c6162656c050000000d616c69656e325f6c65742e6a730000000c696e737472756374696f6e730600000005070000000300000003647374010000000000000000000000026f7005000000086c6f61645f696e740000000576616c7565020000000000000007070000000300000003647374010000000000000001000000026f7005000000046d6f766500000003737263010000000000000000070000000300000003647374010000000000000000000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:26a5a4924c23cda2148e868811e39d3f9b7e8b3cb14d005f6018629dde5171dc",
+            ),
+            (
+                "const_decl",
+                {
+                    let tree = SyntaxTree {
+                        goal: ParseGoal::Script,
+                        body: vec![Statement::VariableDeclaration(VariableDeclaration {
+                            kind: VariableDeclarationKind::Const,
+                            declarations: vec![VariableDeclarator {
+                                pattern: BindingPattern::Identifier("answer".to_string()),
+                                initializer: Some(Expression::NumericLiteral(42)),
+                                span: span(),
+                            }],
+                            span: span(),
+                        })],
+                        span: span(),
+                    };
+                    Ir0Module::from_syntax_tree(tree, "alien2_const.js")
+                },
+                "07000000060000000d636f6e7374616e745f706f6f6c06000000000000000e66756e6374696f6e5f7461626c650600000001070000000500000005617269747901000000000000000000000005656e7472790100000000000000000000000a6672616d655f73697a650100000000000000020000000c69735f67656e657261746f720300000000046e616d6505000000046d61696e000000066865616465720700000004000000056c6576656c05000000036972330000000e736368656d615f76657273696f6e0700000003000000056d616a6f72010000000000000000000000056d696e6f720100000000000000010000000570617463680100000000000000000000000b736f757263655f686173680400000020262876ee01130994831d3bbc12dd5c4e61d605ca7f505dd321b9bcb9262799080000000c736f757263655f6c6162656c050000000f616c69656e325f636f6e73742e6a730000000c696e737472756374696f6e730600000005070000000300000003647374010000000000000000000000026f7005000000086c6f61645f696e740000000576616c756502000000000000002a070000000300000003647374010000000000000001000000026f7005000000046d6f766500000003737263010000000000000000070000000300000003647374010000000000000000000000026f7005000000046d6f7665000000037372630100000000000000010700000002000000026f70050000000672657475726e0000000576616c75650100000000000000000700000001000000026f70050000000468616c740000001572657175697265645f6361706162696c697469657306000000000000000e7370656369616c697a6174696f6e08",
+                "sha256:511018c5beebf35f25352ae47a6762e8dc647cf8a0b4f4cc86c27c9b495172c6",
+            ),
+        ];
+
+        // Pass 1: lower every case, confirm intra-run determinism, and record the actual
+        // ExecIR fingerprint (printed under `--nocapture` to support re-blessing).
+        let mut actual: Vec<(String, String)> = Vec::new();
+        for (name, ir0, _golden_canon, _golden_hash) in cases.iter() {
+            let context =
+                LoweringContext::new("alien2-trace", "alien2-decision", "alien2-policy");
+            let output =
+                lower_ir0_to_ir3(ir0, &context).expect("fixed pure program should lower to IR3");
+            // Re-lower with identical input: IR3 ExecIR must be reproducible bit-for-bit.
+            let again =
+                lower_ir0_to_ir3(ir0, &context).expect("re-lowering should succeed");
+            assert_eq!(
+                output.ir3.canonical_bytes(),
+                again.ir3.canonical_bytes(),
+                "{name}: IR3 canonical bytes are not deterministic"
+            );
+            assert_eq!(
+                output.ir3.content_hash(),
+                again.ir3.content_hash(),
+                "{name}: IR3 content hash is not deterministic"
+            );
+
+            let canon_hex = hex::encode(output.ir3.canonical_bytes());
+            let hash = hash_string(&output.ir3.content_hash());
+            eprintln!("ALIEN-2.3 GOLDEN {name}: canon_hex={canon_hex} hash={hash}");
+            actual.push((canon_hex, hash));
+        }
+
+        // Pass 2: byte-identity guard against the frozen goldens (assertions #1 and #2).
+        for ((name, _ir0, golden_canon, golden_hash), (canon_hex, hash)) in
+            cases.iter().zip(actual.iter())
+        {
+            assert_eq!(
+                canon_hex.as_str(),
+                *golden_canon,
+                "{name}: IR3 ExecIR canonical instruction bytes changed vs frozen golden"
+            );
+            assert_eq!(
+                hash.as_str(),
+                *golden_hash,
+                "{name}: IR3 content hash changed vs frozen golden"
+            );
+        }
+    }
+
+    #[test]
     fn empty_ir0_body_fails_deterministically() {
         let tree = SyntaxTree {
             goal: ParseGoal::Script,

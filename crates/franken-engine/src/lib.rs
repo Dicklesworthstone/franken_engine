@@ -279,6 +279,7 @@ pub mod migration_contract;
 pub mod migration_kit;
 pub mod milestone_release_test_evidence_integrator;
 pub mod minimal_causal_set_inference;
+pub mod minimal_causal_set_minimality_gate;
 pub mod minimized_repro_extraction;
 pub mod mmr_proof;
 pub mod mock_seam_guardrail;

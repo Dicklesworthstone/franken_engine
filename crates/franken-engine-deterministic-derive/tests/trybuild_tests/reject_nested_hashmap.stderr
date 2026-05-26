@@ -1,0 +1,5 @@
+error: Type 'HashMap' is non-deterministic and cannot be used in Deterministic types. Use BTreeMap/BTreeSet for collections or fixed-point arithmetic for numeric types.
+ --> tests/trybuild_tests/reject_nested_hashmap.rs:6:11
+  |
+6 |     maps: Vec<HashMap<String, i32>>,  // Vec containing HashMap should fail
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^

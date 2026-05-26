@@ -1,0 +1,5 @@
+error: Type 'f64' is non-deterministic and cannot be used in Deterministic types. Use BTreeMap/BTreeSet for collections or fixed-point arithmetic for numeric types.
+ --> tests/trybuild_tests/reject_multiple_violations.rs:6:16
+  |
+6 |     float_val: f64,                     // Non-deterministic: f64
+  |                ^^^

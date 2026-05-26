@@ -1,0 +1,5 @@
+error: Raw pointers (*const T, *mut T) are non-deterministic and cannot be used in Deterministic types
+ --> tests/trybuild_tests/reject_const_ptr.rs:5:10
+  |
+5 |     ptr: *const i32,
+  |          ^^^^^^^^^^

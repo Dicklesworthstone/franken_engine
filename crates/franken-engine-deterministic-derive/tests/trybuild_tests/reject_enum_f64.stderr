@@ -1,0 +1,5 @@
+error: Type 'f64' is non-deterministic and cannot be used in Deterministic types. Use BTreeMap/BTreeSet for collections or fixed-point arithmetic for numeric types.
+ --> tests/trybuild_tests/reject_enum_f64.rs:6:14
+  |
+6 |     Variant2(f64),  // This should fail - enum variant contains non-deterministic type
+  |              ^^^

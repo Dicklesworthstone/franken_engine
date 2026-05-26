@@ -1,0 +1,27 @@
+error[E0277]: the trait bound `Level1Container: Deterministic` is not satisfied
+  --> tests/trybuild_tests/reject_deep_transitive.rs:18:11
+   |
+18 |     data: Level1Container,  // This should fail due to deep transitive non-deterministic containment
+   |           ^^^^^^^^^^^^^^^ unsatisfied trait bound
+   |
+help: the trait `Deterministic` is not implemented for `Level1Container`
+  --> tests/trybuild_tests/reject_deep_transitive.rs:12:1
+   |
+12 | struct Level1Container {
+   | ^^^^^^^^^^^^^^^^^^^^^^
+   = help: the following other types implement trait `Deterministic`:
+             ()
+             (A, B)
+             (A, B, C)
+             (A, B, C, D)
+             (A, B, C, D, E)
+             (A,)
+             Arc<T>
+             BTreeMap<K, V>
+           and $N others
+note: required by a bound in `__assert_field_is_deterministic`
+  --> tests/trybuild_tests/reject_deep_transitive.rs:16:10
+   |
+16 | #[derive(Deterministic)]
+   |          ^^^^^^^^^^^^^ required by this bound in `__assert_field_is_deterministic`
+   = note: this error originates in the derive macro `Deterministic` (in Nightly builds, run with -Z macro-backtrace for more info)

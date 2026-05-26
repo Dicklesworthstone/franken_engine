@@ -88,12 +88,72 @@ fn expand_deterministic(input: &DeriveInput) -> syn::Result<proc_macro2::TokenSt
     // non-generic type `split_for_impl` yields empty fragments, leaving the
     // emitted impl byte-identical to the prior `impl ... for #name {}`.
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    // Require every field's type to *also* be `Deterministic`. The syntactic
+    // checks above only reject *directly* named non-deterministic types (a
+    // literal `f64`/`HashMap` field); a proc macro cannot see through a
+    // user-defined wrapper, so it cannot tell that `struct Outer { inner: Foo }`
+    // is non-deterministic when `Foo` transitively contains an `f64`. Emitting a
+    // per-field bound check delegates that transitive judgement to the type
+    // system: if a field's type does not implement `Deterministic`, the generated
+    // assertion fails to compile at the derive site. This realises the
+    // "all its fields are Deterministic (recursive check)" contract this derive
+    // documents. The check is a never-called function, so it adds no runtime cost
+    // and no public surface; `PhantomData<#name #ty_generics>` consumes any
+    // generic parameters so phantom-generic types do not trip `unused parameter`.
+    let field_types = collect_field_types(&input.data);
+    let field_assertions = if field_types.is_empty() {
+        quote! {}
+    } else {
+        quote! {
+            const _: () = {
+                fn __assert_field_is_deterministic<
+                    __FieldTy: ::franken_engine_deterministic_trait::Deterministic + ?Sized,
+                >() {
+                }
+                fn __assert_all_fields_deterministic #impl_generics (
+                    _marker: ::core::marker::PhantomData<#name #ty_generics>,
+                ) #where_clause {
+                    #(
+                        __assert_field_is_deterministic::<#field_types>();
+                    )*
+                }
+            };
+        }
+    };
+
     let expanded = quote! {
         impl #impl_generics ::franken_engine_deterministic_trait::Deterministic
             for #name #ty_generics #where_clause {}
+
+        #field_assertions
     };
 
     Ok(expanded)
+}
+
+/// Collect the type of every field in the input: all fields of a struct, or
+/// every field of every enum variant. Unit structs/variants contribute none.
+fn collect_field_types(data: &Data) -> Vec<&Type> {
+    let mut types = Vec::new();
+    match data {
+        Data::Struct(data_struct) => push_field_types(&data_struct.fields, &mut types),
+        Data::Enum(data_enum) => {
+            for variant in &data_enum.variants {
+                push_field_types(&variant.fields, &mut types);
+            }
+        }
+        Data::Union(_) => {}
+    }
+    types
+}
+
+fn push_field_types<'a>(fields: &'a Fields, out: &mut Vec<&'a Type>) {
+    match fields {
+        Fields::Named(fields) => out.extend(fields.named.iter().map(|field| &field.ty)),
+        Fields::Unnamed(fields) => out.extend(fields.unnamed.iter().map(|field| &field.ty)),
+        Fields::Unit => {}
+    }
 }
 
 fn check_fields(fields: &Fields) -> syn::Result<()> {

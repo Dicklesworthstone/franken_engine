@@ -87,9 +87,13 @@ impl<T: Deterministic, E: Deterministic> Deterministic for Result<T, E> {}
 impl<T: Deterministic> Deterministic for Vec<T> {}
 impl<T: Deterministic> Deterministic for [T] {}
 impl<T: Deterministic, const N: usize> Deterministic for [T; N] {}
-impl<T: Deterministic> Deterministic for Box<T> {}
-impl<T: Deterministic> Deterministic for std::rc::Rc<T> {}
-impl<T: Deterministic> Deterministic for std::sync::Arc<T> {}
+// `?Sized` so smart pointers over unsized deterministic data (e.g. `Box<[u8]>`,
+// `Arc<str>`) are themselves Deterministic. The derive macro's per-field bound
+// check (see franken-engine-deterministic-derive) relies on these holding for
+// boxed-slice fields such as `Box<[u8]>`.
+impl<T: Deterministic + ?Sized> Deterministic for Box<T> {}
+impl<T: Deterministic + ?Sized> Deterministic for std::rc::Rc<T> {}
+impl<T: Deterministic + ?Sized> Deterministic for std::sync::Arc<T> {}
 
 // BTreeMap and BTreeSet are deterministic (ordered)
 impl<K: Deterministic, V: Deterministic> Deterministic for std::collections::BTreeMap<K, V> {}

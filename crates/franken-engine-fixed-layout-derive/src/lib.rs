@@ -241,7 +241,7 @@ fn generate_enum_impl(
     let mut max_variant_size = 0;
     let mut variant_info = Vec::new();
 
-    for (_index, variant) in variants.iter().enumerate() {
+    for variant in variants.iter() {
         let variant_name = &variant.ident;
 
         match &variant.fields {

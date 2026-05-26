@@ -15,7 +15,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use franken_engine_deterministic_derive::Deterministic;
 use franken_engine_deterministic_trait::FixedLayout;
+use franken_engine_fixed_layout_derive::FixedLayout;
 
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 
@@ -787,23 +789,34 @@ fn append_optional_string(preimage: &mut Vec<u8>, value: Option<&str>) {
     }
 }
 
+/// Length-prefix-free rolling-hash preimage: `previous_rolling_hash || marker_id || marker_hash`.
+///
+/// All fields are `FixedLayout` (32 + 8 + 32 bytes); `#[derive(FixedLayout)]` makes the
+/// layout invariant *by construction* (Track CC.4) — the offsets are computed by the
+/// derive instead of via hand-written `split_at_mut`. `marker_id` encodes big-endian via
+/// the `u64` `FixedLayout` impl, byte-for-byte identical to the prior manual assembly.
+#[derive(Deterministic, FixedLayout)]
+struct RollingHashPreimage {
+    previous_rolling_hash: ContentHash,
+    marker_id: u64,
+    marker_hash: ContentHash,
+}
+
 fn compute_rolling_hash(
     previous_rolling_hash: &ContentHash,
     marker_id: u64,
     marker_hash: &ContentHash,
 ) -> ContentHash {
-    // Fixed-layout canonical emit: `previous_rolling_hash || marker_id || marker_hash`.
-    // Every field is FixedLayout (32 + 8 + 32 bytes), so the layout is invariant by
-    // construction; no length prefix is needed and no length-prefix bug is possible.
-    // The marker_id encodes big-endian via the u64 FixedLayout impl, matching the
-    // prior `to_be_bytes()` byte-for-byte. Stack buffer avoids a heap allocation.
-    let mut preimage =
-        [0u8; ContentHash::LAYOUT_SIZE + u64::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE];
-    let (prev_slot, rest) = preimage.split_at_mut(ContentHash::LAYOUT_SIZE);
-    let (id_slot, marker_slot) = rest.split_at_mut(u64::LAYOUT_SIZE);
-    previous_rolling_hash.encode_fixed(prev_slot);
-    marker_id.encode_fixed(id_slot);
-    marker_hash.encode_fixed(marker_slot);
+    // Fixed-layout canonical emit via the derived encoder: correct by construction, with
+    // no length prefix and no possibility of a length-prefix or offset bug. Stack buffer
+    // avoids a heap allocation on this chain path.
+    let preimage_fields = RollingHashPreimage {
+        previous_rolling_hash: *previous_rolling_hash,
+        marker_id,
+        marker_hash: *marker_hash,
+    };
+    let mut preimage = [0u8; RollingHashPreimage::LAYOUT_SIZE];
+    preimage_fields.encode_fixed(&mut preimage);
     ContentHash::compute(&preimage)
 }
 
@@ -815,23 +828,34 @@ fn recompute_rolling_hash(markers: &[DecisionMarker]) -> ContentHash {
         })
 }
 
+/// Length-prefix-free signing preimage: `marker_id || latest_marker_hash || rolling_chain_hash`.
+///
+/// All fields are `FixedLayout` (8 + 32 + 32 bytes); `#[derive(FixedLayout)]` makes the
+/// signing preimage layout invariant *by construction* (Track CC.4), eliminating any
+/// length-prefix ambiguity. Byte-for-byte identical to the prior manual assembly
+/// (`u64` `FixedLayout` is big-endian).
+#[derive(Deterministic, FixedLayout)]
+struct ChainHeadPreimage {
+    marker_id: u64,
+    latest_marker_hash: ContentHash,
+    rolling_chain_hash: ContentHash,
+}
+
 fn sign_chain_head(
     checkpoint_key: &[u8],
     marker_id: u64,
     latest_marker_hash: &ContentHash,
     rolling_chain_hash: &ContentHash,
 ) -> AuthenticityHash {
-    // Fixed-layout canonical emit: `marker_id || latest_marker_hash || rolling_chain_hash`.
-    // All three fields are FixedLayout (8 + 32 + 32 bytes); the signing preimage layout
-    // is invariant by construction, eliminating any length-prefix ambiguity. Byte-for-byte
-    // identical to the prior manual assembly (u64 FixedLayout is big-endian).
-    let mut preimage =
-        [0u8; u64::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE];
-    let (id_slot, rest) = preimage.split_at_mut(u64::LAYOUT_SIZE);
-    let (latest_slot, rolling_slot) = rest.split_at_mut(ContentHash::LAYOUT_SIZE);
-    marker_id.encode_fixed(id_slot);
-    latest_marker_hash.encode_fixed(latest_slot);
-    rolling_chain_hash.encode_fixed(rolling_slot);
+    // Fixed-layout canonical emit via the derived encoder: the signing preimage layout is
+    // correct by construction, with no length-prefix ambiguity.
+    let preimage_fields = ChainHeadPreimage {
+        marker_id,
+        latest_marker_hash: *latest_marker_hash,
+        rolling_chain_hash: *rolling_chain_hash,
+    };
+    let mut preimage = [0u8; ChainHeadPreimage::LAYOUT_SIZE];
+    preimage_fields.encode_fixed(&mut preimage);
     AuthenticityHash::compute_keyed(checkpoint_key, &preimage)
 }
 
@@ -842,6 +866,87 @@ fn sign_chain_head(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Track CC.4: prove the derived FixedLayout preimages are byte-identical to the
+    // legacy manual `split_at_mut` assemblies, so routing the rolling-hash and
+    // chain-head signing emitters through the derive cannot change any chain hash or
+    // signature.
+    #[test]
+    fn rolling_hash_preimage_derive_matches_legacy_manual_assembly() {
+        let prev = ContentHash::compute(b"cc4-prev-rolling");
+        let marker_id = 0x0102_0304_0506_0708u64;
+        let marker = ContentHash::compute(b"cc4-marker");
+
+        // Legacy manual offset assembly.
+        let mut legacy =
+            [0u8; ContentHash::LAYOUT_SIZE + u64::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE];
+        let (prev_slot, rest) = legacy.split_at_mut(ContentHash::LAYOUT_SIZE);
+        let (id_slot, marker_slot) = rest.split_at_mut(u64::LAYOUT_SIZE);
+        prev.encode_fixed(prev_slot);
+        marker_id.encode_fixed(id_slot);
+        marker.encode_fixed(marker_slot);
+
+        let derived = RollingHashPreimage {
+            previous_rolling_hash: prev,
+            marker_id,
+            marker_hash: marker,
+        };
+        assert_eq!(
+            RollingHashPreimage::LAYOUT_SIZE,
+            ContentHash::LAYOUT_SIZE + u64::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE
+        );
+        let mut fixed = [0u8; RollingHashPreimage::LAYOUT_SIZE];
+        derived.encode_fixed(&mut fixed);
+
+        assert_eq!(
+            fixed, legacy,
+            "derived rolling-hash preimage must equal legacy manual assembly byte-for-byte"
+        );
+        // And the public hash output is unchanged.
+        assert_eq!(
+            compute_rolling_hash(&prev, marker_id, &marker),
+            ContentHash::compute(&legacy)
+        );
+    }
+
+    #[test]
+    fn chain_head_preimage_derive_matches_legacy_manual_assembly() {
+        let marker_id = 0xDEAD_BEEF_CAFE_F00Du64;
+        let latest = ContentHash::compute(b"cc4-latest");
+        let rolling = ContentHash::compute(b"cc4-rolling");
+        let key = b"cc4-checkpoint-key";
+
+        // Legacy manual offset assembly.
+        let mut legacy =
+            [0u8; u64::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE];
+        let (id_slot, rest) = legacy.split_at_mut(u64::LAYOUT_SIZE);
+        let (latest_slot, rolling_slot) = rest.split_at_mut(ContentHash::LAYOUT_SIZE);
+        marker_id.encode_fixed(id_slot);
+        latest.encode_fixed(latest_slot);
+        rolling.encode_fixed(rolling_slot);
+
+        let derived = ChainHeadPreimage {
+            marker_id,
+            latest_marker_hash: latest,
+            rolling_chain_hash: rolling,
+        };
+        assert_eq!(
+            ChainHeadPreimage::LAYOUT_SIZE,
+            u64::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE + ContentHash::LAYOUT_SIZE
+        );
+        let mut fixed = [0u8; ChainHeadPreimage::LAYOUT_SIZE];
+        derived.encode_fixed(&mut fixed);
+
+        assert_eq!(
+            fixed, legacy,
+            "derived chain-head preimage must equal legacy manual assembly byte-for-byte"
+        );
+        // And the public signature output is unchanged.
+        assert_eq!(
+            sign_chain_head(key, marker_id, &latest, &rolling),
+            AuthenticityHash::compute_keyed(key, &legacy)
+        );
+    }
 
     fn test_evidence_hash() -> ContentHash {
         ContentHash::compute(b"evidence-entry-content")

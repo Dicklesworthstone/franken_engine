@@ -11,7 +11,9 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use franken_engine_deterministic_derive::Deterministic;
 use franken_engine_deterministic_trait::FixedLayout;
+use franken_engine_fixed_layout_derive::FixedLayout;
 
 use crate::engine_object_id::{EngineObjectId, IdError, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
@@ -278,16 +280,32 @@ pub struct TraceEntry {
     pub epoch: SecurityEpoch,
 }
 
+/// Length-prefix-free chain-hash preimage: `prev_hash || decision_hash`.
+///
+/// Both fields are `FixedLayout` (32 bytes each), so the `#[derive(FixedLayout)]`
+/// makes the preimage layout invariant *by construction* (Track CC.4): the byte
+/// offsets are computed by the derive rather than hand-managed, eliminating any
+/// possibility of a length-prefix or offset bug while remaining byte-identical to
+/// the legacy `prev || decision` manual assembly. `LAYOUT_SIZE == 64`.
+#[derive(Deterministic, FixedLayout)]
+struct TraceChainPreimage {
+    prev_hash: ContentHash,
+    decision_hash: ContentHash,
+}
+
 impl TraceEntry {
     fn compute_hash(prev_hash: &ContentHash, decision: &DecisionSnapshot) -> ContentHash {
-        let decision_hash = decision.content_hash();
-        // Fixed-layout canonical emit: `prev_hash || decision_hash`. Both fields are
-        // FixedLayout (32 bytes each), so the preimage layout is invariant by
-        // construction — no length prefix and no length-prefix bug is possible. The
-        // stack-allocated buffer also avoids a heap allocation on this chain path.
-        let mut preimage = [0u8; ContentHash::LAYOUT_SIZE * 2];
-        prev_hash.encode_fixed(&mut preimage[..ContentHash::LAYOUT_SIZE]);
-        decision_hash.encode_fixed(&mut preimage[ContentHash::LAYOUT_SIZE..]);
+        // Fixed-layout canonical emit: `prev_hash || decision_hash`. The derived
+        // FixedLayout encoder writes each field in declaration order with no length
+        // prefix, so the chain-hash preimage is correct by construction and bit-for-bit
+        // identical to the prior manual offset assembly. The stack buffer also avoids a
+        // heap allocation on this chain path.
+        let preimage_fields = TraceChainPreimage {
+            prev_hash: *prev_hash,
+            decision_hash: decision.content_hash(),
+        };
+        let mut preimage = [0u8; TraceChainPreimage::LAYOUT_SIZE];
+        preimage_fields.encode_fixed(&mut preimage);
         ContentHash::compute(&preimage)
     }
 }
@@ -1290,6 +1308,55 @@ impl std::error::Error for ReplayError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Track CC.4: prove the derived FixedLayout preimage is byte-identical to the
+    // legacy manual `prev || decision` assembly, so routing compute_hash through the
+    // derive cannot change any recorded chain hash.
+    #[test]
+    fn trace_chain_preimage_derive_matches_legacy_manual_assembly() {
+        let prev = ContentHash::compute(b"cc4-prev-entry");
+        let decision_hash = ContentHash::compute(b"cc4-decision-snapshot");
+
+        // Legacy manual offset assembly that compute_hash used before CC.4.
+        let mut legacy = [0u8; ContentHash::LAYOUT_SIZE * 2];
+        prev.encode_fixed(&mut legacy[..ContentHash::LAYOUT_SIZE]);
+        decision_hash.encode_fixed(&mut legacy[ContentHash::LAYOUT_SIZE..]);
+
+        // Derived FixedLayout emit.
+        let derived = TraceChainPreimage {
+            prev_hash: prev,
+            decision_hash,
+        };
+        assert_eq!(
+            TraceChainPreimage::LAYOUT_SIZE,
+            ContentHash::LAYOUT_SIZE * 2
+        );
+        let mut fixed = [0u8; TraceChainPreimage::LAYOUT_SIZE];
+        derived.encode_fixed(&mut fixed);
+
+        assert_eq!(
+            fixed, legacy,
+            "derived FixedLayout preimage must equal legacy manual assembly byte-for-byte"
+        );
+    }
+
+    // Track CC.4: pin the chain-hash output for a fixed input so any future drift in
+    // the derived preimage layout is caught as a determinism regression.
+    #[test]
+    fn compute_hash_is_stable_under_fixed_layout_migration() {
+        let prev = ContentHash::compute(b"genesis");
+        let decision = make_snapshot(7, "promote", 3);
+
+        // Recompute the expected hash via the byte-equivalent manual preimage.
+        let mut manual = [0u8; ContentHash::LAYOUT_SIZE * 2];
+        prev.encode_fixed(&mut manual[..ContentHash::LAYOUT_SIZE]);
+        decision
+            .content_hash()
+            .encode_fixed(&mut manual[ContentHash::LAYOUT_SIZE..]);
+        let expected = ContentHash::compute(&manual);
+
+        assert_eq!(TraceEntry::compute_hash(&prev, &decision), expected);
+    }
 
     fn test_key() -> Vec<u8> {
         vec![42u8; 32]

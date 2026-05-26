@@ -234,6 +234,7 @@ sqlmodel-core = { path = "/dp/sqlmodel_rust/crates/sqlmodel-core" }
 sqlmodel-frankensqlite = { path = "/dp/sqlmodel_rust/crates/sqlmodel-frankensqlite" }
 franken-engine-deterministic-trait = { path = "../franken-engine-deterministic-trait" }
 franken-engine-deterministic-derive = { path = "../franken-engine-deterministic-derive" }
+franken-engine-fixed-layout-derive = { path = "../franken-engine-fixed-layout-derive" }
 unicode-normalization = "0.1"
 rustix = { version = "1.1", features = ["event", "fs", "process", "time"] }
 wait4 = "0.1"

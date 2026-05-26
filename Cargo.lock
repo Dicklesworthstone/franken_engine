@@ -1494,6 +1494,7 @@ dependencies = [
  "franken-decision",
  "franken-engine-deterministic-derive",
  "franken-engine-deterministic-trait",
+ "franken-engine-fixed-layout-derive",
  "franken-evidence",
  "franken-kernel",
  "frankenengine-extension-host",

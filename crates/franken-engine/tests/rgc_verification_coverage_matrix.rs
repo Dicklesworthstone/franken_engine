@@ -164,6 +164,35 @@ fn load_live_open_rgc_beads() -> Option<Vec<String>> {
     Some(beads)
 }
 
+/// Explicit opt-out for environments that genuinely lack the `br` CLI (e.g.
+/// hermetic CI sandboxes). When unset, a missing `br` is a HARD FAILURE: the
+/// snapshot-vs-live assertion must never silently pass green on coverage it
+/// could not actually verify.
+const ALLOW_MISSING_BR_ENV: &str = "RGC_051_ALLOW_MISSING_BR";
+
+/// Decision for the snapshot-vs-live reconciliation, factored out so the
+/// fail-closed contract is itself unit-testable without depending on whether
+/// `br` happens to be installed in the test environment.
+#[derive(Debug, PartialEq, Eq)]
+enum SnapshotCheck {
+    /// `br` produced live state; the committed snapshot must equal it.
+    Verify { live: Vec<String> },
+    /// `br` is unavailable but the operator explicitly waived the check.
+    WaivedMissingBr,
+    /// `br` is unavailable and no waiver is set: fail closed.
+    FailClosedMissingBr,
+}
+
+/// Classify what the snapshot test should do given the live bead state
+/// (`None` ⇔ `br` not on PATH) and whether a waiver is in effect.
+fn classify_snapshot_check(live: Option<Vec<String>>, allow_missing_br: bool) -> SnapshotCheck {
+    match (live, allow_missing_br) {
+        (Some(live), _) => SnapshotCheck::Verify { live },
+        (None, true) => SnapshotCheck::WaivedMissingBr,
+        (None, false) => SnapshotCheck::FailClosedMissingBr,
+    }
+}
+
 #[test]
 fn rgc_051_doc_contains_required_sections() {
     let path = repo_root().join("docs/RGC_VERIFICATION_COVERAGE_MATRIX_V1.md");
@@ -457,14 +486,56 @@ fn rgc_051_operator_verification_commands_are_present() {
 #[test]
 fn rgc_051_snapshot_matches_live_beads_state() {
     let matrix = parse_matrix();
-    let Some(live) = load_live_open_rgc_beads() else {
-        eprintln!("skipping live-bead snapshot assertion: `br` not available in this environment");
-        return;
-    };
+    let allow_missing_br = std::env::var_os(ALLOW_MISSING_BR_ENV).is_some();
+    match classify_snapshot_check(load_live_open_rgc_beads(), allow_missing_br) {
+        SnapshotCheck::Verify { live } => assert_eq!(
+            matrix.scope.open_bead_ids, live,
+            "matrix scope snapshot must match live non-closed bd-1lsy* beads from `br list --json`"
+        ),
+        SnapshotCheck::WaivedMissingBr => eprintln!(
+            "WAIVED: `br` unavailable and {ALLOW_MISSING_BR_ENV} is set; live-bead snapshot \
+             assertion skipped. Coverage snapshot is UNVERIFIED."
+        ),
+        SnapshotCheck::FailClosedMissingBr => panic!(
+            "`br` CLI is not on PATH, so the matrix scope snapshot cannot be verified against \
+             live bead state. Failing closed instead of passing green on unverified coverage. \
+             Install `br`, or set {ALLOW_MISSING_BR_ENV}=1 to explicitly waive the check in \
+             environments that genuinely lack the CLI."
+        ),
+    }
+}
 
+#[test]
+fn rgc_051_snapshot_check_fails_closed_when_br_missing_and_not_waived() {
     assert_eq!(
-        matrix.scope.open_bead_ids, live,
-        "matrix scope snapshot must match live non-closed bd-1lsy* beads from `br list --json`"
+        classify_snapshot_check(None, false),
+        SnapshotCheck::FailClosedMissingBr,
+        "missing `br` without an explicit waiver must fail closed, not silently skip"
+    );
+}
+
+#[test]
+fn rgc_051_snapshot_check_waives_only_with_explicit_optout() {
+    assert_eq!(
+        classify_snapshot_check(None, true),
+        SnapshotCheck::WaivedMissingBr,
+        "missing `br` is skipped only when the explicit waiver env var is set"
+    );
+}
+
+#[test]
+fn rgc_051_snapshot_check_verifies_when_br_available() {
+    let live = vec!["bd-1lsy.2.1".to_string(), "bd-1lsy.11.1".to_string()];
+    assert_eq!(
+        classify_snapshot_check(Some(live.clone()), false),
+        SnapshotCheck::Verify { live },
+        "available `br` output must always drive verification regardless of the waiver flag"
+    );
+    let live2 = vec!["bd-1lsy.2.1".to_string()];
+    assert_eq!(
+        classify_snapshot_check(Some(live2.clone()), true),
+        SnapshotCheck::Verify { live: live2 },
+        "a waiver must never suppress verification when `br` output is actually present"
     );
 }
 

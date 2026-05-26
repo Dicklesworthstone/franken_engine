@@ -1,0 +1,29 @@
+{
+  "schema_version": "franken-engine.frankenctl.v1",
+  "extension_id": "perf-h6-fixture",
+  "trace_id": "frankenctl-run:0",
+  "decision_id": "frankenctl-run:decision:0",
+  "policy_id": "default-policy",
+  "parse_goal": "script",
+  "source_ingestion": {
+    "source_language": "javascript",
+    "normalization_applied": false,
+    "original_source_hash": "sha256:e3b17893103ab6e4bb54a0ce7f2291d582988996e97228bf5db025b4189f9b06",
+    "normalized_source_hash": "sha256:e3b17893103ab6e4bb54a0ce7f2291d582988996e97228bf5db025b4189f9b06",
+    "ts_decision_count": 0,
+    "ts_capability_intent_count": 0
+  },
+  "lane": "baseline_deterministic_profile",
+  "lane_reason": "default_deterministic_profile",
+  "containment_action": "allow",
+  "execution_value": "60",
+  "expected_loss_millionths": 2800000,
+  "instructions_executed": 61,
+  "evidence_entries": 1,
+  "console_output": [],
+  "observability_mode": {
+    "mode_id": "default_capture",
+    "capture_semantics": "default_mixed_capture",
+    "lossless": false
+  }
+}

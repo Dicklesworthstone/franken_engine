@@ -1174,14 +1174,7 @@ impl CounterfactualReplayEngine {
         loss_matrix: &BTreeMap<String, i64>,
         threshold: i64,
     ) -> i64 {
-        // Estimate outcome based on action and loss matrix
-        let action_loss = loss_matrix.get(action).copied().unwrap_or(0);
-        // Outcome is inverse of loss scaled by threshold
-        if threshold > 0 {
-            MILLION - (action_loss * MILLION) / (threshold + MILLION)
-        } else {
-            MILLION - action_loss
-        }
+        estimate_lane_outcome_millionths(action, loss_matrix, threshold)
     }
 
     // ── Internal: Confidence envelope ────────────────────────────
@@ -1462,6 +1455,31 @@ fn trace_node_id(trace: &TraceRecord) -> String {
 
 fn isqrt(n: u64) -> u64 {
     n.isqrt()
+}
+
+/// The engine's outcome model: estimate the decision outcome (in millionths,
+/// higher is better) of taking `action` given a per-action `loss_matrix` and a
+/// risk `threshold`. The outcome is the inverse of the chosen action's loss,
+/// scaled by the threshold.
+///
+/// This is the single source of truth for how a recorded decision's
+/// `outcome_millionths` is produced and how counterfactual re-evaluations score
+/// substituted actions: [`CounterfactualReplayEngine::compute_counterfactual`]
+/// scores every override through this same function. It is exposed so that
+/// recorded traces and metamorphic tests can seed `outcome_millionths` from the
+/// real model rather than from hand-picked numbers, giving the
+/// identity/perturbation relations genuine teeth.
+pub fn estimate_lane_outcome_millionths(
+    action: &str,
+    loss_matrix: &BTreeMap<String, i64>,
+    threshold: i64,
+) -> i64 {
+    let action_loss = loss_matrix.get(action).copied().unwrap_or(0);
+    if threshold > 0 {
+        MILLION - (action_loss * MILLION) / (threshold + MILLION)
+    } else {
+        MILLION - action_loss
+    }
 }
 
 /// Z-multiplier lookup for common confidence levels (millionths input, millionths output).

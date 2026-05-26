@@ -20,16 +20,35 @@
 //! of S.4 and complements the S.3 companion
 //! (`rgc_fleet_counterfactual_replay.rs`).
 //!
+//! ## Why the recorded outcomes are not hand-picked numbers
+//!
+//! The load-bearing risk for this kind of metamorphic test is that the
+//! recorded `outcome_millionths` are author-chosen magic numbers: then the
+//! identity relation degenerates into "the engine echoes whatever integer I
+//! wrote into the trace" and proves nothing about the real decision model.
+//!
+//! To give the relations teeth, every recorded decision's `outcome_millionths`
+//! is produced by the engine's **real** outcome model
+//! ([`estimate_lane_outcome_millionths`]) applied to that decision's
+//! action/loss-matrix/threshold — the exact function
+//! `CounterfactualReplayEngine::compute_counterfactual` uses to score
+//! substituted actions. The ground-truth totals below are recomputed
+//! independently through that same model (not read back from the report), and
+//! the perturbation relation asserts the *exact* re-scored outcome, not merely
+//! that "the number changed".
+//!
 //! Metamorphic relations exercised:
 //!
 //!   * **MR-identity** — substituting the original policy reproduces the
 //!     recorded outcome for the whole fleet and for every node, with zero
 //!     divergence and zero net improvement.
-//!   * **MR-ground-truth** — the reproduced total equals the sum of the
-//!     outcomes encoded in the captured traces (not merely self-consistent).
-//!   * **MR-round-trip** — a genuinely perturbing policy *does* move the
-//!     outcome (the engine is not a no-op), yet substituting the original
-//!     policy back recovers the recorded outcome exactly.
+//!   * **MR-ground-truth** — the reproduced total equals the model-computed
+//!     outcome of every captured decision (recomputed independently in-test
+//!     through the real outcome model, not merely self-consistent).
+//!   * **MR-round-trip** — a genuinely perturbing policy moves every decision's
+//!     outcome to the exact value the real model assigns the forced action
+//!     (the engine is not a no-op), yet substituting the original policy back
+//!     recovers the recorded outcome exactly.
 //!   * **MR-reeval-branch** — identity holds even when the re-evaluation
 //!     branch is active (recorded max-loss exceeds the threshold), because the
 //!     threshold delta is zero.
@@ -54,7 +73,7 @@ use frankenengine_engine::causal_replay::{
 use frankenengine_engine::counterfactual_evaluator::PolicyId;
 use frankenengine_engine::counterfactual_replay_engine::{
     CounterfactualReplayEngine, FLEET_COUNTERFACTUAL_SCHEMA_VERSION, ReplayEngineConfig,
-    ReplayScope, SubstitutedPolicySnapshot,
+    ReplayScope, SubstitutedPolicySnapshot, estimate_lane_outcome_millionths,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::runtime_decision_theory::LaneAction;
@@ -70,13 +89,35 @@ fn epoch() -> SecurityEpoch {
     SecurityEpoch::from_raw(1)
 }
 
-/// A recorded decision. `threshold` lets us build a node whose recorded
-/// max-loss exceeds the threshold, exercising the re-evaluation branch of the
-/// engine under identity substitution.
-fn make_decision(index: u64, outcome: i64, threshold: u64) -> DecisionSnapshot {
+/// The action recorded as "chosen" for every decision in the fleet.
+const CHOSEN_ACTION: &str = "native";
+
+/// Build the per-decision loss matrix from a recorded native-lane loss. The
+/// wasm lane is twice as costly, so the chosen `native` action is the
+/// loss-minimizing one and the matrix's max-loss is `2 * native_loss`.
+fn loss_matrix_for(native_loss: i64) -> BTreeMap<String, i64> {
     let mut loss_matrix = BTreeMap::new();
-    loss_matrix.insert("native".to_string(), 100_000);
-    loss_matrix.insert("wasm".to_string(), 200_000);
+    loss_matrix.insert("native".to_string(), native_loss);
+    loss_matrix.insert("wasm".to_string(), native_loss * 2);
+    loss_matrix
+}
+
+/// The recorded outcome of a decision, produced by the engine's **real**
+/// outcome model — not a hand-picked number. This is the same function the
+/// replay engine uses to score substituted actions, so the trace encodes a
+/// model-consistent ground truth rather than an arbitrary integer.
+fn recorded_outcome(native_loss: i64, threshold: i64) -> i64 {
+    estimate_lane_outcome_millionths(CHOSEN_ACTION, &loss_matrix_for(native_loss), threshold)
+}
+
+/// A recorded decision whose `outcome_millionths` is derived from the real
+/// outcome model applied to its `native_loss`/`threshold`. A larger
+/// `native_loss` (e.g. when `2 * native_loss` exceeds `threshold`) drives the
+/// node onto the re-evaluation branch of the engine under identity
+/// substitution.
+fn make_decision(index: u64, native_loss: i64, threshold: u64) -> DecisionSnapshot {
+    let loss_matrix = loss_matrix_for(native_loss);
+    let outcome = estimate_lane_outcome_millionths(CHOSEN_ACTION, &loss_matrix, threshold as i64);
     DecisionSnapshot {
         decision_index: index,
         trace_id: "metamorphic-trace".to_string(),
@@ -88,7 +129,7 @@ fn make_decision(index: u64, outcome: i64, threshold: u64) -> DecisionSnapshot {
         threshold_millionths: threshold as i64,
         loss_matrix,
         evidence_hashes: vec![ContentHash::compute(b"evidence")],
-        chosen_action: "native".to_string(),
+        chosen_action: CHOSEN_ACTION.to_string(),
         outcome_millionths: outcome,
         extension_id: "ext-1".to_string(),
         nondeterminism_range: (0, 0),
@@ -113,13 +154,14 @@ fn make_trace(decisions: Vec<DecisionSnapshot>) -> TraceRecord {
     recorder.finalize()
 }
 
-/// Build a node trace whose decisions encode `outcomes` under `threshold`.
-fn node_trace(node_id: &str, trace_id: &str, outcomes: &[i64], threshold: u64) -> TraceRecord {
-    let decisions: Vec<DecisionSnapshot> = outcomes
+/// Build a node trace whose decisions encode the model outcomes for the given
+/// per-decision `native_losses` under `threshold`.
+fn node_trace(node_id: &str, trace_id: &str, native_losses: &[i64], threshold: u64) -> TraceRecord {
+    let decisions: Vec<DecisionSnapshot> = native_losses
         .iter()
         .enumerate()
-        .map(|(index, outcome)| {
-            let mut d = make_decision(index as u64, *outcome, threshold);
+        .map(|(index, native_loss)| {
+            let mut d = make_decision(index as u64, *native_loss, threshold);
             d.trace_id = trace_id.to_string();
             d.decision_id = format!("{trace_id}-decision-{index}");
             d
@@ -148,18 +190,50 @@ fn unique_dir(label: &str) -> PathBuf {
     ))
 }
 
-/// Per-node recorded outcomes for the standard fleet, with the recorded
-/// threshold (500_000 > max-loss 200_000, so the "else" branch of the engine
-/// returns the recorded outcome verbatim).
-const NODE_A: &[i64] = &[820_000, 610_000];
-const NODE_B: &[i64] = &[700_000, 900_000];
-const NODE_C: &[i64] = &[505_000, 480_000];
+/// Per-node recorded native-lane losses for the standard fleet. With
+/// `RECORDED_THRESHOLD` = 500_000, every node's max-loss (`2 * native_loss`)
+/// stays at or below the threshold, so the "else" branch of the engine returns
+/// the recorded (model-derived) outcome verbatim under identity. The losses are
+/// distinct so the per-decision model outcomes — and therefore the sums — are
+/// distinct rather than degenerate.
+const NODE_A: &[i64] = &[100_000, 150_000];
+const NODE_B: &[i64] = &[120_000, 90_000];
+const NODE_C: &[i64] = &[200_000, 60_000];
 const RECORDED_THRESHOLD: u64 = 500_000;
 
-/// The exact sum of every recorded outcome in the standard fleet. Identity
-/// substitution must reproduce this number.
+/// Every recorded native loss across the standard fleet, in trace order.
+fn fleet_native_losses() -> Vec<i64> {
+    NODE_A.iter().chain(NODE_B).chain(NODE_C).copied().collect()
+}
+
+/// The exact fleet outcome the **real model** assigns the recorded decisions.
+/// Recomputed independently in-test (not read back from the report), so the
+/// identity relation proves the engine reproduces a genuine model output, not
+/// an echoed magic number.
 fn recorded_fleet_total() -> i64 {
-    NODE_A.iter().chain(NODE_B).chain(NODE_C).sum()
+    fleet_native_losses()
+        .iter()
+        .map(|&loss| recorded_outcome(loss, RECORDED_THRESHOLD as i64))
+        .sum()
+}
+
+/// The exact fleet outcome the real model assigns when every decision is forced
+/// onto the safe fallback action (the perturbing policy below). Because
+/// `fallback_safe` is absent from the loss matrix, the model scores it at the
+/// zero-loss ceiling, so this differs from `recorded_fleet_total()` whenever
+/// the chosen action carried any loss.
+fn perturbed_fleet_total() -> i64 {
+    let forced = LaneAction::FallbackSafe.to_string();
+    fleet_native_losses()
+        .iter()
+        .map(|&loss| {
+            estimate_lane_outcome_millionths(
+                &forced,
+                &loss_matrix_for(loss),
+                RECORDED_THRESHOLD as i64,
+            )
+        })
+        .sum()
 }
 
 /// Build a three-node fleet trace directory and return its root.
@@ -318,14 +392,27 @@ fn mr_identity_equals_trace_encoded_ground_truth() {
 
     let expected = recorded_fleet_total();
     // Not merely self-consistent: the reproduced total equals the exact sum of
-    // the outcomes that were written into the captured traces.
+    // the model-derived outcomes written into the captured traces. `expected`
+    // is recomputed independently in-test through the real outcome model, so a
+    // regression that mutated the carried-through outcome would be caught.
     assert_eq!(
         report.total_original_outcome_millionths, expected,
-        "the recorded fleet total must match the trace-encoded ground truth"
+        "the recorded fleet total must match the model-derived ground truth"
     );
     assert_eq!(
         report.total_counterfactual_outcome_millionths, expected,
-        "identity substitution must reproduce the trace-encoded ground truth"
+        "identity substitution must reproduce the model-derived ground truth"
+    );
+
+    // The ground truth is a genuine, action-sensitive model output rather than
+    // a degenerate constant: the chosen action carries real loss, so it scores
+    // strictly below the zero-loss fallback ceiling. A model that ignored loss
+    // (returned a constant) would collapse these two totals and fail here.
+    assert!(
+        expected < perturbed_fleet_total(),
+        "the chosen action must score below the zero-loss fallback ceiling \
+         (recorded={expected}, fallback-ceiling={})",
+        perturbed_fleet_total()
     );
 }
 
@@ -379,24 +466,28 @@ fn mr_identity_with_explicit_equal_threshold_reproduces_outcome() {
 
 #[test]
 fn mr_identity_holds_when_reeval_branch_is_active() {
-    // Record a node whose max-loss (200_000) exceeds the threshold (50_000),
-    // so the engine takes the re-evaluation branch rather than the verbatim
-    // branch. Under identity the threshold delta is still zero, so the outcome
-    // must be reproduced exactly.
+    // Record a node whose max-loss (2 * native_loss) exceeds the threshold
+    // (50_000), so the engine takes the re-evaluation branch rather than the
+    // verbatim branch. Under identity the threshold delta is still zero, so the
+    // outcome must be reproduced exactly.
     let root = unique_dir("reeval");
     fs::create_dir_all(&root).unwrap();
-    let outcomes = [300_000_i64, 250_000];
+    let native_losses = [40_000_i64, 35_000];
+    let reeval_threshold = 50_000_u64;
     write_trace(
         &root,
         "node-low/t1.json",
-        &node_trace("node-low", "t-low-1", &outcomes, 50_000),
+        &node_trace("node-low", "t-low-1", &native_losses, reeval_threshold),
     );
 
     let report = engine()
         .compare_fleet_trace_dir(&root, &original_policy_snapshot(), None)
         .expect("fleet report for low-threshold node");
 
-    let expected: i64 = outcomes.iter().sum();
+    let expected: i64 = native_losses
+        .iter()
+        .map(|&loss| recorded_outcome(loss, reeval_threshold as i64))
+        .sum();
     assert_eq!(
         report.total_original_outcome_millionths, expected,
         "recorded outcome ground truth"
@@ -433,6 +524,21 @@ fn mr_perturbing_policy_actually_moves_the_outcome() {
     assert_ne!(
         report.total_counterfactual_outcome_millionths, report.total_original_outcome_millionths,
         "a perturbing policy must move the outcome away from the recorded one"
+    );
+
+    // Teeth: the perturbed outcome is not merely "different" — it is exactly the
+    // value the real outcome model assigns when every decision is re-scored on
+    // the forced fallback action. This proves the engine re-runs the genuine
+    // model on the substituted action rather than fabricating a delta.
+    assert_eq!(
+        report.total_counterfactual_outcome_millionths,
+        perturbed_fleet_total(),
+        "the perturbed total must equal the real model's score for the forced action"
+    );
+    assert_eq!(
+        report.total_original_outcome_millionths,
+        recorded_fleet_total(),
+        "the recorded column must remain the trace-encoded model ground truth"
     );
 }
 

@@ -21,7 +21,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use frankenengine_engine::ast::ParseGoal;
-use frankenengine_engine::baseline_interpreter::{InterpreterError, LaneChoice};
+use frankenengine_engine::baseline_interpreter::{ConsoleLevel, InterpreterError, LaneChoice};
 use frankenengine_engine::bayesian_posterior::RiskState;
 use frankenengine_engine::control_plane_mock_inventory::{
     OrchestratorContextRefactorOutcome, OrchestratorContextRefactorRunManifest,
@@ -1703,8 +1703,50 @@ fn different_extensions_produce_different_extension_ids_in_result() {
 fn execution_value_is_populated() {
     let mut orch = default_orch();
     let result = execute_simple(&mut orch);
-    // The execution value should be some string representation of the result.
-    assert!(!result.execution_value.is_empty());
+    // `execute_simple` runs the source `42`, so the orchestrator must surface
+    // the *computed* value, not merely a non-empty string. A non-empty-only
+    // check (the prior assertion) would silently pass for a regression that
+    // returned the wrong value (e.g. "undefined" or a stale digest).
+    assert_eq!(result.execution_value, "42");
+}
+
+#[test]
+fn arithmetic_expression_yields_computed_value() {
+    // Drive a real arithmetic expression end-to-end through the orchestrator
+    // (parse -> lower -> interpret) and assert the exact computed value. This
+    // gives the e2e path teeth: an interpreter/lowering regression that yields
+    // a non-empty but WRONG value (which `!is_empty()` would accept) now fails.
+    let mut orch = default_orch();
+    let result = orch
+        .execute(&simple_package("ext-arith", "40 + 2;"))
+        .expect("arithmetic expression should execute");
+    assert_eq!(result.execution_value, "42");
+}
+
+#[test]
+fn console_output_is_captured_through_orchestrator() {
+    // `console_output` was never asserted anywhere in this file, so an
+    // orchestrator regression that dropped console capture would pass silently.
+    // Run a program that both logs and returns a value, then assert BOTH the
+    // captured console entry and the trailing expression value.
+    let mut orch = default_orch();
+    let result = orch
+        .execute(&simple_package(
+            "ext-console",
+            "console.log(\"orchestrator-console-probe\"); 1 + 1;",
+        ))
+        .expect("console.log program should execute");
+
+    // Trailing expression value must still be computed correctly.
+    assert_eq!(result.execution_value, "2");
+
+    // The console.log call must be captured and surfaced on the result.
+    let probe = result
+        .console_output
+        .iter()
+        .find(|entry| entry.message == "orchestrator-console-probe")
+        .expect("console.log output must be captured and surfaced by the orchestrator");
+    assert_eq!(probe.level, ConsoleLevel::Log);
 }
 
 // =========================================================================

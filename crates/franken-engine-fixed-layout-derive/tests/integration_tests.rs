@@ -1,5 +1,5 @@
 use franken_engine_deterministic_derive::Deterministic;
-use franken_engine_deterministic_trait::{Deterministic, FixedLayout, FixedLayoutError};
+use franken_engine_deterministic_trait::{FixedLayout, FixedLayoutError};
 use franken_engine_fixed_layout_derive::FixedLayout;
 
 #[derive(Debug, Clone, PartialEq, Eq, Deterministic, FixedLayout)]
@@ -130,11 +130,13 @@ fn test_fixed_layout_determinism() {
 fn test_buffer_size_validation() {
     let point = Point { x: 1, y: 2 };
 
-    // Test encode with wrong buffer size
+    // Test encode with wrong buffer size. The closure captures `&mut small_buffer`,
+    // which is not `UnwindSafe`; `AssertUnwindSafe` is correct here because we discard
+    // the buffer after the expected panic.
     let mut small_buffer = vec![0u8; 4]; // Too small
-    std::panic::catch_unwind(|| {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         point.encode_fixed(&mut small_buffer);
-    })
+    }))
     .expect_err("Should panic with wrong buffer size");
 
     // Test decode with wrong buffer size
@@ -161,13 +163,13 @@ fn test_bool_encoding() {
     let mut buffer = vec![0u8; bool::LAYOUT_SIZE];
     true.encode_fixed(&mut buffer);
     assert_eq!(buffer, vec![1]);
-    assert_eq!(bool::decode_fixed(&buffer).unwrap(), true);
+    assert!(bool::decode_fixed(&buffer).unwrap());
 
     // Test false
     let mut buffer = vec![0u8; bool::LAYOUT_SIZE];
     false.encode_fixed(&mut buffer);
     assert_eq!(buffer, vec![0]);
-    assert_eq!(bool::decode_fixed(&buffer).unwrap(), false);
+    assert!(!bool::decode_fixed(&buffer).unwrap());
 
     // Test invalid bool value
     let invalid_buffer = vec![2];

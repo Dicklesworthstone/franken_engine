@@ -291,7 +291,7 @@ fn generate_enum_impl(
     let encode_arms: Vec<_> = variant_info
         .iter()
         .enumerate()
-        .map(|(index, (variant_name, field_count, _))| {
+        .map(|(index, (variant_name, field_count, field_types))| {
             let discriminant = index as u8;
             if *field_count == 0 {
                 quote! {
@@ -304,12 +304,17 @@ fn generate_enum_impl(
                     }
                 }
             } else {
+                // `LAYOUT_SIZE` is a trait associated const, not a field of `value`
+                // (`value` is a borrowed payload such as `&u16`); resolve it through the
+                // FixedLayout trait on the concrete field type.
+                let field_type = &field_types[0];
                 quote! {
                     Self::#variant_name(ref value) => {
                         buffer[0] = #discriminant;
-                        value.encode_fixed(&mut buffer[1..1 + value.LAYOUT_SIZE]);
+                        let field_size = <#field_type as franken_engine_deterministic_trait::FixedLayout>::LAYOUT_SIZE;
+                        value.encode_fixed(&mut buffer[1..1 + field_size]);
                         // Zero-pad the rest
-                        for i in (1 + value.LAYOUT_SIZE)..Self::LAYOUT_SIZE {
+                        for i in (1 + field_size)..Self::LAYOUT_SIZE {
                             buffer[i] = 0;
                         }
                     }

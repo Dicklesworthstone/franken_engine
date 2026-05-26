@@ -34,7 +34,7 @@ use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
 use frankenengine_engine::parser_arena::{ArenaBudget, ParserArena};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use frankenengine_engine::transport_certificate_ledger::{
-    ArtifactKind, HardwareCell, TransportCertificate, evaluate_transport,
+    ArtifactKind, HardwareCell, evaluate_transport,
 };
 use frankenengine_engine::{JsEngine, QuickJsInspiredNativeEngine, V8InspiredNativeEngine};
 
@@ -333,16 +333,13 @@ fn real_runtime_certificate_digest() -> ContentHash {
         990_000,
     )
     .expect("transport certificate should evaluate");
+    // H5.2 (bd-o4cbn.7.2): H5.1 confirmed no production path round-trips a
+    // TransportCertificate, so the bench no longer deserializes (that step was
+    // ~25% of bench self-time and non-representative). Hash only the serialized
+    // bytes; the digest input no longer depends on any decoded field. Round-trip
+    // fidelity is pinned by tests/transport_certificate_serde.rs instead.
     let json = serde_json::to_string(&certificate).expect("transport certificate should serialize");
-    let decoded: TransportCertificate =
-        serde_json::from_str(&json).expect("transport certificate should deserialize");
-    ContentHash::compute(
-        format!(
-            "{}:{}:{}:{}",
-            decoded.certificate_id, decoded.outcome, decoded.residual_fraction_millionths, json
-        )
-        .as_bytes(),
-    )
+    ContentHash::compute(json.as_bytes())
 }
 
 fn bench_real_runtime_hot_paths(c: &mut Criterion) {

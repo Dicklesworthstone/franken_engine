@@ -220,6 +220,15 @@ fn test_tee_attestation_required() {
     let valid_quote_verified = provider.verify_quote(&valid_quote);
     assert!(valid_quote_verified);
 
+    // bd-bg9l1.2: prove verify_quote is not an f(x)==f(x) tautology — a quote
+    // whose signed nonce was mutated must fail the HMAC-SHA256 check.
+    let mut tampered_quote = valid_quote.clone();
+    tampered_quote.nonce = format!("{}_tampered", tampered_quote.nonce);
+    assert!(
+        !provider.verify_quote(&tampered_quote),
+        "mutating a signed field must invalidate the HMAC-SHA256 tag",
+    );
+
     // Generate expired quote (should fail)
     let expired_quote = provider.generate_expired_quote("expired_nonce");
     let expired_quote_structure_verified = provider.verify_quote(&expired_quote);

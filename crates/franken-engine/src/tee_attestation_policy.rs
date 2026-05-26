@@ -1508,13 +1508,28 @@ fn is_hex_ascii(s: &str) -> bool {
 // Mock TEE Provider for Testing
 // ---------------------------------------------------------------------------
 
-/// Mock TEE provider for testing and simulation.
-/// Generates HMAC-signed attestation quotes conforming to existing policy types.
+/// Mock TEE provider for **tests and local simulation only**.
+///
+/// This type is never compiled into production builds. It is gated behind
+/// `#[cfg(test)]` (for this crate's own unit tests) and the opt-in
+/// `tee-test-mock` Cargo feature (activated for cross-crate integration tests
+/// via the self dev-dependency in `Cargo.toml`); it is not part of the default
+/// library API (bd-bg9l1.2).
+///
+/// Quotes are signed with a real HMAC-SHA256 tag over a canonical preimage, but
+/// the signing key is a fixed, publicly-known constant — so a *verified* quote
+/// attests nothing about a real TEE. The provider exists solely to exercise the
+/// structural shape of the attestation path
+/// ([`to_policy_quote`](Self::to_policy_quote) ->
+/// [`TeeAttestationPolicy::evaluate_quote`]) with deterministic, tamper-evident
+/// fixtures. It must never be wired into a production authority decision.
+#[cfg(any(test, feature = "tee-test-mock"))]
 #[derive(Debug, Clone)]
 pub struct MockTeeProvider {
     /// Platform this provider simulates.
     pub platform: TeePlatform,
-    /// HMAC key for signing mock quotes.
+    /// Fixed, publicly-known HMAC-SHA256 key for signing mock quotes.
+    /// NOT a secret — present only so the test tag is reproducible.
     signing_key: [u8; 32],
     /// Mock trust root ID.
     pub trust_root_id: String,
@@ -1524,16 +1539,20 @@ pub struct MockTeeProvider {
     pub rejected_measurement: MeasurementDigest,
 }
 
-/// Mock attestation quote with HMAC signature.
+/// Mock attestation quote carrying an HMAC-SHA256 tag (test-only; see
+/// [`MockTeeProvider`]).
+#[cfg(any(test, feature = "tee-test-mock"))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MockAttestationQuote {
     pub measurement_hash: String,
     pub nonce: String,
     pub timestamp: u64,
     pub platform: TeePlatform,
-    pub signature: String, // HMAC-SHA256 hex
+    /// HMAC-SHA256 tag (lowercase hex) over the canonical quote preimage.
+    pub signature: String,
 }
 
+#[cfg(any(test, feature = "tee-test-mock"))]
 impl MockTeeProvider {
     /// Create a new mock TEE provider for the given platform.
     pub fn new(platform: TeePlatform) -> Self {
@@ -1612,18 +1631,13 @@ impl MockTeeProvider {
         nonce: &str,
         timestamp: u64,
     ) -> MockAttestationQuote {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use hmac::Mac;
 
-        // Create deterministic signature using HMAC-like approach
-        let mut hasher = DefaultHasher::new();
-        self.signing_key.hash(&mut hasher);
-        measurement.digest_hex.hash(&mut hasher);
-        nonce.hash(&mut hasher);
-        timestamp.hash(&mut hasher);
-        self.platform.canonical_tag().hash(&mut hasher);
-
-        let signature = format!("{:x}", hasher.finish());
+        let signature = hex::encode(
+            self.quote_mac(&measurement.digest_hex, nonce, timestamp)
+                .finalize()
+                .into_bytes(),
+        );
 
         MockAttestationQuote {
             measurement_hash: measurement.digest_hex.clone(),
@@ -1634,19 +1648,51 @@ impl MockTeeProvider {
         }
     }
 
-    /// Verify a mock quote signature.
-    pub fn verify_quote(&self, quote: &MockAttestationQuote) -> bool {
-        // Reconstruct expected quote and compare signatures
-        let expected = self.generate_quote_with_measurement(
-            &MeasurementDigest {
-                algorithm: self.approved_measurement.algorithm,
-                digest_hex: quote.measurement_hash.clone(),
-            },
-            &quote.nonce,
-            quote.timestamp,
-        );
+    /// Build the HMAC-SHA256 instance over the canonical quote preimage.
+    ///
+    /// Fields are length-delimited (`u64` LE length prefix per byte slice) so
+    /// distinct field boundaries cannot collide — an unambiguous canonical
+    /// encoding shared by both signing and verification.
+    fn quote_mac(
+        &self,
+        measurement_hash: &str,
+        nonce: &str,
+        timestamp: u64,
+    ) -> hmac::Hmac<sha2::Sha256> {
+        use hmac::{Hmac, Mac};
+        use sha2::Sha256;
 
-        expected.signature == quote.signature && expected.platform == quote.platform
+        let mut mac = <Hmac<Sha256>>::new_from_slice(&self.signing_key)
+            .expect("HMAC-SHA256 accepts keys of any length");
+        for field in [
+            self.platform.canonical_tag().as_bytes(),
+            measurement_hash.as_bytes(),
+            nonce.as_bytes(),
+        ] {
+            mac.update(&(field.len() as u64).to_le_bytes());
+            mac.update(field);
+        }
+        mac.update(&timestamp.to_le_bytes());
+        mac
+    }
+
+    /// Verify a mock quote's HMAC-SHA256 tag in constant time.
+    ///
+    /// Rejects a platform mismatch, a non-hex tag, and any tampering of a
+    /// signed field. Uses [`hmac::Mac::verify_slice`], which compares tags in
+    /// constant time, rather than a short-circuiting string compare.
+    pub fn verify_quote(&self, quote: &MockAttestationQuote) -> bool {
+        use hmac::Mac;
+
+        if quote.platform != self.platform {
+            return false;
+        }
+        let Ok(provided_tag) = hex::decode(&quote.signature) else {
+            return false;
+        };
+        self.quote_mac(&quote.measurement_hash, &quote.nonce, quote.timestamp)
+            .verify_slice(&provided_tag)
+            .is_ok()
     }
 
     /// Convert mock quote to policy AttestationQuote for evaluation.
@@ -4184,6 +4230,82 @@ mod tests {
 
         // Verification should fail
         assert!(!provider.verify_quote(&quote));
+    }
+
+    #[test]
+    fn hmac_signature_round_trips_and_rejects_tampering() {
+        // bd-bg9l1.2: the mock signs with real HMAC-SHA256 (not the prior
+        // non-cryptographic DefaultHasher). A genuine round-trip must verify,
+        // and mutating ANY signed field — or the tag itself — must be rejected
+        // by the constant-time verifier. This proves `verify_quote` is not the
+        // `f(x) == f(x)` tautology the bead flagged.
+        for platform in TeePlatform::ALL {
+            let provider = MockTeeProvider::new(platform);
+            let quote = provider.generate_valid_quote("round-trip-nonce");
+
+            // Round-trip: a freshly-signed quote verifies.
+            assert!(
+                provider.verify_quote(&quote),
+                "valid HMAC-SHA256 quote must verify on {platform:?}",
+            );
+            // Tag is a 32-byte (SHA-256) HMAC encoded as 64 lowercase hex chars.
+            assert_eq!(quote.signature.len(), 64, "HMAC-SHA256 tag is 32 bytes");
+            assert!(is_hex_ascii(&quote.signature), "tag must be hex on {platform:?}");
+
+            // Tamper each signed field independently — every mutation rejects.
+            let mut bad_measurement = quote.clone();
+            bad_measurement.measurement_hash = provider.rejected_measurement.digest_hex.clone();
+            assert!(
+                !provider.verify_quote(&bad_measurement),
+                "measurement tamper must be rejected on {platform:?}",
+            );
+
+            let mut bad_nonce = quote.clone();
+            bad_nonce.nonce = "different-nonce".to_string();
+            assert!(
+                !provider.verify_quote(&bad_nonce),
+                "nonce tamper must be rejected on {platform:?}",
+            );
+
+            let mut bad_timestamp = quote.clone();
+            bad_timestamp.timestamp ^= 1;
+            assert!(
+                !provider.verify_quote(&bad_timestamp),
+                "timestamp tamper must be rejected on {platform:?}",
+            );
+
+            // Flip the first hex nibble of the tag.
+            let mut bad_tag = quote.clone();
+            let first = bad_tag.signature.remove(0);
+            bad_tag.signature.insert(0, if first == '0' { '1' } else { '0' });
+            assert!(
+                !provider.verify_quote(&bad_tag),
+                "tag tamper must be rejected on {platform:?}",
+            );
+
+            // A non-hex tag is rejected without panicking.
+            let mut non_hex = quote.clone();
+            non_hex.signature = "zz".to_string();
+            assert!(
+                !provider.verify_quote(&non_hex),
+                "non-hex tag must be rejected on {platform:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn cross_platform_forgery_rejected() {
+        // A quote signed by one platform's provider must not verify under a
+        // different platform's provider: the canonical preimage binds the
+        // platform tag, and `verify_quote` rejects the platform mismatch.
+        let sgx = MockTeeProvider::new(TeePlatform::IntelSgx);
+        let sev = MockTeeProvider::new(TeePlatform::AmdSev);
+        let quote = sgx.generate_valid_quote("cross-platform");
+        assert!(sgx.verify_quote(&quote));
+        assert!(
+            !sev.verify_quote(&quote),
+            "platform-mismatched verify must fail",
+        );
     }
 
     #[test]

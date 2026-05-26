@@ -207,6 +207,14 @@ legacy_lib_tests_bd_2j7uk = []
 # Adds #[inline(never)] sentinels around encode phases for perf attribution.
 # NEVER enable in production builds - measurement-only.
 _h4_profile = []
+# Test-only: exposes `MockTeeProvider`/`MockAttestationQuote` (the TEE
+# attestation *simulator*) to cross-crate integration tests. The mock signs
+# with a fixed, publicly-known HMAC-SHA256 key and attests NOTHING about a real
+# TEE, so it must NEVER be enabled in production builds (bd-bg9l1.2). The
+# crate's own #[cfg(test)] unit tests reach the mock without this feature; it
+# exists purely so integration tests can — and those activate it via the self
+# dev-dependency below (which a plain `cargo build`/`--release` does not pull).
+tee-test-mock = []
 
 [dependencies]
 # NOTE: frankenengine-core dependency temporarily removed — franken-core crate
@@ -256,6 +264,11 @@ fp-types = { path = "/dp/frankenpandas/crates/fp-types" }
 dp = { path = "../dp" }
 
 [dev-dependencies]
+# Self dev-dependency: activates the test-only `tee-test-mock` feature for this
+# crate's integration tests (e.g. fleet_quarantine_integration.rs) without
+# leaking it into the default/production build. Dev-dependencies are not pulled
+# by `cargo build`/`--release`, so the mock stays out of prod (bd-bg9l1.2).
+frankenengine-engine = { path = ".", features = ["tee-test-mock"] }
 proptest = "1.6"
 regex = "1.0"
 criterion = { version = "0.5", features = ["html_reports"] }

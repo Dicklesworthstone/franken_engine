@@ -1,10 +1,21 @@
 #![forbid(unsafe_code)]
 
-//! Law proof and refutation pipeline: subjects candidate laws to hard
-//! proof/refutation pressure using differential replay, solver checks,
-//! and counterexample archives.
+//! Law proof and refutation pipeline: subjects candidate laws to
+//! proof/refutation pressure across three proof strategies (differential
+//! replay, solver check, counterexample search) and archives counterexamples.
 //!
 //! Bead: bd-1lsy.9.10.2 [RGC-810B]
+//!
+//! # Implementation status (bd-rpw3n)
+//!
+//! The three strategies are currently **deterministic heuristics**, not a
+//! real solver or replay harness: `simulate_proof_attempt` decides each
+//! verdict from content-addressed candidate properties. No SMT solver is
+//! invoked and no differential replay is run, so the per-attempt activity
+//! counters are heuristic rather than measured. In particular
+//! `ProofAttempt::solver_queries` stays `0` until a real solver is wired
+//! (it previously reported a fabricated count). Real solver/replay
+//! integration is tracked as future work.
 //!
 //! Candidate laws from the theorem-mining pipeline (`law_mining`) are
 //! subjected to rigorous verification before they can be promoted into
@@ -16,7 +27,8 @@
 //!
 //! - Three proof strategies are supported: differential replay (run
 //!   the law across multiple engine configurations), solver check
-//!   (formal SMT-style verification), and counterexample search
+//!   (a heuristic stand-in for formal SMT-style verification — see the
+//!   implementation-status note above), and counterexample search
 //!   (active search for violations).
 //! - A verdict is one of `Proved`, `Refuted`, or `Inconclusive`.
 //!   Refuted laws carry a `RefutationWitness` with the counterexample.
@@ -245,7 +257,10 @@ pub struct ProofAttempt {
     pub refutation_witness_id: Option<String>,
     /// Number of replay configurations tested (for DifferentialReplay).
     pub configurations_tested: u64,
-    /// Number of solver queries issued (for SolverCheck).
+    /// Number of solver queries issued (for SolverCheck). Currently always
+    /// `0`: no real solver is wired, so the heuristic SolverCheck strategy
+    /// issues no queries (bd-rpw3n). Will reflect real activity once a solver
+    /// is integrated.
     pub solver_queries: u64,
     /// Number of search iterations (for CounterexampleSearch).
     pub search_iterations: u64,
@@ -776,9 +791,13 @@ fn simulate_proof_attempt(
     let (verdict, confidence, witness_id) =
         determine_verdict(candidate_id, kind, strategy, rank_millionths);
 
+    // `solver_queries` is held at 0 for SolverCheck: no real solver runs, so
+    // reporting a non-zero count would fabricate solver activity a consumer
+    // could mistake for real evidence (bd-rpw3n). The other two counters
+    // remain heuristic placeholders, honestly framed by the module header.
     let (configs, queries, iters) = match strategy {
         ProofStrategy::DifferentialReplay => (4 + attempt_index as u64, 0, 0),
-        ProofStrategy::SolverCheck => (0, 8 + attempt_index as u64, 0),
+        ProofStrategy::SolverCheck => (0, 0, 0),
         ProofStrategy::CounterexampleSearch => (0, 0, 64 + attempt_index as u64 * 16),
     };
 

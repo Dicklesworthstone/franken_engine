@@ -1312,7 +1312,7 @@ fn enrichment_attempt_configurations_tested_for_differential_replay() {
 }
 
 #[test]
-fn enrichment_attempt_solver_queries_for_solver_check() {
+fn enrichment_solver_check_issues_no_solver_queries_until_solver_wired() {
     let config = ProofCampaignConfig {
         strategies: vec![ProofStrategy::SolverCheck],
         max_attempts: 16,
@@ -1323,13 +1323,25 @@ fn enrichment_attempt_solver_queries_for_solver_check() {
     let mut pipeline = ProofRefutationPipeline::new(config, epoch(800));
     let c = mk_candidate("enrich-sc-queries", CandidateKind::Invariant, 800_000);
     let result = pipeline.run_campaign(&c);
+    let mut seen = 0usize;
     for attempt in &result.attempts {
         if attempt.strategy == ProofStrategy::SolverCheck {
+            seen += 1;
             assert_eq!(attempt.configurations_tested, 0);
-            assert!(attempt.solver_queries > 0);
+            // No real solver is wired, so SolverCheck reports 0 queries rather
+            // than a fabricated count a consumer could mistake for real solver
+            // activity (bd-rpw3n).
+            assert_eq!(
+                attempt.solver_queries, 0,
+                "SolverCheck must not fabricate solver activity until a real solver is wired"
+            );
             assert_eq!(attempt.search_iterations, 0);
         }
     }
+    assert!(
+        seen > 0,
+        "expected at least one SolverCheck attempt in the campaign"
+    );
 }
 
 #[test]

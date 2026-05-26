@@ -154,11 +154,17 @@ pub struct ReportConfig {
     /// in the surfaced report. Setting `top_k = 0` is rejected at
     /// assembly time.
     pub top_k: u32,
-    /// EIV (in millionths-of-a-bit) below which the recommended
-    /// action defaults to `Hold` regardless of rank position.
+    /// Normalized-EIV threshold below which the recommended action defaults
+    /// to `Hold` regardless of rank position. Expressed as a fraction (in
+    /// millionths; `1_000_000` = 100%) of the maximum achievable
+    /// single-observation EIV — `recommend` normalizes the raw EIV against
+    /// `MAX_SINGLE_OBS_EIV_MILLIMILLIBITS` before comparing (bd-cixqu.23.4).
+    /// The field name retains the `_millimillibits` suffix for serde / API
+    /// stability; its value is now a fraction, not absolute bits.
     pub hold_below_eiv_millimillibits: i64,
-    /// EIV at or above which the recommended action defaults to
-    /// `InvestNow` if effort is `Small` or `Medium`.
+    /// Normalized-EIV threshold at or above which the recommended action
+    /// defaults to `InvestNow` when effort is `Small` or `Medium`. Same
+    /// fraction-of-maximum scale as [`hold_below_eiv_millimillibits`].
     pub invest_at_eiv_millimillibits: i64,
 }
 
@@ -167,9 +173,12 @@ impl Default for ReportConfig {
         Self {
             cadence_ns: 604_800_000_000_000, // 7 days
             top_k: 10,
-            // 0.20 bits of expected information gain — the noise floor.
+            // Hold below 20% of the maximum achievable single-observation
+            // information — the noise floor (bd-cixqu.23.4: normalized
+            // fraction in millionths, not raw bits).
             hold_below_eiv_millimillibits: 200_000,
-            // 0.60 bits — substantial information gain expected.
+            // InvestNow at or above 60% of the maximum achievable
+            // single-observation information — substantial expected gain.
             invest_at_eiv_millimillibits: 600_000,
         }
     }
@@ -420,15 +429,50 @@ fn action_byte(a: RecommendedAction) -> u8 {
 // Recommendation derivation
 // ---------------------------------------------------------------------------
 
+/// Maximum achievable single-observation binary EIV, in millionths-of-a-bit.
+///
+/// `EivScore::compute` scores the expected information gain of the *next single*
+/// Bernoulli observation, `H(prior) - E[H(posterior)]`. That quantity is
+/// maximized under a uniform `Beta(1, 1)` prior, where it equals
+/// `H(0.5) - H(2/3) = 1.0 - ~0.918 ≈ 0.0817` bits — a single observation can
+/// never gain more than ~0.082 bits. Comparing that raw value against the
+/// [`ReportConfig`] thresholds, which were expressed on a full 0..1-bit scale
+/// (0.20 / 0.60 bits), made `InvestNow`/`Watch` unreachable and pinned every
+/// compute-derived recommendation to `Hold` (bd-cixqu.23.4).
+///
+/// [`recommend`] therefore normalizes the raw EIV against this ceiling so the
+/// thresholds are interpretable as a fraction (in millionths; `1_000_000` =
+/// 100%) of the maximum achievable single-observation information, rather than
+/// as absolute bits the scorer can never reach.
+///
+/// The exact fixed-point value is asserted against `EivScore::compute` by the
+/// `max_single_obs_eiv_ceiling_matches_compute` test, so it cannot silently
+/// drift if the entropy approximation changes.
+const MAX_SINGLE_OBS_EIV_MILLIMILLIBITS: i64 = 81_704;
+
+/// Full-scale denominator for the normalized EIV fraction (`1_000_000` = 1.0),
+/// matching the millionths convention the [`ReportConfig`] thresholds use.
+const EIV_FRACTION_FULL_SCALE: i64 = 1_000_000;
+
 fn recommend(input: &WeeklyReportInput, config: &ReportConfig) -> RecommendedAction {
     let eiv = input.eiv_score.eiv_millimillibits;
     if eiv < 0 {
         return RecommendedAction::ConsiderPausing;
     }
-    if eiv < config.hold_below_eiv_millimillibits {
+    // Normalize the raw single-observation EIV to a [0, 1_000_000] fraction of
+    // the maximum achievable single-observation information before comparing it
+    // to the config thresholds (bd-cixqu.23.4). Without this, a single
+    // observation peaks at ~0.082 bits and never crosses the ~0.2/0.6-bit
+    // thresholds, so InvestNow/Watch were dead code and every recommendation
+    // was Hold. `saturating_mul` guards the multiply; `.min` caps the fraction
+    // at full scale for the uniform-prior ceiling.
+    let eiv_fraction = (eiv.saturating_mul(EIV_FRACTION_FULL_SCALE)
+        / MAX_SINGLE_OBS_EIV_MILLIMILLIBITS)
+        .min(EIV_FRACTION_FULL_SCALE);
+    if eiv_fraction < config.hold_below_eiv_millimillibits {
         return RecommendedAction::Hold;
     }
-    if eiv >= config.invest_at_eiv_millimillibits
+    if eiv_fraction >= config.invest_at_eiv_millimillibits
         && matches!(input.effort, EffortEstimate::Small | EffortEstimate::Medium)
     {
         return RecommendedAction::InvestNow;
@@ -511,13 +555,14 @@ mod tests {
         ReportConfig::default()
     }
 
-    /// Build an input with a directly-specified EIV (millionths-of-a-bit),
-    /// bypassing `EivScore::compute`. The single-observation EIV from
-    /// `compute` peaks near 0.082 bits (at a uniform prior) — well below
-    /// the default invest/hold thresholds — so recommendation tests that
-    /// need to cross the invest threshold construct the EIV they intend to
-    /// exercise rather than relying on an unreachable compute value. The
-    /// threshold-vs-compute-range mismatch is tracked as a separate bug.
+    /// Build an input with a directly-specified raw EIV (millionths-of-a-bit),
+    /// bypassing `EivScore::compute`. The single-observation EIV from `compute`
+    /// peaks near 0.082 bits at a uniform prior; `recommend` normalizes that
+    /// raw value against the `MAX_SINGLE_OBS_EIV_MILLIMILLIBITS` ceiling before
+    /// comparing it to the config thresholds (bd-cixqu.23.4), so a raw value at
+    /// or above the ceiling normalizes to full scale (1_000_000). This helper
+    /// lets recommendation tests pin an exact raw EIV to land on a chosen side
+    /// of the (now reachable) thresholds.
     fn input_with_eiv(
         id: &str,
         eiv_millimillibits: i64,
@@ -669,17 +714,64 @@ mod tests {
 
     #[test]
     fn invest_threshold_governed_by_config() {
+        // A mid-range raw EIV normalizes to ~367k of 1_000_000 (bd-cixqu.23.4).
+        let mid = vec![input_with_eiv("m", 30_000, EffortEstimate::Small, 0)];
+        // Default invest_at = 600_000 (60%): below the threshold -> not InvestNow.
+        let r_default =
+            WeeklyRankedReport::assemble(mid.clone(), default_config(), 1, 100, epoch()).unwrap();
+        assert_ne!(
+            r_default.rankings[0].recommended_action,
+            RecommendedAction::InvestNow
+        );
+        // Lower invest_at to 30%: the same normalized EIV now clears it.
         let cfg = ReportConfig {
-            invest_at_eiv_millimillibits: 999_999, // basically unreachable
+            invest_at_eiv_millimillibits: 300_000,
             ..default_config()
         };
-        let inputs = vec![input("m", 1, 1, EffortEstimate::Small, 0)];
-        let r = WeeklyRankedReport::assemble(inputs, cfg, 1, 100, epoch()).unwrap();
-        // EIV ~1.0 bit but threshold raised: no longer InvestNow.
-        assert_ne!(
+        let r_low = WeeklyRankedReport::assemble(mid, cfg, 1, 100, epoch()).unwrap();
+        assert_eq!(
+            r_low.rankings[0].recommended_action,
+            RecommendedAction::InvestNow
+        );
+    }
+
+    #[test]
+    fn max_single_obs_eiv_ceiling_matches_compute() {
+        // bd-cixqu.23.4: the normalization ceiling must equal the EIV the scorer
+        // actually produces for the most-informative single observation (a
+        // uniform Beta(1,1) prior), so the fraction scale stays self-consistent
+        // if the entropy approximation ever changes.
+        let uniform = EivScore::compute("ceiling", PriorEvidence::uniform(), 0, epoch());
+        assert_eq!(
+            uniform.eiv_millimillibits,
+            MAX_SINGLE_OBS_EIV_MILLIMILLIBITS
+        );
+        // Sanity: the single-observation ceiling is ~0.082 bits.
+        assert!((80_000..=83_000).contains(&MAX_SINGLE_OBS_EIV_MILLIMILLIBITS));
+    }
+
+    #[test]
+    fn compute_derived_uniform_prior_now_reaches_invest_now() {
+        // Regression for bd-cixqu.23.4: before normalization every
+        // compute-derived EIV (max ~0.082 bits) fell below the 0.20-bit hold
+        // threshold, so recommend() returned Hold for everything and
+        // InvestNow/Watch were dead code. The most-informative real prior
+        // (uniform Beta(1,1)) must now be actionable through recommend().
+        let inputs = vec![input("m_uniform", 1, 1, EffortEstimate::Small, 5)];
+        let r = WeeklyRankedReport::assemble(inputs, default_config(), 1, 100, epoch()).unwrap();
+        assert_eq!(
             r.rankings[0].recommended_action,
             RecommendedAction::InvestNow
         );
+    }
+
+    #[test]
+    fn compute_derived_moderate_prior_is_actionable_not_hold() {
+        // A moderately informative prior (Beta(2,1)) normalizes to ~54% of the
+        // ceiling — Watch, not Hold. Before bd-cixqu.23.4 it was silently Hold.
+        let inputs = vec![input("m_mod", 2, 1, EffortEstimate::Small, 1)];
+        let r = WeeklyRankedReport::assemble(inputs, default_config(), 1, 100, epoch()).unwrap();
+        assert_eq!(r.rankings[0].recommended_action, RecommendedAction::Watch);
     }
 
     // ----- Determinism -----

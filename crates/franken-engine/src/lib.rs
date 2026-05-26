@@ -246,6 +246,7 @@ pub mod hot_path_telemetry_kernel;
 pub mod hybrid_lane_router;
 pub mod idempotency_key;
 pub mod ifc_artifacts;
+pub mod ifc_label_translation_validator;
 pub mod ifc_provenance_index;
 pub mod incentive_governance_mechanism;
 pub mod incident_replay_bundle;

@@ -1410,6 +1410,70 @@ mod tests {
         }
     }
 
+    // Full-shape summary builders for the ID-derivation tests. derive_scorecard_id
+    // only reads coverage/consumption/override-frequency/pass-rate, but the structs
+    // require every field; these keep the tests resilient to unrelated field drift.
+    fn sample_attested_summary() -> AttestedReceiptCoverageSummary {
+        AttestedReceiptCoverageSummary {
+            high_impact_total: 10,
+            high_impact_with_valid_attestation: 10,
+            high_impact_missing_or_invalid_attestation: 0,
+            coverage_millionths: 950_000,
+            threshold_pass: true,
+        }
+    }
+
+    fn sample_privacy_summary() -> PrivacyBudgetHealthSummary {
+        PrivacyBudgetHealthSummary {
+            epoch: SecurityEpoch::from_raw(1),
+            epoch_epsilon_budget_millionths: 1_000_000,
+            epoch_epsilon_spent_millionths: 200_000,
+            epoch_delta_budget_millionths: 100_000,
+            epoch_delta_spent_millionths: 10_000,
+            epoch_consumption_millionths: 200_000,
+            lifetime_epsilon_remaining_millionths: 5_000_000,
+            lifetime_delta_remaining_millionths: 900_000,
+            estimated_remaining_operations: 100,
+            epsilon_burn_rate_per_hour_millionths: 50_000,
+            delta_burn_rate_per_hour_millionths: 1_000,
+            projected_epsilon_exhaustion_ns: None,
+            projected_delta_exhaustion_ns: None,
+            overrun_incidents: 0,
+            threshold_pass: true,
+            near_term_exhaustion_warning: false,
+        }
+    }
+
+    fn sample_moonshot_summary() -> MoonshotGovernorDecisionSummary {
+        MoonshotGovernorDecisionSummary {
+            total_decisions: 50,
+            override_count: 3,
+            kill_count: 1,
+            override_frequency_millionths: 50_000,
+            kill_rate_millionths: 20_000,
+            mean_time_to_decision_ns: Some(5_000_000),
+            active_moonshots: 4,
+            paused_moonshots: 1,
+            killed_moonshots: 1,
+            threshold_pass: true,
+        }
+    }
+
+    fn sample_conformance_summary() -> CrossRepoConformanceStabilitySummary {
+        CrossRepoConformanceStabilitySummary {
+            release_id: "v1.0.0".to_string(),
+            total_cells: 100,
+            passed_cells: 98,
+            failed_cells: 2,
+            pass_rate_millionths: 980_000,
+            universal_failures: 0,
+            version_specific_failures: 2,
+            outstanding_exemptions: 0,
+            failure_class_distribution: BTreeMap::new(),
+            threshold_pass: true,
+        }
+    }
+
     fn test_signing_key() -> SigningKey {
         SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs")
     }
@@ -2480,13 +2544,8 @@ mod tests {
         assert!(is_trend_regression(&prev, &current));
     }
 
-    // API drift: AttestedReceiptCoverageSummary / PrivacyBudgetHealthSummary /
-    // MoonshotGovernorDecisionSummary / CrossRepoConformanceStabilitySummary
-    // struct fields were renamed/expanded since this test was written. Needs
-    // rewrite against current summary shapes. Disabled with #[cfg(any())] so
-    // the body never compiles; #[ignore] alone isn't enough because the body
-    // is still type-checked.
-    #[cfg(any())]
+    // Re-enabled (bd-bg9l1.11): summaries built via sample_*_summary() helpers so
+    // unrelated field drift can't silently disable this collision-resistance check.
     #[test]
     fn derive_scorecard_id_collision_resistance() {
         // Test that variable-length field collisions are prevented by hardened encoding
@@ -2511,18 +2570,10 @@ mod tests {
         req3.scorecard_run_id = "".to_string();
 
         // Use same summary data for all requests
-        let attested = AttestedReceiptCoverageSummary {
-            coverage_millionths: 950_000,
-        };
-        let privacy = PrivacyBudgetHealthSummary {
-            epoch_consumption_millionths: 200_000,
-        };
-        let moonshot = MoonshotGovernorDecisionSummary {
-            override_frequency_millionths: 50_000,
-        };
-        let conformance = CrossRepoConformanceStabilitySummary {
-            pass_rate_millionths: 980_000,
-        };
+        let attested = sample_attested_summary();
+        let privacy = sample_privacy_summary();
+        let moonshot = sample_moonshot_summary();
+        let conformance = sample_conformance_summary();
 
         // Derive IDs for all variants
         let id1 = derive_scorecard_id(&req1, &attested, &privacy, &moonshot, &conformance)
@@ -2543,8 +2594,7 @@ mod tests {
         assert!(id3.starts_with("gov-scorecard-"));
     }
 
-    // API drift — see derive_scorecard_id_collision_resistance.
-    #[cfg(any())]
+    // Re-enabled (bd-bg9l1.11) — see derive_scorecard_id_collision_resistance.
     #[test]
     fn derive_scorecard_id_field_order_sensitivity() {
         // Test that field order matters (prevents field swapping attacks)
@@ -2559,18 +2609,10 @@ mod tests {
         req2.decision_id = "trace123".to_string();
         req2.scorecard_run_id = "".to_string();
 
-        let attested = AttestedReceiptCoverageSummary {
-            coverage_millionths: 950_000,
-        };
-        let privacy = PrivacyBudgetHealthSummary {
-            epoch_consumption_millionths: 200_000,
-        };
-        let moonshot = MoonshotGovernorDecisionSummary {
-            override_frequency_millionths: 50_000,
-        };
-        let conformance = CrossRepoConformanceStabilitySummary {
-            pass_rate_millionths: 980_000,
-        };
+        let attested = sample_attested_summary();
+        let privacy = sample_privacy_summary();
+        let moonshot = sample_moonshot_summary();
+        let conformance = sample_conformance_summary();
 
         let id1 = derive_scorecard_id(&req1, &attested, &privacy, &moonshot, &conformance)
             .expect("operation should succeed for valid inputs");
@@ -2580,8 +2622,7 @@ mod tests {
         assert_ne!(id1, id2, "IDs should differ when field values are swapped");
     }
 
-    // API drift — see derive_scorecard_id_collision_resistance.
-    #[cfg(any())]
+    // Re-enabled (bd-bg9l1.11) — see derive_scorecard_id_collision_resistance.
     #[test]
     fn derive_scorecard_id_deterministic() {
         // Test that ID derivation is deterministic for identical inputs
@@ -2589,18 +2630,10 @@ mod tests {
         let mut req = test_request();
         req.scorecard_run_id = "".to_string(); // Force derivation
 
-        let attested = AttestedReceiptCoverageSummary {
-            coverage_millionths: 950_000,
-        };
-        let privacy = PrivacyBudgetHealthSummary {
-            epoch_consumption_millionths: 200_000,
-        };
-        let moonshot = MoonshotGovernorDecisionSummary {
-            override_frequency_millionths: 50_000,
-        };
-        let conformance = CrossRepoConformanceStabilitySummary {
-            pass_rate_millionths: 980_000,
-        };
+        let attested = sample_attested_summary();
+        let privacy = sample_privacy_summary();
+        let moonshot = sample_moonshot_summary();
+        let conformance = sample_conformance_summary();
 
         // Derive ID multiple times
         let id1 = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance)
@@ -2616,8 +2649,7 @@ mod tests {
         assert!(id1.len() > "gov-scorecard-".len());
     }
 
-    // API drift — see derive_scorecard_id_collision_resistance.
-    #[cfg(any())]
+    // Re-enabled (bd-bg9l1.11) — see derive_scorecard_id_collision_resistance.
     #[test]
     fn derive_scorecard_id_special_characters_handling() {
         // Test that special characters and edge cases are handled safely
@@ -2628,18 +2660,10 @@ mod tests {
         req.policy_id = "policy\u{0000}unicode".to_string();
         req.scorecard_run_id = "".to_string();
 
-        let attested = AttestedReceiptCoverageSummary {
-            coverage_millionths: 950_000,
-        };
-        let privacy = PrivacyBudgetHealthSummary {
-            epoch_consumption_millionths: 200_000,
-        };
-        let moonshot = MoonshotGovernorDecisionSummary {
-            override_frequency_millionths: 50_000,
-        };
-        let conformance = CrossRepoConformanceStabilitySummary {
-            pass_rate_millionths: 980_000,
-        };
+        let attested = sample_attested_summary();
+        let privacy = sample_privacy_summary();
+        let moonshot = sample_moonshot_summary();
+        let conformance = sample_conformance_summary();
 
         // Should not panic or fail even with unusual input
         let id = derive_scorecard_id(&req, &attested, &privacy, &moonshot, &conformance)
@@ -2659,52 +2683,24 @@ mod tests {
         );
     }
 
-    // API drift: PrivacyBudgetHealthInput / MoonshotGovernorHealthInput /
-    // CrossRepoConformanceInput have different fields than this test
-    // expects. Disabled with #[cfg(any())].
-    #[cfg(any())]
+    // Re-enabled (bd-bg9l1.11): request built from test_request() + field mutations and
+    // summaries from sample_*_summary() helpers, so this comprehensive collision-resistance
+    // coverage survives unrelated request/summary field drift.
     #[test]
     fn derive_scorecard_id_collision_resistance_comprehensive() {
         // Test comprehensive collision resistance against various attack vectors
-        let attested = AttestedReceiptCoverageSummary {
-            coverage_millionths: 950_000,
-        };
-        let privacy = PrivacyBudgetHealthSummary {
-            epoch_consumption_millionths: 100_000,
-        };
-        let moonshot = MoonshotGovernorDecisionSummary {
-            override_frequency_millionths: 50_000,
-        };
-        let conformance = CrossRepoConformanceStabilitySummary {
-            pass_rate_millionths: 980_000,
-        };
+        let attested = sample_attested_summary();
+        let privacy = sample_privacy_summary();
+        let moonshot = sample_moonshot_summary();
+        let conformance = sample_conformance_summary();
 
         // Attack Vector 1: Field boundary confusion
         // These should produce different hashes even though concatenated fields are same
-        let mut req1 = GovernanceScorecardRequest {
-            trace_id: "abc".to_string(),
-            decision_id: "def".to_string(),
-            policy_id: "ghi".to_string(),
-            scorecard_run_id: "".to_string(),
-            generated_at_ns: 1000000000,
-            attested_receipts: Vec::new(),
-            privacy_budget: PrivacyBudgetHealthInput {
-                current_epoch: SecurityEpoch::from_raw(1),
-                consumed_budget_millionths: 100_000,
-            },
-            moonshot_governor: MoonshotGovernorHealthInput {
-                recent_override_count: 5,
-            },
-            conformance: CrossRepoConformanceInput {
-                total_cells: 100,
-                passed_cells: 98,
-                failed_cells: 2,
-                universal_failures: 0,
-                version_specific_failures: 2,
-            },
-            historical: Vec::new(),
-            thresholds: None,
-        };
+        let mut req1 = test_request();
+        req1.trace_id = "abc".to_string();
+        req1.decision_id = "def".to_string();
+        req1.policy_id = "ghi".to_string();
+        req1.scorecard_run_id = "".to_string();
 
         let mut req2 = req1.clone();
         req2.trace_id = "ab".to_string();

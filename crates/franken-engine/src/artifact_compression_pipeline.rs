@@ -1,18 +1,33 @@
 #![forbid(unsafe_code)]
 
-//! Proof-backed lossless compression and deduplication across cache, AOT, and
-//! evidence artifacts.
+//! Compression-and-deduplication **planning** pipeline for cache, AOT, and
+//! evidence artifacts, with content-addressed restoration recipes.
 //!
 //! Bead: bd-1lsy.7.18.2 [RGC-618B]
+//!
+//! # Status — codec not yet integrated
+//!
+//! This module *plans and verifies* compression; it does **not** yet run a
+//! real codec and **cannot** reconstruct original bytes. Byte-level
+//! compression is modelled by a deterministic per-algorithm size estimate
+//! (`CompressionPipeline::simulate_compression`), and a restoration recipe
+//! records only the algorithm plus content-addressed source/target hashes and
+//! sizes — it carries no compressed payload, and there is no
+//! restore/decompress entry point. Consequently the pipeline verifies *plan
+//! correctness* (recipe linkage, epoch monotonicity, budget compliance), not
+//! actual byte recovery. Wiring a real codec and a byte-level restore path is
+//! tracked as future work (bd-5jllt).
 //!
 //! Builds a compression pipeline with four parts:
 //!
 //! 1. **Bundle planner** — decides which artifact subgraphs can be merged,
 //!    shared, factored, or compressed based on canonical identities,
 //!    transformation witnesses, and downstream consumer requirements.
-//! 2. **Restoration contract** — for every compression action, emits a
-//!    deterministic restoration recipe so any downstream consumer can recover
-//!    the original bytes without loss.
+//! 2. **Restoration recipe** — for every compression action, emits a
+//!    deterministic restoration recipe (algorithm plus content-addressed
+//!    source/target hashes and sizes) describing how recovery would proceed.
+//!    The recipe's linkage is verified; the recipe does not itself recover
+//!    bytes (see Status above).
 //! 3. **Dedup tracker** — tracks duplicate mass and origin across artifact
 //!    families, with explicit dedup receipts.
 //! 4. **Exclusion policy** — certain artifact families (replay-critical,
@@ -21,12 +36,13 @@
 //!
 //! # Design decisions
 //!
-//! - **Lossless only** — all compression actions are reversible; lossy
-//!   compression is structurally impossible through this pipeline.
+//! - **Reversible-by-design plan** — the planner never selects a lossy or
+//!   irreversible action; lossy compression is excluded at the planning stage.
+//!   (No bytes are actually transformed yet — see Status.)
 //! - **Canonical identity integration** — the pipeline consumes canonical IDs
 //!   from `semantic_canonical_basis` to identify dedup candidates.
-//! - **Deterministic restoration** — every compressed artifact carries an
-//!   inline restoration recipe with content-addressed verification.
+//! - **Deterministic restoration recipe** — every planned artifact carries an
+//!   inline restoration recipe whose linkage is content-addressed and verified.
 //! - **Fail-closed exclusion** — excluded families reject compression at the
 //!   planning stage; no runtime bypass.
 //! - **All arithmetic uses fixed-point millionths** (1_000_000 = 1.0).

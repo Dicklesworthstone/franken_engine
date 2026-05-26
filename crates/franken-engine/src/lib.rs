@@ -251,6 +251,7 @@ pub mod incident_replay_bundle;
 pub mod interleaving_explorer;
 pub mod ir_contract;
 pub mod iterator_protocol;
+pub mod iterator_protocol_translation_validator;
 pub mod js_runtime_lane;
 pub mod json_capabilities;
 pub mod jsx_tsx_parser;

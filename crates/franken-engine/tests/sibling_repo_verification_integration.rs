@@ -4,8 +4,9 @@
 //! integration smoke passes — otherwise the pin holds at the last-passed SHA.
 
 use frankenengine_engine::sibling_repo_verification::{
-    PinAuditLedger, PinError, PinUpdateRequest, SiblingHealthReport, SiblingLogEvent, SiblingPin,
-    SiblingRepo, SiblingRepoHealthDashboard, SiblingVerdict, is_valid_sha, short_sha, SCHEMA_VERSION,
+    PinAuditLedger, PinError, PinUpdateRequest, SCHEMA_VERSION, SiblingHealthReport,
+    SiblingLogEvent, SiblingPin, SiblingRepo, SiblingRepoHealthDashboard, SiblingVerdict,
+    is_valid_sha, short_sha,
 };
 
 const SHA_A: &str = "094b59c859611f7f804fac79d185538d6e7aa171";
@@ -64,9 +65,14 @@ fn commit_advances_each_sibling() {
 fn hold_preserves_prior_pin_each_sibling() {
     for repo in SiblingRepo::all() {
         let mut ledger = PinAuditLedger::new();
-        let out = ledger.apply_update(&req(repo, SHA_A, SHA_B, false)).unwrap();
+        let out = ledger
+            .apply_update(&req(repo, SHA_A, SHA_B, false))
+            .unwrap();
         assert!(!out.committed, "{repo} must not commit on smoke fail");
-        assert_eq!(out.effective_sha, SHA_A, "{repo} pin must hold at prior SHA");
+        assert_eq!(
+            out.effective_sha, SHA_A,
+            "{repo} pin must hold at prior SHA"
+        );
         assert_eq!(ledger.commit_count(repo), 0);
         assert_eq!(ledger.len(), 1, "the failed attempt is still audited");
     }
@@ -107,8 +113,12 @@ fn failed_update_between_two_passes_does_not_disturb_count() {
 #[test]
 fn audit_index_is_monotonic() {
     let mut ledger = PinAuditLedger::new();
-    let a = ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true)).unwrap();
-    let b = ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_B, SHA_C, false)).unwrap();
+    let a = ledger
+        .apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true))
+        .unwrap();
+    let b = ledger
+        .apply_update(&req(SiblingRepo::Frankentui, SHA_B, SHA_C, false))
+        .unwrap();
     assert_eq!(a.audit_index, 0);
     assert_eq!(b.audit_index, 1);
 }
@@ -164,7 +174,9 @@ fn hold_note_has_default_reason_when_absent() {
 #[test]
 fn commit_note_records_short_shas() {
     let mut ledger = PinAuditLedger::new();
-    ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true)).unwrap();
+    ledger
+        .apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true))
+        .unwrap();
     let note = &ledger.entries[0].note;
     assert!(note.contains(&short_sha(SHA_A)));
     assert!(note.contains(&short_sha(SHA_B)));
@@ -174,7 +186,13 @@ fn commit_note_records_short_shas() {
 fn invalid_prior_sha_records_nothing() {
     let mut ledger = PinAuditLedger::new();
     let err = ledger.apply_update(&req(SiblingRepo::Frankentui, "nothex!", SHA_B, true));
-    assert!(matches!(err, Err(PinError::InvalidSha { field: "prior_sha", .. })));
+    assert!(matches!(
+        err,
+        Err(PinError::InvalidSha {
+            field: "prior_sha",
+            ..
+        })
+    ));
     assert!(ledger.is_empty());
 }
 
@@ -182,7 +200,13 @@ fn invalid_prior_sha_records_nothing() {
 fn invalid_new_sha_records_nothing() {
     let mut ledger = PinAuditLedger::new();
     let err = ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_A, "zz", true));
-    assert!(matches!(err, Err(PinError::InvalidSha { field: "new_sha", .. })));
+    assert!(matches!(
+        err,
+        Err(PinError::InvalidSha {
+            field: "new_sha",
+            ..
+        })
+    ));
     assert!(ledger.is_empty());
 }
 
@@ -201,7 +225,9 @@ fn empty_timestamp_rejected() {
 fn ledger_content_hash_changes_after_update() {
     let mut ledger = PinAuditLedger::new();
     let before = ledger.content_hash();
-    ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true)).unwrap();
+    ledger
+        .apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true))
+        .unwrap();
     assert_ne!(before, ledger.content_hash());
 }
 
@@ -209,8 +235,10 @@ fn ledger_content_hash_changes_after_update() {
 fn identical_update_sequences_hash_equal() {
     let build = || {
         let mut l = PinAuditLedger::new();
-        l.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true)).unwrap();
-        l.apply_update(&req(SiblingRepo::Asupersync, SHA_A, SHA_C, false)).unwrap();
+        l.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true))
+            .unwrap();
+        l.apply_update(&req(SiblingRepo::Asupersync, SHA_A, SHA_C, false))
+            .unwrap();
         l
     };
     assert_eq!(build().content_hash(), build().content_hash());
@@ -219,17 +247,23 @@ fn identical_update_sequences_hash_equal() {
 #[test]
 fn divergent_smoke_outcome_changes_hash() {
     let mut pass = PinAuditLedger::new();
-    pass.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true)).unwrap();
+    pass.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true))
+        .unwrap();
     let mut fail = PinAuditLedger::new();
-    fail.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, false)).unwrap();
+    fail.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, false))
+        .unwrap();
     assert_ne!(pass.content_hash(), fail.content_hash());
 }
 
 #[test]
 fn ledger_serde_roundtrip() {
     let mut ledger = PinAuditLedger::new();
-    ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true)).unwrap();
-    ledger.apply_update(&req(SiblingRepo::Asupersync, SHA_A, SHA_C, false)).unwrap();
+    ledger
+        .apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true))
+        .unwrap();
+    ledger
+        .apply_update(&req(SiblingRepo::Asupersync, SHA_A, SHA_C, false))
+        .unwrap();
     let json = serde_json::to_string(&ledger).unwrap();
     let back: PinAuditLedger = serde_json::from_str(&json).unwrap();
     assert_eq!(ledger, back);
@@ -239,9 +273,16 @@ fn ledger_serde_roundtrip() {
 #[test]
 fn log_event_for_commit_and_hold() {
     let mut ledger = PinAuditLedger::new();
-    let c = ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true)).unwrap();
-    let h = ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_B, SHA_C, false)).unwrap();
-    assert_eq!(SiblingLogEvent::for_pin_update(&c, "x").outcome, "committed");
+    let c = ledger
+        .apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true))
+        .unwrap();
+    let h = ledger
+        .apply_update(&req(SiblingRepo::Frankentui, SHA_B, SHA_C, false))
+        .unwrap();
+    assert_eq!(
+        SiblingLogEvent::for_pin_update(&c, "x").outcome,
+        "committed"
+    );
     assert_eq!(SiblingLogEvent::for_pin_update(&h, "x").outcome, "held");
     assert_eq!(SiblingLogEvent::for_pin_update(&c, "x").repo, "frankentui");
 }
@@ -249,7 +290,9 @@ fn log_event_for_commit_and_hold() {
 #[test]
 fn log_event_serde_roundtrip() {
     let mut ledger = PinAuditLedger::new();
-    let out = ledger.apply_update(&req(SiblingRepo::SqlmodelRust, SHA_A, SHA_B, true)).unwrap();
+    let out = ledger
+        .apply_update(&req(SiblingRepo::SqlmodelRust, SHA_A, SHA_B, true))
+        .unwrap();
     let ev = SiblingLogEvent::for_pin_update(&out, "advanced");
     let back: SiblingLogEvent = serde_json::from_str(&serde_json::to_string(&ev).unwrap()).unwrap();
     assert_eq!(ev, back);
@@ -354,8 +397,12 @@ fn dashboard_renders_all_six_rows() {
 #[test]
 fn dashboard_shows_advances_from_ledger() {
     let mut ledger = PinAuditLedger::new();
-    ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true)).unwrap();
-    ledger.apply_update(&req(SiblingRepo::Frankentui, SHA_B, SHA_C, true)).unwrap();
+    ledger
+        .apply_update(&req(SiblingRepo::Frankentui, SHA_A, SHA_B, true))
+        .unwrap();
+    ledger
+        .apply_update(&req(SiblingRepo::Frankentui, SHA_B, SHA_C, true))
+        .unwrap();
     let report = SiblingHealthReport::from_pins(
         "2026-05-24",
         vec![pin(SiblingRepo::Frankentui, SHA_C, SiblingVerdict::Passed)],
@@ -402,7 +449,11 @@ fn dashboard_short_sha_column_is_seven_chars() {
 fn dashboard_failed_sibling_shows_reason_and_degraded() {
     let report = SiblingHealthReport::from_pins(
         "2026-05-24",
-        vec![pin(SiblingRepo::Frankensqlite, SHA_A, SiblingVerdict::Failed)],
+        vec![pin(
+            SiblingRepo::Frankensqlite,
+            SHA_A,
+            SiblingVerdict::Failed,
+        )],
     );
     let dash = SiblingRepoHealthDashboard::from_report(&report, &PinAuditLedger::new());
     assert!(!dash.healthy);
@@ -415,7 +466,11 @@ fn dashboard_failed_sibling_shows_reason_and_degraded() {
 fn dashboard_skipped_sibling_uses_dash_for_last_failed() {
     let report = SiblingHealthReport::from_pins(
         "2026-05-24",
-        vec![pin(SiblingRepo::Frankenpandas, SHA_A, SiblingVerdict::Skipped)],
+        vec![pin(
+            SiblingRepo::Frankenpandas,
+            SHA_A,
+            SiblingVerdict::Skipped,
+        )],
     );
     let dash = SiblingRepoHealthDashboard::from_report(&report, &PinAuditLedger::new());
     assert_eq!(dash.rows[0].last_failed_reason, "-");

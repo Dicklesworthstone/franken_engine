@@ -115,9 +115,12 @@ PY
 }
 
 render_summary() {
-  python3 - <<'PY'
+  # The JSON report is passed as argv[1], NOT piped on stdin: `python3 - <<'PY'`
+  # binds the heredoc (the script source) to stdin, so json.load(sys.stdin)
+  # would read nothing. Reading from argv keeps the human summary working.
+  python3 - "$1" <<'PY'
 import json, sys
-r = json.load(sys.stdin)
+r = json.loads(sys.argv[1])
 print(f"Sibling-repo health ({r['generated_utc']}) — "
       f"{'HEALTHY' if r['failed'] == 0 else 'DEGRADED'}")
 print(f"  total={r['total']} pass={r['passed']} skip={r['skipped']} fail={r['failed']}")
@@ -170,7 +173,7 @@ case "${MODE}" in
     } > "${OUT_DIR}/commands.txt"
     report="$(emit_report "${ISOLATION_DOC}" "${LEDGER}" "${SIBLINGS_ROOT}")"
     echo "${report}" > "${OUT_DIR}/report.json"
-    echo "${report}" | render_summary | tee "${OUT_DIR}/summary.txt"
+    render_summary "${report}" | tee "${OUT_DIR}/summary.txt"
     echo "[sibling_status] report written to ${OUT_DIR}/report.json" >&2
     ;;
   *)

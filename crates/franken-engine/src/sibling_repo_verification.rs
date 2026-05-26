@@ -481,10 +481,7 @@ impl PinAuditLedger {
     /// ledger, and the new SHA is committed **only** when `smoke_passed` is
     /// true. On failure the effective SHA stays at `prior_sha` so the pin holds
     /// at the last-passed state.
-    pub fn apply_update(
-        &mut self,
-        req: &PinUpdateRequest,
-    ) -> Result<PinUpdateOutcome, PinError> {
+    pub fn apply_update(&mut self, req: &PinUpdateRequest) -> Result<PinUpdateOutcome, PinError> {
         if !is_valid_sha(&req.prior_sha) {
             return Err(PinError::InvalidSha {
                 repo: req.repo,
@@ -649,7 +646,10 @@ impl SiblingRepoHealthDashboard {
                 repo: pin.repo.slug().to_string(),
                 short_sha: short_sha(&pin.pinned_sha),
                 verdict: pin.verdict.as_str().to_string(),
-                last_passed: pin.last_passed_utc.clone().unwrap_or_else(|| "-".to_string()),
+                last_passed: pin
+                    .last_passed_utc
+                    .clone()
+                    .unwrap_or_else(|| "-".to_string()),
                 last_failed_reason: pin
                     .last_failed_reason
                     .clone()
@@ -668,7 +668,14 @@ impl SiblingRepoHealthDashboard {
     /// Render the panel as a deterministic aligned text table.
     #[must_use]
     pub fn render_plain(&self) -> String {
-        let headers = ["REPO", "SHA", "VERDICT", "LAST PASSED", "ADVANCES", "FAILURE"];
+        let headers = [
+            "REPO",
+            "SHA",
+            "VERDICT",
+            "LAST PASSED",
+            "ADVANCES",
+            "FAILURE",
+        ];
         let mut widths = headers.map(str::len);
         for row in &self.rows {
             let cells = [
@@ -811,7 +818,13 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(matches!(err, PinError::InvalidSha { field: "pinned_sha", .. }));
+        assert!(matches!(
+            err,
+            PinError::InvalidSha {
+                field: "pinned_sha",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -924,8 +937,10 @@ mod tests {
 
     #[test]
     fn health_report_json_has_schema_version() {
-        let report =
-            SiblingHealthReport::from_pins("2026-05-24", vec![passing_pin(SiblingRepo::Frankentui)]);
+        let report = SiblingHealthReport::from_pins(
+            "2026-05-24",
+            vec![passing_pin(SiblingRepo::Frankentui)],
+        );
         let json = report.to_json();
         assert!(json.contains(SCHEMA_VERSION));
         let back: SiblingHealthReport = serde_json::from_str(&json).unwrap();
@@ -986,7 +1001,10 @@ mod tests {
         });
         assert!(matches!(
             bad_prior,
-            Err(PinError::InvalidSha { field: "prior_sha", .. })
+            Err(PinError::InvalidSha {
+                field: "prior_sha",
+                ..
+            })
         ));
         let bad_new = ledger.apply_update(&PinUpdateRequest {
             repo: SiblingRepo::Frankentui,
@@ -998,7 +1016,10 @@ mod tests {
         });
         assert!(matches!(
             bad_new,
-            Err(PinError::InvalidSha { field: "new_sha", .. })
+            Err(PinError::InvalidSha {
+                field: "new_sha",
+                ..
+            })
         ));
         // No entries recorded on validation failure.
         assert!(ledger.is_empty());
@@ -1144,15 +1165,17 @@ mod tests {
     fn dashboard_marks_degraded_on_failure() {
         let report = SiblingHealthReport::from_pins(
             "2026-05-24",
-            vec![SiblingPin::new(
-                SiblingRepo::Frankentui,
-                SHA_A,
-                "2026-05-21",
-                SiblingVerdict::Failed,
-                None,
-                Some("boom".to_string()),
-            )
-            .unwrap()],
+            vec![
+                SiblingPin::new(
+                    SiblingRepo::Frankentui,
+                    SHA_A,
+                    "2026-05-21",
+                    SiblingVerdict::Failed,
+                    None,
+                    Some("boom".to_string()),
+                )
+                .unwrap(),
+            ],
         );
         let dash = SiblingRepoHealthDashboard::from_report(&report, &PinAuditLedger::new());
         assert!(!dash.healthy);

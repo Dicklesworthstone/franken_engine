@@ -388,6 +388,87 @@ promoted win**:
    remaining reason the combined sweep is logged as a measurement rather than an
    H6-isolated win.
 
+## Transport-certificate serialization-bench truthfulness (H5)
+
+The H5 pass (`bd-o4cbn.7`) is a **bench-truthfulness** correction, not a
+production-path optimisation. The `transport_certificate_serialization`
+sub-bench used to `serde_json::to_string` a `TransportCertificate` **and then
+`serde_json::from_str` it back** before hashing. The H5.1 audit
+(`bd-o4cbn.7.1`, `docs/PERF_H5_TRANSPORT_CERT_ROUNDTRIP_AUDIT.md`) classified
+every `from_str::<TransportCertificate>` site in the tree and confirmed **no
+production path round-trips a certificate** — all such sites are `#[cfg(test)]`
+or bench-only. The deserialize step (≈ 25 % of the bench self-time) was
+therefore measuring work that no real code performs. H5.2 (`bd-o4cbn.7.2`,
+commit `9b75b510`) dropped it; the bench now hashes only the serialized bytes,
+which is the representative hot path.
+
+The round-trip fidelity that *justified* removing the deserialize — i.e. that a
+certificate's serde contract is still byte- and value-stable — is now pinned by
+a dedicated test, `crates/franken-engine/tests/transport_certificate_serde.rs`
+(value round-trip, per-field byte equality across all public fields, and
+serialize → deserialize → serialize byte-stability), so the bench refactor
+cannot silently weaken the contract.
+
+### Verification (two reproducible gates)
+
+- **E2E smoke** — `scripts/perf/run_perf_h5_smoke.sh` (PERF-H5.4,
+  `bd-o4cbn.7.4`) builds the `hot_paths` bench with the canonical pass1 flags,
+  runs the `transport_certificate_serialization` sub-bench under a short
+  Criterion budget, and runs the H5.2 fidelity test
+  (`transport_certificate_serde`) — proving the path builds, runs, and keeps
+  the cert serde contract. It also fails closed if a
+  `from_str::<TransportCertificate>` ever creeps back into the bench (the H5.2
+  invariant). A `--self-check` mode validates the pipeline without a build
+  (CI-able on a contended/red tree); `--quick` runs the fidelity test only.
+- **Statistical gate** — `scripts/perf/h5_bench_validate.sh` (PERF-H5.3,
+  `bd-o4cbn.7.3`) runs the full `real_runtime_hot_paths` Criterion group and
+  diffs every sub-bench against the frozen `pass1` baseline, emitting an
+  H1.4-schema `events.jsonl` + `summary.md` evidence bundle, and enforces the
+  H5.3 gate: target drop ≥ 20 %, target post mean ≤ 5 µs, no NEW other bench
+  regresses > 5 %.
+
+### Measured result
+
+Full Criterion group, HEAD `e1a5a414` vs the frozen `pass1` baseline
+(`tests/artifacts/perf/20260520T214829Z-prof-pass1`), bench + verdict run-id
+`20260526T063706Z`:
+
+| sub-bench | pass1 (ns) | current (ns) | Δ% |
+|---|---:|---:|---:|
+| parser_arena_materialization | 31354.0 | 25434.9 | −18.88 |
+| lowering_pipeline_ir3 | 87916.5 | 69596.9 | −20.84 |
+| baseline_interpreter_eval | 494406.8 | 319848.4 | −35.31 |
+| baseline_value_string_clone | 245111.9 | 277805.0 | **+13.34** |
+| iterator_protocol_trace | 6098.0 | 1479.1 | −75.74 |
+| scheduler_queue_commit | 58223.3 | 45176.0 | −22.41 |
+| evidence_ledger_bundle | 225145.0 | 146612.4 | −34.88 |
+| transport_certificate_serialization *(H5 target)* | 6674.7 | 3033.7 | **−54.55** |
+
+**H5.3 gate verdict: PASS.** `transport_certificate_serialization` drops
+**−54.55 %** (post mean 3033.7 ns, CV 1.41 %, CI95 [3026.9, 3043.3] ns — fully
+below the pass1 CI95 lower bound of 6597.2 ns), clearing both the ≥ 20 % drop
+and ≤ 5 µs criteria with margin, and the `transport_certificate_serde` fidelity
+test confirms the serde contract is unchanged. The H5.4 E2E smoke (run-id
+`20260526T064417Z`, HEAD `e38c8ba4`) independently re-confirms build + bench +
+fidelity all pass.
+
+Two honesty caveats are recorded per the **What counts as a perf win** standard
+above:
+
+1. **The drop is a truthfulness correction, not a production speedup.** The
+   bench no longer performs a deserialize that no production path performs, so
+   roughly half of the measured drop is dead work that was removed from the
+   *measurement*; the remainder reflects the cumulative serialization-path
+   improvements merged since `pass1`. No claim is made that production
+   certificate handling became 54 % faster — there is no production round-trip
+   to speed up. The win is that the bench now measures the real hot path.
+2. **One sub-bench "regressed" — the allocator-transition artifact, not code
+   (`bd-o4cbn.15`).** `baseline_value_string_clone` reads +13.34 % vs `pass1`
+   for the documented mimalloc-vs-system allocator + machine-load reasons in the
+   H6 section above. It is reported in every run but excluded from the H5 gate
+   via the same `KNOWN_REGRESSIONS` mechanism (H5 touched only the
+   transport-certificate bench path).
+
 ## Future Performance Roadmap
 
 ### Planned Optimizations (Future Releases)

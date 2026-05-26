@@ -65,7 +65,10 @@ fn nested_object(depth: usize) -> CanonicalValue {
 fn make_test_value(i: usize) -> CanonicalValue {
     let mut m = BTreeMap::new();
     m.insert("id".to_string(), CanonicalValue::U64(i as u64));
-    m.insert("name".to_string(), CanonicalValue::String(format!("entry-{i}")));
+    m.insert(
+        "name".to_string(),
+        CanonicalValue::String(format!("entry-{i}")),
+    );
     m.insert("flag".to_string(), CanonicalValue::Bool(i % 2 == 0));
     m.insert(
         "data".to_string(),
@@ -232,7 +235,10 @@ fn canonical_encoding_byte_identical_against_golden() {
             .filter_map(Result::ok)
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json"))
             .count();
-        assert!(count >= 20, "expected at least 20 golden files; found {count}");
+        assert!(
+            count >= 20,
+            "expected at least 20 golden files; found {count}"
+        );
     }
 }
 
@@ -313,7 +319,11 @@ fn sequential_pool_reuse_correctness() {
     for _ in 0..1_000 {
         for v in &values {
             let from_pool = pool.encode(v).to_vec();
-            assert_eq!(from_pool, encode_value(v), "pool encoding diverged on reuse");
+            assert_eq!(
+                from_pool,
+                encode_value(v),
+                "pool encoding diverged on reuse"
+            );
         }
     }
 }

@@ -1088,12 +1088,15 @@ fn enrichment_receipt_empty_artifacts_rejected() {
 #[test]
 fn enrichment_receipt_id_deterministic_100_iterations() {
     let s = default_slot();
-    let first = ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old-det", "new-det", "tv", "chain", 42_000, "zone-det")
-        .unwrap();
+    let first = ReplacementReceipt::derive_receipt_id(
+        &s, &s, &s, "old-det", "new-det", "tv", "chain", 42_000, "zone-det",
+    )
+    .unwrap();
     for _ in 0..100 {
-        let id =
-            ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old-det", "new-det", "tv", "chain", 42_000, "zone-det")
-                .unwrap();
+        let id = ReplacementReceipt::derive_receipt_id(
+            &s, &s, &s, "old-det", "new-det", "tv", "chain", 42_000, "zone-det",
+        )
+        .unwrap();
         assert_eq!(first, id);
     }
 }
@@ -1101,32 +1104,50 @@ fn enrichment_receipt_id_deterministic_100_iterations() {
 #[test]
 fn enrichment_receipt_id_varies_by_old_digest() {
     let s = default_slot();
-    let id1 = ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old-a", "new", "tv", "chain", 1000, "z").unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old-b", "new", "tv", "chain", 1000, "z").unwrap();
+    let id1 =
+        ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old-a", "new", "tv", "chain", 1000, "z")
+            .unwrap();
+    let id2 =
+        ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old-b", "new", "tv", "chain", 1000, "z")
+            .unwrap();
     assert_ne!(id1, id2);
 }
 
 #[test]
 fn enrichment_receipt_id_varies_by_new_digest() {
     let s = default_slot();
-    let id1 = ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new-a", "tv", "chain", 1000, "z").unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new-b", "tv", "chain", 1000, "z").unwrap();
+    let id1 =
+        ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new-a", "tv", "chain", 1000, "z")
+            .unwrap();
+    let id2 =
+        ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new-b", "tv", "chain", 1000, "z")
+            .unwrap();
     assert_ne!(id1, id2);
 }
 
 #[test]
 fn enrichment_receipt_id_varies_by_timestamp() {
     let s = default_slot();
-    let id1 = ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new", "tv", "chain", 1000, "z").unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new", "tv", "chain", 2000, "z").unwrap();
+    let id1 =
+        ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new", "tv", "chain", 1000, "z")
+            .unwrap();
+    let id2 =
+        ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new", "tv", "chain", 2000, "z")
+            .unwrap();
     assert_ne!(id1, id2);
 }
 
 #[test]
 fn enrichment_receipt_id_varies_by_zone() {
     let s = default_slot();
-    let id1 = ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new", "tv", "chain", 1000, "zone-a").unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new", "tv", "chain", 1000, "zone-b").unwrap();
+    let id1 = ReplacementReceipt::derive_receipt_id(
+        &s, &s, &s, "old", "new", "tv", "chain", 1000, "zone-a",
+    )
+    .unwrap();
+    let id2 = ReplacementReceipt::derive_receipt_id(
+        &s, &s, &s, "old", "new", "tv", "chain", 1000, "zone-b",
+    )
+    .unwrap();
     assert_ne!(id1, id2);
 }
 
@@ -1553,8 +1574,10 @@ fn enrichment_cross_artifact_ids_all_distinct() {
         "cross",
     )
     .unwrap();
-    let receipt_id =
-        ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new", "tv", "chain", 1000, "cross").unwrap();
+    let receipt_id = ReplacementReceipt::derive_receipt_id(
+        &s, &s, &s, "old", "new", "tv", "chain", 1000, "cross",
+    )
+    .unwrap();
     let decision_id =
         PromotionDecision::derive_decision_id(&s, "candidate", 1000, "cross").unwrap();
     let mut ids = BTreeSet::new();
@@ -1580,8 +1603,18 @@ fn enrichment_same_slot_different_artifact_types_distinct_ids() {
         "shared-zone",
     )
     .unwrap();
-    let r_id =
-        ReplacementReceipt::derive_receipt_id(&s, &s, &s, "old", "new", "tv", "chain", 5000, "shared-zone").unwrap();
+    let r_id = ReplacementReceipt::derive_receipt_id(
+        &s,
+        &s,
+        &s,
+        "old",
+        "new",
+        "tv",
+        "chain",
+        5000,
+        "shared-zone",
+    )
+    .unwrap();
     let d_id = PromotionDecision::derive_decision_id(&s, "new", 5000, "shared-zone").unwrap();
     assert_ne!(m_id, r_id);
     assert_ne!(r_id, d_id);

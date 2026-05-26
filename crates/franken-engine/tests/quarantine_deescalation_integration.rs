@@ -13,7 +13,7 @@ use frankenengine_engine::quarantine_deescalation::{
     ReAdmissionReceipt,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::signature_preimage::{generate_keypair, SigningKey, VerificationKey};
+use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey, generate_keypair};
 use frankenengine_engine::tee_attestation_policy::{
     AttestationQuote, MeasurementAlgorithm, MeasurementDigest, RevocationProbeStatus, TeePlatform,
 };

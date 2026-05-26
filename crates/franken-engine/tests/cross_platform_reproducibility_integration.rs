@@ -12,5 +12,7 @@
 #[test]
 fn test_stub_cross_platform_reproducibility_disabled() {
     // This test serves as a placeholder until the module dependency issues are resolved
-    println!("Cross-platform reproducibility tests are currently disabled due to module dependency issues");
+    println!(
+        "Cross-platform reproducibility tests are currently disabled due to module dependency issues"
+    );
 }

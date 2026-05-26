@@ -134,9 +134,21 @@ fn unique_dir(label: &str) -> PathBuf {
 fn captured_fleet() -> PathBuf {
     let root = unique_dir("fleet");
     fs::create_dir_all(&root).unwrap();
-    write_trace(&root, "node-a/t1.json", &node_trace("node-a", "t-a-1", &[820_000, 610_000]));
-    write_trace(&root, "node-b/t1.json", &node_trace("node-b", "t-b-1", &[700_000, 900_000]));
-    write_trace(&root, "node-c/t1.json", &node_trace("node-c", "t-c-1", &[505_000, 480_000]));
+    write_trace(
+        &root,
+        "node-a/t1.json",
+        &node_trace("node-a", "t-a-1", &[820_000, 610_000]),
+    );
+    write_trace(
+        &root,
+        "node-b/t1.json",
+        &node_trace("node-b", "t-b-1", &[700_000, 900_000]),
+    );
+    write_trace(
+        &root,
+        "node-c/t1.json",
+        &node_trace("node-c", "t-c-1", &[505_000, 480_000]),
+    );
     root
 }
 
@@ -317,8 +329,14 @@ fn s2_signing_preimage_is_deterministic() {
 #[test]
 fn s2_report_is_consistent_and_signed() {
     let report = signed_report();
-    assert!(report.is_consistent(), "changed-node count must match deltas");
-    assert!(report.signature_bundle.is_signed(), "report must carry a signature");
+    assert!(
+        report.is_consistent(),
+        "changed-node count must match deltas"
+    );
+    assert!(
+        report.signature_bundle.is_signed(),
+        "report must carry a signature"
+    );
 }
 
 #[test]

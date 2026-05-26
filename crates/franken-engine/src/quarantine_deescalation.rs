@@ -311,11 +311,15 @@ impl ReAdmissionDecision {
             ..self.clone()
         };
 
-        verify_signature(operator_key, &unsigned.preimage_bytes(), &self.operator_signature)
-            .map(|_| true)
-            .map_err(|e| {
-                ReAdmissionError::Verification(format!("Signature verification failed: {}", e))
-            })
+        verify_signature(
+            operator_key,
+            &unsigned.preimage_bytes(),
+            &self.operator_signature,
+        )
+        .map(|_| true)
+        .map_err(|e| {
+            ReAdmissionError::Verification(format!("Signature verification failed: {}", e))
+        })
     }
 
     /// Computes content hash for deterministic ID generation.
@@ -427,14 +431,15 @@ impl ReAdmissionReceipt {
             ..self.clone()
         };
 
-        let signature_valid = verify_signature(system_key, &unsigned.preimage_bytes(), &self.system_signature)
-            .map(|_| true)
-            .map_err(|e| {
-                ReAdmissionError::Verification(format!(
-                    "System signature verification failed: {}",
-                    e
-                ))
-            })?;
+        let signature_valid = verify_signature(
+            system_key,
+            &unsigned.preimage_bytes(),
+            &self.system_signature,
+        )
+        .map(|_| true)
+        .map_err(|e| {
+            ReAdmissionError::Verification(format!("System signature verification failed: {}", e))
+        })?;
 
         if !signature_valid {
             return Ok(false);
@@ -539,16 +544,46 @@ impl SignaturePreimage for ReAdmissionDecision {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut map = BTreeMap::new();
 
-        map.insert("schema_version".to_string(), CanonicalValue::String(format!("{:?}", self.schema_version)));
-        map.insert("epoch".to_string(), CanonicalValue::U64(self.epoch.as_u64()));
-        map.insert("decision_id".to_string(), CanonicalValue::Bytes(self.decision_id.as_bytes().to_vec()));
-        map.insert("original_quarantine_id".to_string(), CanonicalValue::Bytes(self.original_quarantine_id.as_bytes().to_vec()));
-        map.insert("original_quarantine_reason".to_string(), CanonicalValue::String(format!("{:?}", self.original_quarantine_reason)));
-        map.insert("time_in_quarantine_secs".to_string(), CanonicalValue::U64(self.time_in_quarantine_secs));
-        map.insert("operator_id".to_string(), CanonicalValue::String(self.operator_id.clone()));
-        map.insert("tee_attestation".to_string(), CanonicalValue::String(format!("{:?}", self.tee_attestation)));
-        map.insert("posterior_confidence_millionths".to_string(), CanonicalValue::U64(self.posterior_confidence_millionths));
-        map.insert("fallback_path".to_string(), CanonicalValue::String(format!("{:?}", self.fallback_path)));
+        map.insert(
+            "schema_version".to_string(),
+            CanonicalValue::String(format!("{:?}", self.schema_version)),
+        );
+        map.insert(
+            "epoch".to_string(),
+            CanonicalValue::U64(self.epoch.as_u64()),
+        );
+        map.insert(
+            "decision_id".to_string(),
+            CanonicalValue::Bytes(self.decision_id.as_bytes().to_vec()),
+        );
+        map.insert(
+            "original_quarantine_id".to_string(),
+            CanonicalValue::Bytes(self.original_quarantine_id.as_bytes().to_vec()),
+        );
+        map.insert(
+            "original_quarantine_reason".to_string(),
+            CanonicalValue::String(format!("{:?}", self.original_quarantine_reason)),
+        );
+        map.insert(
+            "time_in_quarantine_secs".to_string(),
+            CanonicalValue::U64(self.time_in_quarantine_secs),
+        );
+        map.insert(
+            "operator_id".to_string(),
+            CanonicalValue::String(self.operator_id.clone()),
+        );
+        map.insert(
+            "tee_attestation".to_string(),
+            CanonicalValue::String(format!("{:?}", self.tee_attestation)),
+        );
+        map.insert(
+            "posterior_confidence_millionths".to_string(),
+            CanonicalValue::U64(self.posterior_confidence_millionths),
+        );
+        map.insert(
+            "fallback_path".to_string(),
+            CanonicalValue::String(format!("{:?}", self.fallback_path)),
+        );
 
         // Convert metadata map
         let mut metadata_map = BTreeMap::new();
@@ -558,7 +593,10 @@ impl SignaturePreimage for ReAdmissionDecision {
         map.insert("metadata".to_string(), CanonicalValue::Map(metadata_map));
 
         // Set signature to sentinel
-        map.insert("operator_signature".to_string(), CanonicalValue::Bytes(SIGNATURE_SENTINEL.to_vec()));
+        map.insert(
+            "operator_signature".to_string(),
+            CanonicalValue::Bytes(SIGNATURE_SENTINEL.to_vec()),
+        );
 
         CanonicalValue::Map(map)
     }
@@ -576,14 +614,32 @@ impl SignaturePreimage for ReAdmissionReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut map = BTreeMap::new();
 
-        map.insert("receipt_id".to_string(), CanonicalValue::Bytes(self.receipt_id.as_bytes().to_vec()));
-        map.insert("decision_id".to_string(), CanonicalValue::Bytes(self.decision.decision_id.as_bytes().to_vec()));
-        map.insert("prev_evidence_hash".to_string(), CanonicalValue::Bytes(self.prev_evidence_hash.as_bytes().to_vec()));
-        map.insert("content_hash".to_string(), CanonicalValue::Bytes(self.content_hash.as_bytes().to_vec()));
-        map.insert("generated_at_secs".to_string(), CanonicalValue::U64(self.generated_at_secs));
+        map.insert(
+            "receipt_id".to_string(),
+            CanonicalValue::Bytes(self.receipt_id.as_bytes().to_vec()),
+        );
+        map.insert(
+            "decision_id".to_string(),
+            CanonicalValue::Bytes(self.decision.decision_id.as_bytes().to_vec()),
+        );
+        map.insert(
+            "prev_evidence_hash".to_string(),
+            CanonicalValue::Bytes(self.prev_evidence_hash.as_bytes().to_vec()),
+        );
+        map.insert(
+            "content_hash".to_string(),
+            CanonicalValue::Bytes(self.content_hash.as_bytes().to_vec()),
+        );
+        map.insert(
+            "generated_at_secs".to_string(),
+            CanonicalValue::U64(self.generated_at_secs),
+        );
 
         // Set signature to sentinel
-        map.insert("system_signature".to_string(), CanonicalValue::Bytes(SIGNATURE_SENTINEL.to_vec()));
+        map.insert(
+            "system_signature".to_string(),
+            CanonicalValue::Bytes(SIGNATURE_SENTINEL.to_vec()),
+        );
 
         CanonicalValue::Map(map)
     }
@@ -600,11 +656,17 @@ mod tests {
     }
 
     fn make_test_attestation_quote() -> AttestationQuote {
-        use crate::tee_attestation_policy::{AttestationQuote, TeePlatform, MeasurementDigest, MeasurementAlgorithm, RevocationProbeStatus};
+        use crate::tee_attestation_policy::{
+            AttestationQuote, MeasurementAlgorithm, MeasurementDigest, RevocationProbeStatus,
+            TeePlatform,
+        };
         use std::collections::BTreeMap;
 
         let mut rev = BTreeMap::new();
-        rev.insert("test_source".to_string(), RevocationProbeStatus::Unavailable);
+        rev.insert(
+            "test_source".to_string(),
+            RevocationProbeStatus::Unavailable,
+        );
 
         AttestationQuote {
             platform: TeePlatform::IntelSgx,
@@ -647,7 +709,9 @@ mod tests {
             quarantine_reason,
             3600, // 1 hour in quarantine
             "operator-alice".to_string(),
-            AttestationStatus::Available { quote: make_test_attestation_quote() },
+            AttestationStatus::Available {
+                quote: make_test_attestation_quote(),
+            },
             800_000, // 80% confidence
             fallback_path,
             metadata,
@@ -681,7 +745,9 @@ mod tests {
             make_test_quarantine_reason(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available { quote: make_test_attestation_quote() },
+            AttestationStatus::Available {
+                quote: make_test_attestation_quote(),
+            },
             800_000,
             make_test_fallback_path(),
             BTreeMap::new(),
@@ -725,7 +791,9 @@ mod tests {
             make_test_quarantine_reason(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available { quote: make_test_attestation_quote() },
+            AttestationStatus::Available {
+                quote: make_test_attestation_quote(),
+            },
             800_000,
             make_test_fallback_path(),
             BTreeMap::new(),
@@ -825,7 +893,9 @@ mod tests {
             quarantine_reason.clone(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available { quote: make_test_attestation_quote() },
+            AttestationStatus::Available {
+                quote: make_test_attestation_quote(),
+            },
             800_000,
             fallback_path.clone(),
             metadata.clone(),
@@ -839,7 +909,9 @@ mod tests {
             quarantine_reason.clone(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available { quote: make_test_attestation_quote() },
+            AttestationStatus::Available {
+                quote: make_test_attestation_quote(),
+            },
             800_000,
             fallback_path,
             metadata,
@@ -862,7 +934,9 @@ mod tests {
             make_test_quarantine_reason(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available { quote: make_test_attestation_quote() },
+            AttestationStatus::Available {
+                quote: make_test_attestation_quote(),
+            },
             800_000,
             make_test_fallback_path(),
             BTreeMap::new(),
@@ -889,7 +963,9 @@ mod tests {
             make_test_quarantine_reason(),
             3600,
             "operator-alice".to_string(),
-            AttestationStatus::Available { quote: make_test_attestation_quote() },
+            AttestationStatus::Available {
+                quote: make_test_attestation_quote(),
+            },
             800_000,
             make_test_fallback_path(),
             BTreeMap::new(),

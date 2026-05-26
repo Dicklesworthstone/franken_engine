@@ -295,12 +295,18 @@ fn test_timer_effects() {
     let clear_timeout_effect = TimerEffect {
         operation: TimerOperation::ClearTimeout { timer_id: 42 },
     };
-    assert_eq!(Effect::effect_name(&clear_timeout_effect), "timer:clearTimeout");
+    assert_eq!(
+        Effect::effect_name(&clear_timeout_effect),
+        "timer:clearTimeout"
+    );
 
     let clear_interval_effect = TimerEffect {
         operation: TimerOperation::ClearInterval { timer_id: 43 },
     };
-    assert_eq!(Effect::effect_name(&clear_interval_effect), "timer:clearInterval");
+    assert_eq!(
+        Effect::effect_name(&clear_interval_effect),
+        "timer:clearInterval"
+    );
 }
 
 /// Test builtin effect for JavaScript operations.
@@ -370,7 +376,10 @@ fn test_number_effects() {
             value: "3.14159".to_string(),
         },
     };
-    assert_eq!(Effect::effect_name(&parse_float_effect), "number:parseFloat");
+    assert_eq!(
+        Effect::effect_name(&parse_float_effect),
+        "number:parseFloat"
+    );
 
     let is_nan_effect = NumberEffect {
         operation: NumberOperation::IsNaN { value: f64::NAN },

@@ -1621,63 +1621,59 @@ mod tests {
 
     #[test]
     fn receipt_id_deterministic() {
-        let id1 =
-            ReplacementReceipt::derive_receipt_id(
-                &test_slot_id(),
-                &test_slot_id(),
-                &test_slot_id(),
-                "old",
-                "new",
-                "translation_proof",
-                "content_hash_chain",
-                1000,
-                "zone-a"
-            )
-                .expect("operation should succeed for valid inputs");
-        let id2 =
-            ReplacementReceipt::derive_receipt_id(
-                &test_slot_id(),
-                &test_slot_id(),
-                &test_slot_id(),
-                "old",
-                "new",
-                "translation_proof",
-                "content_hash_chain",
-                1000,
-                "zone-a"
-            )
-                .expect("operation should succeed for valid inputs");
+        let id1 = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old",
+            "new",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone-a",
+        )
+        .expect("operation should succeed for valid inputs");
+        let id2 = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old",
+            "new",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone-a",
+        )
+        .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2);
     }
 
     #[test]
     fn receipt_id_differs_by_timestamp() {
-        let id1 =
-            ReplacementReceipt::derive_receipt_id(
-                &test_slot_id(),
-                &test_slot_id(),
-                &test_slot_id(),
-                "old",
-                "new",
-                "translation_proof",
-                "content_hash_chain",
-                1000,
-                "zone-a"
-            )
-                .expect("operation should succeed for valid inputs");
-        let id2 =
-            ReplacementReceipt::derive_receipt_id(
-                &test_slot_id(),
-                &test_slot_id(),
-                &test_slot_id(),
-                "old",
-                "new",
-                "translation_proof",
-                "content_hash_chain",
-                2000,
-                "zone-a"
-            )
-                .expect("operation should succeed for valid inputs");
+        let id1 = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old",
+            "new",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone-a",
+        )
+        .expect("operation should succeed for valid inputs");
+        let id2 = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old",
+            "new",
+            "translation_proof",
+            "content_hash_chain",
+            2000,
+            "zone-a",
+        )
+        .expect("operation should succeed for valid inputs");
         assert_ne!(id1, id2);
     }
 
@@ -2283,32 +2279,30 @@ mod tests {
         .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b, "different content must yield different IDs");
 
-        let id_c =
-            ReplacementReceipt::derive_receipt_id(
-                &test_slot_id(),
-                &test_slot_id(),
-                &test_slot_id(),
-                "old-a",
-                "new-a",
-                "translation_proof",
-                "content_hash_chain",
-                1000,
-                "zone"
-            )
-                .expect("operation should succeed for valid inputs");
-        let id_d =
-            ReplacementReceipt::derive_receipt_id(
-                &test_slot_id(),
-                &test_slot_id(),
-                &test_slot_id(),
-                "old-b",
-                "new-a",
-                "translation_proof",
-                "content_hash_chain",
-                1000,
-                "zone"
-            )
-                .expect("operation should succeed for valid inputs");
+        let id_c = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old-a",
+            "new-a",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone",
+        )
+        .expect("operation should succeed for valid inputs");
+        let id_d = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old-b",
+            "new-a",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone",
+        )
+        .expect("operation should succeed for valid inputs");
         assert_ne!(id_c, id_d);
 
         let id_e = PromotionDecision::derive_decision_id(&test_slot_id(), "cand-a", 1000, "zone")
@@ -2702,32 +2696,30 @@ mod tests {
 
     #[test]
     fn receipt_id_differs_by_zone() {
-        let id_a =
-            ReplacementReceipt::derive_receipt_id(
-                &test_slot_id(),
-                &test_slot_id(),
-                &test_slot_id(),
-                "old",
-                "new",
-                "translation_proof",
-                "content_hash_chain",
-                1000,
-                "zone-a"
-            )
-                .expect("operation should succeed for valid inputs");
-        let id_b =
-            ReplacementReceipt::derive_receipt_id(
-                &test_slot_id(),
-                &test_slot_id(),
-                &test_slot_id(),
-                "old",
-                "new",
-                "translation_proof",
-                "content_hash_chain",
-                1000,
-                "zone-b"
-            )
-                .expect("operation should succeed for valid inputs");
+        let id_a = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old",
+            "new",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone-a",
+        )
+        .expect("operation should succeed for valid inputs");
+        let id_b = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old",
+            "new",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone-b",
+        )
+        .expect("operation should succeed for valid inputs");
         assert_ne!(id_a, id_b);
     }
 

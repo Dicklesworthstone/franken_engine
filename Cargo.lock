@@ -1135,6 +1135,7 @@ version = "0.1.0"
 dependencies = [
  "rand 0.8.6",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
  "tokio",
 ]
@@ -1485,6 +1486,7 @@ dependencies = [
  "chrono",
  "clap",
  "criterion",
+ "dp",
  "ed25519-dalek",
  "fastapi-core",
  "fp-columnar",
@@ -1498,6 +1500,7 @@ dependencies = [
  "franken-engine-fixed-layout-derive",
  "franken-evidence",
  "franken-kernel",
+ "frankenengine-engine",
  "frankenengine-extension-host",
  "hex",
  "hmac 0.12.1",

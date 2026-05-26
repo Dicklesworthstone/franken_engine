@@ -24,8 +24,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::eprocess_guardrail::{
-    EProcessGuardrail, ExpectedLossMatrix, GuardrailError, GuardrailEvent, GuardrailRegistry, GuardrailState,
-    ResetReceipt, ThresholdLikelihoodRatio, UniversalLikelihoodRatio,
+    EProcessGuardrail, ExpectedLossMatrix, GuardrailError, GuardrailEvent, GuardrailRegistry,
+    GuardrailState, ResetReceipt, ThresholdLikelihoodRatio, UniversalLikelihoodRatio,
 };
 use frankenengine_engine::martingale_decision_ledger::StoppingThreshold;
 use frankenengine_engine::security_epoch::SecurityEpoch;
@@ -35,7 +35,8 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 // ---------------------------------------------------------------------------
 
 fn blocked_loss_matrix(actions: &[&str]) -> ExpectedLossMatrix {
-    let action_losses: BTreeMap<String, i64> = actions.iter()
+    let action_losses: BTreeMap<String, i64> = actions
+        .iter()
         .map(|&action| (action.to_string(), 2_000_000)) // 2.0 (above 1.0 threshold)
         .collect();
     ExpectedLossMatrix::new(action_losses, 1_000_000) // Block threshold = 1.0
@@ -80,7 +81,10 @@ fn new_guardrail_starts_active_with_e_value_one() {
     assert_eq!(gr.state(), GuardrailState::Active);
     assert_eq!(gr.martingale_state().log_m_millionths, 1_000_000); // 1.0
     assert_eq!(gr.observation_count(), 0);
-    assert_eq!(gr.threshold(), StoppingThreshold::try_from_log_millionths(20_000_000).unwrap());
+    assert_eq!(
+        gr.threshold(),
+        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap()
+    );
     assert_eq!(gr.config_epoch(), SecurityEpoch::GENESIS);
     assert_eq!(gr.guardrail_id, "g1");
     assert_eq!(gr.metric_stream, "metric");
@@ -943,7 +947,11 @@ fn deterministic_replay_same_trigger_point() {
             }
             let _ = gr.update(o);
         }
-        (gr.observation_count(), gr.martingale_state().log_m_millionths, gr.state())
+        (
+            gr.observation_count(),
+            gr.martingale_state().log_m_millionths,
+            gr.state(),
+        )
     };
 
     let (count1, ev1, state1) = run(&observations);

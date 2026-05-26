@@ -14,17 +14,21 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-use frankenengine_engine::guardplane_adapter::{GuardplaneDecisionRecord, GuardplaneAdapter, GuardplaneOperation};
-use frankenengine_engine::baseline_interpreter::{HookContext, HookAction};
+use frankenengine_engine::baseline_interpreter::{HookAction, HookContext};
 use frankenengine_engine::bayesian_posterior::{Posterior, RiskState};
 use frankenengine_engine::expected_loss_selector::ContainmentAction;
 use frankenengine_engine::fleet_immune_protocol::ContainmentAction as ThresholdContainmentAction;
-use frankenengine_engine::martingale_decision_ledger::{MartingaleLedger, MartingaleState, StoppingThreshold};
-use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::guardplane_adapter::{
+    GuardplaneAdapter, GuardplaneDecisionRecord, GuardplaneOperation,
+};
+use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::martingale_decision_ledger::{
+    MartingaleLedger, MartingaleState, StoppingThreshold,
+};
 use frankenengine_engine::runtime_decision_core::{
     AsymmetricLossPolicy, RegimeEstimate, default_routing_loss_policy,
 };
-use frankenengine_engine::hash_tiers::ContentHash;
+use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 
 // Type alias for compatibility
@@ -106,7 +110,6 @@ impl HistoricalCaseGenerator {
                 },
                 expected_content_hash: ContentHash::compute(b"historical_001_expected"),
             },
-
             // Case 2: High-risk scenario requiring fallback
             HistoricalDecisionCase {
                 case_id: "historical_002".to_string(),
@@ -124,16 +127,21 @@ impl HistoricalCaseGenerator {
                         "fallback:safe_mode".to_string(),
                         "hold".to_string(),
                     ],
-                    threat_surface: vec!["network".to_string(), "ipc".to_string(), "filesystem".to_string()],
+                    threat_surface: vec![
+                        "network".to_string(),
+                        "ipc".to_string(),
+                        "filesystem".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"historical_002_expected"),
             },
-
             // Case 3: Borderline case requiring precise decision
             HistoricalDecisionCase {
                 case_id: "historical_003".to_string(),
                 description: "Borderline risk requiring throughput profile decision".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_throughput_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_throughput_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::from([
                         ("supply_chain_risk".to_string(), 200_000),
@@ -149,12 +157,13 @@ impl HistoricalCaseGenerator {
                 },
                 expected_content_hash: ContentHash::compute(b"historical_003_expected"),
             },
-
             // Additional historical cases (7 more to reach 10)
             HistoricalDecisionCase {
                 case_id: "historical_004".to_string(),
                 description: "Zero-risk trusted environment".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_throughput_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_throughput_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::from([
                         ("supply_chain_risk".to_string(), 0),
@@ -170,7 +179,6 @@ impl HistoricalCaseGenerator {
                 },
                 expected_content_hash: ContentHash::compute(b"historical_004_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "historical_005".to_string(),
                 description: "Maximum risk scenario".to_string(),
@@ -183,15 +191,21 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string(), "fallback:safe_mode".to_string()],
-                    threat_surface: vec!["network".to_string(), "filesystem".to_string(), "ipc".to_string(), "memory".to_string()],
+                    threat_surface: vec![
+                        "network".to_string(),
+                        "filesystem".to_string(),
+                        "ipc".to_string(),
+                        "memory".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"historical_005_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "historical_006".to_string(),
                 description: "Asymmetric risk distribution".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_deterministic_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_deterministic_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::from([
                         ("supply_chain_risk".to_string(), 10_000),
@@ -208,22 +222,20 @@ impl HistoricalCaseGenerator {
                 },
                 expected_content_hash: ContentHash::compute(b"historical_006_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "historical_007".to_string(),
                 description: "Single candidate forced selection".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_deterministic_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_deterministic_profile",
+                ),
                 input_context: TestDecisionContext {
-                    risk_posteriors: BTreeMap::from([
-                        ("supply_chain_risk".to_string(), 100_000),
-                    ]),
+                    risk_posteriors: BTreeMap::from([("supply_chain_risk".to_string(), 100_000)]),
                     regime: RegimeEstimate::Normal,
                     candidates: vec!["select:baseline_deterministic_profile".to_string()],
                     threat_surface: vec!["network".to_string()],
                 },
                 expected_content_hash: ContentHash::compute(b"historical_007_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "historical_008".to_string(),
                 description: "Elevated regime with moderate risk".to_string(),
@@ -242,11 +254,12 @@ impl HistoricalCaseGenerator {
                 },
                 expected_content_hash: ContentHash::compute(b"historical_008_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "historical_009".to_string(),
                 description: "Multiple equal-risk candidates".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_deterministic_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_deterministic_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::from([
                         ("supply_chain_risk".to_string(), 150_000),
@@ -258,11 +271,14 @@ impl HistoricalCaseGenerator {
                         "select:baseline_deterministic_profile".to_string(),
                         "select:baseline_throughput_profile".to_string(),
                     ],
-                    threat_surface: vec!["network".to_string(), "filesystem".to_string(), "ipc".to_string()],
+                    threat_surface: vec![
+                        "network".to_string(),
+                        "filesystem".to_string(),
+                        "ipc".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"historical_009_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "historical_010".to_string(),
                 description: "Critical regime emergency response".to_string(),
@@ -275,7 +291,13 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
-                    threat_surface: vec!["network".to_string(), "filesystem".to_string(), "ipc".to_string(), "memory".to_string(), "runtime".to_string()],
+                    threat_surface: vec![
+                        "network".to_string(),
+                        "filesystem".to_string(),
+                        "ipc".to_string(),
+                        "memory".to_string(),
+                        "runtime".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"historical_010_expected"),
             },
@@ -297,11 +319,14 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Attack,
                     candidates: vec!["fallback:safe_mode".to_string(), "hold".to_string()],
-                    threat_surface: vec!["supply_chain".to_string(), "network".to_string(), "filesystem".to_string()],
+                    threat_surface: vec![
+                        "supply_chain".to_string(),
+                        "network".to_string(),
+                        "filesystem".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_001_expected"),
             },
-
             // Red-team case 2: Runtime injection attempt
             HistoricalDecisionCase {
                 case_id: "redteam_002".to_string(),
@@ -315,11 +340,14 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string(), "fallback:safe_mode".to_string()],
-                    threat_surface: vec!["runtime".to_string(), "memory".to_string(), "ipc".to_string()],
+                    threat_surface: vec![
+                        "runtime".to_string(),
+                        "memory".to_string(),
+                        "ipc".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_002_expected"),
             },
-
             // Additional red-team cases (8 more to reach 10)
             HistoricalDecisionCase {
                 case_id: "redteam_003".to_string(),
@@ -334,11 +362,16 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
-                    threat_surface: vec!["network".to_string(), "filesystem".to_string(), "runtime".to_string(), "memory".to_string(), "supply_chain".to_string()],
+                    threat_surface: vec![
+                        "network".to_string(),
+                        "filesystem".to_string(),
+                        "runtime".to_string(),
+                        "memory".to_string(),
+                        "supply_chain".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_003_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "redteam_004".to_string(),
                 description: "Stealth persistence mechanism".to_string(),
@@ -352,11 +385,14 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Elevated,
                     candidates: vec!["fallback:safe_mode".to_string(), "hold".to_string()],
-                    threat_surface: vec!["filesystem".to_string(), "registry".to_string(), "memory".to_string()],
+                    threat_surface: vec![
+                        "filesystem".to_string(),
+                        "registry".to_string(),
+                        "memory".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_004_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "redteam_005".to_string(),
                 description: "Zero-day exploit simulation".to_string(),
@@ -370,11 +406,14 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
-                    threat_surface: vec!["runtime".to_string(), "kernel".to_string(), "memory".to_string()],
+                    threat_surface: vec![
+                        "runtime".to_string(),
+                        "kernel".to_string(),
+                        "memory".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_005_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "redteam_006".to_string(),
                 description: "Social engineering component".to_string(),
@@ -387,12 +426,18 @@ impl HistoricalCaseGenerator {
                         ("social_risk".to_string(), 600_000),
                     ]),
                     regime: RegimeEstimate::Elevated,
-                    candidates: vec!["fallback:safe_mode".to_string(), "select:baseline_deterministic_profile".to_string()],
-                    threat_surface: vec!["user_interface".to_string(), "network".to_string(), "filesystem".to_string()],
+                    candidates: vec![
+                        "fallback:safe_mode".to_string(),
+                        "select:baseline_deterministic_profile".to_string(),
+                    ],
+                    threat_surface: vec![
+                        "user_interface".to_string(),
+                        "network".to_string(),
+                        "filesystem".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_006_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "redteam_007".to_string(),
                 description: "Privilege escalation chain".to_string(),
@@ -406,11 +451,14 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string(), "fallback:safe_mode".to_string()],
-                    threat_surface: vec!["runtime".to_string(), "kernel".to_string(), "privilege".to_string()],
+                    threat_surface: vec![
+                        "runtime".to_string(),
+                        "kernel".to_string(),
+                        "privilege".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_007_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "redteam_008".to_string(),
                 description: "Lateral movement detection".to_string(),
@@ -423,12 +471,18 @@ impl HistoricalCaseGenerator {
                         ("lateral_risk".to_string(), 700_000),
                     ]),
                     regime: RegimeEstimate::Elevated,
-                    candidates: vec!["fallback:safe_mode".to_string(), "select:baseline_deterministic_profile".to_string()],
-                    threat_surface: vec!["network".to_string(), "ipc".to_string(), "filesystem".to_string()],
+                    candidates: vec![
+                        "fallback:safe_mode".to_string(),
+                        "select:baseline_deterministic_profile".to_string(),
+                    ],
+                    threat_surface: vec![
+                        "network".to_string(),
+                        "ipc".to_string(),
+                        "filesystem".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_008_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "redteam_009".to_string(),
                 description: "Data exfiltration attempt".to_string(),
@@ -442,11 +496,14 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
-                    threat_surface: vec!["network".to_string(), "filesystem".to_string(), "memory".to_string()],
+                    threat_surface: vec![
+                        "network".to_string(),
+                        "filesystem".to_string(),
+                        "memory".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_009_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "redteam_010".to_string(),
                 description: "Advanced persistent threat".to_string(),
@@ -461,7 +518,14 @@ impl HistoricalCaseGenerator {
                     ]),
                     regime: RegimeEstimate::Attack,
                     candidates: vec!["hold".to_string()],
-                    threat_surface: vec!["network".to_string(), "filesystem".to_string(), "runtime".to_string(), "memory".to_string(), "registry".to_string(), "kernel".to_string()],
+                    threat_surface: vec![
+                        "network".to_string(),
+                        "filesystem".to_string(),
+                        "runtime".to_string(),
+                        "memory".to_string(),
+                        "registry".to_string(),
+                        "kernel".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"redteam_010_expected"),
             },
@@ -480,74 +544,90 @@ impl HistoricalCaseGenerator {
                         ("supply_chain_risk".to_string(), 500_000), // Exactly 0.5
                     ]),
                     regime: RegimeEstimate::Normal,
-                    candidates: vec!["select:baseline_deterministic_profile".to_string(), "fallback:safe_mode".to_string()],
+                    candidates: vec![
+                        "select:baseline_deterministic_profile".to_string(),
+                        "fallback:safe_mode".to_string(),
+                    ],
                     threat_surface: vec!["network".to_string()],
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_001_expected"),
             },
-
             // Adversarial case 2: Minimal difference scenarios
             HistoricalDecisionCase {
                 case_id: "adversarial_002".to_string(),
                 description: "Minimal risk difference: 1 millionth".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_deterministic_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_deterministic_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::from([
                         ("supply_chain_risk".to_string(), 499_999),
                         ("runtime_risk".to_string(), 500_000),
                     ]),
                     regime: RegimeEstimate::Normal,
-                    candidates: vec!["select:baseline_deterministic_profile".to_string(), "select:baseline_throughput_profile".to_string()],
+                    candidates: vec![
+                        "select:baseline_deterministic_profile".to_string(),
+                        "select:baseline_throughput_profile".to_string(),
+                    ],
                     threat_surface: vec!["runtime".to_string()],
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_002_expected"),
             },
-
             // Additional adversarial cases (8 more to reach 10+)
             HistoricalDecisionCase {
                 case_id: "adversarial_003".to_string(),
                 description: "Empty threat surface".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_throughput_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_throughput_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::new(),
                     regime: RegimeEstimate::Normal,
-                    candidates: vec!["select:baseline_throughput_profile".to_string(), "select:baseline_deterministic_profile".to_string()],
+                    candidates: vec![
+                        "select:baseline_throughput_profile".to_string(),
+                        "select:baseline_deterministic_profile".to_string(),
+                    ],
                     threat_surface: vec![],
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_003_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "adversarial_004".to_string(),
                 description: "Maximum millionths precision".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_deterministic_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_deterministic_profile",
+                ),
                 input_context: TestDecisionContext {
-                    risk_posteriors: BTreeMap::from([
-                        ("supply_chain_risk".to_string(), 999_999),
-                    ]),
+                    risk_posteriors: BTreeMap::from([("supply_chain_risk".to_string(), 999_999)]),
                     regime: RegimeEstimate::Attack,
-                    candidates: vec!["select:baseline_deterministic_profile".to_string(), "hold".to_string()],
+                    candidates: vec![
+                        "select:baseline_deterministic_profile".to_string(),
+                        "hold".to_string(),
+                    ],
                     threat_surface: vec!["all".to_string()],
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_004_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "adversarial_005".to_string(),
                 description: "Negative risk values".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_throughput_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_throughput_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::from([
                         ("supply_chain_risk".to_string(), -100_000),
                         ("runtime_risk".to_string(), 50_000),
                     ]),
                     regime: RegimeEstimate::Normal,
-                    candidates: vec!["select:baseline_throughput_profile".to_string(), "select:baseline_deterministic_profile".to_string()],
+                    candidates: vec![
+                        "select:baseline_throughput_profile".to_string(),
+                        "select:baseline_deterministic_profile".to_string(),
+                    ],
                     threat_surface: vec!["network".to_string()],
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_005_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "adversarial_006".to_string(),
                 description: "Single maximum risk".to_string(),
@@ -562,11 +642,12 @@ impl HistoricalCaseGenerator {
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_006_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "adversarial_007".to_string(),
                 description: "Alternating risk pattern".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_deterministic_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_deterministic_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::from([
                         ("risk_a".to_string(), 100_000),
@@ -575,12 +656,14 @@ impl HistoricalCaseGenerator {
                         ("risk_d".to_string(), 900_000),
                     ]),
                     regime: RegimeEstimate::Elevated,
-                    candidates: vec!["select:baseline_deterministic_profile".to_string(), "fallback:safe_mode".to_string()],
+                    candidates: vec![
+                        "select:baseline_deterministic_profile".to_string(),
+                        "fallback:safe_mode".to_string(),
+                    ],
                     threat_surface: vec!["pattern_a".to_string(), "pattern_b".to_string()],
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_007_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "adversarial_008".to_string(),
                 description: "Large threat surface".to_string(),
@@ -594,32 +677,40 @@ impl HistoricalCaseGenerator {
                         ("threat_05".to_string(), 50_000),
                     ]),
                     regime: RegimeEstimate::Normal,
-                    candidates: vec!["fallback:safe_mode".to_string(), "select:baseline_deterministic_profile".to_string()],
+                    candidates: vec![
+                        "fallback:safe_mode".to_string(),
+                        "select:baseline_deterministic_profile".to_string(),
+                    ],
                     threat_surface: (1..=20).map(|i| format!("threat_{:02}", i)).collect(),
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_008_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "adversarial_009".to_string(),
                 description: "Regime transition boundary".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_deterministic_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_deterministic_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::from([
                         ("supply_chain_risk".to_string(), 250_000),
                         ("runtime_risk".to_string(), 250_000),
                     ]),
                     regime: RegimeEstimate::Normal,
-                    candidates: vec!["select:baseline_deterministic_profile".to_string(), "select:baseline_throughput_profile".to_string()],
+                    candidates: vec![
+                        "select:baseline_deterministic_profile".to_string(),
+                        "select:baseline_throughput_profile".to_string(),
+                    ],
                     threat_surface: vec!["transition".to_string()],
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_009_expected"),
             },
-
             HistoricalDecisionCase {
                 case_id: "adversarial_010".to_string(),
                 description: "Zero probability events".to_string(),
-                legacy_verdict: Self::create_mock_legacy_verdict("select:baseline_throughput_profile"),
+                legacy_verdict: Self::create_mock_legacy_verdict(
+                    "select:baseline_throughput_profile",
+                ),
                 input_context: TestDecisionContext {
                     risk_posteriors: BTreeMap::from([
                         ("zero_risk_a".to_string(), 0),
@@ -627,12 +718,14 @@ impl HistoricalCaseGenerator {
                         ("zero_risk_c".to_string(), 0),
                     ]),
                     regime: RegimeEstimate::Normal,
-                    candidates: vec!["select:baseline_throughput_profile".to_string(), "select:baseline_deterministic_profile".to_string()],
+                    candidates: vec![
+                        "select:baseline_throughput_profile".to_string(),
+                        "select:baseline_deterministic_profile".to_string(),
+                    ],
                     threat_surface: vec![],
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_010_expected"),
             },
-
             // Extra case to exceed minimum requirement
             HistoricalDecisionCase {
                 case_id: "adversarial_011".to_string(),
@@ -648,8 +741,15 @@ impl HistoricalCaseGenerator {
                         ("interaction_yz".to_string(), 450_000),
                     ]),
                     regime: RegimeEstimate::Elevated,
-                    candidates: vec!["fallback:safe_mode".to_string(), "select:baseline_deterministic_profile".to_string()],
-                    threat_surface: vec!["multi_dimensional".to_string(), "complex".to_string(), "interactive".to_string()],
+                    candidates: vec![
+                        "fallback:safe_mode".to_string(),
+                        "select:baseline_deterministic_profile".to_string(),
+                    ],
+                    threat_surface: vec![
+                        "multi_dimensional".to_string(),
+                        "complex".to_string(),
+                        "interactive".to_string(),
+                    ],
                 },
                 expected_content_hash: ContentHash::compute(b"adversarial_011_expected"),
             },
@@ -666,9 +766,12 @@ impl HistoricalCaseGenerator {
             hook_context: HookContext {
                 extension_id: "test_context".to_string(),
                 instruction_count: 100,
-                current_ip: 0
+                current_ip: 0,
             },
-            operation: GuardplaneOperation::Call { callee_name: Some("test_function".to_string()), arg_count: 0 },
+            operation: GuardplaneOperation::Call {
+                callee_name: Some("test_function".to_string()),
+                arg_count: 0,
+            },
             posterior: Posterior::default_prior(),
             risk_state: RiskState::Benign,
             posterior_delta_millionths: 100_000,
@@ -696,27 +799,41 @@ pub struct MartingaleDecisionAdapter {
 impl MartingaleDecisionAdapter {
     pub fn new() -> Self {
         Self {
-            ledger: MartingaleLedger::new(StoppingThreshold::try_from_log_millionths(1000).unwrap(), SecurityEpoch::from_raw(0)),
+            ledger: MartingaleLedger::new(
+                StoppingThreshold::try_from_log_millionths(1000).unwrap(),
+                SecurityEpoch::from_raw(0),
+            ),
             policy: default_routing_loss_policy(),
         }
     }
 
     /// Make a decision using the new martingale substrate.
-    pub fn make_decision(&mut self, context: &TestDecisionContext) -> Result<GuardplaneDecisionRecord, String> {
+    pub fn make_decision(
+        &mut self,
+        context: &TestDecisionContext,
+    ) -> Result<GuardplaneDecisionRecord, String> {
         // Convert test context to martingale input format
         let candidates = &context.candidates;
         let risk_posteriors = &context.risk_posteriors;
         let regime = context.regime;
 
         // Use new martingale substrate to make decision
-        let decision_result = self.policy.select_min_loss_action(candidates, risk_posteriors, regime);
-        let decision = decision_result.map(|(action, _loss)| action).unwrap_or_else(|| "default_action".to_string());
+        let decision_result =
+            self.policy
+                .select_min_loss_action(candidates, risk_posteriors, regime);
+        let decision = decision_result
+            .map(|(action, _loss)| action)
+            .unwrap_or_else(|| "default_action".to_string());
 
         // Convert decision back to GuardplaneDecisionRecord format for comparison
         self.convert_to_legacy_format(decision, context)
     }
 
-    fn convert_to_legacy_format(&self, decision: String, context: &TestDecisionContext) -> Result<GuardplaneDecisionRecord, String> {
+    fn convert_to_legacy_format(
+        &self,
+        decision: String,
+        context: &TestDecisionContext,
+    ) -> Result<GuardplaneDecisionRecord, String> {
         use frankenengine_engine::guardplane_adapter::*;
 
         // This conversion represents the semantic mapping between old and new substrates
@@ -724,9 +841,12 @@ impl MartingaleDecisionAdapter {
             hook_context: HookContext {
                 extension_id: "martingale_context".to_string(),
                 instruction_count: 200,
-                current_ip: 1
+                current_ip: 1,
             },
-            operation: GuardplaneOperation::Call { callee_name: Some("test_function".to_string()), arg_count: 0 },
+            operation: GuardplaneOperation::Call {
+                callee_name: Some("test_function".to_string()),
+                arg_count: 0,
+            },
             posterior: Posterior::default_prior(),
             risk_state: RiskState::Benign,
             posterior_delta_millionths: 100_000,
@@ -772,7 +892,8 @@ fn test_martingale_substrate_metamorphic_preservation() {
         );
 
         // Make decision with new martingale substrate
-        let new_verdict = adapter.make_decision(&case.input_context)
+        let new_verdict = adapter
+            .make_decision(&case.input_context)
             .expect("New substrate should not fail");
 
         // Compute content hashes for byte-for-byte comparison
@@ -826,8 +947,14 @@ fn test_martingale_substrate_metamorphic_preservation() {
         }
     }
 
-    println!("Metamorphic test results: {} passed, {} failed", passed, failed);
-    assert_eq!(failed, 0, "All metamorphic cases must preserve verdicts exactly");
+    println!(
+        "Metamorphic test results: {} passed, {} failed",
+        passed, failed
+    );
+    assert_eq!(
+        failed, 0,
+        "All metamorphic cases must preserve verdicts exactly"
+    );
     assert!(passed >= 30, "Must test at least 30 cases");
 }
 
@@ -856,13 +983,15 @@ fn test_martingale_substrate_negative_case_corrupted_loss_matrix() {
 
     // Get baseline decision
     let mut baseline_adapter = MartingaleDecisionAdapter::new();
-    let baseline_verdict = baseline_adapter.make_decision(&test_context)
+    let baseline_verdict = baseline_adapter
+        .make_decision(&test_context)
         .expect("Baseline decision should succeed");
 
     // Corrupt the substrate's loss-matrix (simulate by creating a new adapter with different policy)
     let mut corrupted_adapter = MartingaleDecisionAdapter::new();
     // TODO: Actually corrupt the loss matrix when the substrate API supports it
-    let corrupted_verdict = corrupted_adapter.make_decision(&test_context)
+    let corrupted_verdict = corrupted_adapter
+        .make_decision(&test_context)
         .expect("Corrupted decision should still succeed but produce different result");
 
     // Verify the test fails loudly when verdicts diverge
@@ -886,7 +1015,9 @@ fn test_martingale_substrate_negative_case_corrupted_loss_matrix() {
             "✓ Negative case: Corruption correctly detected via divergent decision id"
         );
     } else {
-        tracing::warn!("Negative case: No divergence detected (corruption simulation may be insufficient)");
+        tracing::warn!(
+            "Negative case: No divergence detected (corruption simulation may be insufficient)"
+        );
     }
 
     // Note: In a real scenario with actual loss-matrix corruption, this would fail.
@@ -904,16 +1035,16 @@ fn test_decision_logging_discipline() {
     tracing::info!("Testing logging discipline per bd-cixqu.45");
 
     let test_context = TestDecisionContext {
-        risk_posteriors: BTreeMap::from([
-            ("supply_chain_risk".to_string(), 150_000),
-        ]),
+        risk_posteriors: BTreeMap::from([("supply_chain_risk".to_string(), 150_000)]),
         regime: RegimeEstimate::Normal,
         candidates: vec!["select:baseline_deterministic_profile".to_string()],
         threat_surface: vec!["network".to_string()],
     };
 
     let mut adapter = MartingaleDecisionAdapter::new();
-    let verdict = adapter.make_decision(&test_context).expect("Decision should succeed");
+    let verdict = adapter
+        .make_decision(&test_context)
+        .expect("Decision should succeed");
 
     // Emit structured events.jsonl line as required
     let structured_event = serde_json::json!({

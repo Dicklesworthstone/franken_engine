@@ -16,9 +16,8 @@ use frankenengine_engine::differential_privacy_posterior::{
 use frankenengine_engine::federated_posterior_aggregation::PosteriorDelta;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::{
-    fleet_immune_protocol::NodeId,
+    fleet_immune_protocol::NodeId, policy_checkpoint::DeterministicTimestamp as Timestamp,
     security_epoch::SecurityEpoch,
-    policy_checkpoint::DeterministicTimestamp as Timestamp,
 };
 use rand::{Rng, thread_rng};
 
@@ -186,18 +185,27 @@ fn reconstruction_attack_against_differential_privacy() {
         // Convert aggregated deltas to BTreeMap for reconstruction analysis
         let aggregate_map = {
             let mut map = BTreeMap::new();
-            map.insert(RiskLevel::Benign, aggregated.aggregate_delta_benign_millionths.max(0) as u32);
-            map.insert(RiskLevel::Anomalous, aggregated.aggregate_delta_anomalous_millionths.max(0) as u32);
-            map.insert(RiskLevel::Malicious, aggregated.aggregate_delta_malicious_millionths.max(0) as u32);
-            map.insert(RiskLevel::Unknown, aggregated.aggregate_delta_unknown_millionths.max(0) as u32);
+            map.insert(
+                RiskLevel::Benign,
+                aggregated.aggregate_delta_benign_millionths.max(0) as u32,
+            );
+            map.insert(
+                RiskLevel::Anomalous,
+                aggregated.aggregate_delta_anomalous_millionths.max(0) as u32,
+            );
+            map.insert(
+                RiskLevel::Malicious,
+                aggregated.aggregate_delta_malicious_millionths.max(0) as u32,
+            );
+            map.insert(
+                RiskLevel::Unknown,
+                aggregated.aggregate_delta_unknown_millionths.max(0) as u32,
+            );
             map
         };
 
-        let reconstruction_accuracy = attempt_algebraic_reconstruction(
-            &aggregate_map,
-            known_posteriors,
-            target_posterior,
-        );
+        let reconstruction_accuracy =
+            attempt_algebraic_reconstruction(&aggregate_map, known_posteriors, target_posterior);
 
         if reconstruction_accuracy > PRIVACY_VIOLATION_THRESHOLD {
             successful_reconstructions += 1;
@@ -237,10 +245,8 @@ fn weak_privacy_parameters_detected() {
         println!("Testing weak privacy detection: {}", test_name);
 
         // These should either fail to create PrivacyParameters or provide no privacy
-        let privacy_result = PrivacyParameters::new(
-            (epsilon * 1_000_000.0) as u64,
-            (delta * 1_000_000.0) as u64
-        );
+        let privacy_result =
+            PrivacyParameters::new((epsilon * 1_000_000.0) as u64, (delta * 1_000_000.0) as u64);
 
         if privacy_result.is_err() {
             println!("✓ {} correctly rejected at parameter level", test_name);
@@ -299,7 +305,8 @@ fn reconstruction_attack_known_vectors() {
 fn minimum_privacy_requirements_enforced() {
     let epoch = SecurityEpoch::from_raw(1000);
     // Test with minimum acceptable epsilon
-    let min_privacy_params = PrivacyParameters::new((MINIMUM_EPSILON * 1_000_000.0) as u64, 1u64).unwrap();
+    let min_privacy_params =
+        PrivacyParameters::new((MINIMUM_EPSILON * 1_000_000.0) as u64, 1u64).unwrap();
     let mut min_privacy_budget = PrivacyBudget::new(10_000_000u64, 10u64, epoch).unwrap();
     let dp_aggregator = PrivacyPreservingAggregator::new(min_privacy_params.clone(), epoch);
 
@@ -355,18 +362,27 @@ fn minimum_privacy_requirements_enforced() {
         // Convert aggregated deltas to BTreeMap for reconstruction analysis
         let aggregate_map = {
             let mut map = BTreeMap::new();
-            map.insert(RiskLevel::Benign, aggregated.aggregate_delta_benign_millionths.max(0) as u32);
-            map.insert(RiskLevel::Anomalous, aggregated.aggregate_delta_anomalous_millionths.max(0) as u32);
-            map.insert(RiskLevel::Malicious, aggregated.aggregate_delta_malicious_millionths.max(0) as u32);
-            map.insert(RiskLevel::Unknown, aggregated.aggregate_delta_unknown_millionths.max(0) as u32);
+            map.insert(
+                RiskLevel::Benign,
+                aggregated.aggregate_delta_benign_millionths.max(0) as u32,
+            );
+            map.insert(
+                RiskLevel::Anomalous,
+                aggregated.aggregate_delta_anomalous_millionths.max(0) as u32,
+            );
+            map.insert(
+                RiskLevel::Malicious,
+                aggregated.aggregate_delta_malicious_millionths.max(0) as u32,
+            );
+            map.insert(
+                RiskLevel::Unknown,
+                aggregated.aggregate_delta_unknown_millionths.max(0) as u32,
+            );
             map
         };
 
-        let reconstruction_accuracy = attempt_algebraic_reconstruction(
-            &aggregate_map,
-            known_posteriors,
-            target_posterior,
-        );
+        let reconstruction_accuracy =
+            attempt_algebraic_reconstruction(&aggregate_map, known_posteriors, target_posterior);
 
         reconstruction_attempts += 1;
         if reconstruction_accuracy > PRIVACY_VIOLATION_THRESHOLD {
@@ -398,7 +414,9 @@ fn attempt_reconstruction_attack(
     num_attempts: usize,
 ) -> f64 {
     let epoch = SecurityEpoch::from_raw(1000);
-    let privacy_params = PrivacyParameters::new((epsilon * 1_000_000.0) as u64, (delta * 1_000_000.0) as u64).unwrap();
+    let privacy_params =
+        PrivacyParameters::new((epsilon * 1_000_000.0) as u64, (delta * 1_000_000.0) as u64)
+            .unwrap();
     let mut privacy_budget = PrivacyBudget::new(100_000_000u64, 10_000u64, epoch).unwrap();
     let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), epoch);
 
@@ -453,18 +471,27 @@ fn attempt_reconstruction_attack(
         // Convert aggregated deltas to BTreeMap for reconstruction analysis
         let aggregate_map = {
             let mut map = BTreeMap::new();
-            map.insert(RiskLevel::Benign, aggregated.aggregate_delta_benign_millionths.max(0) as u32);
-            map.insert(RiskLevel::Anomalous, aggregated.aggregate_delta_anomalous_millionths.max(0) as u32);
-            map.insert(RiskLevel::Malicious, aggregated.aggregate_delta_malicious_millionths.max(0) as u32);
-            map.insert(RiskLevel::Unknown, aggregated.aggregate_delta_unknown_millionths.max(0) as u32);
+            map.insert(
+                RiskLevel::Benign,
+                aggregated.aggregate_delta_benign_millionths.max(0) as u32,
+            );
+            map.insert(
+                RiskLevel::Anomalous,
+                aggregated.aggregate_delta_anomalous_millionths.max(0) as u32,
+            );
+            map.insert(
+                RiskLevel::Malicious,
+                aggregated.aggregate_delta_malicious_millionths.max(0) as u32,
+            );
+            map.insert(
+                RiskLevel::Unknown,
+                aggregated.aggregate_delta_unknown_millionths.max(0) as u32,
+            );
             map
         };
 
-        let reconstruction_accuracy = attempt_algebraic_reconstruction(
-            &aggregate_map,
-            known_posteriors,
-            target_posterior,
-        );
+        let reconstruction_accuracy =
+            attempt_algebraic_reconstruction(&aggregate_map, known_posteriors, target_posterior);
 
         if reconstruction_accuracy > PRIVACY_VIOLATION_THRESHOLD {
             successful_attacks += 1;
@@ -525,7 +552,9 @@ fn simulate_collusion_attack(
     num_attacks: usize,
 ) -> f64 {
     let epoch = SecurityEpoch::from_raw(1000);
-    let privacy_params = PrivacyParameters::new((epsilon * 1_000_000.0) as u64, (delta * 1_000_000.0) as u64).unwrap();
+    let privacy_params =
+        PrivacyParameters::new((epsilon * 1_000_000.0) as u64, (delta * 1_000_000.0) as u64)
+            .unwrap();
     let mut privacy_budget = PrivacyBudget::new(100_000_000u64, 10_000u64, epoch).unwrap();
     let dp_aggregator = PrivacyPreservingAggregator::new(privacy_params.clone(), epoch);
 
@@ -584,13 +613,25 @@ fn simulate_collusion_attack(
 
             let reconstruction_accuracy = attempt_algebraic_reconstruction(
                 &{
-            let mut aggregate_map = BTreeMap::new();
-            aggregate_map.insert(RiskLevel::Benign, aggregated.aggregate_delta_benign_millionths.max(0) as u32);
-            aggregate_map.insert(RiskLevel::Anomalous, aggregated.aggregate_delta_anomalous_millionths.max(0) as u32);
-            aggregate_map.insert(RiskLevel::Malicious, aggregated.aggregate_delta_malicious_millionths.max(0) as u32);
-            aggregate_map.insert(RiskLevel::Unknown, aggregated.aggregate_delta_unknown_millionths.max(0) as u32);
-            aggregate_map
-        },
+                    let mut aggregate_map = BTreeMap::new();
+                    aggregate_map.insert(
+                        RiskLevel::Benign,
+                        aggregated.aggregate_delta_benign_millionths.max(0) as u32,
+                    );
+                    aggregate_map.insert(
+                        RiskLevel::Anomalous,
+                        aggregated.aggregate_delta_anomalous_millionths.max(0) as u32,
+                    );
+                    aggregate_map.insert(
+                        RiskLevel::Malicious,
+                        aggregated.aggregate_delta_malicious_millionths.max(0) as u32,
+                    );
+                    aggregate_map.insert(
+                        RiskLevel::Unknown,
+                        aggregated.aggregate_delta_unknown_millionths.max(0) as u32,
+                    );
+                    aggregate_map
+                },
                 known_posteriors,
                 target_posterior,
             );
@@ -660,12 +701,13 @@ fn privacy_budget_tracking_prevents_leakage() {
     // Apply differential privacy a few times to test
     let mut applications = 0;
     while applications < 5 {
-        let _result = frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
-            delta.clone(),
-            privacy_params.clone(),
-            format!("test_round_{}", applications),
-            &mut DeterministicTestNoiseGenerator::new(),
-        );
+        let _result =
+            frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
+                delta.clone(),
+                privacy_params.clone(),
+                format!("test_round_{}", applications),
+                &mut DeterministicTestNoiseGenerator::new(),
+            );
 
         applications += 1;
     }

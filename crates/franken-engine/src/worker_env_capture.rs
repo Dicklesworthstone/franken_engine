@@ -302,11 +302,12 @@ impl WindowsX64EnvCapture {
     /// Get Visual Studio/MSVC version information.
     fn get_msvc_version(&self) -> Result<String, EnvCaptureError> {
         // Try to get MSVC version
-        let output = Command::new("cl")
-            .output()
-            .map_err(|_| EnvCaptureError::CommandExecution {
-                command: "cl".to_string(),
-            })?;
+        let output =
+            Command::new("cl")
+                .output()
+                .map_err(|_| EnvCaptureError::CommandExecution {
+                    command: "cl".to_string(),
+                })?;
 
         // cl returns non-zero when called without args, but still outputs version info
         let output_str = String::from_utf8_lossy(&output.stderr);
@@ -489,7 +490,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&info).expect("serialization should work");
-        let deserialized: RustToolchainInfo = serde_json::from_str(&json).expect("deserialization should work");
+        let deserialized: RustToolchainInfo =
+            serde_json::from_str(&json).expect("deserialization should work");
         assert_eq!(info, deserialized);
     }
 
@@ -518,7 +520,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&env).expect("serialization should work");
-        let deserialized: WorkerEnvironment = serde_json::from_str(&json).expect("deserialization should work");
+        let deserialized: WorkerEnvironment =
+            serde_json::from_str(&json).expect("deserialization should work");
         assert_eq!(env, deserialized);
     }
 
@@ -530,7 +533,10 @@ mod tests {
         let result = capture.capture_environment();
 
         // On actual macOS arm64, this should succeed
-        assert!(result.is_ok(), "Environment capture should succeed on macOS arm64");
+        assert!(
+            result.is_ok(),
+            "Environment capture should succeed on macOS arm64"
+        );
 
         let env = result.unwrap();
         assert_eq!(env.os, "macos");
@@ -547,7 +553,10 @@ mod tests {
         let result = capture.capture_environment();
 
         // On non-macOS arm64 platforms, this should fail
-        assert!(result.is_err(), "Environment capture should fail on wrong platform");
+        assert!(
+            result.is_err(),
+            "Environment capture should fail on wrong platform"
+        );
 
         match result.unwrap_err() {
             EnvCaptureError::UnsupportedPlatform { .. } => {
@@ -564,7 +573,10 @@ mod tests {
         let result = capture.capture_environment();
 
         // On actual Windows x64, this should succeed
-        assert!(result.is_ok(), "Environment capture should succeed on Windows x64");
+        assert!(
+            result.is_ok(),
+            "Environment capture should succeed on Windows x64"
+        );
 
         let env = result.unwrap();
         assert_eq!(env.os, "windows");
@@ -581,7 +593,10 @@ mod tests {
         let result = capture.capture_environment();
 
         // On non-Windows x64 platforms, this should fail
-        assert!(result.is_err(), "Environment capture should fail on wrong platform");
+        assert!(
+            result.is_err(),
+            "Environment capture should fail on wrong platform"
+        );
 
         match result.unwrap_err() {
             EnvCaptureError::UnsupportedPlatform { .. } => {

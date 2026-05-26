@@ -453,10 +453,7 @@ impl ForensicOperator {
             decision_id
         ));
         let formatted_time = format!("Timestamp: {}", report.investigation_timestamp_ns);
-        output.push_str(&format!(
-            "**Investigation Time**: {}\n",
-            formatted_time
-        ));
+        output.push_str(&format!("**Investigation Time**: {}\n", formatted_time));
 
         // Decision Summary
         output.push_str("\n## Decision Summary\n\n");

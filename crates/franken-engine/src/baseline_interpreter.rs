@@ -2991,7 +2991,6 @@ impl InterpreterCore {
         }
     }
 
-
     fn snapshot_module_execution(&self) -> ModuleExecutionSnapshot {
         ModuleExecutionSnapshot {
             registers: self.registers.clone(),
@@ -10600,7 +10599,8 @@ impl InterpreterCore {
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let result = (|| -> Result<Value, InterpreterError> {
-            self.registers = SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
+            self.registers =
+                SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.call_stack.clear();
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -10685,7 +10685,8 @@ impl InterpreterCore {
         let snapshot = self.snapshot_module_execution();
         let saved_active_cjs_context = self.active_cjs_context.clone();
         let result = (|| -> Result<Value, InterpreterError> {
-            self.registers = SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
+            self.registers =
+                SeedTrackedField::new(vec![Value::Undefined; self.config.max_registers as usize]);
             self.call_stack.clear();
             self.ip = wrapper_start;
             self.register_base = 0;
@@ -11212,7 +11213,8 @@ impl InterpreterCore {
                         for (index_str, element) in elements {
                             obj.properties.insert(index_str, element);
                         }
-                        obj.properties.insert("length".to_string(), Value::Int(count as i64));
+                        obj.properties
+                            .insert("length".to_string(), Value::Int(count as i64));
                     }
                 });
 
@@ -18545,7 +18547,10 @@ impl InterpreterCore {
 
             self.mutate_heap(|heap| {
                 if let Some(entries_obj) = heap.get_mut(entries_index) {
-                    inserted = entries_obj.properties.insert(key_str, value.clone()).is_none();
+                    inserted = entries_obj
+                        .properties
+                        .insert(key_str, value.clone())
+                        .is_none();
                 }
             });
 
@@ -19908,7 +19913,7 @@ impl InterpreterCore {
         self.mutate_heap(|heap| {
             if let Some(object) = heap.get_mut(heap_index) {
                 if object.is_frozen {
-                    return;  // Will handle error below
+                    return; // Will handle error below
                 }
 
                 // Check if setting this property would make array sparse
@@ -28547,8 +28552,8 @@ mod tests {
                 captured_env: Vec::new(),
             });
             core.mutate_registers(|r| {
-            r[3] = Value::AsyncFunction(0);
-        });
+                r[3] = Value::AsyncFunction(0);
+            });
 
             let result = core
                 .execute(&module)
@@ -28604,8 +28609,8 @@ mod tests {
                 captured_env: Vec::new(),
             });
             core.mutate_registers(|r| {
-            r[3] = Value::AsyncFunction(0);
-        });
+                r[3] = Value::AsyncFunction(0);
+            });
 
             let result = core
                 .execute(&module)
@@ -28653,8 +28658,8 @@ mod tests {
                 captured_env: Vec::new(),
             });
             core.mutate_registers(|r| {
-            r[3] = Value::AsyncFunction(0);
-        });
+                r[3] = Value::AsyncFunction(0);
+            });
 
             let handle = core.promise_store.create();
             let label = crate::ifc_artifacts::Label::Public;
@@ -28667,8 +28672,8 @@ mod tests {
                 )
                 .expect("seed promise should be fulfillable");
             core.mutate_registers(|r| {
-            r[1] = Value::Promise(handle.0);
-        });
+                r[1] = Value::Promise(handle.0);
+            });
 
             let result = core
                 .execute(&module)
@@ -32385,11 +32390,17 @@ mod lazy_seed_tests {
         // Eager core's original state should match lazy core's reset state
         assert_eq!(eager.registers.len(), lazy.registers.len());
         assert_eq!(eager.heap.len(), lazy.heap.len());
-        assert_eq!(eager.function_prototypes.len(), lazy.function_prototypes.len());
+        assert_eq!(
+            eager.function_prototypes.len(),
+            lazy.function_prototypes.len()
+        );
 
         // Check register values specifically
         for i in 0..eager.registers.len().min(lazy.registers.len()) {
-            assert_eq!(eager.registers[i], lazy.registers[i], "register {i} mismatch");
+            assert_eq!(
+                eager.registers[i], lazy.registers[i],
+                "register {i} mismatch"
+            );
         }
     }
 
@@ -32421,10 +32432,15 @@ mod lazy_seed_tests {
         });
         // Seed must now be Materialized.
         match &*seed.borrow() {
-            ExecutionSeed::Materialized { function_prototypes, .. } => {
+            ExecutionSeed::Materialized {
+                function_prototypes,
+                ..
+            } => {
                 assert!(function_prototypes.is_empty()); // Pre-write prototypes was empty
             }
-            ExecutionSeed::Lazy { .. } => panic!("function_prototypes write should have materialized the seed"),
+            ExecutionSeed::Lazy { .. } => {
+                panic!("function_prototypes write should have materialized the seed")
+            }
         }
         assert!(core.seed_epoch > pre_epoch);
     }
@@ -32451,7 +32467,13 @@ mod lazy_seed_tests {
         let pre_epoch = core.seed_epoch;
         core.mutate_registers(|r| r[0] = Value::Int(2));
         // No keepers (the Weak upgrade returns None); pending_lazy_seeds drains to empty.
-        assert!(core.pending_lazy_seeds.is_empty() || core.pending_lazy_seeds.iter().all(|w| w.upgrade().is_none()));
+        assert!(
+            core.pending_lazy_seeds.is_empty()
+                || core
+                    .pending_lazy_seeds
+                    .iter()
+                    .all(|w| w.upgrade().is_none())
+        );
         // Epoch still advances due to the write
         assert!(core.seed_epoch > pre_epoch);
     }

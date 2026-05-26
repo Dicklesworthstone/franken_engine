@@ -52,7 +52,10 @@ fn frankenctl_verify_receipt_uses_cached_default_key() {
     .expect("second entry must build successfully");
 
     // Verify both entries built successfully using cached signing key
-    assert!(entry1.decision_type == entry2.decision_type, "entries must have same decision type");
+    assert!(
+        entry1.decision_type == entry2.decision_type,
+        "entries must have same decision type"
+    );
     // Note: Direct signature comparison not available in current API
 
     // Also verify the entry content itself is identical (sanity check)

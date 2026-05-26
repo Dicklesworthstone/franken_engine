@@ -5,7 +5,9 @@
 
 #![forbid(unsafe_code)]
 
-use crate::worker_env_capture::{WindowsX64EnvCapture, WorkerEnvCapture, WorkerEnvironment, EnvCaptureError};
+use crate::worker_env_capture::{
+    EnvCaptureError, WindowsX64EnvCapture, WorkerEnvCapture, WorkerEnvironment,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -136,8 +138,8 @@ impl Default for WorkerResourceLimits {
             max_cpu_percent: 80,
             max_memory_bytes: 8 * 1024 * 1024 * 1024, // 8GB
             max_disk_bytes: 50 * 1024 * 1024 * 1024,  // 50GB
-            max_job_time_seconds: 3600,                // 1 hour
-            max_network_bytes_per_sec: None,           // Unlimited
+            max_job_time_seconds: 3600,               // 1 hour
+            max_network_bytes_per_sec: None,          // Unlimited
         }
     }
 }
@@ -199,7 +201,9 @@ impl WindowsX64WorkerManager {
         let worker_id = format!("windows-x64-{}", worker_num);
 
         // Capture environment information
-        let environment = self.env_capture.capture_environment()
+        let environment = self
+            .env_capture
+            .capture_environment()
             .map_err(WindowsWorkerError::EnvironmentCapture)?;
 
         // Verify platform compatibility
@@ -247,8 +251,12 @@ impl WindowsX64WorkerManager {
 
     /// Mark a worker as idle and available for work.
     pub fn mark_worker_idle(&mut self, worker_id: &str) -> Result<(), WindowsWorkerError> {
-        let worker = self.workers.get_mut(worker_id)
-            .ok_or_else(|| WindowsWorkerError::WorkerNotFound { worker_id: worker_id.to_string() })?;
+        let worker =
+            self.workers
+                .get_mut(worker_id)
+                .ok_or_else(|| WindowsWorkerError::WorkerNotFound {
+                    worker_id: worker_id.to_string(),
+                })?;
 
         worker.status = WorkerStatus::Idle;
         worker.last_activity_at = chrono::Utc::now().to_rfc3339();
@@ -258,8 +266,12 @@ impl WindowsX64WorkerManager {
 
     /// Mark a worker as busy executing a job.
     pub fn mark_worker_busy(&mut self, worker_id: &str) -> Result<(), WindowsWorkerError> {
-        let worker = self.workers.get_mut(worker_id)
-            .ok_or_else(|| WindowsWorkerError::WorkerNotFound { worker_id: worker_id.to_string() })?;
+        let worker =
+            self.workers
+                .get_mut(worker_id)
+                .ok_or_else(|| WindowsWorkerError::WorkerNotFound {
+                    worker_id: worker_id.to_string(),
+                })?;
 
         worker.status = WorkerStatus::Busy;
         worker.last_activity_at = chrono::Utc::now().to_rfc3339();
@@ -268,9 +280,16 @@ impl WindowsX64WorkerManager {
     }
 
     /// Remove a worker from the pool.
-    pub fn remove_worker(&mut self, worker_id: &str) -> Result<WindowsX64Worker, WindowsWorkerError> {
-        let worker = self.workers.remove(worker_id)
-            .ok_or_else(|| WindowsWorkerError::WorkerNotFound { worker_id: worker_id.to_string() })?;
+    pub fn remove_worker(
+        &mut self,
+        worker_id: &str,
+    ) -> Result<WindowsX64Worker, WindowsWorkerError> {
+        let worker =
+            self.workers
+                .remove(worker_id)
+                .ok_or_else(|| WindowsWorkerError::WorkerNotFound {
+                    worker_id: worker_id.to_string(),
+                })?;
 
         // Clean up worker workspace
         self.cleanup_worker_workspace(worker_id)?;
@@ -280,7 +299,8 @@ impl WindowsX64WorkerManager {
 
     /// Get the number of available workers.
     pub fn available_worker_count(&self) -> usize {
-        self.workers.values()
+        self.workers
+            .values()
             .filter(|w| w.status.is_available())
             .count()
     }
@@ -291,19 +311,29 @@ impl WindowsX64WorkerManager {
     }
 
     /// Write environment information to a JSON file for a worker.
-    pub fn export_worker_env(&self, worker_id: &str, output_path: &Path) -> Result<(), WindowsWorkerError> {
-        let worker = self.workers.get(worker_id)
-            .ok_or_else(|| WindowsWorkerError::WorkerNotFound { worker_id: worker_id.to_string() })?;
+    pub fn export_worker_env(
+        &self,
+        worker_id: &str,
+        output_path: &Path,
+    ) -> Result<(), WindowsWorkerError> {
+        let worker =
+            self.workers
+                .get(worker_id)
+                .ok_or_else(|| WindowsWorkerError::WorkerNotFound {
+                    worker_id: worker_id.to_string(),
+                })?;
 
-        let json = serde_json::to_string_pretty(&worker.environment)
-            .map_err(|e| WindowsWorkerError::Serialization { details: e.to_string() })?;
+        let json = serde_json::to_string_pretty(&worker.environment).map_err(|e| {
+            WindowsWorkerError::Serialization {
+                details: e.to_string(),
+            }
+        })?;
 
-        std::fs::write(output_path, json)
-            .map_err(|e| WindowsWorkerError::IoError {
-                operation: "write_env_json".to_string(),
-                path: output_path.to_string_lossy().to_string(),
-                error: e.to_string(),
-            })?;
+        std::fs::write(output_path, json).map_err(|e| WindowsWorkerError::IoError {
+            operation: "write_env_json".to_string(),
+            path: output_path.to_string_lossy().to_string(),
+            error: e.to_string(),
+        })?;
 
         Ok(())
     }
@@ -316,8 +346,12 @@ impl WindowsX64WorkerManager {
         working_dir: Option<&Path>,
         timeout_seconds: Option<u64>,
     ) -> Result<WorkerExecutionResult, WindowsWorkerError> {
-        let worker = self.workers.get_mut(worker_id)
-            .ok_or_else(|| WindowsWorkerError::WorkerNotFound { worker_id: worker_id.to_string() })?;
+        let worker =
+            self.workers
+                .get_mut(worker_id)
+                .ok_or_else(|| WindowsWorkerError::WorkerNotFound {
+                    worker_id: worker_id.to_string(),
+                })?;
 
         if !worker.status.is_available() {
             return Err(WindowsWorkerError::WorkerNotAvailable {
@@ -330,7 +364,9 @@ impl WindowsX64WorkerManager {
 
         // Prepare command - use cmd.exe for Windows
         if command.is_empty() {
-            return Err(WindowsWorkerError::InvalidCommand { details: "Empty command".to_string() });
+            return Err(WindowsWorkerError::InvalidCommand {
+                details: "Empty command".to_string(),
+            });
         }
 
         let mut cmd = Command::new("cmd");
@@ -343,14 +379,14 @@ impl WindowsX64WorkerManager {
         cmd.current_dir(work_dir);
 
         // Configure command execution
-        cmd.stdout(Stdio::piped())
-           .stderr(Stdio::piped());
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let start_time = SystemTime::now();
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| WindowsWorkerError::CommandExecution {
                 command: command.join(" "),
-                error: e.to_string()
+                error: e.to_string(),
             })?;
 
         // Handle timeout if specified
@@ -386,7 +422,8 @@ impl WindowsX64WorkerManager {
                 }
             }
         } else {
-            child.wait_with_output()
+            child
+                .wait_with_output()
                 .map_err(|e| WindowsWorkerError::CommandExecution {
                     command: command.join(" "),
                     error: e.to_string(),
@@ -410,12 +447,11 @@ impl WindowsX64WorkerManager {
     /// Initialize workspace for a worker.
     fn initialize_worker_workspace(&self, worker_id: &str) -> Result<(), WindowsWorkerError> {
         let workspace_dir = self.config.work_dir.join(worker_id);
-        std::fs::create_dir_all(&workspace_dir)
-            .map_err(|e| WindowsWorkerError::IoError {
-                operation: "create_workspace".to_string(),
-                path: workspace_dir.to_string_lossy().to_string(),
-                error: e.to_string(),
-            })?;
+        std::fs::create_dir_all(&workspace_dir).map_err(|e| WindowsWorkerError::IoError {
+            operation: "create_workspace".to_string(),
+            path: workspace_dir.to_string_lossy().to_string(),
+            error: e.to_string(),
+        })?;
 
         Ok(())
     }
@@ -424,12 +460,11 @@ impl WindowsX64WorkerManager {
     fn cleanup_worker_workspace(&self, worker_id: &str) -> Result<(), WindowsWorkerError> {
         let workspace_dir = self.config.work_dir.join(worker_id);
         if workspace_dir.exists() {
-            std::fs::remove_dir_all(&workspace_dir)
-                .map_err(|e| WindowsWorkerError::IoError {
-                    operation: "cleanup_workspace".to_string(),
-                    path: workspace_dir.to_string_lossy().to_string(),
-                    error: e.to_string(),
-                })?;
+            std::fs::remove_dir_all(&workspace_dir).map_err(|e| WindowsWorkerError::IoError {
+                operation: "cleanup_workspace".to_string(),
+                path: workspace_dir.to_string_lossy().to_string(),
+                error: e.to_string(),
+            })?;
         }
 
         Ok(())
@@ -472,13 +507,20 @@ pub enum WindowsWorkerError {
     CommandExecution { command: String, error: String },
 
     #[error("Command timeout after {timeout_seconds}s: {command}")]
-    CommandTimeout { timeout_seconds: u64, command: String },
+    CommandTimeout {
+        timeout_seconds: u64,
+        command: String,
+    },
 
     #[error("Invalid command: {details}")]
     InvalidCommand { details: String },
 
     #[error("I/O error during {operation} on {path}: {error}")]
-    IoError { operation: String, path: String, error: String },
+    IoError {
+        operation: String,
+        path: String,
+        error: String,
+    },
 
     #[error("Serialization error: {details}")]
     Serialization { details: String },
@@ -514,7 +556,10 @@ mod tests {
     fn test_worker_capabilities_default() {
         let caps = WorkerCapabilities::default();
         assert_eq!(caps.max_concurrent_jobs, 1);
-        assert!(caps.supported_targets.contains(&"x86_64-pc-windows-msvc".to_string()));
+        assert!(
+            caps.supported_targets
+                .contains(&"x86_64-pc-windows-msvc".to_string())
+        );
         assert!(caps.cross_compilation);
         assert!(caps.network_access);
     }
@@ -554,7 +599,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&worker).expect("serialization should work");
-        let deserialized: WindowsX64Worker = serde_json::from_str(&json).expect("deserialization should work");
+        let deserialized: WindowsX64Worker =
+            serde_json::from_str(&json).expect("deserialization should work");
         assert_eq!(worker, deserialized);
     }
 
@@ -570,7 +616,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&result).expect("serialization should work");
-        let deserialized: WorkerExecutionResult = serde_json::from_str(&json).expect("deserialization should work");
+        let deserialized: WorkerExecutionResult =
+            serde_json::from_str(&json).expect("deserialization should work");
         assert_eq!(result, deserialized);
     }
 
@@ -580,7 +627,9 @@ mod tests {
         let config = create_test_config();
         let mut manager = WindowsX64WorkerManager::new(config);
 
-        let worker_id = manager.create_worker().expect("should create worker on Windows x64");
+        let worker_id = manager
+            .create_worker()
+            .expect("should create worker on Windows x64");
         assert!(!worker_id.is_empty());
         assert_eq!(manager.total_worker_count(), 1);
 
@@ -597,10 +646,15 @@ mod tests {
         let mut manager = WindowsX64WorkerManager::new(config);
 
         let result = manager.create_worker();
-        assert!(result.is_err(), "should fail to create worker on wrong platform");
+        assert!(
+            result.is_err(),
+            "should fail to create worker on wrong platform"
+        );
 
         match result.unwrap_err() {
-            WindowsWorkerError::EnvironmentCapture(EnvCaptureError::UnsupportedPlatform { .. }) => {
+            WindowsWorkerError::EnvironmentCapture(EnvCaptureError::UnsupportedPlatform {
+                ..
+            }) => {
                 // Expected error
             }
             other => panic!("Expected UnsupportedPlatform error, got: {:?}", other),
@@ -645,14 +699,20 @@ mod tests {
         // Test state transitions
         assert_eq!(manager.available_worker_count(), 1);
 
-        manager.mark_worker_busy(&worker_id).expect("should mark worker busy");
+        manager
+            .mark_worker_busy(&worker_id)
+            .expect("should mark worker busy");
         assert_eq!(manager.available_worker_count(), 0);
 
-        manager.mark_worker_idle(&worker_id).expect("should mark worker idle");
+        manager
+            .mark_worker_idle(&worker_id)
+            .expect("should mark worker idle");
         assert_eq!(manager.available_worker_count(), 1);
 
         // Test removal
-        let removed_worker = manager.remove_worker(&worker_id).expect("should remove worker");
+        let removed_worker = manager
+            .remove_worker(&worker_id)
+            .expect("should remove worker");
         assert_eq!(removed_worker.worker_id, worker_id);
         assert_eq!(manager.total_worker_count(), 0);
     }

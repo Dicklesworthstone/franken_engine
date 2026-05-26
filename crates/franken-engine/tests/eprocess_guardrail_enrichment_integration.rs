@@ -23,16 +23,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use frankenengine_engine::eprocess_guardrail::*;
-use frankenengine_engine::martingale_decision_ledger::{MartingaleError, MartingaleVerdict, StoppingThreshold};
+use frankenengine_engine::martingale_decision_ledger::{
+    MartingaleError, MartingaleVerdict, StoppingThreshold,
+};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ── helpers ────────────────────────────────────────────────────────────
 
 fn test_loss_matrix() -> ExpectedLossMatrix {
     let mut action_losses = BTreeMap::new();
-    action_losses.insert("low".to_string(), 500_000);    // 0.5
+    action_losses.insert("low".to_string(), 500_000); // 0.5
     action_losses.insert("medium".to_string(), 1_500_000); // 1.5
-    action_losses.insert("high".to_string(), 100_000);   // 0.1 (below threshold)
+    action_losses.insert("high".to_string(), 100_000); // 0.1 (below threshold)
     ExpectedLossMatrix::new(action_losses, 1_000_000) // Block threshold = 1.0
 }
 
@@ -249,7 +251,10 @@ fn guardrail_error_display_overflow() {
         guardrail_id: "g6".to_string(),
         source: MartingaleError::LogAccumulatorOverflow,
     };
-    assert!(e.to_string().contains("martingale error for guardrail 'g6'"));
+    assert!(
+        e.to_string()
+            .contains("martingale error for guardrail 'g6'")
+    );
 }
 
 #[test]
@@ -544,7 +549,10 @@ fn guardrail_drain_events() {
     gr.update(5_000).unwrap();
     let events = gr.drain_events();
     assert!(!events.is_empty());
-    assert!(matches!(&events[0], GuardrailEvent::MartingaleUpdated { .. }));
+    assert!(matches!(
+        &events[0],
+        GuardrailEvent::MartingaleUpdated { .. }
+    ));
     let events2 = gr.drain_events();
     assert!(events2.is_empty());
 }
@@ -558,7 +566,10 @@ fn guardrail_config_epoch() {
 #[test]
 fn guardrail_threshold() {
     let gr = test_guardrail();
-    assert_eq!(gr.threshold(), StoppingThreshold::try_from_log_millionths(20_000_000).unwrap());
+    assert_eq!(
+        gr.threshold(),
+        StoppingThreshold::try_from_log_millionths(20_000_000).unwrap()
+    );
 }
 
 // ── GuardrailRegistry ──────────────────────────────────────────────────

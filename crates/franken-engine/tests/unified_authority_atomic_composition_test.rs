@@ -118,15 +118,21 @@ impl MockConcurrentAuthorityContext {
             .unwrap()
             .push("caps_updated".to_string());
 
-        // Update budget (increase budget)
-        let current_budget = self.budget_envelope.read().unwrap();
-        let new_budget = BudgetEnvelope::try_new(
-            current_budget.cpu_millionths + 500_000,
-            current_budget.memory_millionths + 1_000_000,
-            current_budget.wall_time_millionths + 10_000_000,
-            current_budget.io_millionths + 2_000_000,
-        )
-        .unwrap();
+        // Update budget (increase budget). The current value is read inside a
+        // scoped block so the read guard is dropped before the write lock is
+        // taken: a same-thread read-then-write on a std `RwLock` deadlocks
+        // (the writer waits for every reader to release, including this
+        // thread's own never-released read guard).
+        let new_budget = {
+            let current_budget = self.budget_envelope.read().unwrap();
+            BudgetEnvelope::try_new(
+                current_budget.cpu_millionths + 500_000,
+                current_budget.memory_millionths + 1_000_000,
+                current_budget.wall_time_millionths + 10_000_000,
+                current_budget.io_millionths + 2_000_000,
+            )
+            .unwrap()
+        };
         *self.budget_envelope.write().unwrap() = new_budget;
         self.access_log
             .lock()
@@ -185,8 +191,11 @@ fn test_atomic_composition_consistency_under_concurrent_updates() {
     )
     .unwrap();
 
-    let context =
-        MockConcurrentAuthorityContext::new(initial_ifc.clone(), initial_caps.clone(), initial_budget);
+    let context = MockConcurrentAuthorityContext::new(
+        initial_ifc.clone(),
+        initial_caps.clone(),
+        initial_budget,
+    );
 
     // Define a cross-axis requirement that's borderline
     // (will pass after the concurrent update, but might be inconsistent during)
@@ -292,18 +301,24 @@ fn test_cross_axis_hostcall_atomic_semantics() {
         result
     );
 
-    // Test insufficient authority case
-    let insufficient_caps = CapabilitySet::empty(); // No FsRead capability
+    // Test insufficient authority case: the operation requires a capability the
+    // granted context does NOT hold. The context grants only `FsRead`, so a
+    // requirement that demands `FsWrite` must NOT be subsumed — an empty required
+    // set would be the bottom of the capability lattice and trivially satisfied,
+    // which would not exercise the negative path at all.
+    let mut required_caps = CapabilitySet::empty();
+    required_caps.insert(CapabilityKind::FsWrite);
     let insufficient_authority = AuthorityLattice::new(
         LabelClass::Secret,
-        insufficient_caps,
+        required_caps,
         BudgetEnvelope::try_new(100_000, 1_024, 30_000_000, 0).unwrap(),
     );
 
     let result = cross_axis_hostcall_check(&context, &insufficient_authority, true);
     assert!(
         result.is_err(),
-        "Cross-axis hostcall should fail when capabilities are insufficient"
+        "Cross-axis hostcall should fail when a required capability is not granted: {:?}",
+        result
     );
 }
 

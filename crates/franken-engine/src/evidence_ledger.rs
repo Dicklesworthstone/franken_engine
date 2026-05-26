@@ -3882,7 +3882,14 @@ mod tests {
         // execution) and hard-coded into the test for future regression
         // detection. Update the literal only if the canonical preimage
         // shape changes — which is itself a separate signed-decision.
-        let observed_sig_hex = hex::encode(cached_entry.signed_envelope.as_ref().unwrap().signature.to_bytes());
+        let observed_sig_hex = hex::encode(
+            cached_entry
+                .signed_envelope
+                .as_ref()
+                .unwrap()
+                .signature
+                .to_bytes(),
+        );
         let snapshot_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/golden/evidence_h1_fixed_signature.hex");
         if std::env::var("BLESS_GOLDEN").is_ok() {

@@ -1886,7 +1886,9 @@ mod tests {
             required_caps: EffectCapabilities::none(),
         };
 
-        let result = stack.handle_effect(&effect).expect("Effect should be handled");
+        let result = stack
+            .handle_effect(&effect)
+            .expect("Effect should be handled");
         let output: String = result.downcast().expect("Result should be String");
         assert_eq!(output, "handled by test_handler");
     }
@@ -1970,7 +1972,10 @@ mod tests {
         };
 
         assert_eq!(Effect::effect_name(&effect), "console:info");
-        assert_eq!(Effect::required_capabilities(&effect), EffectCapabilities::none());
+        assert_eq!(
+            Effect::required_capabilities(&effect),
+            EffectCapabilities::none()
+        );
 
         let params = Effect::parameters(&effect);
         let (level, args) = params
@@ -2197,7 +2202,10 @@ mod tests {
                 value: "3.14".to_string(),
             },
         };
-        assert_eq!(Effect::effect_name(&parse_float_effect), "number:parseFloat");
+        assert_eq!(
+            Effect::effect_name(&parse_float_effect),
+            "number:parseFloat"
+        );
 
         let is_nan_effect = NumberEffect {
             operation: NumberOperation::IsNaN { value: f64::NAN },

@@ -451,14 +451,19 @@ impl OptimizationProofCarrier {
         let start_time = std::time::Instant::now();
 
         // First, collect verification results without mutating self.equivalence_proofs
-        let verification_results: Result<Vec<_>, String> = self.equivalence_proofs
+        let verification_results: Result<Vec<_>, String> = self
+            .equivalence_proofs
             .iter()
             .map(|proof| self.verify_single_proof(proof))
             .collect();
         let verification_results = verification_results?;
 
         // Then apply the results
-        for (proof, verification_result) in self.equivalence_proofs.iter_mut().zip(verification_results.into_iter()) {
+        for (proof, verification_result) in self
+            .equivalence_proofs
+            .iter_mut()
+            .zip(verification_results.into_iter())
+        {
             match verification_result {
                 ProofResult::Verified => {
                     proof.verification_result = ProofResult::Verified;

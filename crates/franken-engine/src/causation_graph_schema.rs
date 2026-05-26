@@ -692,7 +692,9 @@ mod tests {
                         evidence_type: "test_evidence".to_string(),
                         influenced_factor: DecisionFactor::PosteriorProbability,
                         influence_magnitude_millionths: 500_000,
-                        evidence_content_hash: ContentHash::compute(format!("test{}", i).as_bytes()),
+                        evidence_content_hash: ContentHash::compute(
+                            format!("test{}", i).as_bytes(),
+                        ),
                     },
                     evidence_hash: ContentHash::compute(format!("evidence{}", i).as_bytes()),
                     confidence_millionths: 900_000,
@@ -774,7 +776,9 @@ mod tests {
                         evidence_type: "test_evidence".to_string(),
                         influenced_factor: DecisionFactor::PosteriorProbability,
                         influence_magnitude_millionths: 500_000,
-                        evidence_content_hash: ContentHash::compute(format!("test{}", i).as_bytes()),
+                        evidence_content_hash: ContentHash::compute(
+                            format!("test{}", i).as_bytes(),
+                        ),
                     },
                     evidence_hash: ContentHash::compute(format!("evidence{}", i).as_bytes()),
                     confidence_millionths: 900_000,

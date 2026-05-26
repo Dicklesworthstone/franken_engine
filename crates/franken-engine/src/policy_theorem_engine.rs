@@ -381,14 +381,19 @@ impl PolicyTheoremEngine {
         let start_time = std::time::Instant::now();
 
         // First, collect verification results without mutating self.theorems
-        let verification_results: Result<Vec<_>, String> = self.theorems
+        let verification_results: Result<Vec<_>, String> = self
+            .theorems
             .iter()
             .map(|theorem| self.verify_single_theorem(theorem))
             .collect();
         let verification_results = verification_results?;
 
         // Then apply the results
-        for (theorem, verification_result) in self.theorems.iter_mut().zip(verification_results.into_iter()) {
+        for (theorem, verification_result) in self
+            .theorems
+            .iter_mut()
+            .zip(verification_results.into_iter())
+        {
             let status = verification_result.verification_status.clone();
 
             match status {

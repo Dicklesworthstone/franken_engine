@@ -622,16 +622,60 @@ fn receipt_create_unsigned() {
 #[test]
 fn receipt_id_deterministic() {
     let slot_id = test_slot_id();
-    let id1 = ReplacementReceipt::derive_receipt_id(&slot_id, &slot_id, &slot_id, "old", "new", "proof-ref", "hash-chain", 1000, "z").unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&slot_id, &slot_id, &slot_id, "old", "new", "proof-ref", "hash-chain", 1000, "z").unwrap();
+    let id1 = ReplacementReceipt::derive_receipt_id(
+        &slot_id,
+        &slot_id,
+        &slot_id,
+        "old",
+        "new",
+        "proof-ref",
+        "hash-chain",
+        1000,
+        "z",
+    )
+    .unwrap();
+    let id2 = ReplacementReceipt::derive_receipt_id(
+        &slot_id,
+        &slot_id,
+        &slot_id,
+        "old",
+        "new",
+        "proof-ref",
+        "hash-chain",
+        1000,
+        "z",
+    )
+    .unwrap();
     assert_eq!(id1, id2);
 }
 
 #[test]
 fn receipt_id_varies_by_digest() {
     let slot_id = test_slot_id();
-    let id1 = ReplacementReceipt::derive_receipt_id(&slot_id, &slot_id, &slot_id, "old-a", "new", "proof-ref", "hash-chain", 1000, "z").unwrap();
-    let id2 = ReplacementReceipt::derive_receipt_id(&slot_id, &slot_id, &slot_id, "old-b", "new", "proof-ref", "hash-chain", 1000, "z").unwrap();
+    let id1 = ReplacementReceipt::derive_receipt_id(
+        &slot_id,
+        &slot_id,
+        &slot_id,
+        "old-a",
+        "new",
+        "proof-ref",
+        "hash-chain",
+        1000,
+        "z",
+    )
+    .unwrap();
+    let id2 = ReplacementReceipt::derive_receipt_id(
+        &slot_id,
+        &slot_id,
+        &slot_id,
+        "old-b",
+        "new",
+        "proof-ref",
+        "hash-chain",
+        1000,
+        "z",
+    )
+    .unwrap();
     assert_ne!(id1, id2);
 }
 

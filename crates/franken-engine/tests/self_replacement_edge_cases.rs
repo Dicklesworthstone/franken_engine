@@ -389,9 +389,9 @@ fn receipt_id_differs_by_zone() {
         "translation_proof",
         "content_hash_chain",
         1000,
-        "zone-a"
+        "zone-a",
     )
-        .unwrap();
+    .unwrap();
     let id2 = ReplacementReceipt::derive_receipt_id(
         &test_slot_id(),
         &test_slot_id(),
@@ -401,9 +401,9 @@ fn receipt_id_differs_by_zone() {
         "translation_proof",
         "content_hash_chain",
         1000,
-        "zone-b"
+        "zone-b",
     )
-        .unwrap();
+    .unwrap();
     assert_ne!(id1, id2);
 }
 
@@ -418,9 +418,9 @@ fn receipt_id_differs_by_new_digest() {
         "translation_proof",
         "content_hash_chain",
         1000,
-        "zone"
+        "zone",
     )
-        .unwrap();
+    .unwrap();
     let id2 = ReplacementReceipt::derive_receipt_id(
         &test_slot_id(),
         &test_slot_id(),
@@ -430,9 +430,9 @@ fn receipt_id_differs_by_new_digest() {
         "translation_proof",
         "content_hash_chain",
         1000,
-        "zone"
+        "zone",
     )
-        .unwrap();
+    .unwrap();
     assert_ne!(id1, id2);
 }
 
@@ -1250,22 +1250,21 @@ fn deterministic_id_derivation_all_artifact_types() {
             "translation_proof",
             "content_hash_chain",
             1000,
-            "zone"
+            "zone",
         )
-            .unwrap();
-        let id2 =
-            ReplacementReceipt::derive_receipt_id(
-                &test_slot_id(),
-                &test_slot_id(),
-                &test_slot_id(),
-                "old",
-                "new",
-                "translation_proof",
-                "content_hash_chain",
-                1000,
-                "zone"
-            )
-                .unwrap();
+        .unwrap();
+        let id2 = ReplacementReceipt::derive_receipt_id(
+            &test_slot_id(),
+            &test_slot_id(),
+            &test_slot_id(),
+            "old",
+            "new",
+            "translation_proof",
+            "content_hash_chain",
+            1000,
+            "zone",
+        )
+        .unwrap();
         assert_eq!(id, id2);
     }
     // Decision IDs
@@ -1290,18 +1289,18 @@ fn all_artifact_ids_from_different_types_are_distinct() {
         "zone",
     )
     .unwrap();
-    let receipt_id =
-        ReplacementReceipt::derive_receipt_id(
-            &test_slot_id(),
-            &test_slot_id(),
-            &test_slot_id(),
-            "old",
-            "new",
-            "translation_proof",
-            "content_hash_chain",
-            1000,
-            "zone"
-        ).unwrap();
+    let receipt_id = ReplacementReceipt::derive_receipt_id(
+        &test_slot_id(),
+        &test_slot_id(),
+        &test_slot_id(),
+        "old",
+        "new",
+        "translation_proof",
+        "content_hash_chain",
+        1000,
+        "zone",
+    )
+    .unwrap();
     let decision_id =
         PromotionDecision::derive_decision_id(&test_slot_id(), "candidate", 1000, "zone").unwrap();
 

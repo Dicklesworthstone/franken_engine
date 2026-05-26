@@ -5423,8 +5423,12 @@ fn create_unified_authority_from_components(
     if let Some(_cap_str) = capability {
         // Parse common capability strings to CapabilityKind
         match _cap_str.as_str() {
-            "fs_read" => { capability_set.insert(CapabilityKind::FsRead); },
-            "fs_write" => { capability_set.insert(CapabilityKind::FsWrite); },
+            "fs_read" => {
+                capability_set.insert(CapabilityKind::FsRead);
+            }
+            "fs_write" => {
+                capability_set.insert(CapabilityKind::FsWrite);
+            }
             "net_connect" => {
                 capability_set.insert(CapabilityKind::NetConnect);
             }
@@ -5434,15 +5438,21 @@ fn create_unified_authority_from_components(
             "proc_spawn" => {
                 capability_set.insert(CapabilityKind::ProcSpawn);
             }
-            "env_read" => { capability_set.insert(CapabilityKind::EnvRead); },
+            "env_read" => {
+                capability_set.insert(CapabilityKind::EnvRead);
+            }
             "env_write" => {
                 capability_set.insert(CapabilityKind::EnvWrite);
             }
             "policy_request" => {
                 capability_set.insert(CapabilityKind::PolicyRequest);
             }
-            "eval" => { capability_set.insert(CapabilityKind::Eval); },
-            "global" => { capability_set.insert(CapabilityKind::Global); },
+            "eval" => {
+                capability_set.insert(CapabilityKind::Eval);
+            }
+            "global" => {
+                capability_set.insert(CapabilityKind::Global);
+            }
             "clock_read" => {
                 capability_set.insert(CapabilityKind::ClockRead);
             }

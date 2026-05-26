@@ -5,9 +5,17 @@
 
 #![forbid(unsafe_code)]
 
-use crate::macos_arm64_worker::{MacOSArm64WorkerManager, MacOSArm64WorkerConfig, MacOSWorkerError, WorkerExecutionResult as MacOSExecutionResult};
-use crate::windows_x64_worker::{WindowsX64WorkerManager, WindowsX64WorkerConfig, WindowsWorkerError, WorkerExecutionResult as WindowsExecutionResult};
-use crate::worker_env_capture::{WorkerEnvironment, WorkerEnvCapture, MacOSArm64EnvCapture, WindowsX64EnvCapture};
+use crate::macos_arm64_worker::{
+    MacOSArm64WorkerConfig, MacOSArm64WorkerManager, MacOSWorkerError,
+    WorkerExecutionResult as MacOSExecutionResult,
+};
+use crate::windows_x64_worker::{
+    WindowsWorkerError, WindowsX64WorkerConfig, WindowsX64WorkerManager,
+    WorkerExecutionResult as WindowsExecutionResult,
+};
+use crate::worker_env_capture::{
+    MacOSArm64EnvCapture, WindowsX64EnvCapture, WorkerEnvCapture, WorkerEnvironment,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -88,7 +96,12 @@ impl WorkerPlatform {
 
     /// Get all supported platforms.
     pub fn all() -> &'static [Self] {
-        &[Self::MacOSArm64, Self::WindowsX64, Self::LinuxX64, Self::LinuxArm64]
+        &[
+            Self::MacOSArm64,
+            Self::WindowsX64,
+            Self::LinuxX64,
+            Self::LinuxArm64,
+        ]
     }
 
     /// Check if this platform is currently supported.
@@ -203,7 +216,11 @@ impl RchWorkerRegistry {
     /// Initialize platform-specific worker managers.
     fn initialize_platform_managers(&mut self) {
         // Initialize macOS ARM64 manager if configured
-        if let Some(PlatformConfig::MacOSArm64(macos_config)) = self.config.platform_configs.get(&WorkerPlatform::MacOSArm64) {
+        if let Some(PlatformConfig::MacOSArm64(macos_config)) = self
+            .config
+            .platform_configs
+            .get(&WorkerPlatform::MacOSArm64)
+        {
             let mut config = macos_config.clone();
             config.work_dir = self.config.base_work_dir.join("macos_arm64");
             config.verbose = self.config.verbose;
@@ -212,7 +229,11 @@ impl RchWorkerRegistry {
         }
 
         // Initialize Windows x64 manager if configured
-        if let Some(PlatformConfig::WindowsX64(windows_config)) = self.config.platform_configs.get(&WorkerPlatform::WindowsX64) {
+        if let Some(PlatformConfig::WindowsX64(windows_config)) = self
+            .config
+            .platform_configs
+            .get(&WorkerPlatform::WindowsX64)
+        {
             let mut config = windows_config.clone();
             config.work_dir = self.config.base_work_dir.join("windows_x64");
             config.verbose = self.config.verbose;
@@ -235,7 +256,9 @@ impl RchWorkerRegistry {
     pub fn create_worker(&mut self, platform: WorkerPlatform) -> Result<String, RchWorkerError> {
         match platform {
             WorkerPlatform::MacOSArm64 => {
-                let manager = self.macos_arm64_manager.as_mut()
+                let manager = self
+                    .macos_arm64_manager
+                    .as_mut()
                     .ok_or(RchWorkerError::PlatformNotConfigured { platform })?;
 
                 if manager.total_worker_count() >= self.config.max_workers_per_platform {
@@ -245,7 +268,8 @@ impl RchWorkerRegistry {
                     });
                 }
 
-                manager.create_worker()
+                manager
+                    .create_worker()
                     .map_err(|e| RchWorkerError::PlatformError {
                         platform,
                         details: e.to_string(),
@@ -256,16 +280,24 @@ impl RchWorkerRegistry {
     }
 
     /// Get worker pool statistics for a platform.
-    pub fn get_pool_stats(&self, platform: WorkerPlatform) -> Result<WorkerPoolStats, RchWorkerError> {
+    pub fn get_pool_stats(
+        &self,
+        platform: WorkerPlatform,
+    ) -> Result<WorkerPoolStats, RchWorkerError> {
         match platform {
             WorkerPlatform::MacOSArm64 => {
-                let manager = self.macos_arm64_manager.as_ref()
+                let manager = self
+                    .macos_arm64_manager
+                    .as_ref()
                     .ok_or(RchWorkerError::PlatformNotConfigured { platform })?;
 
                 let workers = manager.list_workers();
                 let total_workers = workers.len();
                 let available_workers = workers.iter().filter(|w| w.status.is_available()).count();
-                let busy_workers = workers.iter().filter(|w| matches!(w.status, crate::macos_arm64_worker::WorkerStatus::Busy)).count();
+                let busy_workers = workers
+                    .iter()
+                    .filter(|w| matches!(w.status, crate::macos_arm64_worker::WorkerStatus::Busy))
+                    .count();
                 let failed_workers = workers.iter().filter(|w| w.status.is_terminal()).count();
 
                 Ok(WorkerPoolStats {
@@ -304,10 +336,13 @@ impl RchWorkerRegistry {
     ) -> Result<WorkerExecutionResult, RchWorkerError> {
         match platform {
             WorkerPlatform::MacOSArm64 => {
-                let manager = self.macos_arm64_manager.as_mut()
+                let manager = self
+                    .macos_arm64_manager
+                    .as_mut()
                     .ok_or(RchWorkerError::PlatformNotConfigured { platform })?;
 
-                manager.execute_on_worker(worker_id, command, working_dir, timeout_seconds)
+                manager
+                    .execute_on_worker(worker_id, command, working_dir, timeout_seconds)
                     .map(WorkerExecutionResult::from)
                     .map_err(|e| RchWorkerError::PlatformError {
                         platform,
@@ -327,10 +362,13 @@ impl RchWorkerRegistry {
     ) -> Result<(), RchWorkerError> {
         match platform {
             WorkerPlatform::MacOSArm64 => {
-                let manager = self.macos_arm64_manager.as_ref()
+                let manager = self
+                    .macos_arm64_manager
+                    .as_ref()
                     .ok_or(RchWorkerError::PlatformNotConfigured { platform })?;
 
-                manager.export_worker_env(worker_id, output_path)
+                manager
+                    .export_worker_env(worker_id, output_path)
                     .map_err(|e| RchWorkerError::PlatformError {
                         platform,
                         details: e.to_string(),
@@ -341,18 +379,24 @@ impl RchWorkerRegistry {
     }
 
     /// Remove a worker from the specified platform.
-    pub fn remove_worker(&mut self, platform: WorkerPlatform, worker_id: &str) -> Result<(), RchWorkerError> {
+    pub fn remove_worker(
+        &mut self,
+        platform: WorkerPlatform,
+        worker_id: &str,
+    ) -> Result<(), RchWorkerError> {
         match platform {
             WorkerPlatform::MacOSArm64 => {
-                let manager = self.macos_arm64_manager.as_mut()
+                let manager = self
+                    .macos_arm64_manager
+                    .as_mut()
                     .ok_or(RchWorkerError::PlatformNotConfigured { platform })?;
 
-                manager.remove_worker(worker_id)
-                    .map(|_| ())
-                    .map_err(|e| RchWorkerError::PlatformError {
+                manager.remove_worker(worker_id).map(|_| ()).map_err(|e| {
+                    RchWorkerError::PlatformError {
                         platform,
                         details: e.to_string(),
-                    })
+                    }
+                })
             }
             _ => Err(RchWorkerError::PlatformNotImplemented { platform }),
         }
@@ -363,7 +407,8 @@ impl RchWorkerRegistry {
         let mut workers = BTreeMap::new();
 
         if let Some(manager) = &self.macos_arm64_manager {
-            let macos_workers = manager.list_workers()
+            let macos_workers = manager
+                .list_workers()
                 .iter()
                 .map(|w| w.worker_id.clone())
                 .collect();
@@ -376,11 +421,17 @@ impl RchWorkerRegistry {
     /// Get environment information for the current platform.
     pub fn get_current_platform_env(&self) -> Result<WorkerEnvironment, RchWorkerError> {
         let current_platform = self.detect_current_platform()?;
-        let env_capture = self.env_captures.get(&current_platform)
-            .ok_or(RchWorkerError::PlatformNotConfigured { platform: current_platform })?;
+        let env_capture = self.env_captures.get(&current_platform).ok_or(
+            RchWorkerError::PlatformNotConfigured {
+                platform: current_platform,
+            },
+        )?;
 
-        env_capture.capture_environment()
-            .map_err(|e| RchWorkerError::EnvironmentCapture { details: e.to_string() })
+        env_capture
+            .capture_environment()
+            .map_err(|e| RchWorkerError::EnvironmentCapture {
+                details: e.to_string(),
+            })
     }
 
     /// Detect the current platform.
@@ -425,15 +476,16 @@ impl RchWorkerRegistry {
             total_available,
         };
 
-        let json = serde_json::to_string_pretty(&report)
-            .map_err(|e| RchWorkerError::Serialization { details: e.to_string() })?;
-
-        std::fs::write(output_path, json)
-            .map_err(|e| RchWorkerError::IoError {
-                operation: "write_registry_status".to_string(),
-                path: output_path.to_string_lossy().to_string(),
-                error: e.to_string(),
+        let json =
+            serde_json::to_string_pretty(&report).map_err(|e| RchWorkerError::Serialization {
+                details: e.to_string(),
             })?;
+
+        std::fs::write(output_path, json).map_err(|e| RchWorkerError::IoError {
+            operation: "write_registry_status".to_string(),
+            path: output_path.to_string_lossy().to_string(),
+            error: e.to_string(),
+        })?;
 
         Ok(())
     }
@@ -464,10 +516,16 @@ pub enum RchWorkerError {
     PlatformNotConfigured { platform: WorkerPlatform },
 
     #[error("Worker limit reached for {platform}: {limit}")]
-    WorkerLimitReached { platform: WorkerPlatform, limit: usize },
+    WorkerLimitReached {
+        platform: WorkerPlatform,
+        limit: usize,
+    },
 
     #[error("Platform error on {platform}: {details}")]
-    PlatformError { platform: WorkerPlatform, details: String },
+    PlatformError {
+        platform: WorkerPlatform,
+        details: String,
+    },
 
     #[error("Unsupported platform: {os}-{arch}")]
     UnsupportedPlatform { os: String, arch: String },
@@ -476,7 +534,11 @@ pub enum RchWorkerError {
     EnvironmentCapture { details: String },
 
     #[error("I/O error during {operation} on {path}: {error}")]
-    IoError { operation: String, path: String, error: String },
+    IoError {
+        operation: String,
+        path: String,
+        error: String,
+    },
 
     #[error("Serialization error: {details}")]
     Serialization { details: String },
@@ -491,8 +553,14 @@ mod tests {
         assert_eq!(WorkerPlatform::MacOSArm64.as_str(), "macos-arm64");
         assert_eq!(WorkerPlatform::WindowsX64.as_str(), "windows-x64");
 
-        assert_eq!(WorkerPlatform::from_str("macos-arm64"), Some(WorkerPlatform::MacOSArm64));
-        assert_eq!(WorkerPlatform::from_str("windows-x64"), Some(WorkerPlatform::WindowsX64));
+        assert_eq!(
+            WorkerPlatform::from_str("macos-arm64"),
+            Some(WorkerPlatform::MacOSArm64)
+        );
+        assert_eq!(
+            WorkerPlatform::from_str("windows-x64"),
+            Some(WorkerPlatform::WindowsX64)
+        );
         assert_eq!(WorkerPlatform::from_str("invalid"), None);
     }
 
@@ -522,7 +590,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&stats).expect("serialization should work");
-        let deserialized: WorkerPoolStats = serde_json::from_str(&json).expect("deserialization should work");
+        let deserialized: WorkerPoolStats =
+            serde_json::from_str(&json).expect("deserialization should work");
         assert_eq!(stats, deserialized);
     }
 
@@ -549,7 +618,8 @@ mod tests {
         };
 
         let json = serde_json::to_string(&report).expect("serialization should work");
-        let deserialized: RegistryStatusReport = serde_json::from_str(&json).expect("deserialization should work");
+        let deserialized: RegistryStatusReport =
+            serde_json::from_str(&json).expect("deserialization should work");
         assert_eq!(report.current_platform, deserialized.current_platform);
         assert_eq!(report.total_workers, deserialized.total_workers);
     }
@@ -582,7 +652,9 @@ mod tests {
         let worker_id = result.unwrap();
         assert!(!worker_id.is_empty());
 
-        let stats = registry.get_pool_stats(WorkerPlatform::MacOSArm64).expect("should get stats");
+        let stats = registry
+            .get_pool_stats(WorkerPlatform::MacOSArm64)
+            .expect("should get stats");
         assert_eq!(stats.total_workers, 1);
     }
 
@@ -592,7 +664,10 @@ mod tests {
         let mut registry = RchWorkerRegistry::with_defaults();
         let result = registry.create_worker(WorkerPlatform::MacOSArm64);
 
-        assert!(result.is_err(), "Should fail to create macOS worker on wrong platform");
+        assert!(
+            result.is_err(),
+            "Should fail to create macOS worker on wrong platform"
+        );
 
         match result.unwrap_err() {
             RchWorkerError::PlatformError { platform, .. } => {

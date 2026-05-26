@@ -5,14 +5,15 @@
 use std::collections::BTreeMap;
 
 use frankenengine_engine::differential_privacy_posterior::{
-    DeterministicTestNoiseGenerator, PrivacyBudget, PrivacyParameters, PrivacyPreservingAggregator, PrivatePosteriorDelta,
+    DeterministicTestNoiseGenerator, PrivacyBudget, PrivacyParameters, PrivacyPreservingAggregator,
+    PrivatePosteriorDelta,
 };
 use frankenengine_engine::federated_posterior_aggregation::{
     AggregatedPosteriorUpdate, LocalPosteriorProvider, PosteriorDelta,
 };
+use frankenengine_engine::fleet_immune_protocol::NodeId;
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
-use frankenengine_engine::fleet_immune_protocol::NodeId;
 
 // Temporary type definitions for test compilation
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -56,10 +57,10 @@ fn differential_privacy_protects_individual_contributions() {
 
     let delta1 = PosteriorDelta {
         extension_id: "test_extension_1".to_string(),
-        delta_benign_millionths: 500_000, // 50%
+        delta_benign_millionths: 500_000,    // 50%
         delta_anomalous_millionths: 200_000, // 20%
         delta_malicious_millionths: 250_000, // 25%
-        delta_unknown_millionths: 50_000, // 5%
+        delta_unknown_millionths: 50_000,    // 5%
         confidence_weight_millionths: 950_000,
         evidence_hash: ContentHash::compute(b"delta1_evidence"),
         epoch: epoch,
@@ -74,10 +75,10 @@ fn differential_privacy_protects_individual_contributions() {
 
     let delta2 = PosteriorDelta {
         extension_id: "test_extension_2".to_string(),
-        delta_benign_millionths: 300_000, // 30%
+        delta_benign_millionths: 300_000,    // 30%
         delta_anomalous_millionths: 500_000, // 50%
         delta_malicious_millionths: 150_000, // 15%
-        delta_unknown_millionths: 50_000, // 5%
+        delta_unknown_millionths: 50_000,    // 5%
         confidence_weight_millionths: 750_000,
         evidence_hash: ContentHash::compute(b"delta2_evidence"),
         epoch: epoch,
@@ -92,10 +93,10 @@ fn differential_privacy_protects_individual_contributions() {
 
     let delta3 = PosteriorDelta {
         extension_id: "test_extension_3".to_string(),
-        delta_benign_millionths: 800_000, // 80%
+        delta_benign_millionths: 800_000,    // 80%
         delta_anomalous_millionths: 100_000, // 10%
-        delta_malicious_millionths: 70_000, // 7%
-        delta_unknown_millionths: 30_000, // 3%
+        delta_malicious_millionths: 70_000,  // 7%
+        delta_unknown_millionths: 30_000,    // 3%
         confidence_weight_millionths: 900_000,
         evidence_hash: ContentHash::compute(b"delta3_evidence"),
         epoch: epoch,
@@ -129,7 +130,8 @@ fn differential_privacy_protects_individual_contributions() {
     let total_probability: u64 = (aggregated.aggregate_delta_benign_millionths
         + aggregated.aggregate_delta_anomalous_millionths
         + aggregated.aggregate_delta_malicious_millionths
-        + aggregated.aggregate_delta_unknown_millionths).abs() as u64;
+        + aggregated.aggregate_delta_unknown_millionths)
+        .abs() as u64;
     assert!(
         total_probability >= 950_000 && total_probability <= 1_050_000,
         "Total probability should be close to 1.0 with noise: {}",
@@ -144,7 +146,10 @@ fn differential_privacy_protects_individual_contributions() {
     let initial_epsilon_remaining_millionths = 10_000_000u64;
     let epsilon_used_millionths = 3_000_000u64; // 3 calls with ε=1.0 each (in millionths)
     assert!(privacy_budget.remaining_epsilon() < initial_epsilon_remaining_millionths);
-    assert!(privacy_budget.remaining_epsilon() >= initial_epsilon_remaining_millionths.saturating_sub(epsilon_used_millionths));
+    assert!(
+        privacy_budget.remaining_epsilon()
+            >= initial_epsilon_remaining_millionths.saturating_sub(epsilon_used_millionths)
+    );
 }
 
 /// Test that privacy budget enforcement prevents excessive consumption
@@ -163,10 +168,10 @@ fn privacy_budget_enforcement_prevents_excessive_consumption() {
 
     let delta = PosteriorDelta {
         extension_id: "test_extension_budget".to_string(),
-        delta_benign_millionths: 600_000, // 60%
+        delta_benign_millionths: 600_000,    // 60%
         delta_anomalous_millionths: 300_000, // 30%
         delta_malicious_millionths: 100_000, // 10%
-        delta_unknown_millionths: 0, // 0%
+        delta_unknown_millionths: 0,         // 0%
         confidence_weight_millionths: 800_000,
         evidence_hash: ContentHash::compute(b"delta_budget_evidence"),
         epoch: epoch,
@@ -211,8 +216,10 @@ fn noise_injection_maintains_differential_privacy() {
     let delta = PosteriorDelta {
         extension_id: node.as_str().to_string(),
         delta_benign_millionths: *original_posterior.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-        delta_anomalous_millionths: *original_posterior.get(&RiskLevel::Anomalous).unwrap_or(&0) as i64,
-        delta_malicious_millionths: *original_posterior.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
+        delta_anomalous_millionths: *original_posterior.get(&RiskLevel::Anomalous).unwrap_or(&0)
+            as i64,
+        delta_malicious_millionths: *original_posterior.get(&RiskLevel::Malicious).unwrap_or(&0)
+            as i64,
         delta_unknown_millionths: *original_posterior.get(&RiskLevel::Unknown).unwrap_or(&0) as i64,
         confidence_weight_millionths: 900_000,
         evidence_hash: ContentHash::compute(b"test_evidence_1"),
@@ -261,11 +268,13 @@ fn noise_injection_maintains_differential_privacy() {
     let total1: u64 = (private_delta1.base_delta.delta_benign_millionths
         + private_delta1.base_delta.delta_anomalous_millionths
         + private_delta1.base_delta.delta_malicious_millionths
-        + private_delta1.base_delta.delta_unknown_millionths).abs() as u64;
+        + private_delta1.base_delta.delta_unknown_millionths)
+        .abs() as u64;
     let total2: u64 = (private_delta2.base_delta.delta_benign_millionths
         + private_delta2.base_delta.delta_anomalous_millionths
         + private_delta2.base_delta.delta_malicious_millionths
-        + private_delta2.base_delta.delta_unknown_millionths).abs() as u64;
+        + private_delta2.base_delta.delta_unknown_millionths)
+        .abs() as u64;
 
     assert!(
         total1 >= 950_000 && total1 <= 1_050_000,
@@ -290,7 +299,8 @@ fn integration_with_federated_aggregation_pipeline() {
     // Create local providers for different fleet zones
     let provider_us_east = LocalPosteriorProvider::new(NodeId::new("us-east-1".to_string()), epoch);
     let provider_us_west = LocalPosteriorProvider::new(NodeId::new("us-west-2".to_string()), epoch);
-    let provider_eu_central = LocalPosteriorProvider::new(NodeId::new("eu-central-1".to_string()), epoch);
+    let provider_eu_central =
+        LocalPosteriorProvider::new(NodeId::new("eu-central-1".to_string()), epoch);
     let timestamp = Timestamp::from_millis(1640995300000);
 
     // Each provider generates local posterior deltas
@@ -302,8 +312,10 @@ fn integration_with_federated_aggregation_pipeline() {
     let delta_us_east = PosteriorDelta {
         extension_id: "node_us_east".to_string(),
         delta_benign_millionths: *posterior_us_east.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-        delta_anomalous_millionths: *posterior_us_east.get(&RiskLevel::Anomalous).unwrap_or(&0) as i64,
-        delta_malicious_millionths: *posterior_us_east.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
+        delta_anomalous_millionths: *posterior_us_east.get(&RiskLevel::Anomalous).unwrap_or(&0)
+            as i64,
+        delta_malicious_millionths: *posterior_us_east.get(&RiskLevel::Malicious).unwrap_or(&0)
+            as i64,
         delta_unknown_millionths: *posterior_us_east.get(&RiskLevel::Unknown).unwrap_or(&0) as i64,
         confidence_weight_millionths: 850_000,
         evidence_hash: ContentHash::compute(b"us_east_evidence"),
@@ -318,8 +330,10 @@ fn integration_with_federated_aggregation_pipeline() {
     let delta_us_west = PosteriorDelta {
         extension_id: "node_us_west".to_string(),
         delta_benign_millionths: *posterior_us_west.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-        delta_anomalous_millionths: *posterior_us_west.get(&RiskLevel::Anomalous).unwrap_or(&0) as i64,
-        delta_malicious_millionths: *posterior_us_west.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
+        delta_anomalous_millionths: *posterior_us_west.get(&RiskLevel::Anomalous).unwrap_or(&0)
+            as i64,
+        delta_malicious_millionths: *posterior_us_west.get(&RiskLevel::Malicious).unwrap_or(&0)
+            as i64,
         delta_unknown_millionths: *posterior_us_west.get(&RiskLevel::Unknown).unwrap_or(&0) as i64,
         confidence_weight_millionths: 750_000,
         evidence_hash: ContentHash::compute(b"us_west_evidence"),
@@ -334,9 +348,14 @@ fn integration_with_federated_aggregation_pipeline() {
     let delta_eu_central = PosteriorDelta {
         extension_id: "node_eu_central".to_string(),
         delta_benign_millionths: *posterior_eu_central.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
-        delta_anomalous_millionths: *posterior_eu_central.get(&RiskLevel::Anomalous).unwrap_or(&0) as i64,
-        delta_malicious_millionths: *posterior_eu_central.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
-        delta_unknown_millionths: *posterior_eu_central.get(&RiskLevel::Unknown).unwrap_or(&0) as i64,
+        delta_anomalous_millionths: *posterior_eu_central
+            .get(&RiskLevel::Anomalous)
+            .unwrap_or(&0) as i64,
+        delta_malicious_millionths: *posterior_eu_central
+            .get(&RiskLevel::Malicious)
+            .unwrap_or(&0) as i64,
+        delta_unknown_millionths: *posterior_eu_central.get(&RiskLevel::Unknown).unwrap_or(&0)
+            as i64,
         confidence_weight_millionths: 900_000,
         evidence_hash: ContentHash::compute(b"eu_central_evidence"),
         epoch,
@@ -389,7 +408,8 @@ fn integration_with_federated_aggregation_pipeline() {
     let total_probability: u64 = (final_aggregate.aggregate_delta_benign_millionths
         + final_aggregate.aggregate_delta_anomalous_millionths
         + final_aggregate.aggregate_delta_malicious_millionths
-        + final_aggregate.aggregate_delta_unknown_millionths).abs() as u64;
+        + final_aggregate.aggregate_delta_unknown_millionths)
+        .abs() as u64;
     assert!(
         total_probability >= 950_000 && total_probability <= 1_050_000,
         "Total aggregated probability should normalize properly: {}",
@@ -530,7 +550,8 @@ fn noise_preserves_differential_privacy_across_rounds() {
         let total_prob: u64 = (aggregated.aggregate_delta_benign_millionths
             + aggregated.aggregate_delta_anomalous_millionths
             + aggregated.aggregate_delta_malicious_millionths
-            + aggregated.aggregate_delta_unknown_millionths).abs() as u64;
+            + aggregated.aggregate_delta_unknown_millionths)
+            .abs() as u64;
         assert!(
             total_prob >= 950_000 && total_prob <= 1_050_000,
             "Round {} probability normalization failed: {}",

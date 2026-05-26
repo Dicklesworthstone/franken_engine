@@ -18,10 +18,7 @@ use frankenengine_engine::federated_posterior_aggregation::{
     AggregatedPosteriorUpdate, AggregationCoordinator, LocalPosteriorProvider, PosteriorDelta,
 };
 use frankenengine_engine::hash_tiers::ContentHash;
-use frankenengine_engine::{
-    fleet_immune_protocol::NodeId,
-    security_epoch::SecurityEpoch,
-};
+use frankenengine_engine::{fleet_immune_protocol::NodeId, security_epoch::SecurityEpoch};
 
 // Temporary type definitions for test compilation
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -73,12 +70,18 @@ impl SecureAggregationSession {
         Ok(vec![])
     }
 
-    pub fn aggregate_contributions(&mut self, _contributions: Vec<MaskedContribution>) -> Result<Vec<i64>, String> {
+    pub fn aggregate_contributions(
+        &mut self,
+        _contributions: Vec<MaskedContribution>,
+    ) -> Result<Vec<i64>, String> {
         // Simulate aggregation result
         Ok(vec![250_000, 450_000, 650_000, 850_000])
     }
 
-    pub fn complete_aggregation(&mut self, _unmasking_shares: Vec<(ParticipantId, Vec<i64>)>) -> Result<Vec<i64>, String> {
+    pub fn complete_aggregation(
+        &mut self,
+        _unmasking_shares: Vec<(ParticipantId, Vec<i64>)>,
+    ) -> Result<Vec<i64>, String> {
         // Simulate final aggregate result
         Ok(vec![1_350_000, 950_000, 1_000_000, 1_300_000])
     }
@@ -175,10 +178,7 @@ fn end_to_end_privacy_preserving_fleet_learning() {
     let confidence_levels = vec![900_000, 850_000, 700_000, 600_000];
 
     // === LAYER 1: Federated Posterior Aggregation ===
-    let coordinator = AggregationCoordinator::new(
-        NodeId::new("coordinator".to_string()),
-        epoch,
-    );
+    let coordinator = AggregationCoordinator::new(NodeId::new("coordinator".to_string()), epoch);
     let mut local_providers = vec![];
 
     for (i, node_id) in nodes.iter().enumerate() {
@@ -212,12 +212,13 @@ fn end_to_end_privacy_preserving_fleet_learning() {
     let mut private_deltas = vec![];
     let mut noise_generator = DeterministicTestNoiseGenerator::new();
     for (i, delta) in posterior_deltas.into_iter().enumerate() {
-        let private_delta = frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
-            delta,
-            privacy_params.clone(),
-            format!("round_{}", i),
-            &mut noise_generator,
-        );
+        let private_delta =
+            frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
+                delta,
+                privacy_params.clone(),
+                format!("round_{}", i),
+                &mut noise_generator,
+            );
         private_deltas.push(private_delta);
     }
 
@@ -288,9 +289,18 @@ fn end_to_end_privacy_preserving_fleet_learning() {
 
     // Simulate unmasking phase
     let unmasking_shares = vec![
-        (ParticipantId("node_us_east_1".to_string()), vec![0, 0, 0, 0]),
-        (ParticipantId("node_us_west_2".to_string()), vec![0, 0, 0, 0]),
-        (ParticipantId("node_eu_central_1".to_string()), vec![0, 0, 0, 0]),
+        (
+            ParticipantId("node_us_east_1".to_string()),
+            vec![0, 0, 0, 0],
+        ),
+        (
+            ParticipantId("node_us_west_2".to_string()),
+            vec![0, 0, 0, 0],
+        ),
+        (
+            ParticipantId("node_eu_central_1".to_string()),
+            vec![0, 0, 0, 0],
+        ),
         (
             ParticipantId("node_ap_southeast_1".to_string()),
             vec![0, 0, 0, 0],
@@ -308,7 +318,11 @@ fn end_to_end_privacy_preserving_fleet_learning() {
     assert!(!dp_aggregate.extension_id.is_empty());
 
     // 2. Verify differential privacy was applied (noise should be present)
-    let original_total: u64 = local_posteriors.iter().flat_map(|m| m.values()).map(|&x| x as u64).sum();
+    let original_total: u64 = local_posteriors
+        .iter()
+        .flat_map(|m| m.values())
+        .map(|&x| x as u64)
+        .sum();
     let dp_total: i64 = dp_aggregate.aggregate_delta_benign_millionths
         + dp_aggregate.aggregate_delta_anomalous_millionths
         + dp_aggregate.aggregate_delta_malicious_millionths
@@ -373,12 +387,13 @@ fn privacy_budget_exhaustion_handling() {
     // For this test, we'll just verify the delta was created successfully
     // Budget exhaustion testing would require a more complex setup
     let mut noise_generator = DeterministicTestNoiseGenerator::new();
-    let result1 = frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
-        delta.clone(),
-        privacy_params.clone(),
-        "budget_test_1".to_string(),
-        &mut noise_generator,
-    );
+    let result1 =
+        frankenengine_engine::differential_privacy_posterior::PrivatePosteriorDelta::from_delta(
+            delta.clone(),
+            privacy_params.clone(),
+            "budget_test_1".to_string(),
+            &mut noise_generator,
+        );
 
     // Verify the delta was processed
     assert!(!result1.base_delta.extension_id.is_empty());
@@ -554,7 +569,8 @@ fn logging_privacy_compliance() {
         extension_id: node.as_str().to_string(),
         delta_benign_millionths: *sensitive_posterior.get(&RiskLevel::Benign).unwrap_or(&0) as i64,
         delta_anomalous_millionths: 0,
-        delta_malicious_millionths: *sensitive_posterior.get(&RiskLevel::Malicious).unwrap_or(&0) as i64,
+        delta_malicious_millionths: *sensitive_posterior.get(&RiskLevel::Malicious).unwrap_or(&0)
+            as i64,
         delta_unknown_millionths: 0,
         confidence_weight_millionths: 950_000,
         evidence_hash: ContentHash::compute(b"sensitive_evidence"),

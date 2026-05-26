@@ -16,12 +16,12 @@ use frankenengine_engine::{
     pre_signed_demotion_fallback::{
         DemotionTrigger, FallbackStatus, PreSignedFallbackStore, PromotionId,
     },
-    security_epoch::SecurityEpoch,
     proof_ingestion::ProofValidationStatus,
+    security_epoch::SecurityEpoch,
     self_replacement::{
         CreateReceiptInput, DelegateCellManifest, DelegateType, ReplacementReceipt,
-        SandboxConfiguration, SchemaVersion, SignatureBundle, ValidationArtifactRef,
-        ValidationArtifactKind,
+        SandboxConfiguration, SchemaVersion, SignatureBundle, ValidationArtifactKind,
+        ValidationArtifactRef,
     },
     signature_preimage::{Signature, SigningKey, VerificationKey},
     slot_registry::{AuthorityEnvelope, SlotId},
@@ -57,7 +57,10 @@ fn create_test_slot_id(suffix: &str) -> SlotId {
 }
 
 /// Create a validation artifact reference.
-fn create_validation_artifact_ref(name: &str, status: ProofValidationStatus) -> ValidationArtifactRef {
+fn create_validation_artifact_ref(
+    name: &str,
+    status: ProofValidationStatus,
+) -> ValidationArtifactRef {
     ValidationArtifactRef {
         kind: ValidationArtifactKind::EquivalenceResult,
         artifact_digest: format!("evidence_{}", name),

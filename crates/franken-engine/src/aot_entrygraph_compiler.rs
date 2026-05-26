@@ -1,10 +1,23 @@
-//! Ahead-of-time entrygraph compilation with explicit provenance.
+//! Ahead-of-time entrygraph compilation planning with explicit provenance.
 //!
-//! This module compiles supported package and app entrygraphs ahead of time
-//! so shipped surfaces can produce startup-optimised artifacts instead of
-//! relying exclusively on runtime tier-up.  Every compiled artifact carries
-//! a provenance chain that ties the output back to the exact source graph,
-//! policy revision, and compiler configuration that produced it.
+//! ## Provenance/planning records today — real codegen is future work (bd-w2dov)
+//!
+//! This module builds the provenance and planning records for ahead-of-time
+//! compilation of supported package and app entrygraphs, so shipped surfaces
+//! can eventually produce startup-optimised artifacts instead of relying
+//! exclusively on runtime tier-up. It does NOT yet run a codegen backend: no
+//! bytecode, IR, or machine code is emitted. `compile_module` *simulates* the
+//! compile (see its inline comments), and the resulting `artifact_hash` is a
+//! content-addressed identity of the compilation INPUTS (source-graph hash,
+//! policy revision, engine version, compiler configuration, target) — not a
+//! hash of a produced output artifact.
+//!
+//! The provenance chain that ties that identity back to the exact source graph,
+//! policy revision, and compiler configuration IS genuinely built; only the
+//! compiled-output codegen is deferred. Treat outputs as planning/provenance
+//! records, not executable startup images, until a real codegen backend is
+//! wired. (The sole consumer, `cold_start_compilation_lane`, is itself gated
+//! out of proof/release claims until real signed-image evidence exists.)
 //!
 //! Plan references: Section 7.10 (RGC-610B), bead bd-1lsy.7.10.2.
 

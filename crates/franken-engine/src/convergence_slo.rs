@@ -751,15 +751,21 @@ impl ConvergenceGate {
                 let effective_required = quorum_required.max(min_required);
 
                 if local_size < effective_required {
-                    // Quorum impossible - REFUSE convergence
-                    (
-                        "convergence-impossible".to_string(),
-                        false,
-                        format!(
-                            "quorum impossible: local partition {} < required {}",
-                            local_size, effective_required
-                        ),
-                    )
+                    // Quorum impossible - REFUSE convergence.
+                    let quorum_reason = format!(
+                        "quorum impossible: local partition {} < required {}",
+                        local_size, effective_required
+                    );
+                    // Preserve a profile's declared impossibility reason instead of
+                    // letting the quorum check shadow it: when the base verdict was
+                    // already impossible, compose both so the audit trail keeps the
+                    // declared context alongside the quorum failure (bd-mty3t).
+                    let composed_reason = if !convergence_possible && !verdict_reason.is_empty() {
+                        format!("{verdict_reason}; {quorum_reason}")
+                    } else {
+                        quorum_reason
+                    };
+                    ("convergence-impossible".to_string(), false, composed_reason)
                 } else {
                     (gate_verdict, convergence_possible, verdict_reason)
                 }
@@ -1082,5 +1088,111 @@ mod tests {
         assert_eq!(summary.completed_measurements, 1);
         assert_eq!(summary.total_measurements, 2);
         assert!(!summary.latest_statistics_available);
+    }
+
+    /// Build a single-profile gate for the quorum-reason tests below.
+    fn single_profile_gate(name: &str, profile: FleetPartitionProfile) -> ConvergenceGate {
+        let config = PartitionGateConfig {
+            quorum_threshold_percent: 50,
+            minimum_required_nodes: 2,
+            convergence_impossible_profiles: vec![],
+            slo_publication_blocked_on_impossible: true,
+            manifest_failure_reporting: true,
+        };
+        let mut profiles = BTreeMap::new();
+        profiles.insert(name.to_string(), profile);
+        ConvergenceGate {
+            partition_profiles: FleetPartitionProfiles {
+                schema_version: "v1".to_string(),
+                description: "reason-composition test".to_string(),
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                profiles,
+                gate_configuration: config,
+            },
+            profiles_file_path: PathBuf::from("/tmp/reason_test.json"),
+            evaluation_history: Vec::new(),
+        }
+    }
+
+    fn declared_impossible_profile(
+        reason: &str,
+        local: usize,
+        total: usize,
+    ) -> FleetPartitionProfile {
+        FleetPartitionProfile {
+            description: "declared impossible".to_string(),
+            partition_mode: "degraded".to_string(),
+            message_success_rate: 0,
+            local_partition_size: Some(local),
+            total_fleet_size: Some(total),
+            expected_convergence: false,
+            convergence_timeout_ms: None,
+            convergence_impossible_reason: Some(reason.to_string()),
+            failure_mode: Some("quorum_impossible".to_string()),
+            gate_verdict: Some("convergence-impossible".to_string()),
+        }
+    }
+
+    // bd-mty3t: when a profile is BOTH declared-impossible and fails quorum, the
+    // quorum check used to overwrite (shadow) the declared reason. The composed
+    // reason must now carry the declared context alongside the quorum failure.
+    #[test]
+    fn quorum_failure_preserves_declared_impossible_reason() {
+        // local=1 < required 3 (50% of 7) AND the profile declares its own reason.
+        let profile = declared_impossible_profile("permanent_network_partition", 1, 7);
+        let mut gate = single_profile_gate("split", profile);
+        let result = gate.evaluate_profile("split").expect("evaluation succeeds");
+
+        assert!(!result.convergence_possible);
+        assert_eq!(result.gate_verdict, "convergence-impossible");
+        assert!(
+            result
+                .verdict_reason
+                .contains("permanent_network_partition"),
+            "declared reason must survive the quorum override: {}",
+            result.verdict_reason
+        );
+        assert!(
+            result.verdict_reason.contains("quorum impossible"),
+            "quorum failure must still be reported: {}",
+            result.verdict_reason
+        );
+    }
+
+    #[test]
+    fn declared_reason_unchanged_when_quorum_is_met() {
+        // local=3 >= required 3, so the quorum branch does not fire; the declared
+        // reason stands alone with no quorum suffix.
+        let profile = declared_impossible_profile("manual_quarantine", 3, 7);
+        let mut gate = single_profile_gate("held", profile);
+        let result = gate.evaluate_profile("held").expect("evaluation succeeds");
+
+        assert_eq!(result.verdict_reason, "manual_quarantine");
+        assert!(!result.verdict_reason.contains("quorum impossible"));
+    }
+
+    #[test]
+    fn quorum_reason_has_no_prefix_without_a_declared_reason() {
+        // A healthy profile (no declared reason) that fails quorum must report the
+        // bare quorum reason — no spurious "; " composition.
+        let profile = FleetPartitionProfile {
+            description: "healthy but under quorum".to_string(),
+            partition_mode: "degraded".to_string(),
+            message_success_rate: 90,
+            local_partition_size: Some(2),
+            total_fleet_size: Some(7),
+            expected_convergence: true,
+            convergence_timeout_ms: Some(1000),
+            convergence_impossible_reason: None,
+            failure_mode: None,
+            gate_verdict: None,
+        };
+        let mut gate = single_profile_gate("under", profile);
+        let result = gate.evaluate_profile("under").expect("evaluation succeeds");
+
+        assert_eq!(
+            result.verdict_reason,
+            "quorum impossible: local partition 2 < required 3"
+        );
     }
 }

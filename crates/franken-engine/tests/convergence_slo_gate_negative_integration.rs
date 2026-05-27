@@ -68,13 +68,19 @@ fn test_permanent_split_profile_refuses_convergence() {
         !result.verdict_reason.is_empty(),
         "Verdict reason must be provided"
     );
-    // local=1 < required 3 (50% of 7), so the quorum check overrides and supplies
-    // the verdict reason; the declared "permanent_network_partition" reason is
-    // shadowed when quorum also fails. The declared-reason path is exercised by
-    // test_split_brain, where quorum is met and the declared reason survives.
+    // local=1 < required 3 (50% of 7), so the quorum check ALSO fires. Per
+    // bd-mty3t the composed reason now carries BOTH the declared reason and the
+    // quorum failure (the quorum check no longer shadows the declared context).
+    assert!(
+        result
+            .verdict_reason
+            .contains("permanent_network_partition"),
+        "declared reason must survive the quorum override: {}",
+        result.verdict_reason
+    );
     assert!(
         result.verdict_reason.contains("quorum impossible"),
-        "Verdict reason should record the quorum failure: {}",
+        "Verdict reason should also record the quorum failure: {}",
         result.verdict_reason
     );
 }
@@ -406,13 +412,17 @@ fn test_manifest_generation_for_refusal() {
         gate_entry["slo_publication_status"],
         "blocked-convergence-impossible"
     );
-    // local=1 < required 3, so the quorum override supplies the verdict reason
-    // (see test_permanent_split_profile_refuses_convergence for the same shadowing).
+    // local=1 < required 3: the composed reason (bd-mty3t) carries BOTH the
+    // declared reason and the quorum failure into the audit manifest.
+    let manifest_reason = gate_entry["verdict_reason"]
+        .as_str()
+        .expect("verdict_reason must be a string");
     assert!(
-        gate_entry["verdict_reason"]
-            .as_str()
-            .expect("verdict_reason must be a string")
-            .contains("quorum impossible"),
+        manifest_reason.contains("permanent_network_partition"),
+        "manifest verdict_reason must preserve the declared reason: {manifest_reason}"
+    );
+    assert!(
+        manifest_reason.contains("quorum impossible"),
         "manifest verdict_reason must record the quorum failure"
     );
     assert_eq!(gate_entry["failure_mode"], "quorum_impossible");

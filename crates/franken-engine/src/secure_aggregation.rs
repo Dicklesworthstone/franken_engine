@@ -42,6 +42,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
 
 /// Schema version for the secure-aggregation surface, mirrored in
@@ -111,6 +112,57 @@ impl PeerInput {
             participant_id: participant_id.into(),
             update,
             malicious_evidence: Some(evidence.into()),
+        }
+    }
+
+    /// Binding commitment for an update vector under a per-peer `nonce`:
+    /// `H(domain || len(nonce) || nonce || len(update) || update_le)`.
+    ///
+    /// Length-prefixing every variable-length field makes the preimage an
+    /// injective encoding (no two distinct `(nonce, update)` pairs collide on
+    /// the concatenation), and the domain tag separates these commitments from
+    /// any other `ContentHash` use. In a real round each peer publishes this
+    /// digest *before* revealing its `update`; the reveal is checked against it
+    /// by [`PeerInput::from_revealed_commitment`].
+    #[must_use]
+    pub fn commitment_of(update: &[i64], nonce: &[u8]) -> ContentHash {
+        let mut preimage = Vec::with_capacity(48 + 8 + nonce.len() + 8 + update.len() * 8);
+        preimage.extend_from_slice(b"franken-engine.secure-aggregation.commitment.v1\0");
+        preimage.extend_from_slice(&(nonce.len() as u64).to_le_bytes());
+        preimage.extend_from_slice(nonce);
+        preimage.extend_from_slice(&(update.len() as u64).to_le_bytes());
+        for value in update {
+            preimage.extend_from_slice(&value.to_le_bytes());
+        }
+        ContentHash::compute(&preimage)
+    }
+
+    /// Construct a peer contribution whose byzantine status is decided by a real
+    /// in-module commitment check rather than a caller-set flag: the peer earlier
+    /// published `committed = commitment_of(update, nonce)`; here we recompute the
+    /// commitment over the *revealed* `update` and, on mismatch, attach
+    /// machine-readable `malicious_evidence` so the round rejects this peer with
+    /// [`SecureAggregationReject::MaliciousPeer`]. An honest reveal (matching the
+    /// commitment) yields no evidence (bd-bg9l1.22).
+    #[must_use]
+    pub fn from_revealed_commitment(
+        participant_id: impl Into<String>,
+        update: Vec<i64>,
+        nonce: &[u8],
+        committed: &ContentHash,
+    ) -> Self {
+        let recomputed = Self::commitment_of(&update, nonce);
+        let malicious_evidence = if recomputed == *committed {
+            None
+        } else {
+            Some(format!(
+                "commitment mismatch: revealed update digest {recomputed} does not match committed {committed}"
+            ))
+        };
+        Self {
+            participant_id: participant_id.into(),
+            update,
+            malicious_evidence,
         }
     }
 }
@@ -719,6 +771,82 @@ mod tests {
         let outcome = round(3, 4).run(&honest_inputs(3, 4), &mut r);
         assert!(outcome.is_aggregated());
         assert_eq!(outcome.aggregate().unwrap(), expected_sum(3, 4).as_slice());
+    }
+
+    // ----- commitment-bound malicious-peer detection (bd-bg9l1.22) --------
+
+    #[test]
+    fn honest_commitment_reveal_is_admitted_and_aggregates() {
+        // Each peer publishes commitment_of(update, nonce) up front, then reveals
+        // the SAME update. from_revealed_commitment recomputes and finds no
+        // mismatch (no caller-set flag), so the round aggregates exactly like the
+        // plain honest-inputs round.
+        let mut r = rng();
+        let dimension = 4;
+        let inputs: Vec<PeerInput> = ids(3)
+            .into_iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let update: Vec<i64> = (0..dimension).map(|c| ((i + 1) * (c + 1)) as i64).collect();
+                let nonce = [i as u8; 16];
+                let committed = PeerInput::commitment_of(&update, &nonce);
+                PeerInput::from_revealed_commitment(id, update, &nonce, &committed)
+            })
+            .collect();
+        let outcome = round(3, dimension).run(&inputs, &mut r);
+        assert!(outcome.is_aggregated());
+        assert_eq!(
+            outcome.aggregate().unwrap(),
+            expected_sum(3, dimension).as_slice()
+        );
+    }
+
+    #[test]
+    fn commitment_mismatch_is_detected_in_module_and_rejects_round() {
+        // A cheating peer commits to one update but reveals a DIFFERENT one. The
+        // in-module commitment check (not a caller-set flag) attaches the evidence,
+        // and the round rejects fail-closed with MaliciousPeer.
+        let mut r = rng();
+        let dimension = 4;
+        let committed_update: Vec<i64> = vec![1, 2, 3, 4];
+        let nonce = [9u8; 16];
+        let commitment = PeerInput::commitment_of(&committed_update, &nonce);
+
+        // Reveal a tampered update inconsistent with the published commitment.
+        let cheater =
+            PeerInput::from_revealed_commitment("peer-00", vec![1, 2, 3, 5], &nonce, &commitment);
+        assert!(
+            cheater.malicious_evidence.is_some(),
+            "a reveal inconsistent with its commitment must be flagged by the in-module check"
+        );
+
+        let inputs = vec![
+            cheater,
+            PeerInput::new("peer-01", vec![0, 0, 0, 0]),
+            PeerInput::new("peer-02", vec![0, 0, 0, 0]),
+        ];
+        let outcome = round(3, dimension).run(&inputs, &mut r);
+        assert!(!outcome.is_aggregated());
+        assert!(
+            matches!(
+                outcome.reject_reason(),
+                Some(SecureAggregationReject::MaliciousPeer { participant_id, .. })
+                    if participant_id.as_str() == "peer-00"
+            ),
+            "commitment mismatch must reject with MaliciousPeer, got {:?}",
+            outcome.reject_reason()
+        );
+    }
+
+    #[test]
+    fn commitment_is_binding_to_both_update_and_nonce() {
+        // Changing either the update or the nonce changes the commitment, so a
+        // peer cannot swap its value (or replay another peer's nonce) without the
+        // recomputed digest diverging; identical inputs reproduce the digest.
+        let base = PeerInput::commitment_of(&[1, 2, 3], b"nonce-a");
+        assert_ne!(base, PeerInput::commitment_of(&[1, 2, 4], b"nonce-a"));
+        assert_ne!(base, PeerInput::commitment_of(&[1, 2, 3], b"nonce-b"));
+        assert_eq!(base, PeerInput::commitment_of(&[1, 2, 3], b"nonce-a"));
     }
 
     #[test]

@@ -10,8 +10,9 @@
 
 use frankenengine_engine::ifc_label_translation_validator::{
     DeclassificationReceipt, Declassify, IfcLemma, IfcStmt, IfcValidationContext, ProgramCategory,
-    SecurityLabel, SemanticsBreakingTransform, TrustedAuthorizers, apply_transform, faithful_lower,
-    generate_ifc_test_programs, reference_trace, target_trace,
+    SecurityLabel, SemanticsBreakingTransform, TrustedAuthorizers, apply_transform,
+    declassification_admitted, faithful_lower, generate_ifc_test_programs, reference_trace,
+    target_trace,
 };
 
 fn receipt(
@@ -206,6 +207,123 @@ fn lattice_soundness_lemmas_always_verified() {
             .contains(&IfcLemma::JoinIsLeastUpperBound)
     );
     assert!(result.verified_lemmas.contains(&IfcLemma::JoinIdempotent));
+}
+
+/// bd-bg9l1.14: the translation-validator admission path must be bound to a
+/// REAL receipt signature check, not a hand-set bool. Here `signature_valid` is
+/// *derived* from `ifc_artifacts::DeclassificationReceipt::verify` (real ed25519
+/// signature + validity-window check) and fed through both the public admission
+/// function and the full faithful-lowering validation. If the runtime's real
+/// receipt verification ever diverges from what the proof harness assumes, this
+/// test breaks instead of staying green on a hand-set `true`.
+#[test]
+fn declassification_admission_is_bound_to_real_signature_verification() {
+    use frankenengine_engine::ifc_artifacts::{
+        DeclassificationDecision, DeclassificationReceipt as ArtifactReceipt, IfcSchemaVersion,
+        Label,
+    };
+    use frankenengine_engine::signature_preimage::{Signature, SigningKey};
+
+    let signing_key = SigningKey::from_bytes([7u8; 32]).expect("valid signing key bytes");
+    let verification_key = signing_key.verification_key();
+    let attacker_key = SigningKey::from_bytes([13u8; 32])
+        .expect("valid signing key bytes")
+        .verification_key();
+
+    // A real, signable receipt authorizing a Confidential -> Internal downgrade.
+    let mut artifact = ArtifactReceipt {
+        receipt_id: "translation-validator-bd-bg9l1-14".to_string(),
+        source_label: Label::Confidential,
+        sink_clearance: Label::Internal,
+        content_binding: None,
+        declassification_route_ref: "route.v1".to_string(),
+        decision_contract_id: "contract.v1".to_string(),
+        policy_evaluation_summary: "authorized downgrade".to_string(),
+        loss_assessment_milli: 100_000,
+        decision: DeclassificationDecision::Allow,
+        authorized_by: verification_key.clone(),
+        replay_linkage: "trace.v1".to_string(),
+        timestamp_ms: 1_735_689_000_000,
+        not_before_ms: 0,
+        not_after_ms: u64::MAX,
+        schema_version: IfcSchemaVersion::CURRENT,
+        signature: Signature::from_bytes([0u8; 64]),
+    };
+    artifact.sign(&signing_key).expect("honest receipt signs");
+
+    // DERIVED from real verification (signature + validity window), not hand-set.
+    let honest_signature_valid = artifact.verify(&verification_key).is_ok();
+    let forged_signature_valid = artifact.verify(&attacker_key).is_ok();
+    assert!(honest_signature_valid, "honest receipt must verify");
+    assert!(
+        !forged_signature_valid,
+        "verification under the wrong key must fail"
+    );
+
+    // The mirror receipt carries the derived bool; the authorizer identity is the
+    // real verification key, and the trust set is keyed off that same identity.
+    let authorizer = verification_key.to_hex();
+    let mut trusted = TrustedAuthorizers::new();
+    trusted.trust("contract.v1", &authorizer);
+
+    let honest = receipt(
+        "contract.v1",
+        &authorizer,
+        SecurityLabel::Secret,
+        SecurityLabel::Public,
+        honest_signature_valid,
+    );
+    let forged = receipt(
+        "contract.v1",
+        &authorizer,
+        SecurityLabel::Secret,
+        SecurityLabel::Public,
+        forged_signature_valid,
+    );
+
+    // Public admission keys directly off the real verification outcome.
+    assert!(
+        declassification_admitted(
+            Some(&honest),
+            SecurityLabel::Secret,
+            SecurityLabel::Public,
+            &trusted
+        ),
+        "a genuinely-verified receipt must be admitted"
+    );
+    assert!(
+        !declassification_admitted(
+            Some(&forged),
+            SecurityLabel::Secret,
+            SecurityLabel::Public,
+            &trusted
+        ),
+        "a receipt whose real signature check failed must be refused"
+    );
+
+    // End-to-end: the honest, real-verified receipt also clears the full
+    // faithful-lowering validation and its receipt-discipline lemma.
+    let program = vec![
+        IfcStmt::Source {
+            var: 0,
+            label: SecurityLabel::Secret,
+        },
+        IfcStmt::Derive {
+            dest: 1,
+            inputs: vec![0],
+            declassify: Some(Declassify {
+                to: SecurityLabel::Public,
+                receipt: Some(honest),
+            }),
+        },
+    ];
+    let result = IfcValidationContext::faithful(program, trusted).validate();
+    assert!(result.validation_successful);
+    assert!(
+        result
+            .verified_lemmas
+            .contains(&IfcLemma::DeclassificationReceiptDiscipline)
+    );
 }
 
 #[test]

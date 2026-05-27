@@ -15,7 +15,8 @@
 //! `forensic_replayer`'s `telemetry_log` is left empty; and the named consumer
 //! `guardplane_adapter` reads capability-witness summaries from package metadata
 //! (`capability_witness.*` keys) rather than these records. Wiring the recorder
-//! into the interpreter hostcall dispatch is tracked as a separate enhancement.
+//! into the interpreter hostcall dispatch (and populating `forensic_replayer`'s
+//! `telemetry_log`) is tracked as a separate enhancement under `bd-ygbaj.1`.
 //!
 //! Plan reference: Section 10.5, item 3.
 //! Cross-refs: 9A.2 (Probabilistic Guardplane), 9E.9 (normative

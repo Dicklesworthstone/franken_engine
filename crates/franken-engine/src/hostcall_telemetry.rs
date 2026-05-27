@@ -1,9 +1,21 @@
 //! Hostcall telemetry schema and recorder.
 //!
-//! Records every hostcall made by extensions with sufficient detail for
-//! the Probabilistic Guardplane to use as evidence in its Bayesian
-//! inference loop.  The recorder captures, timestamps, and persists
-//! records with deterministic ordering guarantees.
+//! Defines the [`HostcallTelemetryRecord`] schema and an in-memory
+//! [`TelemetryRecorder`] that, when driven, assigns strictly monotonic record
+//! ids, a non-decreasing timestamp, and a rolling hash — the deterministically
+//! ordered evidence format the Probabilistic Guardplane's Bayesian inference
+//! loop is designed to consume.
+//!
+//! NOT WIRED INTO THE RUNTIME (bd-ygbaj): this is a standalone schema + recorder
+//! surface that callers must drive explicitly via [`TelemetryRecorder::record`];
+//! the runtime interpreter does **not** currently feed it, so it does not by
+//! itself capture "every hostcall". Concretely: the baseline interpreter records
+//! its own hostcall decisions in its `hostcall_decisions` vector (see
+//! `baseline_interpreter`) and never calls [`TelemetryRecorder::record`];
+//! `forensic_replayer`'s `telemetry_log` is left empty; and the named consumer
+//! `guardplane_adapter` reads capability-witness summaries from package metadata
+//! (`capability_witness.*` keys) rather than these records. Wiring the recorder
+//! into the interpreter hostcall dispatch is tracked as a separate enhancement.
 //!
 //! Plan reference: Section 10.5, item 3.
 //! Cross-refs: 9A.2 (Probabilistic Guardplane), 9E.9 (normative

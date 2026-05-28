@@ -5843,22 +5843,44 @@ fn required_effect_for_ambient_authority(
     }
 }
 
-/// Check if the current scope's effect profile allows the required effect.
-/// For now, we'll assume a restrictive default profile (empty) unless explicitly specified.
-/// TODO: Wire this to actual scope-based effect profile lookup.
+/// The ambient-authority [`EffectSet`] lowering enforces for `scope_id`.
+///
+/// Lowering applies a fixed deny-by-default baseline — the empty effect set,
+/// i.e. [`EffectPolicy::Empty`] — to every scope. No ambient-authority effect
+/// (eval, fs, network, env, CSPRNG, or generic global access) may be exercised
+/// through a raw ambient identifier in lowered IR. This is the intended
+/// security posture, not an unfinished lookup: it forces any code that reaches
+/// for ambient authority to be rejected at the lowering boundary, so red-team
+/// scenarios cannot smuggle authority past it. Legitimate authority is granted
+/// downstream by the capability/IFC runtime layer through explicit capability
+/// objects — never by widening this lowering-time profile.
+///
+/// The baseline is scope-uniform by design: there is no per-scope effect
+/// manifest at the lowering layer (effect annotations on functions/closures are
+/// resolved later, against [`EffectPolicy::Inherited`]/[`EffectPolicy::Declared`]).
+/// `scope_id` is therefore threaded through but selects the same empty baseline
+/// for every scope; it is the single seam a future per-scope lowering manifest
+/// would consult here.
+fn ambient_authority_profile_for_scope(scope_id: ScopeId) -> EffectSet {
+    let _ = scope_id; // scope-uniform empty baseline today (see doc above)
+    EffectSet::new()
+}
+
+/// Check whether the lowering-time ambient-authority profile for `scope_id`
+/// permits `required_effect`.
+///
+/// Returns `Ok(())` when the effect is within the scope's profile, otherwise
+/// `Err(profile)` carrying the (deny-by-default, empty) profile so the caller
+/// can surface it in a [`LoweringPipelineError::AmbientAuthorityViolation`].
 fn check_ambient_authority_allowed(
     required_effect: EffectKind,
-    _scope_id: ScopeId,
+    scope_id: ScopeId,
 ) -> Result<(), EffectSet> {
-    // For the current implementation, we assume a restrictive default profile
-    // that doesn't allow any ambient authority effects by default.
-    // This ensures that red team scenarios are rejected at lowering time.
-    let current_profile = EffectSet::new(); // Empty profile
-
-    if current_profile.contains(required_effect) {
+    let profile = ambient_authority_profile_for_scope(scope_id);
+    if profile.contains(required_effect) {
         Ok(())
     } else {
-        Err(current_profile)
+        Err(profile)
     }
 }
 

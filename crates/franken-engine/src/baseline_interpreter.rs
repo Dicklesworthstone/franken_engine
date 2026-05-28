@@ -6376,11 +6376,19 @@ impl InterpreterCore {
                                 }
                             });
 
-                            // Register 0 = `this` for the constructor body.
-                            self.write_reg(0, this_val)?;
-                            // Arguments start at register 1.
+                            // Arguments occupy r0..rN-1, matching the IR3
+                            // lowering's parameter-register allocation
+                            // (lowering_pipeline.rs comment: "Allocate
+                            // parameter registers r0..rN-1"). `this` is
+                            // recovered through `LoadThis` reading
+                            // `frame.this_value` and is not stored in a
+                            // numbered register; writing it to register 0
+                            // here used to clobber the first constructor
+                            // parameter and silently corrupted
+                            // `this.field = paramName` bodies (bd-a7kpw).
+                            let _ = this_val;
                             for (i, val) in arg_vals.into_iter().enumerate() {
-                                let reg = (i + 1) as u32;
+                                let reg = i as u32;
                                 if reg < self.config.max_registers {
                                     self.write_reg(reg, val)?;
                                 }

@@ -432,6 +432,49 @@ mod class_runtime_execution_tests {
         );
     }
 
+    /// A constructor parameter flows into `this.field = paramName` and is
+    /// observable from the constructed instance. Regression guard for the
+    /// bd-a7kpw fix: `Construct` previously wrote `this` to register 0 and
+    /// shifted args to register 1+, but the IR3 lowering binds parameter
+    /// `i` to register `i` (see `lowering_pipeline.rs` "Allocate parameter
+    /// registers r0..rN-1"). That mismatch silently clobbered the first
+    /// parameter with the receiver, so `this.value = value` stored the
+    /// receiver — not 7 — into the `value` field. `this` is now reached
+    /// exclusively through `LoadThis` reading the call frame.
+    #[test]
+    fn constructor_parameter_flows_into_instance_field() {
+        let result = run_ok(concat!(
+            "class Box { constructor(value) { this.value = value; } }\n",
+            "var b = new Box(7);\n",
+            "b.value;\n",
+        ));
+        assert_eq!(
+            result.value,
+            Value::Int(7),
+            "a constructor parameter must reach `this.field = paramName` without \
+             being clobbered by the receiver in register 0"
+        );
+    }
+
+    /// The same regression with arithmetic on the parameter — historically
+    /// this returned `Float(NaN)` because `value` resolved to the receiver
+    /// object and `Object + 1` is `NaN` under JS coercion. Now `value + 1`
+    /// must observe the real integer argument and produce `8`.
+    #[test]
+    fn constructor_parameter_participates_in_arithmetic() {
+        let result = run_ok(concat!(
+            "class Box { constructor(value) { this.x = value + 1; } }\n",
+            "var b = new Box(7);\n",
+            "b.x;\n",
+        ));
+        assert_eq!(
+            result.value,
+            Value::Int(8),
+            "a constructor parameter must participate in arithmetic as the \
+             real argument value, not as the receiver object"
+        );
+    }
+
     // -- Boundary: current fail-closed behavior (real engine, no mocks; bd-a7kpw) --
 
     /// `super` expressions are rejected fail-closed by the parser today.

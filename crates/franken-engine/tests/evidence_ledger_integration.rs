@@ -1695,6 +1695,17 @@ fn evidence_ledger_cli_writes_real_artifacts_and_structured_logs() {
 use regex::Regex;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
+
+// Hoisted scrub patterns (bd-ub6x8.13).
+static SCRUB_UUID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap()
+});
+static SCRUB_TIMESTAMP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\d{10,}").unwrap());
+static SCRUB_EVIDENCE_HASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""evidence_hash": "[0-9a-f]{64}""#).unwrap());
+static SCRUB_ENTRY_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""entry_id": "[^"]+""#).unwrap());
 
 /// Assert evidence entry matches golden file with scrubbed dynamic values.
 fn assert_evidence_golden(test_name: &str, entry: &EvidenceEntry) {
@@ -1747,28 +1758,16 @@ fn assert_evidence_golden(test_name: &str, entry: &EvidenceEntry) {
 /// Scrub dynamic values from evidence entry JSON for stable golden comparison.
 fn scrub_evidence_dynamic_fields(json: &str) -> String {
     let mut scrubbed = json.to_string();
-
-    // Replace UUIDs with [UUID]
-    let uuid_re =
-        Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}").unwrap();
-    scrubbed = uuid_re.replace_all(&scrubbed, "[UUID]").to_string();
-
-    // Replace timestamps with [TIMESTAMP]
-    let ts_re = Regex::new(r"\d{10,}").unwrap();
-    scrubbed = ts_re.replace_all(&scrubbed, "[TIMESTAMP]").to_string();
-
-    // Replace evidence hash with [HASH] (content-addressed but may change)
-    let hash_re = Regex::new(r#""evidence_hash": "[0-9a-f]{64}""#).unwrap();
-    scrubbed = hash_re
+    scrubbed = SCRUB_UUID.replace_all(&scrubbed, "[UUID]").into_owned();
+    scrubbed = SCRUB_TIMESTAMP
+        .replace_all(&scrubbed, "[TIMESTAMP]")
+        .into_owned();
+    scrubbed = SCRUB_EVIDENCE_HASH
         .replace_all(&scrubbed, r#""evidence_hash": "[HASH]""#)
-        .to_string();
-
-    // Replace entry_id with [ENTRY_ID] (content-addressed)
-    let entry_id_re = Regex::new(r#""entry_id": "[^"]+""#).unwrap();
-    scrubbed = entry_id_re
+        .into_owned();
+    scrubbed = SCRUB_ENTRY_ID
         .replace_all(&scrubbed, r#""entry_id": "[ENTRY_ID]""#)
-        .to_string();
-
+        .into_owned();
     scrubbed
 }
 

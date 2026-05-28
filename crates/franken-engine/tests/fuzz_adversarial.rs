@@ -17,6 +17,17 @@ use std::path::{Path, PathBuf};
 
 // Golden file testing imports
 use regex::Regex;
+use std::sync::LazyLock;
+
+// Hoisted scrub patterns (bd-ub6x8.13).
+static SCRUB_SHA256: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"sha256:[a-f0-9]{64}").unwrap());
+static SCRUB_TRACE_ID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"trace-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap()
+});
+static SCRUB_DECISION_ID: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"parser-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap()
+});
 
 use frankenengine_engine::capability::RuntimeCapability;
 use frankenengine_engine::capability_token::{
@@ -1346,23 +1357,13 @@ fn assert_golden_parser_boundary(test_name: &str, output: &ParserBoundaryOutput)
 /// Scrub non-deterministic values from parser output
 fn scrub_parser_output(output: &str) -> String {
     let mut scrubbed = output.to_string();
-
-    // SHA256 hashes → [HASH]
-    let hash_re = Regex::new(r"sha256:[a-f0-9]{64}").unwrap();
-    scrubbed = hash_re.replace_all(&scrubbed, "[HASH]").to_string();
-
-    // Trace IDs → [TRACE_ID]
-    let trace_re =
-        Regex::new(r"trace-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap();
-    scrubbed = trace_re.replace_all(&scrubbed, "[TRACE_ID]").to_string();
-
-    // Decision IDs → [DECISION_ID]
-    let decision_re =
-        Regex::new(r"parser-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}").unwrap();
-    scrubbed = decision_re
+    scrubbed = SCRUB_SHA256.replace_all(&scrubbed, "[HASH]").into_owned();
+    scrubbed = SCRUB_TRACE_ID
+        .replace_all(&scrubbed, "[TRACE_ID]")
+        .into_owned();
+    scrubbed = SCRUB_DECISION_ID
         .replace_all(&scrubbed, "[DECISION_ID]")
-        .to_string();
-
+        .into_owned();
     scrubbed
 }
 

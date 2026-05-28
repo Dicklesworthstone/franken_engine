@@ -12,10 +12,30 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 mod golden_diag;
+
+// Scrub patterns hoisted once at startup so each scrub call does a single
+// `replace_all` instead of recompiling 8 regexes per invocation (bd-ub6x8.13).
+static SCRUB_TIMING_VALUE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b\d+\.\d+\s*(us|ns|ms|μs)\b").unwrap());
+static SCRUB_TIMING_NUMBER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b\d{4,}\.\d+\b").unwrap());
+static SCRUB_ISO_TIMESTAMP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\d\.\-\+:]*").unwrap());
+static SCRUB_PROJECT_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/data/projects/franken_engine[/\w\-\.]*").unwrap());
+static SCRUB_TMP_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/tmp/[/\w\-\.]*").unwrap());
+static SCRUB_TARGET_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"target[/\w\-\.]*").unwrap());
+static SCRUB_HASH_VALUE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b[a-fA-F0-9]{40,64}\b").unwrap());
+static SCRUB_MEMORY_ADDRESS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"0x[a-fA-F0-9]+").unwrap());
 
 /// Represents the captured output from a benchmark/diagnostic command execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,55 +141,30 @@ const BENCHMARK_DIAGNOSTIC_TEST_CASES: &[BenchmarkDiagnosticTestCase] = &[
 /// while preserving the overall structure for format validation.
 fn scrub_benchmark_diagnostic_output(content: &str) -> String {
     let mut scrubbed = content.to_string();
-
-    // Scrub timing values (microseconds, nanoseconds, milliseconds)
-    scrubbed = regex::Regex::new(r"\b\d+\.\d+\s*(us|ns|ms|μs)\b")
-        .unwrap()
+    scrubbed = SCRUB_TIMING_VALUE
         .replace_all(&scrubbed, "[TIMING_VALUE]")
-        .to_string();
-
-    // Scrub standalone timing numbers that look like performance values
-    scrubbed = regex::Regex::new(r"\b\d{4,}\.\d+\b")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_TIMING_NUMBER
         .replace_all(&scrubbed, "[TIMING_NUMBER]")
-        .to_string();
-
-    // Scrub ISO timestamps (2026-04-30T...)
-    scrubbed = regex::Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\d\.\-\+:]*")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_ISO_TIMESTAMP
         .replace_all(&scrubbed, "[TIMESTAMP]")
-        .to_string();
-
-    // Scrub absolute paths containing /data/projects/franken_engine
-    scrubbed = regex::Regex::new(r"/data/projects/franken_engine[/\w\-\.]*")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_PROJECT_PATH
         .replace_all(&scrubbed, "[PROJECT_PATH]")
-        .to_string();
-
-    // Scrub temporary paths
-    scrubbed = regex::Regex::new(r"/tmp/[/\w\-\.]*")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_TMP_PATH
         .replace_all(&scrubbed, "[TMP_PATH]")
-        .to_string();
-
-    // Scrub target directory paths
-    scrubbed = regex::Regex::new(r"target[/\w\-\.]*")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_TARGET_PATH
         .replace_all(&scrubbed, "[TARGET_PATH]")
-        .to_string();
-
-    // Scrub hash values (SHA256, etc)
-    scrubbed = regex::Regex::new(r"\b[a-fA-F0-9]{40,64}\b")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_HASH_VALUE
         .replace_all(&scrubbed, "[HASH_VALUE]")
-        .to_string();
-
-    // Scrub memory addresses
-    scrubbed = regex::Regex::new(r"0x[a-fA-F0-9]+")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_MEMORY_ADDRESS
         .replace_all(&scrubbed, "[MEMORY_ADDRESS]")
-        .to_string();
-
+        .into_owned();
     scrubbed
 }
 

@@ -9,8 +9,15 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use regex::Regex;
+
+// Hoisted scrub patterns (bd-ub6x8.13).
+static SCRUB_CONTENT_HASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""content_hash":\s*\[\s*([0-9]+(?:,\s*[0-9]+)*)\s*\]"#).unwrap());
+static SCRUB_TIMESTAMP_NS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""timestamp_ns":\s*[0-9]+"#).unwrap());
 
 use frankenengine_engine::queueing_admission_control::{AdmissionDecision, ShedReason};
 use frankenengine_engine::resource_certificate_governance::{GovernanceVerdict, ResourceDimension};
@@ -103,19 +110,12 @@ fn sample_terminate_event() -> EscalationEvent {
 /// Scrub dynamic values from escalation log JSON for deterministic comparison.
 fn scrub_escalation_dynamic_fields(json: &str) -> String {
     let mut scrubbed = json.to_string();
-
-    // Replace content_hash array with placeholder
-    let hash_re = Regex::new(r#""content_hash":\s*\[\s*([0-9]+(?:,\s*[0-9]+)*)\s*\]"#).unwrap();
-    scrubbed = hash_re
+    scrubbed = SCRUB_CONTENT_HASH
         .replace_all(&scrubbed, r#""content_hash": "[CONTENT_HASH]""#)
-        .to_string();
-
-    // Replace timestamps with placeholders to handle timing variations
-    let ts_re = Regex::new(r#""timestamp_ns":\s*[0-9]+"#).unwrap();
-    scrubbed = ts_re
+        .into_owned();
+    scrubbed = SCRUB_TIMESTAMP_NS
         .replace_all(&scrubbed, r#""timestamp_ns": "[TIMESTAMP_NS]""#)
-        .to_string();
-
+        .into_owned();
     scrubbed
 }
 

@@ -12,10 +12,22 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::str;
+use std::sync::LazyLock;
 
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 mod golden_diag;
+
+// Hoisted scrub patterns (bd-ub6x8.13) — compile once at first call instead
+// of every scrub_output invocation.
+static SCRUB_ISO_TIMESTAMP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\d\.\-\+:]*").unwrap());
+static SCRUB_PROJECT_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/data/projects/franken_engine[/\w\-\.]*").unwrap());
+static SCRUB_TMP_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/tmp/[/\w\-\.]*").unwrap());
+static SCRUB_TARGET_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"target[/\w\-\.]*").unwrap());
 
 /// Represents the captured output from a CLI command execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,31 +95,18 @@ const CLI_TEST_CASES: &[CliTestCase] = &[
 /// while preserving the overall structure.
 fn scrub_output(content: &str) -> String {
     let mut scrubbed = content.to_string();
-
-    // Scrub ISO timestamps (2026-04-30T...)
-    scrubbed = regex::Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\d\.\-\+:]*")
-        .unwrap()
+    scrubbed = SCRUB_ISO_TIMESTAMP
         .replace_all(&scrubbed, "[TIMESTAMP]")
-        .to_string();
-
-    // Scrub absolute paths containing /data/projects/franken_engine
-    scrubbed = regex::Regex::new(r"/data/projects/franken_engine[/\w\-\.]*")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_PROJECT_PATH
         .replace_all(&scrubbed, "[PROJECT_PATH]")
-        .to_string();
-
-    // Scrub temporary paths and build artifacts
-    scrubbed = regex::Regex::new(r"/tmp/[/\w\-\.]*")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_TMP_PATH
         .replace_all(&scrubbed, "[TMP_PATH]")
-        .to_string();
-
-    // Scrub target directory paths
-    scrubbed = regex::Regex::new(r"target[/\w\-\.]*")
-        .unwrap()
+        .into_owned();
+    scrubbed = SCRUB_TARGET_PATH
         .replace_all(&scrubbed, "[TARGET_PATH]")
-        .to_string();
-
+        .into_owned();
     scrubbed
 }
 

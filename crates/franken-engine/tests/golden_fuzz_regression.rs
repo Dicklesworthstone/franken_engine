@@ -10,6 +10,13 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
+
+// Hoisted scrub patterns (bd-ub6x8.13).
+static SCRUB_SHA256: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"sha256:[a-f0-9]{64}").unwrap());
+static SCRUB_MEMORY_ADDRESS: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"0x[0-9a-f]{6,16}").unwrap());
 
 use frankenengine_engine::parser::{
     CanonicalEs2020Parser, ParseDiagnosticEnvelope, ParseGoal, ParserBudget, ParserMode,
@@ -52,15 +59,12 @@ struct ParserOptionsSnapshot {
 /// Scrub non-deterministic values from golden output
 fn scrub_golden_output(input: &str) -> String {
     let mut scrubbed = input.to_string();
-
-    // Replace SHA256 hashes with placeholder (these are deterministic but hard to read)
-    let sha_re = Regex::new(r"sha256:[a-f0-9]{64}").unwrap();
-    scrubbed = sha_re.replace_all(&scrubbed, "sha256:[HASH]").to_string();
-
-    // Replace any memory addresses
-    let addr_re = Regex::new(r"0x[0-9a-f]{6,16}").unwrap();
-    scrubbed = addr_re.replace_all(&scrubbed, "0x[ADDR]").to_string();
-
+    scrubbed = SCRUB_SHA256
+        .replace_all(&scrubbed, "sha256:[HASH]")
+        .into_owned();
+    scrubbed = SCRUB_MEMORY_ADDRESS
+        .replace_all(&scrubbed, "0x[ADDR]")
+        .into_owned();
     scrubbed
 }
 

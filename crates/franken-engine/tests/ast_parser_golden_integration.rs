@@ -9,8 +9,21 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 
 use regex::Regex;
+
+// Hoisted scrub patterns (bd-ub6x8.13). The canonical_hash regex is fixed;
+// the span-field regex is shared across the 6 span fields by anchoring the
+// field name as a capture group instead of formatting one regex per field.
+static SCRUB_CANONICAL_HASH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#""canonical_hash":\s*"[^"]+""#).unwrap());
+static SCRUB_SPAN_FIELD: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#""(start_offset|end_offset|start_line|start_column|end_line|end_column)":\s*[0-9]+"#,
+    )
+    .unwrap()
+});
 
 use frankenengine_engine::ast::{ParseGoal, SyntaxTree};
 use frankenengine_engine::parser::{
@@ -47,33 +60,17 @@ fn budget_limited_options() -> ParserOptions {
 
 /// Scrub dynamic values from AST JSON for deterministic comparison.
 fn scrub_ast_dynamic_fields(json: &str) -> String {
-    let mut scrubbed = json.to_string();
-
-    // Replace canonical_hash with placeholder
-    let hash_re = Regex::new(r#""canonical_hash":\s*"[^"]+""#).unwrap();
-    scrubbed = hash_re
-        .replace_all(&scrubbed, r#""canonical_hash": "[CANONICAL_HASH]""#)
-        .to_string();
-
-    // Replace source spans with placeholders (preserving structure)
-    let span_fields = [
-        "start_offset",
-        "end_offset",
-        "start_line",
-        "start_column",
-        "end_line",
-        "end_column",
-    ];
-    for field in &span_fields {
-        let field_re = Regex::new(&format!(r#""{}":\s*[0-9]+"#, field)).unwrap();
-        scrubbed = field_re
-            .replace_all(
-                &scrubbed,
-                &format!(r#""{}": "[{}]""#, field, field.to_uppercase()),
-            )
-            .to_string();
-    }
-
+    let mut scrubbed = SCRUB_CANONICAL_HASH
+        .replace_all(json, r#""canonical_hash": "[CANONICAL_HASH]""#)
+        .into_owned();
+    // Replace every "<span_field>": <int> with "<SPAN_FIELD>": "[<SPAN_FIELD>]"
+    // in one pass over the input using a single capture-group regex.
+    scrubbed = SCRUB_SPAN_FIELD
+        .replace_all(&scrubbed, |caps: &regex::Captures<'_>| {
+            let field = &caps[1];
+            format!(r#""{field}": "[{}]""#, field.to_uppercase())
+        })
+        .into_owned();
     scrubbed
 }
 

@@ -75,9 +75,12 @@ fn test_newtype_wrapper_fixed_layout() {
 
 #[test]
 fn test_enum_fixed_layout() {
-    // Test unit variant
+    // Test unit variant.
+    // Exact layout = 1 discriminant byte + the widest payload across variants.
+    // Status's widest payload is `Code(u16)` = 2 bytes, so LAYOUT_SIZE = 1 + 2 = 3
+    // (the derive no longer over-estimates the multi-variant case to a flat `1 + 8`).
     let status_active = Status::Active;
-    assert_eq!(Status::LAYOUT_SIZE, 9); // 1 discriminant + 8 for max variant size (simplified)
+    assert_eq!(Status::LAYOUT_SIZE, 3);
 
     let mut buffer = vec![0u8; Status::LAYOUT_SIZE];
     status_active.encode_fixed(&mut buffer);
@@ -100,8 +103,9 @@ fn test_nested_struct_fixed_layout() {
         flag: true,
     };
 
-    // Check layout size: Point (8) + Status (9) + bool (1) = 18
-    assert_eq!(Nested::LAYOUT_SIZE, 18);
+    // Check layout size: Point (8) + Status (3) + bool (1) = 12
+    // (Status is now its exact 3 bytes, not the previous over-estimated 9).
+    assert_eq!(Nested::LAYOUT_SIZE, 12);
 
     // Test encode/decode round trip
     let mut buffer = vec![0u8; Nested::LAYOUT_SIZE];
@@ -220,4 +224,74 @@ fn test_primitive_encodings() {
 
     let decoded = i32::decode_fixed(&buffer).unwrap();
     assert_eq!(negative_value, decoded);
+}
+
+// --- bd-1lw7r.6: exact compile-time max-size for multi-variant enums ---
+//
+// These enums pin the derive's enum LAYOUT_SIZE to `1 + max(payload sizes)`
+// computed at compile time, replacing the prior `1 + 8` over-estimate.
+
+#[derive(Debug, Clone, PartialEq, Eq, Deterministic, FixedLayout)]
+enum WideEnum {
+    Empty,
+    Small(u8),
+    Medium(u32),
+    Large(u64),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deterministic, FixedLayout)]
+enum NarrowEnum {
+    A(u8),
+    B(u16),
+    C,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deterministic, FixedLayout)]
+enum UnitOnlyEnum {
+    X,
+    Y,
+    Z,
+}
+
+#[test]
+fn test_enum_layout_size_is_exact_max_not_hardcoded_eight() {
+    // Widest payload is `Large(u64)` = 8 bytes → 1 + 8 = 9. This happens to
+    // match the old hardcoded value, but here it is *derived* from the max.
+    assert_eq!(WideEnum::LAYOUT_SIZE, 9);
+
+    // Widest payload is `B(u16)` = 2 bytes → 1 + 2 = 3. The previous
+    // implementation would have reported 9; the exact-max derive reports 3.
+    assert_eq!(NarrowEnum::LAYOUT_SIZE, 3);
+
+    // No payloads at all → just the discriminant byte → 1. The previous
+    // implementation would have reported 9.
+    assert_eq!(UnitOnlyEnum::LAYOUT_SIZE, 1);
+}
+
+#[test]
+fn test_exact_max_enum_round_trips_every_variant() {
+    // Every variant — including the widest and the narrowest — must encode and
+    // decode losslessly within the exact LAYOUT_SIZE buffer.
+    for value in [
+        WideEnum::Empty,
+        WideEnum::Small(0xAB),
+        WideEnum::Medium(0x0123_4567),
+        WideEnum::Large(0x0123_4567_89AB_CDEF),
+    ] {
+        let mut buffer = vec![0u8; WideEnum::LAYOUT_SIZE];
+        value.encode_fixed(&mut buffer);
+        assert_eq!(WideEnum::decode_fixed(&buffer).unwrap(), value);
+    }
+
+    for value in [NarrowEnum::A(0xFE), NarrowEnum::B(0xBEEF), NarrowEnum::C] {
+        let mut buffer = vec![0u8; NarrowEnum::LAYOUT_SIZE];
+        value.encode_fixed(&mut buffer);
+        assert_eq!(NarrowEnum::decode_fixed(&buffer).unwrap(), value);
+    }
+
+    for value in [UnitOnlyEnum::X, UnitOnlyEnum::Y, UnitOnlyEnum::Z] {
+        let mut buffer = vec![0u8; UnitOnlyEnum::LAYOUT_SIZE];
+        value.encode_fixed(&mut buffer);
+        assert_eq!(UnitOnlyEnum::decode_fixed(&buffer).unwrap(), value);
+    }
 }

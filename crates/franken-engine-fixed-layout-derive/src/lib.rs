@@ -35,7 +35,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, Data, DeriveInput, Fields, Ident, Type, Variant};
+use syn::{Data, DeriveInput, Fields, Ident, Type, Variant, parse_macro_input};
 
 /// Derive macro for the FixedLayout trait.
 #[proc_macro_derive(FixedLayout)]
@@ -264,7 +264,8 @@ fn generate_enum_impl(
         }
     }
 
-    // For simplicity, calculate max size at compile time using const_max helper
+    // Per-variant payload size, each a `const usize` expression resolved at
+    // compile time through the field type's `FixedLayout::LAYOUT_SIZE`.
     let variant_size_calculations: Vec<_> = variant_info.iter().map(|(_, field_count, field_types)| {
         if *field_count == 0 {
             quote! { 0 }
@@ -274,17 +275,34 @@ fn generate_enum_impl(
         }
     }).collect();
 
-    // For now, use a simple approach: discriminant + largest possible variant (u64 = 8 bytes)
-    // This is a simplification - in practice, we'd want to calculate the exact max size
+    // Layout = 1 discriminant byte + the EXACT largest payload across variants.
+    // The previous implementation hardcoded `1 + 8` for the multi-variant case,
+    // over-estimating LAYOUT_SIZE for any enum whose widest payload is not a
+    // u64 and under-estimating it for any payload wider than 8 bytes (which
+    // would silently truncate). We instead fold the per-variant const sizes
+    // into their maximum inside a const block — `while` loops and mutable
+    // locals are permitted in const contexts, so this evaluates entirely at
+    // compile time with no runtime cost.
     let size_calculation = if variant_size_calculations.is_empty() {
         quote! { 1 } // Just discriminant
     } else if variant_size_calculations.len() == 1 {
         let size = &variant_size_calculations[0];
         quote! { 1 + #size }
     } else {
-        // For multiple variants, assume max 8 bytes (u64 size) for simplicity
-        // TODO: Calculate exact max size at compile time
-        quote! { 1 + 8 }
+        quote! {
+            1 + {
+                const __VARIANT_SIZES: &[usize] = &[#(#variant_size_calculations),*];
+                let mut __max = 0usize;
+                let mut __i = 0usize;
+                while __i < __VARIANT_SIZES.len() {
+                    if __VARIANT_SIZES[__i] > __max {
+                        __max = __VARIANT_SIZES[__i];
+                    }
+                    __i += 1;
+                }
+                __max
+            }
+        }
     };
 
     // Generate encode match arms
@@ -297,10 +315,11 @@ fn generate_enum_impl(
                 quote! {
                     Self::#variant_name => {
                         buffer[0] = #discriminant;
-                        // Zero-pad the rest
-                        for i in 1..Self::LAYOUT_SIZE {
-                            buffer[i] = 0;
-                        }
+                        // Zero-pad the rest. A slice fill (rather than an index
+                        // loop) stays correct when this variant is as wide as
+                        // LAYOUT_SIZE — the tail slice is then empty and the fill
+                        // is a no-op, avoiding a provably-empty `N..N` range.
+                        buffer[1..].fill(0);
                     }
                 }
             } else {
@@ -313,10 +332,11 @@ fn generate_enum_impl(
                         buffer[0] = #discriminant;
                         let field_size = <#field_type as franken_engine_deterministic_trait::FixedLayout>::LAYOUT_SIZE;
                         value.encode_fixed(&mut buffer[1..1 + field_size]);
-                        // Zero-pad the rest
-                        for i in (1 + field_size)..Self::LAYOUT_SIZE {
-                            buffer[i] = 0;
-                        }
+                        // Zero-pad the rest. For the widest variant, field_size
+                        // == LAYOUT_SIZE - 1, so the tail slice is empty and the
+                        // fill is a no-op (a `(1+field_size)..LAYOUT_SIZE` index
+                        // loop would be a provably-empty range that clippy denies).
+                        buffer[1 + field_size..].fill(0);
                     }
                 }
             }

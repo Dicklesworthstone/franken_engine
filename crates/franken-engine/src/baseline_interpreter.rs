@@ -57,6 +57,10 @@ use crate::checkpoint::{
 use crate::deterministic_replay::{NondeterminismSource, NondeterminismTrace};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId, derive_id};
 use crate::hash_tiers::ContentHash;
+use crate::hostcall_telemetry::{
+    FlowLabel, HostcallResult as TelemetryHostcallResult, HostcallType as TelemetryHostcallType,
+    RecordInput, RecorderConfig, ResourceDelta, TelemetryRecorder,
+};
 use crate::ifc_artifacts::Label;
 use crate::ir_contract::{
     CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
@@ -215,6 +219,34 @@ fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
         HostcallCapabilityClass::Runtime(capability)
     } else {
         HostcallCapabilityClass::Unknown
+    }
+}
+
+/// Map an [`InterpreterError`] to a small stable `u32` for the telemetry
+/// schema's `HostcallResult::Error { code }` field. Codes are an internal
+/// taxonomy (not user-visible) and are intentionally narrow so a new error
+/// variant added later falls into the catch-all bucket rather than silently
+/// reusing an unrelated code.
+fn interpreter_error_telemetry_code(err: &InterpreterError) -> u32 {
+    match err {
+        InterpreterError::CapabilityDenied { .. } => 1,
+        InterpreterError::TypeError { .. } => 2,
+        InterpreterError::RangeError { .. } => 3,
+        InterpreterError::RegisterOutOfBounds { .. } => 4,
+        InterpreterError::PropertyNotFound { .. } => 5,
+        InterpreterError::ObjectNotFound { .. } => 6,
+        InterpreterError::DivisionByZero => 7,
+        InterpreterError::BudgetExhausted { .. } => 8,
+        InterpreterError::MemoryBudgetExceeded { .. } => 9,
+        InterpreterError::UncaughtException { .. } => 10,
+        InterpreterError::ModuleResolutionFailed { .. }
+        | InterpreterError::ModuleReadFailed { .. }
+        | InterpreterError::ModuleParseFailed { .. }
+        | InterpreterError::ModuleLoweringFailed { .. }
+        | InterpreterError::ModuleEvaluationFailed { .. } => 11,
+        InterpreterError::RequireSpecifierNotString { .. }
+        | InterpreterError::ImportSpecifierNotString { .. } => 12,
+        _ => 0,
     }
 }
 
@@ -2330,6 +2362,15 @@ pub struct InterpreterCore {
     /// `capability_denial_total` counter and structured security log reflect
     /// actual denials on the live execution path (not just a schema surface).
     security_observability: RuntimeSecurityObservability,
+    /// Live hostcall telemetry recorder driven from every `dispatch_*_hostcall`
+    /// path (bd-qi3hs). The deterministic timestamp source is the interpreter's
+    /// own instruction counter, so the record sequence is byte-identical across
+    /// replays. Recording is best-effort: backpressure (`ChannelFull`) is
+    /// swallowed silently so a saturated telemetry channel can never block JS
+    /// execution. The recorder is exposed via [`InterpreterCore::hostcall_telemetry`]
+    /// and copied into incident traces via
+    /// [`crate::forensic_replayer::IncidentTrace::with_telemetry_log`].
+    telemetry_recorder: TelemetryRecorder,
     /// Structured events.
     events: Vec<InterpreterEvent>,
     /// Witness sequence counter.
@@ -2464,6 +2505,7 @@ impl InterpreterCore {
             witness_events: Vec::new(),
             hostcall_decisions: Vec::new(),
             security_observability: RuntimeSecurityObservability::new(),
+            telemetry_recorder: TelemetryRecorder::new(RecorderConfig::default()),
             events: Vec::new(),
             witness_seq: 0,
             trace_id,
@@ -9111,6 +9153,19 @@ impl InterpreterCore {
         &mut self,
         cap: &str,
         args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let timestamp_ns = self.instructions_executed;
+        let args_hash = self.hostcall_arguments_hash(args);
+        let outcome = self.dispatch_promise_hostcall_inner(cap, args, module);
+        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        outcome
+    }
+
+    fn dispatch_promise_hostcall_inner(
+        &mut self,
+        cap: &str,
+        args: RegRange,
         _module: Option<&Ir3Module>,
     ) -> Result<Value, InterpreterError> {
         let label = crate::ifc_artifacts::Label::Public;
@@ -10914,6 +10969,18 @@ impl InterpreterCore {
     /// - `number:Number.isNaN` — Number.isNaN() (strict, no coercion)
     /// - `number:Number.isFinite` — Number.isFinite() (strict, no coercion)
     fn dispatch_number_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let timestamp_ns = self.instructions_executed;
+        let args_hash = self.hostcall_arguments_hash(args);
+        let outcome = self.dispatch_number_hostcall_inner(cap, args);
+        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        outcome
+    }
+
+    fn dispatch_number_hostcall_inner(
         &self,
         cap: &str,
         args: RegRange,
@@ -11000,7 +11067,21 @@ impl InterpreterCore {
     /// - `console:warn` — console.warn(...args)
     ///
     /// Console output is captured in `self.console_output` for deterministic replay.
+    /// Every call is also recorded into the hostcall telemetry recorder
+    /// (bd-qi3hs) post-dispatch with a deterministic timestamp.
     fn dispatch_console_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let timestamp_ns = self.instructions_executed;
+        let args_hash = self.hostcall_arguments_hash(args);
+        let outcome = self.dispatch_console_hostcall_inner(cap, args);
+        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        outcome
+    }
+
+    fn dispatch_console_hostcall_inner(
         &mut self,
         cap: &str,
         args: RegRange,
@@ -11048,6 +11129,18 @@ impl InterpreterCore {
     }
 
     fn dispatch_timer_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let timestamp_ns = self.instructions_executed;
+        let args_hash = self.hostcall_arguments_hash(args);
+        let outcome = self.dispatch_timer_hostcall_inner(cap, args);
+        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        outcome
+    }
+
+    fn dispatch_timer_hostcall_inner(
         &mut self,
         cap: &str,
         args: RegRange,
@@ -11177,6 +11270,19 @@ impl InterpreterCore {
     }
 
     fn dispatch_builtin_hostcall(
+        &mut self,
+        cap: &str,
+        args: RegRange,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
+        let timestamp_ns = self.instructions_executed;
+        let args_hash = self.hostcall_arguments_hash(args);
+        let outcome = self.dispatch_builtin_hostcall_inner(cap, args, module);
+        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        outcome
+    }
+
+    fn dispatch_builtin_hostcall_inner(
         &mut self,
         cap: &str,
         args: RegRange,
@@ -20062,6 +20168,90 @@ impl InterpreterCore {
     /// security log) populated by this interpreter on the live execution path.
     pub fn security_observability(&self) -> &RuntimeSecurityObservability {
         &self.security_observability
+    }
+
+    /// Live hostcall telemetry recorder driven from each `dispatch_*_hostcall`
+    /// path (bd-qi3hs). Use this to seed
+    /// [`crate::forensic_replayer::IncidentTrace::telemetry_log`] with the
+    /// real per-execution evidence feed the Probabilistic Guardplane consumes.
+    pub fn hostcall_telemetry(&self) -> &TelemetryRecorder {
+        &self.telemetry_recorder
+    }
+
+    /// Best-effort recording for a single completed hostcall. Backpressure and
+    /// other recorder errors are swallowed so telemetry can never block JS
+    /// execution; the recorder is observability, not enforcement.
+    fn record_hostcall_telemetry(
+        &mut self,
+        cap: &str,
+        timestamp_ns: u64,
+        arguments_hash: ContentHash,
+        outcome: &Result<Value, InterpreterError>,
+    ) {
+        let result_status = match outcome {
+            Ok(_) => TelemetryHostcallResult::Success,
+            Err(err) => TelemetryHostcallResult::Error {
+                code: interpreter_error_telemetry_code(err),
+            },
+        };
+        let extension_id = if self.trace_id.is_empty() {
+            "anonymous-execution".to_string()
+        } else {
+            self.trace_id.clone()
+        };
+        let capability_used = RuntimeCapability::from_tag_str(cap)
+            // Internal-only tags (`promise:*`, `ifc.check_flow`) have no real
+            // capability gate. We surface them under `VmDispatch`, the umbrella
+            // capability every JS execution already requires, so the schema
+            // field stays meaningful instead of being silently dropped.
+            .unwrap_or(RuntimeCapability::VmDispatch);
+        let input = RecordInput {
+            extension_id,
+            hostcall_type: TelemetryHostcallType::from_capability_tag(cap),
+            capability_used,
+            arguments_hash,
+            result_status,
+            // The deterministic timestamp source is the interpreter's
+            // instruction counter (not wall-clock), so wall-time duration is
+            // intentionally zero — every replay produces byte-identical
+            // records.
+            duration_ns: 0,
+            resource_delta: ResourceDelta::default(),
+            flow_label: FlowLabel::new("public", "public"),
+            decision_id: None,
+        };
+        // Recorder errors are intentionally swallowed: telemetry must never
+        // block JS execution. The recorder is observability, not enforcement.
+        let _ = self.telemetry_recorder.record(timestamp_ns, input);
+    }
+
+    /// Hash the argument register values that an in-flight hostcall is about to
+    /// consume, so the recorder schema's `arguments_hash` reflects the real
+    /// inputs without persisting the (potentially sensitive) raw values.
+    /// Failure modes (register out-of-bounds, etc.) collapse to a
+    /// schema-stable "unreadable args" sentinel so telemetry can never break
+    /// the hot path.
+    fn hostcall_arguments_hash(&self, args: RegRange) -> ContentHash {
+        let mut buf: Vec<u8> = Vec::with_capacity((args.count as usize).saturating_mul(32));
+        buf.extend_from_slice(b"hostcall-args/v1\n");
+        buf.extend_from_slice(&args.count.to_le_bytes());
+        for i in 0..args.count {
+            let Some(reg) = args.start.checked_add(i) else {
+                return ContentHash::compute(b"hostcall-args/unreadable");
+            };
+            let reg_index = self.register_base + reg as usize;
+            let Some(value) = self.registers.value.get(reg_index) else {
+                return ContentHash::compute(b"hostcall-args/unreadable");
+            };
+            match serde_json::to_vec(value) {
+                Ok(bytes) => {
+                    buf.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+                    buf.extend_from_slice(&bytes);
+                }
+                Err(_) => return ContentHash::compute(b"hostcall-args/unreadable"),
+            }
+        }
+        ContentHash::compute(&buf)
     }
 
     // -- Structured events -------------------------------------------------

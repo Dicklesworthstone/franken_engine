@@ -143,6 +143,25 @@ impl IncidentTrace {
         buf.extend_from_slice(self.loss_matrix.content_hash().as_bytes());
         ContentHash::compute(&buf)
     }
+
+    /// Return a clone of this trace whose `telemetry_log` is replaced with
+    /// the supplied records.
+    ///
+    /// This is the recommended bridge between
+    /// [`crate::baseline_interpreter::InterpreterCore::hostcall_telemetry`]
+    /// and a recorded incident trace (bd-qi3hs): callers seed an
+    /// [`IncidentTrace`] from posterior/decision/evidence history and then
+    /// feed it the runtime's hostcall records so the Probabilistic Guardplane
+    /// can replay against the real evidence stream rather than the empty
+    /// placeholder that lived here before the recorder was wired in.
+    #[must_use]
+    pub fn with_telemetry_log(
+        mut self,
+        telemetry_log: Vec<HostcallTelemetryRecord>,
+    ) -> Self {
+        self.telemetry_log = telemetry_log;
+        self
+    }
 }
 
 // ---------------------------------------------------------------------------

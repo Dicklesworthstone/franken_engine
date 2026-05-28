@@ -6,17 +6,15 @@
 //! ordered evidence format the Probabilistic Guardplane's Bayesian inference
 //! loop is designed to consume.
 //!
-//! NOT WIRED INTO THE RUNTIME (bd-ygbaj): this is a standalone schema + recorder
-//! surface that callers must drive explicitly via [`TelemetryRecorder::record`];
-//! the runtime interpreter does **not** currently feed it, so it does not by
-//! itself capture "every hostcall". Concretely: the baseline interpreter records
-//! its own hostcall decisions in its `hostcall_decisions` vector (see
-//! `baseline_interpreter`) and never calls [`TelemetryRecorder::record`];
-//! `forensic_replayer`'s `telemetry_log` is left empty; and the named consumer
-//! `guardplane_adapter` reads capability-witness summaries from package metadata
-//! (`capability_witness.*` keys) rather than these records. Wiring the recorder
-//! into the interpreter hostcall dispatch (and populating `forensic_replayer`'s
-//! `telemetry_log`) is tracked as a separate enhancement under `bd-ygbaj.1`.
+//! WIRED INTO THE INTERPRETER (bd-qi3hs): each `dispatch_*_hostcall` path in
+//! [`crate::baseline_interpreter::InterpreterCore`] drives
+//! [`TelemetryRecorder::record`] with the post-dispatch outcome, a SHA-256 hash
+//! of the argument register values, and a deterministic timestamp sourced from
+//! the interpreter's instruction counter (so two replays produce byte-identical
+//! records). The live recorder is exposed via `InterpreterCore::hostcall_telemetry`.
+//! [`crate::forensic_replayer::IncidentTrace::with_telemetry_log`] copies the
+//! recorder's records into an incident trace's `telemetry_log`, giving the
+//! Probabilistic Guardplane the runtime evidence feed it expects.
 //!
 //! Plan reference: Section 10.5, item 3.
 //! Cross-refs: 9A.2 (Probabilistic Guardplane), 9E.9 (normative
@@ -45,6 +43,14 @@ const DEFAULT_CHANNEL_CAPACITY: usize = 8192;
 // ---------------------------------------------------------------------------
 
 /// Enumeration of hostcall categories.
+///
+/// The IO-style variants (Fs*/Network*/ProcessSpawn/EnvRead/MemAlloc/TimerCreate/
+/// CryptoOp/Ipc*) describe syscalls extensions issue against host resources. The
+/// runtime-internal variants (Console/Builtin/Promise) categorise hostcalls the
+/// JavaScript interpreter dispatches against its own builtins (`console.*`,
+/// `Array.prototype.*`, the `Promise` machinery, etc.); they are emitted by
+/// [`InterpreterCore`](crate::baseline_interpreter::InterpreterCore) when the
+/// recorder wired in `bd-qi3hs` captures live hostcall events.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum HostcallType {
     FsRead,
@@ -58,6 +64,12 @@ pub enum HostcallType {
     CryptoOp,
     IpcSend,
     IpcRecv,
+    /// `console.log/error/warn/info` and related output sinks.
+    Console,
+    /// Built-in operations on JS values (`Array.prototype.*`, `Number.*`, etc.).
+    Builtin,
+    /// Internal promise/microtask machinery (`promise:resolve`, `promise:all`, …).
+    Promise,
 }
 
 impl fmt::Display for HostcallType {
@@ -74,8 +86,48 @@ impl fmt::Display for HostcallType {
             Self::CryptoOp => "crypto-op",
             Self::IpcSend => "ipc-send",
             Self::IpcRecv => "ipc-recv",
+            Self::Console => "console",
+            Self::Builtin => "builtin",
+            Self::Promise => "promise",
         };
         f.write_str(s)
+    }
+}
+
+impl HostcallType {
+    /// Categorise a runtime capability tag (e.g. `"console:log"`, `"promise:all"`,
+    /// `"fs:read"`) into the most specific [`HostcallType`] available, defaulting
+    /// to [`HostcallType::Builtin`] for unrecognised tags so the runtime never
+    /// drops a record on schema mismatch alone.
+    pub fn from_capability_tag(tag: &str) -> Self {
+        if tag.starts_with("console:") {
+            Self::Console
+        } else if tag.starts_with("timer:") {
+            Self::TimerCreate
+        } else if tag.starts_with("promise:") {
+            Self::Promise
+        } else if tag.starts_with("number:") || tag.starts_with("builtin:") {
+            Self::Builtin
+        } else if tag == "fs:read" || tag == "fs.read" || tag == "fs_read" {
+            Self::FsRead
+        } else if tag == "fs:write" || tag == "fs.write" || tag == "fs_write" {
+            Self::FsWrite
+        } else if tag.starts_with("net:") || tag.starts_with("network") {
+            Self::NetworkSend
+        } else if tag == "process_spawn" {
+            Self::ProcessSpawn
+        } else if tag == "env_read" {
+            Self::EnvRead
+        } else if tag == "heap_allocate" {
+            Self::MemAlloc
+        } else if tag == "ifc.check_flow" {
+            Self::Builtin
+        } else if tag.starts_with("module:") || tag.starts_with("module.") || tag == "module_load"
+        {
+            Self::Builtin
+        } else {
+            Self::Builtin
+        }
     }
 }
 
@@ -799,6 +851,51 @@ mod tests {
         assert_eq!(HostcallType::CryptoOp.to_string(), "crypto-op");
         assert_eq!(HostcallType::IpcSend.to_string(), "ipc-send");
         assert_eq!(HostcallType::IpcRecv.to_string(), "ipc-recv");
+        assert_eq!(HostcallType::Console.to_string(), "console");
+        assert_eq!(HostcallType::Builtin.to_string(), "builtin");
+        assert_eq!(HostcallType::Promise.to_string(), "promise");
+    }
+
+    #[test]
+    fn hostcall_type_from_capability_tag() {
+        assert_eq!(
+            HostcallType::from_capability_tag("console:log"),
+            HostcallType::Console
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("timer:setTimeout"),
+            HostcallType::TimerCreate
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("promise:all"),
+            HostcallType::Promise
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("number:parse_int"),
+            HostcallType::Builtin
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("builtin:ArrayPrototypePush"),
+            HostcallType::Builtin
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("fs:read"),
+            HostcallType::FsRead
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("net:fetch"),
+            HostcallType::NetworkSend
+        );
+        // Unknown / runtime-internal tags fall back to Builtin rather than
+        // dropping the record.
+        assert_eq!(
+            HostcallType::from_capability_tag("ifc.check_flow"),
+            HostcallType::Builtin
+        );
+        assert_eq!(
+            HostcallType::from_capability_tag("mystery"),
+            HostcallType::Builtin
+        );
     }
 
     #[test]
@@ -815,6 +912,9 @@ mod tests {
             HostcallType::CryptoOp,
             HostcallType::IpcSend,
             HostcallType::IpcRecv,
+            HostcallType::Console,
+            HostcallType::Builtin,
+            HostcallType::Promise,
         ] {
             // SAFETY: HostcallType derives Serialize and has no non-serializable fields.
             // to_string on derived Serialize types only fails on writer errors (impossible with String).

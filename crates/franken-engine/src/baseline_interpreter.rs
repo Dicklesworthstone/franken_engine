@@ -217,9 +217,50 @@ enum HostcallCapabilityClass {
     Unknown,
 }
 
+/// Closed allowlist of `promise:*` sub-capabilities recognised by
+/// [`InterpreterCore::dispatch_promise_hostcall_inner`]. Any other
+/// `promise:*` tag is classified [`HostcallCapabilityClass::Unknown`]
+/// (fail-closed) instead of [`HostcallCapabilityClass::InternalAllowed`].
+///
+/// The audit (bd-hxukn) showed that the previous prefix-match
+/// (`tag.starts_with("promise:")`) let a malicious IR3 module write
+/// attacker-chosen strings into `hostcall_decisions` and `emit_witness`
+/// payloads — every entry tagged `allowed: true`, polluting the signed
+/// evidence chain with capabilities the runtime had no concept of and
+/// inflating witness-log entries to arbitrary length.
+const KNOWN_PROMISE_SUBCAPS: &[&str] = &[
+    "promise:constructor",
+    "promise:resolve",
+    "promise:reject",
+    "promise:then",
+    "promise:catch",
+    "promise:finally",
+    "promise:all",
+    "promise:race",
+    "promise:allSettled",
+    "promise:any",
+    "promise:create",
+];
+
+/// Maximum length of a `capability_tag` byte slice that the witness /
+/// decision log will record verbatim. Tags longer than this are still
+/// gate-decided fail-closed (they cannot satisfy any known classifier),
+/// but the recorded payload is truncated with a marker so a malicious
+/// extension cannot inflate the audit log to arbitrary size via a single
+/// long `HostCall` argument (bd-hxukn defense-in-depth).
+const CAPABILITY_TAG_RECORD_BYTE_CAP: usize = 256;
+
 fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
     if tag.starts_with("promise:") {
-        HostcallCapabilityClass::InternalAllowed
+        if KNOWN_PROMISE_SUBCAPS.iter().any(|known| *known == tag) {
+            HostcallCapabilityClass::InternalAllowed
+        } else {
+            // bd-hxukn: refuse unknown `promise:*` tags at the gate
+            // instead of treating them as `InternalAllowed`. Unknown
+            // sub-capabilities now flow through `Unknown` and fail
+            // closed at the gate.
+            HostcallCapabilityClass::Unknown
+        }
     } else if tag == "ifc.check_flow" {
         HostcallCapabilityClass::InternalAllowed
     } else if let Some(capability) = RuntimeCapability::from_tag_str(tag) {
@@ -227,6 +268,31 @@ fn classify_hostcall_capability(tag: &str) -> HostcallCapabilityClass {
     } else {
         HostcallCapabilityClass::Unknown
     }
+}
+
+/// Borrow `tag` if it fits within [`CAPABILITY_TAG_RECORD_BYTE_CAP`];
+/// otherwise return a `Cow::Owned` containing the first
+/// `CAPABILITY_TAG_RECORD_BYTE_CAP - marker.len()` bytes followed by a
+/// `<TRUNCATED>` marker. Used at every recording site to keep
+/// attacker-controlled tags from inflating the witness or decision log
+/// (bd-hxukn).
+fn recordable_capability_tag(tag: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if tag.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP {
+        return Cow::Borrowed(tag);
+    }
+    const MARKER: &str = "<TRUNCATED>";
+    let prefix_len = CAPABILITY_TAG_RECORD_BYTE_CAP.saturating_sub(MARKER.len());
+    // Walk back to the nearest UTF-8 char boundary so the prefix stays
+    // a valid `&str` slice.
+    let mut cut = prefix_len.min(tag.len());
+    while cut > 0 && !tag.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    let mut out = String::with_capacity(cut + MARKER.len());
+    out.push_str(&tag[..cut]);
+    out.push_str(MARKER);
+    Cow::Owned(out)
 }
 
 /// Map an [`InterpreterError`] to a small stable `u32` for the telemetry
@@ -273,14 +339,19 @@ fn check_hostcall_capability_gate(
         HostcallCapabilityClass::Unknown => true, // fail-closed on unknown tags
     };
 
+    // bd-hxukn: cap the tag length at the recording sites so an attacker
+    // who controls the `HostCall` capability string cannot inflate the
+    // witness or decision log with a multi-megabyte payload per call.
+    let recordable_tag = recordable_capability_tag(capability_tag);
+
     if capability_denied {
         interpreter.emit_witness(
             WitnessEventKind::CapabilityChecked,
-            Some(&format!("denied:{}", capability_tag)),
+            Some(&format!("denied:{}", recordable_tag)),
         );
         interpreter.hostcall_decisions.push(HostcallDecisionRecord {
             seq: interpreter.hostcall_decisions.len() as u64,
-            capability: CapabilityTag(capability_tag.to_string()),
+            capability: CapabilityTag(recordable_tag.clone().into_owned()),
             allowed: false,
             instruction_index,
         });
@@ -293,21 +364,21 @@ fn check_hostcall_capability_gate(
         interpreter.security_observability.record_capability_denial(
             denial_context,
             CapabilityDenialReason::InsufficientAuthority,
-            capability_tag,
+            recordable_tag.as_ref(),
         );
         return Err(InterpreterError::CapabilityDenied {
-            capability: capability_tag.to_string(),
+            capability: recordable_tag.into_owned(),
         });
     }
 
     // Record successful capability grant
     interpreter.emit_witness(
         WitnessEventKind::CapabilityChecked,
-        Some(&format!("granted:{}", capability_tag)),
+        Some(&format!("granted:{}", recordable_tag)),
     );
     interpreter.hostcall_decisions.push(HostcallDecisionRecord {
         seq: interpreter.hostcall_decisions.len() as u64,
-        capability: CapabilityTag(capability_tag.to_string()),
+        capability: CapabilityTag(recordable_tag.into_owned()),
         allowed: true,
         instruction_index,
     });
@@ -22178,6 +22249,115 @@ mod module_resolution_security_tests {
             "expected post-canonical non-regular-file rejection, got: {err:?}"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod hostcall_capability_classification_tests {
+    use super::{
+        CAPABILITY_TAG_RECORD_BYTE_CAP, HostcallCapabilityClass, KNOWN_PROMISE_SUBCAPS,
+        classify_hostcall_capability, recordable_capability_tag,
+    };
+
+    /// bd-hxukn: every known `promise:*` sub-capability — the ones the
+    /// dispatch table actually understands — must classify as
+    /// `InternalAllowed`. Anything else `promise:*` must fall through
+    /// to `Unknown`, even if it shares the prefix.
+    #[test]
+    fn known_promise_subcaps_remain_internal_allowed() {
+        for known in KNOWN_PROMISE_SUBCAPS {
+            assert_eq!(
+                classify_hostcall_capability(known),
+                HostcallCapabilityClass::InternalAllowed,
+                "{known} should still classify as InternalAllowed",
+            );
+        }
+    }
+
+    /// bd-hxukn: unknown `promise:*` sub-capabilities must classify as
+    /// `Unknown` (fail-closed at the gate) so an attacker who emits
+    /// `HostCall { capability: CapabilityTag("promise:steal_admin_key") }`
+    /// cannot write attacker-chosen strings into `hostcall_decisions`
+    /// tagged `allowed: true`.
+    #[test]
+    fn unknown_promise_subcaps_fail_closed() {
+        for attacker in [
+            "promise:steal_admin_key",
+            "promise:",
+            "promise:Resolve", // case-sensitive — "promise:resolve" is the only allowed form
+            "promise:resolve ", // trailing space — exact match required
+            "promise: resolve",
+            "promise:resolve_x",
+        ] {
+            assert_eq!(
+                classify_hostcall_capability(attacker),
+                HostcallCapabilityClass::Unknown,
+                "{attacker} must classify as Unknown so the gate fails closed",
+            );
+        }
+    }
+
+    /// bd-hxukn: `ifc.check_flow` and the runtime-capability surface keep
+    /// their prior classifications.
+    #[test]
+    fn non_promise_classifications_unchanged() {
+        assert_eq!(
+            classify_hostcall_capability("ifc.check_flow"),
+            HostcallCapabilityClass::InternalAllowed,
+        );
+        // `unknown:cap` is intentionally not a `RuntimeCapability` tag.
+        assert_eq!(
+            classify_hostcall_capability("definitely-not-a-known-cap-xyz"),
+            HostcallCapabilityClass::Unknown,
+        );
+    }
+
+    /// bd-hxukn: short tags pass through `recordable_capability_tag`
+    /// untouched (no allocation, returned as `Cow::Borrowed`).
+    #[test]
+    fn recordable_tag_passthrough_for_short_tags() {
+        let tag = "promise:resolve";
+        let rec = recordable_capability_tag(tag);
+        assert_eq!(rec.as_ref(), tag);
+        assert!(matches!(rec, std::borrow::Cow::Borrowed(_)));
+    }
+
+    /// bd-hxukn: tags longer than `CAPABILITY_TAG_RECORD_BYTE_CAP` are
+    /// truncated with a `<TRUNCATED>` marker. Verifies the output stays
+    /// within the cap so the witness-log can't be inflated by a single
+    /// attacker-controlled call.
+    #[test]
+    fn recordable_tag_truncates_overlong_tags() {
+        let attacker = "promise:".to_string() + &"X".repeat(CAPABILITY_TAG_RECORD_BYTE_CAP * 64);
+        let rec = recordable_capability_tag(&attacker);
+        assert!(
+            rec.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP,
+            "recorded payload must stay within cap, got {} bytes",
+            rec.len()
+        );
+        assert!(
+            rec.ends_with("<TRUNCATED>"),
+            "expected truncation marker, got: {rec}",
+        );
+        assert!(matches!(rec, std::borrow::Cow::Owned(_)));
+    }
+
+    /// bd-hxukn: the truncation step must not split a multi-byte UTF-8
+    /// codepoint mid-sequence; doing so would produce an invalid `&str`
+    /// slice and panic. Use a tag built entirely from a 3-byte codepoint
+    /// to surface any boundary-walk regression.
+    #[test]
+    fn recordable_tag_truncation_respects_utf8_boundaries() {
+        // U+1234 (ETHIOPIC SYLLABLE SEE) is 3 bytes in UTF-8 (E1 88 B4).
+        let codepoint = '\u{1234}';
+        let attacker: String = std::iter::repeat(codepoint)
+            .take(CAPABILITY_TAG_RECORD_BYTE_CAP * 4)
+            .collect();
+        let rec = recordable_capability_tag(&attacker);
+        // Must still be valid UTF-8 (the assertion is implicit — &str
+        // can only exist if it is).
+        assert!(rec.ends_with("<TRUNCATED>"));
+        assert!(rec.len() <= CAPABILITY_TAG_RECORD_BYTE_CAP);
     }
 }
 

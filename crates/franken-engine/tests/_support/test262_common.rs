@@ -37,6 +37,63 @@ fn matches_expected_error_type(error: &EvalError, error_type: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Shared round-trip oracle (bd-wrmld FIND-22)
+//
+// Audit `bd-85qfs` FIND-22: harnesses that have a JSON-round-trip oracle
+// reimplement the same 4-line check inline. This helper centralises that
+// check so:
+//
+// 1. A `report` round-trips through serde_json with `PartialEq`-equality.
+// 2. The report's `schema_version` matches the canonical pin the harness
+//    claims to follow (caller passes both sides; the helper asserts they
+//    are byte-equal).
+//
+// FIND-10 (`bd-rqev5`) is the follow-up that migrates the 3+ existing
+// round-trip oracles to call this helper and adds the missing 6+ harnesses
+// — out of scope for this commit (it's a CARGO-touching migration that
+// belongs in a sibling bead).
+// ---------------------------------------------------------------------------
+
+/// Assert that a conformance `report` round-trips through `serde_json` and
+/// carries the expected `schema_version` pin.
+///
+/// `actual_schema_version` is the version string baked into the report
+/// (typically `report.schema_version` or a wrapped equivalent). The helper
+/// is generic over the report type so every harness's report can call into
+/// the same oracle.
+///
+/// Panics — i.e. fails the test — when any of the following holds:
+///
+/// 1. `report` does not serialize via `serde_json::to_string`.
+/// 2. The serialized JSON does not deserialize back into `R`.
+/// 3. The round-tripped value is not `PartialEq` equal to the original.
+/// 4. `actual_schema_version` does not byte-equal `expected_schema_version`.
+///
+/// Use this helper as the sole load-bearing round-trip oracle in every
+/// `*_test262_conformance.rs` harness; sibling beads tracked under
+/// FIND-10 (`bd-rqev5`) carry the per-harness migration.
+pub fn assert_report_round_trips<R>(
+    report: &R,
+    expected_schema_version: &str,
+    actual_schema_version: &str,
+) where
+    R: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+{
+    let json = serde_json::to_string(report)
+        .expect("conformance report must serialise via serde_json::to_string");
+    let back: R = serde_json::from_str(&json)
+        .expect("conformance report must deserialise back into its report type");
+    assert_eq!(
+        report, &back,
+        "conformance report must round-trip through serde_json without loss"
+    );
+    assert_eq!(
+        actual_schema_version, expected_schema_version,
+        "conformance report schema_version must match the canonical pin"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Common Test262 Enums and Types
 // ---------------------------------------------------------------------------
 
@@ -51,6 +108,20 @@ pub enum RequirementLevel {
     Should,
     /// MAY clauses - optional behavior
     May,
+}
+
+impl std::fmt::Display for RequirementLevel {
+    /// Renders as the upper-case RFC-2119-style tag (`MUST` / `SHOULD` /
+    /// `MAY`) so per-test log lines stay grep-friendly after harnesses
+    /// migrate away from inline string literals (bd-cd0px).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let tag = match self {
+            RequirementLevel::Must => "MUST",
+            RequirementLevel::Should => "SHOULD",
+            RequirementLevel::May => "MAY",
+        };
+        f.write_str(tag)
+    }
 }
 
 /// Expected execution result for Test262 test cases.

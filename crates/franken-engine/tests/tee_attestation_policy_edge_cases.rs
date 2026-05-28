@@ -10,7 +10,12 @@
     clippy::needless_borrows_for_generic_args,
     clippy::too_many_arguments,
     clippy::identity_op,
-    clippy::manual_abs_diff
+    clippy::manual_abs_diff,
+    // Edge-case tests exercise the structural-only `evaluate_quote` surface
+    // directly (asserting it accepts/rejects on the structural axes alone).
+    // The deprecation lives at the function (bd-f67eb) to nudge new callers
+    // toward `evaluate_quote_attested`; these tests are the audited exception.
+    deprecated
 )]
 
 use std::collections::BTreeMap;

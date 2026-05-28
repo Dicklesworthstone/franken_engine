@@ -857,7 +857,11 @@ fn verify_attestation_layer(receipt: &OptReceipt, input: &AttestationLayerInput)
         ),
     }
 
-    match input.policy.evaluate_quote(
+    // Use the pub(crate) structural alias so this audited pairing with
+    // `verify_quote_attestation` below does not trip the `evaluate_quote`
+    // deprecation warning (bd-f67eb): the receipt-verifier path is one of
+    // exactly two safe callers of the structural-only check.
+    match input.policy.evaluate_quote_structural(
         &input.policy_quote,
         input.decision_impact,
         input.runtime_epoch,

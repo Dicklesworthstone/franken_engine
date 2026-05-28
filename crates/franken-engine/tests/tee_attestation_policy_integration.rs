@@ -12,7 +12,11 @@
     clippy::needless_borrows_for_generic_args,
     clippy::too_many_arguments,
     clippy::identity_op,
-    clippy::manual_abs_diff
+    clippy::manual_abs_diff,
+    // Integration tests exercise the structural-only `evaluate_quote`
+    // surface directly. Deprecation (bd-f67eb) lives at the function to
+    // nudge new pub callers; these tests are the audited exception.
+    deprecated
 )]
 
 use std::collections::BTreeMap;

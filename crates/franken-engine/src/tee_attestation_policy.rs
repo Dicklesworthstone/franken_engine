@@ -542,8 +542,57 @@ impl TeeAttestationPolicy {
         Ok(())
     }
 
-    /// Validate one quote against this policy at runtime epoch.
+    /// Validate one quote against this policy at runtime epoch — **structural
+    /// checks only, not a cryptographic admission decision**.
+    ///
+    /// # ⚠ Security note (bd-f67eb)
+    ///
+    /// This function checks ONLY:
+    /// - The quote names a measurement digest the policy has approved.
+    /// - The quote names a trust root the policy knows about and that is
+    ///   still active for `runtime_epoch`.
+    /// - The quote's `quote_age_secs` is within the impact-tier window.
+    /// - The quote's revocation observations don't flag a revoke.
+    ///
+    /// It does **not** verify the quote signature. A forged quote that
+    /// happens to echo an approved digest + a known `trust_root_id` will
+    /// pass every check here. The cryptographic binding lives in
+    /// [`Self::verify_quote_attestation`]; the safe composition that
+    /// chains both checks is [`Self::evaluate_quote_attested`].
+    ///
+    /// **Always prefer [`Self::evaluate_quote_attested`]** unless you are
+    /// the receipt-verifier pipeline that explicitly calls
+    /// `verify_quote_attestation` right after this function on the same
+    /// quote — that pairing is the only safe way to use `evaluate_quote`
+    /// directly. Any new pub caller of this function is an audit
+    /// regression (bd-f67eb).
+    #[deprecated(
+        note = "evaluate_quote performs structural checks only and does NOT verify the \
+                quote signature. Use evaluate_quote_attested for the safe \
+                evaluate-then-verify composition. If you genuinely need only the \
+                structural check (the receipt-verifier pipeline does, but you \
+                probably don't), allow this deprecation locally with a comment \
+                explaining why; the deprecation guarantees a downstream consumer \
+                cannot pick it up without seeing the warning. See bd-f67eb."
+    )]
     pub fn evaluate_quote(
+        &self,
+        quote: &AttestationQuote,
+        impact: DecisionImpact,
+        runtime_epoch: SecurityEpoch,
+    ) -> Result<(), TeeAttestationPolicyError> {
+        self.evaluate_quote_structural(quote, impact, runtime_epoch)
+    }
+
+    /// Internal alias for [`Self::evaluate_quote`] that does not carry the
+    /// deprecation warning. Used by the receipt-verifier pipeline and by
+    /// [`Self::evaluate_quote_attested`] internally — both call sites pair
+    /// the structural check with [`Self::verify_quote_attestation`] in the
+    /// same expression, so they are not the audit hazard the deprecation
+    /// is guarding against. Keeping the structural-only check in a
+    /// `pub(crate)` companion lets the internal callers stop suppressing
+    /// the deprecation warning at every call site (bd-f67eb).
+    pub(crate) fn evaluate_quote_structural(
         &self,
         quote: &AttestationQuote,
         impact: DecisionImpact,
@@ -684,7 +733,9 @@ impl TeeAttestationPolicy {
         impact: DecisionImpact,
         runtime_epoch: SecurityEpoch,
     ) -> Result<(), TeeAttestationPolicyError> {
-        self.evaluate_quote(quote, impact, runtime_epoch)?;
+        // Use the pub(crate) structural alias so this internal pairing does
+        // not trip the `evaluate_quote` deprecation warning (bd-f67eb).
+        self.evaluate_quote_structural(quote, impact, runtime_epoch)?;
         self.verify_quote_attestation(quote, signature, runtime_epoch)
     }
 
@@ -1910,6 +1961,7 @@ impl MockTeeProvider {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
+#[allow(deprecated)] // tests exercise the deprecated `evaluate_quote` surface on purpose (bd-f67eb).
 mod tests {
     use super::*;
 

@@ -127,8 +127,7 @@ pub mod counterfactual_generation_guard;
 pub mod counterfactual_intervention_planner;
 pub mod counterfactual_replay_engine;
 pub mod cross_arch_reproducibility;
-// TODO: cross_platform_reproducibility has internal dependency issues
-// pub mod cross_platform_reproducibility;
+pub mod cross_platform_reproducibility;
 pub mod cross_repo_contract;
 pub mod cross_workload_transfer;
 pub mod cut_line_automation;

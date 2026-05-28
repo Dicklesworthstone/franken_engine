@@ -163,12 +163,25 @@ impl Default for ReproducibilityTestConfig {
 }
 
 /// Cross-platform reproducibility test harness.
-#[derive(Debug)]
 pub struct CrossPlatformReproducibilityTester {
     /// Worker registry for cross-platform execution.
     worker_registry: RchWorkerRegistry,
     /// Test configuration.
     config: ReproducibilityTestConfig,
+}
+
+// `RchWorkerRegistry` holds `Box<dyn WorkerEnvCapture>` trait objects and is not
+// `Debug`, so this struct cannot `#[derive(Debug)]` (the "internal dependency
+// issue" that previously kept the module disabled, bd-1lw7r.7). Provide a manual
+// `Debug` that elides the registry's opaque internals while keeping the config
+// observable.
+impl std::fmt::Debug for CrossPlatformReproducibilityTester {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CrossPlatformReproducibilityTester")
+            .field("worker_registry", &"<RchWorkerRegistry>")
+            .field("config", &self.config)
+            .finish()
+    }
 }
 
 impl CrossPlatformReproducibilityTester {
@@ -199,8 +212,11 @@ impl CrossPlatformReproducibilityTester {
         let mut platform_results = BTreeMap::new();
         let mut divergences = Vec::new();
 
-        // Execute test on each platform
-        for &platform in &self.config.target_platforms {
+        // Execute test on each platform. Snapshot the target list first so the
+        // immutable borrow of `self.config` ends before the `&mut self` call to
+        // `execute_on_platform` (WorkerPlatform is `Copy`).
+        let target_platforms: Vec<WorkerPlatform> = self.config.target_platforms.clone();
+        for platform in target_platforms {
             let result = self.execute_on_platform(&test_input, platform)?;
             platform_results.insert(platform, result);
         }

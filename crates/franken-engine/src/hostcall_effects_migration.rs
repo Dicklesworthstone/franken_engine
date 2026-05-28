@@ -222,13 +222,37 @@ pub struct ModuleExports {
 #[derive(Debug)]
 pub struct FullCapsHandler;
 
+impl FullCapsHandler {
+    /// Whether this handler dispatches side-effecting hostcalls
+    /// (`fs:read` / `fs:write` / `network`) to the engine's real hostcall
+    /// implementations.
+    ///
+    /// Returns `false` today (bd-1lw7r.11): despite providing the full
+    /// capability set, [`FullCapsHandler::handle`] SIMULATES these effects —
+    /// `fs:read` returns a canned `"simulated content of {path}"` string,
+    /// `fs:write` discards the write, and `network` returns a hardcoded
+    /// response. A future change that routes these to the real
+    /// `dispatch_*_hostcall` surface (honoring the capability gate,
+    /// deterministic-replay recording, and IFC labeling) must flip this to
+    /// `true` and update the regression test that pins the simulated bodies.
+    pub const fn dispatches_real_hostcalls() -> bool {
+        false
+    }
+}
+
 impl Handler for FullCapsHandler {
     fn can_handle(&self, effect_name: &str) -> bool {
         effect_name.starts_with("hostcall:")
     }
 
     fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
-        // FullCaps allows all hostcalls - dispatch to actual implementation
+        // FullCaps is permitted to invoke all hostcalls. FIXME (bd-1lw7r.11):
+        // the side-effecting hostcalls below are SIMULATED, not dispatched to
+        // the engine's real hostcall implementations — `fs:read` returns a
+        // canned string, `fs:write` discards the write, and `network` returns a
+        // hardcoded response, so callers of the Full profile receive FAKE data
+        // while this handler claims full capability. See
+        // `FullCapsHandler::dispatches_real_hostcalls()`.
         match effect.effect_name() {
             "hostcall:console" => {
                 if let Ok(params) = effect.parameters().downcast::<(String, Vec<String>)>() {
@@ -260,7 +284,8 @@ impl Handler for FullCapsHandler {
                     .downcast::<(FsOperation, String, Option<Vec<u8>>)>()
                 {
                     let (_, path, _) = *params;
-                    // Simulate file read
+                    // FIXME (bd-1lw7r.11): SIMULATED — returns a canned string
+                    // instead of reading `path` via the real fs hostcall.
                     let content = format!("simulated content of {}", path).into_bytes();
                     Ok(Some(EffectResult::new(Some(content))))
                 } else {
@@ -277,7 +302,8 @@ impl Handler for FullCapsHandler {
                     .downcast::<(FsOperation, String, Option<Vec<u8>>)>()
                 {
                     let (_, path, content) = *params;
-                    // Simulate file write
+                    // FIXME (bd-1lw7r.11): SIMULATED — discards the write (no
+                    // real fs hostcall); returns an empty buffer.
                     println!(
                         "Writing {} bytes to {}",
                         content.as_ref().map_or(0, |c| c.len()),
@@ -299,7 +325,8 @@ impl Handler for FullCapsHandler {
                         .downcast::<(String, String, Vec<(String, String)>, Option<Vec<u8>>)>()
                 {
                     let (url, method, _, _) = *params;
-                    // Simulate network request
+                    // FIXME (bd-1lw7r.11): SIMULATED — returns a hardcoded
+                    // response instead of performing/routing the real request.
                     let response = NetworkResponse {
                         status: 200,
                         headers: vec![("content-type".to_string(), "application/json".to_string())],
@@ -715,6 +742,61 @@ mod tests {
         let result = handler.handle(&effect);
         assert!(result.is_ok());
         assert!(result.unwrap().is_some());
+    }
+
+    #[test]
+    fn full_caps_fs_network_are_simulated_not_dispatched_bd_1lw7r_11() {
+        // bd-1lw7r.11: FullCapsHandler SIMULATES side-effecting hostcalls
+        // instead of dispatching them to the real hostcall surface. Pin the
+        // current (fake) behavior so future real-dispatch wiring is forced to
+        // flip the helper and update these assertions.
+        assert!(
+            !FullCapsHandler::dispatches_real_hostcalls(),
+            "FullCapsHandler must report false until fs/network dispatch is wired (bd-1lw7r.11)"
+        );
+
+        let handler = FullCapsHandler;
+
+        // fs:read returns a canned "simulated content of {path}" buffer rather
+        // than reading the file.
+        let fs_effect = FsHostcallEffect {
+            operation: FsOperation::Read,
+            path: "/etc/hostname".to_string(),
+            content: None,
+        };
+        let fs_bytes = handler
+            .handle(&fs_effect)
+            .expect("fs:read is handled")
+            .expect("fs:read produces a result")
+            .downcast::<Option<Vec<u8>>>()
+            .expect("fs:read result is Option<Vec<u8>>")
+            .expect("fs:read returns Some bytes");
+        assert_eq!(
+            String::from_utf8(fs_bytes).unwrap(),
+            "simulated content of /etc/hostname",
+            "fs:read is still simulated (bd-1lw7r.11)"
+        );
+
+        // network returns a hardcoded simulated response body rather than
+        // performing the request.
+        let net_effect = NetworkHostcallEffect {
+            url: "https://example.com".to_string(),
+            method: "GET".to_string(),
+            headers: Vec::new(),
+            body: None,
+        };
+        let net_response = handler
+            .handle(&net_effect)
+            .expect("network is handled")
+            .expect("network produces a result")
+            .downcast::<NetworkResponse>()
+            .expect("network result is a NetworkResponse");
+        assert!(
+            String::from_utf8(net_response.body)
+                .unwrap()
+                .contains("simulated response"),
+            "network is still simulated (bd-1lw7r.11)"
+        );
     }
 
     #[test]

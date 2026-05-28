@@ -719,6 +719,18 @@ mod tests {
         let harness = IteratorConformanceHarness::new();
         assert!(!harness.tests.is_empty());
 
+        // bd-ab9ty (follow-up to bd-s2ubw / FIND-15): every case must
+        // declare its ES2020 § anchor; without this assertion an
+        // empty/missing tag can land silently and the spec-section
+        // coverage report under-counts.
+        for test in &harness.tests {
+            assert!(
+                !test.es2020_section.is_empty(),
+                "case es2020_section must be non-empty (case id: {})",
+                test.id
+            );
+        }
+
         // Verify we have tests for all major categories
         let categories: std::collections::HashSet<_> =
             harness.tests.iter().map(|t| t.category.clone()).collect();

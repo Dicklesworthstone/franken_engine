@@ -533,8 +533,7 @@ mod tests {
             .iter()
             .map(|(id, _)| *id)
             .collect();
-        let all_error_ids: BTreeSet<&str> =
-            error_cases.iter().map(|tc| tc.id.as_str()).collect();
+        let all_error_ids: BTreeSet<&str> = error_cases.iter().map(|tc| tc.id.as_str()).collect();
         let actually_rejected: BTreeSet<&str> = error_cases
             .iter()
             .filter(|tc| {
@@ -547,8 +546,7 @@ mod tests {
             .collect();
 
         // Invariant 1: every waived id refers to an existing ErrorPaths case.
-        let stale_waivers: Vec<&str> =
-            waived.difference(&all_error_ids).copied().collect();
+        let stale_waivers: Vec<&str> = waived.difference(&all_error_ids).copied().collect();
         assert!(
             stale_waivers.is_empty(),
             "bd-t2cgg: KNOWN_FAILING_ERROR_REJECTS references ids not present in the ErrorPaths set — prune them: {stale_waivers:?}"
@@ -569,10 +567,7 @@ mod tests {
         // Invariant 3 (PROGRESS): a waived case now rejects — promote it
         // out of KNOWN_FAILING_ERROR_REJECTS so the gap inventory stays
         // accurate and the cited bd-no788 row can be flipped to RESOLVED.
-        let gap_closed: Vec<&str> = waived
-            .intersection(&actually_rejected)
-            .copied()
-            .collect();
+        let gap_closed: Vec<&str> = waived.intersection(&actually_rejected).copied().collect();
         assert!(
             gap_closed.is_empty(),
             "bd-t2cgg PROGRESS: the engine now rejects waived malformed sources — remove these ids from KNOWN_FAILING_ERROR_REJECTS and flip the bd-no788 entry: {gap_closed:?}"

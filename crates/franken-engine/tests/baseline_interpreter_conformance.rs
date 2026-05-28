@@ -11,7 +11,8 @@ use frankenengine_engine::ir_contract::{
 };
 
 const BASELINE_INTERPRETER: &str = include_str!("../src/baseline_interpreter.rs");
-const DISPATCH_ARMS_GOLDEN: &str = include_str!("golden_vectors/baseline_dispatch_arms.txt");
+// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
+const DISPATCH_ARMS_GOLDEN: &str = include_str!("golden/wire_vectors/baseline_dispatch_arms.txt");
 
 fn render_dispatch_arm_snapshot(source: &str) -> String {
     let mut capabilities = Vec::new();

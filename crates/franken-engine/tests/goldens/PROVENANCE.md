@@ -16,6 +16,7 @@ subdirectories migrated into `tests/golden/<feature>/`:
 | `tests/goldens/react_compilation/`       | `tests/golden/react_compilation/`        | bd-ub6x8.6.2 |
 | `tests/goldens/benchmark_diagnostic/`    | `tests/golden/benchmark_diagnostic/`     | bd-ub6x8.6.2 |
 | `tests/golden_tests/` (sibling root)     | `tests/golden/cli/`                      | bd-ub6x8.6.2 |
+| `tests/golden_vectors/` (sibling root)   | `tests/golden/wire_vectors/`             | bd-ub6x8.6.3 |
 
 The remaining two subdirectories below stay here until their owning tests
 are no longer held exclusively by another agent (file reservations are

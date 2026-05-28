@@ -17,7 +17,8 @@ use serde::Serialize;
 #[path = "_support/golden_diag.rs"]
 mod golden_diag;
 
-const GOLDEN_FILE: &str = "tests/golden_vectors/frir_artifact_v1.json";
+// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
+const GOLDEN_FILE: &str = "tests/golden/wire_vectors/frir_artifact_v1.json";
 
 #[derive(Debug, Serialize)]
 struct FrirArtifactGoldenSnapshot {

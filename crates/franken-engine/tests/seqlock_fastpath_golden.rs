@@ -3,7 +3,8 @@
 use frankenengine_engine::seqlock_fastpath::{RetryBudgetPolicy, SnapshotFastPath};
 use serde::Serialize;
 
-const EXPECTED: &str = include_str!("golden_vectors/seqlock_fastpath_recovery_surface.json");
+// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
+const EXPECTED: &str = include_str!("golden/wire_vectors/seqlock_fastpath_recovery_surface.json");
 
 #[derive(Debug, Serialize)]
 struct SeqlockFastPathSnapshot<T> {

@@ -1,8 +1,8 @@
-# Golden File Provenance — `tests/golden_vectors/` (versioned wire-format)
+# Golden File Provenance — `tests/golden/wire_vectors/` (versioned wire-format)
 
 Companion to the canonical inventory at `tests/golden/PROVENANCE.md` and the
 canonical-location decision in
-[docs/operator-gates/GOLDEN_DIRECTORIES_RATIONALIZATION.md](../../../../docs/operator-gates/GOLDEN_DIRECTORIES_RATIONALIZATION.md).
+[docs/operator-gates/GOLDEN_DIRECTORIES_RATIONALIZATION.md](../../../../../docs/operator-gates/GOLDEN_DIRECTORIES_RATIONALIZATION.md).
 
 This directory holds **versioned wire-format vectors**: serialized payloads
 of stable schemas (`*_v1.json`, `*_v1_wire.json`), text dumps of expected
@@ -11,9 +11,9 @@ across these files is that they pin the **on-wire / on-disk schema** rather
 than a presentation format, so a schema reorder or content-hash change
 trips an immediate diff.
 
-This directory is one of three legacy golden roots that pre-date the
-canonical-location decision (bd-ub6x8.6); migration into
-`tests/golden/wire_vectors/` is deferred to a follow-up bead.
+This directory was migrated from `tests/golden_vectors/` to its current
+canonical location at `tests/golden/wire_vectors/` in bd-ub6x8.6.3
+(parent: bd-ub6x8.6).
 
 ## Regeneration
 

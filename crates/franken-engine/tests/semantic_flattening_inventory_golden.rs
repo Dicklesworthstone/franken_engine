@@ -7,7 +7,9 @@ use frankenengine_engine::semantic_flattening_inventory::{
 };
 use serde::{Deserialize, Serialize};
 
-const EXPECTED: &str = include_str!("golden_vectors/semantic_flattening_inventory_hashes_v1.json");
+// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
+const EXPECTED: &str =
+    include_str!("golden/wire_vectors/semantic_flattening_inventory_hashes_v1.json");
 const FIXTURE_SCHEMA_VERSION: &str = "franken-engine.semantic-flattening-inventory-hashes.v1";
 const GOLDEN_EPOCH: u64 = 13;
 

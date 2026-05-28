@@ -7,7 +7,8 @@ use frankenengine_engine::test262_conformance_runner::{
 };
 use serde::Serialize;
 
-const EXPECTED: &str = include_str!("golden_vectors/test262_runner_accounting_v1.json");
+// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
+const EXPECTED: &str = include_str!("golden/wire_vectors/test262_runner_accounting_v1.json");
 
 #[derive(Debug, Serialize)]
 struct CategoryCase {

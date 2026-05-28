@@ -11,7 +11,9 @@ use frankenengine_engine::ir_contract::{
 };
 use serde::Serialize;
 
-const EXPECTED: &str = include_str!("golden_vectors/baseline_malformed_dispatch_fail_closed.json");
+// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
+const EXPECTED: &str =
+    include_str!("golden/wire_vectors/baseline_malformed_dispatch_fail_closed.json");
 
 #[derive(Debug, Serialize)]
 struct ErrorSnapshot {

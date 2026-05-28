@@ -16,8 +16,11 @@ use frankenengine_engine::runtime_diagnostics_cli::{
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::Serialize;
 
-const GOLDEN_RELATIVE_PATH: &str = "tests/golden_vectors/benchmark_diagnostics_output_v1.json";
-const EXPECTED: &str = include_str!("golden_vectors/benchmark_diagnostics_output_v1.json");
+// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
+const GOLDEN_RELATIVE_PATH: &str =
+    "tests/golden/wire_vectors/benchmark_diagnostics_output_v1.json";
+const EXPECTED: &str =
+    include_str!("golden/wire_vectors/benchmark_diagnostics_output_v1.json");
 
 #[derive(Debug, Serialize)]
 struct BenchmarkDiagnosticsGolden {

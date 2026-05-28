@@ -2925,19 +2925,29 @@ impl InterpreterCore {
     pub(crate) fn reset_execution_state_from_seed(
         &mut self,
         seed: &std::rc::Rc<std::cell::RefCell<ExecutionSeed>>,
-    ) {
+    ) -> Result<(), InterpreterError> {
         let snapshot = seed.borrow();
         match &*snapshot {
             ExecutionSeed::Lazy { epoch, .. } if *epoch == self.seed_epoch => {
                 // No writes between capture and reset — nothing to do.
             }
             ExecutionSeed::Lazy { epoch, .. } => {
-                // Should be unreachable: writes are supposed to materialize.
-                panic!(
-                    "BUG: Lazy seed survived a write (seed_epoch={}, core_epoch={}). \\
-                     The before_seed_surface_write chokepoint missed a write site.",
-                    epoch, self.seed_epoch
-                );
+                // bd-ytaa7: previously this was a `panic!()` based on the
+                // assumption that `before_seed_surface_write` is always
+                // reached before any state mutation. A future regression
+                // that adds a write site bypassing the chokepoint would
+                // turn this into an attacker-reachable process abort
+                // from any embedder that hosts extension code. Return a
+                // fail-closed `InternalError` instead so the run loop
+                // can emit a safe-mode witness and the host can recover
+                // without losing every in-flight extension's state.
+                return Err(InterpreterError::InternalError {
+                    details: format!(
+                        "lazy seed survived a write (seed_epoch={}, core_epoch={}); \
+                         the before_seed_surface_write chokepoint missed a write site",
+                        epoch, self.seed_epoch
+                    ),
+                });
             }
             ExecutionSeed::Materialized {
                 registers,
@@ -2949,6 +2959,7 @@ impl InterpreterCore {
                 self.mutate_function_prototypes(|fp| *fp = function_prototypes.clone());
             }
         }
+        Ok(())
     }
 
     // ---------------------------------------------------------------------------
@@ -3257,7 +3268,7 @@ impl InterpreterCore {
             _ => current_seed,
         };
         self.last_pre_run_seed = Some(seed.clone());
-        self.reset_execution_state_from_seed(&seed);
+        self.reset_execution_state_from_seed(&seed)?;
         self.sync_estimated_memory_bytes()?;
         // perf: hot path - avoid double clone of source_label
         let entry_specifier = module.header.source_label.clone();
@@ -33075,7 +33086,8 @@ mod lazy_seed_tests {
         let mut core = test_core();
         let seed = core.capture_execution_seed();
         assert!(matches!(*seed.borrow(), ExecutionSeed::Lazy { .. }));
-        core.reset_execution_state_from_seed(&seed);
+        core.reset_execution_state_from_seed(&seed)
+            .expect("matching-epoch lazy seed must reset cleanly");
         assert!(matches!(*seed.borrow(), ExecutionSeed::Lazy { .. }));
     }
 
@@ -33112,7 +33124,8 @@ mod lazy_seed_tests {
         }
 
         // Reset lazy core from seed
-        lazy.reset_execution_state_from_seed(&seed_l);
+        lazy.reset_execution_state_from_seed(&seed_l)
+            .expect("materialized seed must reset without invariant violation");
 
         // Eager core's original state should match lazy core's reset state
         assert_eq!(eager.registers.len(), lazy.registers.len());
@@ -33203,5 +33216,37 @@ mod lazy_seed_tests {
         );
         // Epoch still advances due to the write
         assert!(core.seed_epoch > pre_epoch);
+    }
+
+    /// bd-ytaa7: simulate the chokepoint failure (lazy seed with a
+    /// different epoch than the core, never materialized) and confirm
+    /// `reset_execution_state_from_seed` returns `InterpreterError::
+    /// InternalError` instead of panicking. This is the
+    /// security-incident path the run loop must propagate as a
+    /// fail-closed witness — a panic here would let extension code
+    /// abort the host process via any embedder.
+    #[test]
+    fn lazy_seed_epoch_divergence_returns_internal_error() {
+        let mut core = test_core();
+        let seed = core.capture_execution_seed();
+        // Without going through `before_seed_surface_write`, bump the
+        // core epoch to model a missed chokepoint — the seed stays
+        // Lazy at the old epoch.
+        core.seed_epoch = core.seed_epoch.wrapping_add(1);
+        assert!(matches!(*seed.borrow(), ExecutionSeed::Lazy { .. }));
+
+        let err = core
+            .reset_execution_state_from_seed(&seed)
+            .expect_err("epoch-divergent lazy seed must error, not panic");
+
+        assert!(
+            matches!(
+                &err,
+                InterpreterError::InternalError { details }
+                    if details.contains("lazy seed survived a write")
+                        && details.contains("chokepoint missed a write site")
+            ),
+            "expected InternalError with chokepoint-miss detail, got: {err:?}"
+        );
     }
 }

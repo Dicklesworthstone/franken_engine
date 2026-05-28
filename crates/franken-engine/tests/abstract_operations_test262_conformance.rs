@@ -18,27 +18,21 @@
 //! equality, signed-zero equality. Subsequent waves should grow the matrix
 //! toward §7 completion (ToPrimitive, ToInt32, RequireObjectCoercible, etc).
 
-use frankenengine_engine::HybridRouter;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
 use _support::test262_common::{
-    ExpectedResult, RequirementLevel, Test262Result, assert_report_round_trips,
-    evaluate_test262_result,
+    ConformanceTest, ExpectedResult, RequirementLevel, Test262Result, assert_report_round_trips,
 };
 
 pub const ABSTRACT_OPERATIONS_CONFORMANCE_SCHEMA: &str =
     "franken-engine.abstract-operations-test262.v1";
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum AbstractOperationResult {
-    Pass,
-    Fail { reason: String },
-    Error { error: String },
-    Skip { reason: String },
-}
+// Test result classification now uses the shared `Test262Result` via the
+// unified `ConformanceTest` trait (bd-glf1i FIND-7) — the former
+// `AbstractOperationResult` enum was a byte-identical clone of `Test262Result`.
 
 /// Spec section groupings — keep aligned with ECMA-262 §7 numbering.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -68,6 +62,21 @@ pub struct AbstractOperationTest {
     pub category: AbstractOperationCategory,
     pub source: String,
     pub expected_result: ExpectedResult,
+}
+
+impl ConformanceTest for AbstractOperationTest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn source(&self) -> &str {
+        &self.source
+    }
+    fn expected_result(&self) -> &ExpectedResult {
+        &self.expected_result
+    }
+    fn requirement_level(&self) -> RequirementLevel {
+        self.requirement_level
+    }
 }
 
 pub struct AbstractOperationsHarness {
@@ -252,10 +261,10 @@ impl AbstractOperationsHarness {
             let result = self.execute_test(test, security_epoch);
 
             match result {
-                AbstractOperationResult::Pass => statistics.passed += 1,
-                AbstractOperationResult::Fail { .. } => statistics.failed += 1,
-                AbstractOperationResult::Error { .. } => statistics.errored += 1,
-                AbstractOperationResult::Skip { .. } => statistics.skipped += 1,
+                Test262Result::Pass => statistics.passed += 1,
+                Test262Result::Fail { .. } => statistics.failed += 1,
+                Test262Result::Error { .. } => statistics.errored += 1,
+                Test262Result::Skip { .. } => statistics.skipped += 1,
             }
 
             statistics.total_tests += 1;
@@ -278,27 +287,20 @@ impl AbstractOperationsHarness {
         &self,
         test: &AbstractOperationTest,
         _security_epoch: SecurityEpoch,
-    ) -> AbstractOperationResult {
-        let mut engine = HybridRouter::default();
-        let eval_result = engine.eval(&test.source);
-        match evaluate_test262_result(eval_result, &test.expected_result, &test.id) {
-            Test262Result::Pass => AbstractOperationResult::Pass,
-            Test262Result::Fail { reason } => AbstractOperationResult::Fail { reason },
-            Test262Result::Error { error } => AbstractOperationResult::Error { error },
-            Test262Result::Skip { reason } => AbstractOperationResult::Skip { reason },
-        }
+    ) -> Test262Result {
+        test.evaluate()
     }
 
     fn coverage_by_category(
         &self,
-        results: &BTreeMap<String, AbstractOperationResult>,
+        results: &BTreeMap<String, Test262Result>,
     ) -> BTreeMap<AbstractOperationCategory, CategoryCoverage> {
         let mut coverage: BTreeMap<AbstractOperationCategory, CategoryCoverage> = BTreeMap::new();
         for test in &self.tests {
             let entry = coverage.entry(test.category.clone()).or_default();
             entry.total += 1;
             if let Some(result) = results.get(&test.id)
-                && matches!(result, AbstractOperationResult::Pass)
+                && matches!(result, Test262Result::Pass)
             {
                 entry.passed += 1;
             }
@@ -327,7 +329,7 @@ pub struct CategoryCoverage {
 pub struct AbstractOperationsReport {
     pub schema_version: String,
     pub security_epoch: SecurityEpoch,
-    pub test_results: BTreeMap<String, AbstractOperationResult>,
+    pub test_results: BTreeMap<String, Test262Result>,
     pub statistics: ConformanceStatistics,
     pub coverage_by_category: BTreeMap<AbstractOperationCategory, CategoryCoverage>,
 }
@@ -431,20 +433,20 @@ mod tests {
             );
         }
 
-        let mut unexpected_failures: Vec<(String, AbstractOperationResult)> = Vec::new();
+        let mut unexpected_failures: Vec<(String, Test262Result)> = Vec::new();
         let mut unexpected_passes: Vec<String> = Vec::new();
         for test in must_tests(&harness) {
             let result = report
                 .test_results
                 .get(&test.id)
                 .cloned()
-                .unwrap_or_else(|| AbstractOperationResult::Error {
+                .unwrap_or_else(|| Test262Result::Error {
                     error: "<missing result>".to_string(),
                 });
             let waived = allow.contains_key(test.id.as_str());
             match (&result, waived) {
-                (AbstractOperationResult::Pass, false) => {}
-                (AbstractOperationResult::Pass, true) => unexpected_passes.push(test.id.clone()),
+                (Test262Result::Pass, false) => {}
+                (Test262Result::Pass, true) => unexpected_passes.push(test.id.clone()),
                 (_, true) => {} // expected failure
                 (other, false) => unexpected_failures.push((test.id.clone(), other.clone())),
             }

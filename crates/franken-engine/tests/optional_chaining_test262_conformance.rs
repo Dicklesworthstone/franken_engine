@@ -10,15 +10,13 @@
 //!
 //! Focus: property access, method calls, bracket notation, short-circuiting, error cases.
 
-use frankenengine_engine::HybridRouter;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
 use _support::test262_common::{
-    ExpectedResult, RequirementLevel, Test262Result, assert_report_round_trips,
-    evaluate_test262_result,
+    ConformanceTest, ExpectedResult, RequirementLevel, Test262Result, assert_report_round_trips,
 };
 
 // ---------------------------------------------------------------------------
@@ -29,14 +27,9 @@ use _support::test262_common::{
 pub const OPTIONAL_CHAINING_CONFORMANCE_SCHEMA: &str =
     "franken-engine.optional-chaining-test262.v1";
 
-/// Test result classification.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum OptionalChainingResult {
-    Pass,
-    Fail { reason: String },
-    Error { error: String },
-    Skip { reason: String },
-}
+// Test result classification now uses the shared `Test262Result` via the
+// unified `ConformanceTest` trait (bd-glf1i FIND-7) — the former
+// `OptionalChainingResult` enum was a byte-identical clone of `Test262Result`.
 
 // RequirementLevel now imported from shared module
 
@@ -67,6 +60,21 @@ pub struct OptionalChainingTest {
     pub category: OptionalChainingCategory,
     pub source: String,
     pub expected_result: ExpectedResult,
+}
+
+impl ConformanceTest for OptionalChainingTest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn source(&self) -> &str {
+        &self.source
+    }
+    fn expected_result(&self) -> &ExpectedResult {
+        &self.expected_result
+    }
+    fn requirement_level(&self) -> RequirementLevel {
+        self.requirement_level
+    }
 }
 
 // ExpectedResult now imported from shared module
@@ -376,10 +384,10 @@ impl OptionalChainingHarness {
             let result = self.execute_test(test, security_epoch);
 
             match result {
-                OptionalChainingResult::Pass => statistics.passed += 1,
-                OptionalChainingResult::Fail { .. } => statistics.failed += 1,
-                OptionalChainingResult::Error { .. } => statistics.errored += 1,
-                OptionalChainingResult::Skip { .. } => statistics.skipped += 1,
+                Test262Result::Pass => statistics.passed += 1,
+                Test262Result::Fail { .. } => statistics.failed += 1,
+                Test262Result::Error { .. } => statistics.errored += 1,
+                Test262Result::Skip { .. } => statistics.skipped += 1,
             }
 
             statistics.total_tests += 1;
@@ -402,33 +410,21 @@ impl OptionalChainingHarness {
 
     /// Execute a single optional chaining test.
     ///
-    /// FIXED: Now properly compares expected output instead of ignoring it.
-    /// Uses shared evaluate_test262_result utility to ensure consistent
-    /// conformance validation across all harnesses.
+    /// Delegates to the unified [`ConformanceTest::evaluate`] (bd-glf1i
+    /// FIND-7), which drives a fresh `HybridRouter` and classifies the result
+    /// with output-aware comparison via the shared `evaluate_test262_result`.
     fn execute_test(
         &self,
         test: &OptionalChainingTest,
         _security_epoch: SecurityEpoch,
-    ) -> OptionalChainingResult {
-        let mut engine = HybridRouter::default();
-        let eval_result = engine.eval(&test.source);
-
-        // Use shared utility for proper output comparison
-        let test262_result = evaluate_test262_result(eval_result, &test.expected_result, &test.id);
-
-        // Convert Test262Result to OptionalChainingResult
-        match test262_result {
-            Test262Result::Pass => OptionalChainingResult::Pass,
-            Test262Result::Fail { reason } => OptionalChainingResult::Fail { reason },
-            Test262Result::Error { error } => OptionalChainingResult::Error { error },
-            Test262Result::Skip { reason } => OptionalChainingResult::Skip { reason },
-        }
+    ) -> Test262Result {
+        test.evaluate()
     }
 
     /// Calculate coverage by category.
     fn calculate_coverage_by_category(
         &self,
-        results: &BTreeMap<String, OptionalChainingResult>,
+        results: &BTreeMap<String, Test262Result>,
     ) -> BTreeMap<OptionalChainingCategory, CategoryCoverage> {
         let mut coverage: BTreeMap<OptionalChainingCategory, CategoryCoverage> = BTreeMap::new();
 
@@ -437,7 +433,7 @@ impl OptionalChainingHarness {
             category_coverage.total += 1;
 
             if let Some(result) = results.get(&test.id)
-                && matches!(result, OptionalChainingResult::Pass)
+                && matches!(result, Test262Result::Pass)
             {
                 category_coverage.passed += 1;
             }
@@ -471,7 +467,7 @@ pub struct OptionalChainingReport {
     pub schema_version: String,
     pub security_epoch: SecurityEpoch,
     pub timestamp: String,
-    pub test_results: BTreeMap<String, OptionalChainingResult>,
+    pub test_results: BTreeMap<String, Test262Result>,
     pub statistics: ConformanceStatistics,
     pub coverage_by_category: BTreeMap<OptionalChainingCategory, CategoryCoverage>,
 }
@@ -515,14 +511,14 @@ impl OptionalChainingReport {
         summary.push_str("\n## Test Results\n\n");
         for (test_id, result) in &self.test_results {
             match result {
-                OptionalChainingResult::Pass => summary.push_str(&format!("✅ {}\n", test_id)),
-                OptionalChainingResult::Fail { reason } => {
+                Test262Result::Pass => summary.push_str(&format!("✅ {}\n", test_id)),
+                Test262Result::Fail { reason } => {
                     summary.push_str(&format!("❌ {}: {}\n", test_id, reason))
                 }
-                OptionalChainingResult::Error { error } => {
+                Test262Result::Error { error } => {
                     summary.push_str(&format!("🔥 {}: {}\n", test_id, error))
                 }
-                OptionalChainingResult::Skip { reason } => {
+                Test262Result::Skip { reason } => {
                     summary.push_str(&format!("⏭️ {}: {}\n", test_id, reason))
                 }
             }
@@ -596,7 +592,7 @@ mod tests {
         let report = harness.run_conformance(epoch);
 
         assert_eq!(report.clone(), report);
-        assert_eq!(OptionalChainingResult::Pass, OptionalChainingResult::Pass);
+        assert_eq!(Test262Result::Pass, Test262Result::Pass);
         assert_eq!(
             OptionalChainingCategory::PropertyAccess,
             OptionalChainingCategory::PropertyAccess
@@ -715,7 +711,7 @@ mod tests {
         let mut failures: Vec<String> = Vec::new();
         for id in CANONICAL_MUST_IDS {
             match report.test_results.get(*id) {
-                Some(OptionalChainingResult::Pass) => {}
+                Some(Test262Result::Pass) => {}
                 Some(other) => failures.push(format!("{id}: {other:?}")),
                 None => failures.push(format!("{id}: <missing result>")),
             }
@@ -756,20 +752,20 @@ mod tests {
             );
         }
 
-        let mut unexpected_failures: Vec<(String, OptionalChainingResult)> = Vec::new();
+        let mut unexpected_failures: Vec<(String, Test262Result)> = Vec::new();
         let mut unexpected_passes: Vec<String> = Vec::new();
         for test in must_tests(&harness) {
             let result = report
                 .test_results
                 .get(&test.id)
                 .cloned()
-                .unwrap_or_else(|| OptionalChainingResult::Error {
+                .unwrap_or_else(|| Test262Result::Error {
                     error: "<missing result in report>".to_string(),
                 });
             let waived = allow.contains_key(test.id.as_str());
             match (&result, waived) {
-                (OptionalChainingResult::Pass, false) => {}
-                (OptionalChainingResult::Pass, true) => unexpected_passes.push(test.id.clone()),
+                (Test262Result::Pass, false) => {}
+                (Test262Result::Pass, true) => unexpected_passes.push(test.id.clone()),
                 (_, true) => {} // expected failure
                 (other, false) => unexpected_failures.push((test.id.clone(), other.clone())),
             }

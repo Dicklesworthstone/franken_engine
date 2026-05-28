@@ -307,7 +307,12 @@ pub fn evaluate_test262_result(
 ///
 /// Parameterized by category type to allow type-safe categorization
 /// while sharing common result structure.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Derives `PartialEq`/`Eq`/`Hash` (all variants carry only `String`
+/// payloads) so harness reports that key on or equality-compare results —
+/// e.g. those using the equality-based `assert_report_round_trips` oracle —
+/// can adopt this shared type directly (bd-glf1i FIND-7).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Test262Result {
     /// Test passed - behavior matches ES2020 spec
     Pass,
@@ -317,6 +322,47 @@ pub enum Test262Result {
     Error { error: String },
     /// Test skipped - known limitation or unsupported syntax
     Skip { reason: String },
+}
+
+/// Unified contract for a single Test262 conformance test case (bd-glf1i FIND-7).
+///
+/// Before this trait, every `*_test262_conformance.rs` harness re-declared a
+/// private `Pass/Fail/Error/Skip` result enum byte-identical to
+/// [`Test262Result`], then ran a hand-written four-arm match to convert the
+/// output of [`evaluate_test262_result`] back into that private enum. The
+/// audit (`bd-85qfs` FIND-7) flagged this as "no unified ConformanceTest trait
+/// — each harness rolls its own Result enum and structure".
+///
+/// This trait collapses that duplication: a harness's test-case struct
+/// implements the four accessors and inherits a provided
+/// [`ConformanceTest::evaluate`] that runs the engine and classifies the
+/// outcome directly into the shared [`Test262Result`]. Harnesses keep their
+/// domain-specific category enum and report struct — only the result
+/// classification and execution path are unified.
+pub trait ConformanceTest {
+    /// Stable test identifier (used in result maps and failure messages).
+    fn id(&self) -> &str;
+    /// ECMAScript source executed by the engine.
+    fn source(&self) -> &str;
+    /// Expected outcome the engine result is checked against.
+    fn expected_result(&self) -> &ExpectedResult;
+    /// RFC-2119 requirement level (MUST/SHOULD/MAY) the case asserts.
+    fn requirement_level(&self) -> RequirementLevel;
+
+    /// Run the case through a fresh [`HybridRouter`] and classify the engine
+    /// result against [`ConformanceTest::expected_result`].
+    ///
+    /// Provided method — harnesses get identical, audited execution semantics
+    /// (engine call + output-aware classification via
+    /// [`evaluate_test262_result`]) for free instead of re-implementing the
+    /// engine call followed by a `Test262Result` → private-enum conversion
+    /// match.
+    fn evaluate(&self) -> Test262Result {
+        use frankenengine_engine::HybridRouter;
+        let mut engine = HybridRouter::default();
+        let eval_result = engine.eval(self.source());
+        evaluate_test262_result(eval_result, self.expected_result(), self.id())
+    }
 }
 
 /// Test262 conformance test case structure.

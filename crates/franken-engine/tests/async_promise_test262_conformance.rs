@@ -24,26 +24,20 @@
 //! await-rejection propagation, timer-vs-microtask ordering, host rejection
 //! tracking observability, and thenable assimilation edge cases.
 
-use frankenengine_engine::HybridRouter;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
 use _support::test262_common::{
-    ExpectedResult, RequirementLevel, Test262Result, assert_report_round_trips,
-    evaluate_test262_result,
+    ConformanceTest, ExpectedResult, RequirementLevel, Test262Result, assert_report_round_trips,
 };
 
 pub const ASYNC_PROMISE_CONFORMANCE_SCHEMA: &str = "franken-engine.async-promise-test262.v1";
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-pub enum AsyncPromiseResult {
-    Pass,
-    Fail { reason: String },
-    Error { error: String },
-    Skip { reason: String },
-}
+// Test result classification now uses the shared `Test262Result` via the
+// unified `ConformanceTest` trait (bd-glf1i FIND-7) — the former
+// `AsyncPromiseResult` enum was a byte-identical clone of `Test262Result`.
 
 /// Spec section groupings — keep aligned with ECMA-262 §25 (Promise) and
 /// §15.8 (Async Function Definitions).
@@ -89,6 +83,21 @@ pub struct AsyncPromiseTest {
     pub category: AsyncPromiseCategory,
     pub source: String,
     pub expected_result: ExpectedResult,
+}
+
+impl ConformanceTest for AsyncPromiseTest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn source(&self) -> &str {
+        &self.source
+    }
+    fn expected_result(&self) -> &ExpectedResult {
+        &self.expected_result
+    }
+    fn requirement_level(&self) -> RequirementLevel {
+        self.requirement_level
+    }
 }
 
 pub struct AsyncPromiseHarness {
@@ -447,10 +456,10 @@ impl AsyncPromiseHarness {
             let result = self.execute_test(test, security_epoch);
 
             match result {
-                AsyncPromiseResult::Pass => statistics.passed += 1,
-                AsyncPromiseResult::Fail { .. } => statistics.failed += 1,
-                AsyncPromiseResult::Error { .. } => statistics.errored += 1,
-                AsyncPromiseResult::Skip { .. } => statistics.skipped += 1,
+                Test262Result::Pass => statistics.passed += 1,
+                Test262Result::Fail { .. } => statistics.failed += 1,
+                Test262Result::Error { .. } => statistics.errored += 1,
+                Test262Result::Skip { .. } => statistics.skipped += 1,
             }
 
             statistics.total_tests += 1;
@@ -473,27 +482,20 @@ impl AsyncPromiseHarness {
         &self,
         test: &AsyncPromiseTest,
         _security_epoch: SecurityEpoch,
-    ) -> AsyncPromiseResult {
-        let mut engine = HybridRouter::default();
-        let eval_result = engine.eval(&test.source);
-        match evaluate_test262_result(eval_result, &test.expected_result, &test.id) {
-            Test262Result::Pass => AsyncPromiseResult::Pass,
-            Test262Result::Fail { reason } => AsyncPromiseResult::Fail { reason },
-            Test262Result::Error { error } => AsyncPromiseResult::Error { error },
-            Test262Result::Skip { reason } => AsyncPromiseResult::Skip { reason },
-        }
+    ) -> Test262Result {
+        test.evaluate()
     }
 
     fn coverage_by_category(
         &self,
-        results: &BTreeMap<String, AsyncPromiseResult>,
+        results: &BTreeMap<String, Test262Result>,
     ) -> BTreeMap<AsyncPromiseCategory, CategoryCoverage> {
         let mut coverage: BTreeMap<AsyncPromiseCategory, CategoryCoverage> = BTreeMap::new();
         for test in &self.tests {
             let entry = coverage.entry(test.category.clone()).or_default();
             entry.total += 1;
             if let Some(result) = results.get(&test.id)
-                && matches!(result, AsyncPromiseResult::Pass)
+                && matches!(result, Test262Result::Pass)
             {
                 entry.passed += 1;
             }
@@ -522,7 +524,7 @@ pub struct CategoryCoverage {
 pub struct AsyncPromiseReport {
     pub schema_version: String,
     pub security_epoch: SecurityEpoch,
-    pub test_results: BTreeMap<String, AsyncPromiseResult>,
+    pub test_results: BTreeMap<String, Test262Result>,
     pub statistics: ConformanceStatistics,
     pub coverage_by_category: BTreeMap<AsyncPromiseCategory, CategoryCoverage>,
 }
@@ -623,20 +625,20 @@ mod tests {
             );
         }
 
-        let mut unexpected_failures: Vec<(String, AsyncPromiseResult)> = Vec::new();
+        let mut unexpected_failures: Vec<(String, Test262Result)> = Vec::new();
         let mut unexpected_passes: Vec<String> = Vec::new();
         for test in must_tests(&harness) {
             let result = report
                 .test_results
                 .get(&test.id)
                 .cloned()
-                .unwrap_or_else(|| AsyncPromiseResult::Error {
+                .unwrap_or_else(|| Test262Result::Error {
                     error: "<missing result>".to_string(),
                 });
             let waived = allow.contains_key(test.id.as_str());
             match (&result, waived) {
-                (AsyncPromiseResult::Pass, false) => {}
-                (AsyncPromiseResult::Pass, true) => unexpected_passes.push(test.id.clone()),
+                (Test262Result::Pass, false) => {}
+                (Test262Result::Pass, true) => unexpected_passes.push(test.id.clone()),
                 (_, true) => {}
                 (other, false) => unexpected_failures.push((test.id.clone(), other.clone())),
             }

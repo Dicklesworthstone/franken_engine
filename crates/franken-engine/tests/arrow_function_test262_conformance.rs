@@ -9,15 +9,14 @@
 //! Focus areas: parameter destructuring, default parameters, rest parameters,
 //! async arrow functions, lexical scope binding, and syntax edge cases.
 
-use frankenengine_engine::HybridRouter;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
 use _support::test262_common::{
-    ExpectedResult, RequirementLevel, Test262Result, assert_report_json_round_trips,
-    evaluate_test262_result,
+    ConformanceTest, ExpectedResult, RequirementLevel, Test262Result,
+    assert_report_json_round_trips,
 };
 
 // ---------------------------------------------------------------------------
@@ -27,18 +26,9 @@ use _support::test262_common::{
 /// Schema version for arrow function conformance reports.
 pub const ARROW_FUNCTION_CONFORMANCE_SCHEMA: &str = "franken-engine.arrow-function-test262.v1";
 
-/// Test result classification for arrow function conformance.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum ArrowFunctionResult {
-    /// Test passed - behavior matches ES2020 spec
-    Pass,
-    /// Test failed - behavior diverges from ES2020 spec
-    Fail { reason: String },
-    /// Test execution error - franken_engine failed to execute
-    Error { error: String },
-    /// Test skipped - known limitation or unsupported syntax
-    Skip { reason: String },
-}
+// Test result classification now uses the shared `Test262Result` via the
+// unified `ConformanceTest` trait (bd-glf1i FIND-7) — the former
+// `ArrowFunctionResult` enum was a byte-identical clone of `Test262Result`.
 
 // RequirementLevel now imported from shared module
 
@@ -73,6 +63,21 @@ pub struct ArrowFunctionTest {
     pub category: ArrowFunctionCategory,
     pub source: String,
     pub expected_result: ExpectedResult,
+}
+
+impl ConformanceTest for ArrowFunctionTest {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn source(&self) -> &str {
+        &self.source
+    }
+    fn expected_result(&self) -> &ExpectedResult {
+        &self.expected_result
+    }
+    fn requirement_level(&self) -> RequirementLevel {
+        self.requirement_level
+    }
 }
 
 // ExpectedResult now imported from shared module
@@ -381,10 +386,10 @@ impl ArrowFunctionHarness {
             let result = self.execute_test(test, security_epoch);
 
             match result {
-                ArrowFunctionResult::Pass => statistics.passed += 1,
-                ArrowFunctionResult::Fail { .. } => statistics.failed += 1,
-                ArrowFunctionResult::Error { .. } => statistics.errored += 1,
-                ArrowFunctionResult::Skip { .. } => statistics.skipped += 1,
+                Test262Result::Pass => statistics.passed += 1,
+                Test262Result::Fail { .. } => statistics.failed += 1,
+                Test262Result::Error { .. } => statistics.errored += 1,
+                Test262Result::Skip { .. } => statistics.skipped += 1,
             }
 
             statistics.total_tests += 1;
@@ -408,33 +413,21 @@ impl ArrowFunctionHarness {
 
     /// Execute a single arrow function test.
     ///
-    /// FIXED: Now properly compares expected output instead of ignoring it.
-    /// Uses shared evaluate_test262_result utility to ensure consistent
-    /// conformance validation across all harnesses.
+    /// Delegates to the unified [`ConformanceTest::evaluate`] (bd-glf1i
+    /// FIND-7), which drives a fresh `HybridRouter` and classifies the result
+    /// with output-aware comparison via the shared `evaluate_test262_result`.
     fn execute_test(
         &self,
         test: &ArrowFunctionTest,
         _security_epoch: SecurityEpoch,
-    ) -> ArrowFunctionResult {
-        let mut engine = HybridRouter::default();
-        let eval_result = engine.eval(&test.source);
-
-        // Use shared utility for proper output comparison
-        let test262_result = evaluate_test262_result(eval_result, &test.expected_result, &test.id);
-
-        // Convert Test262Result to ArrowFunctionResult
-        match test262_result {
-            Test262Result::Pass => ArrowFunctionResult::Pass,
-            Test262Result::Fail { reason } => ArrowFunctionResult::Fail { reason },
-            Test262Result::Error { error } => ArrowFunctionResult::Error { error },
-            Test262Result::Skip { reason } => ArrowFunctionResult::Skip { reason },
-        }
+    ) -> Test262Result {
+        test.evaluate()
     }
 
     /// Calculate coverage by category.
     fn calculate_coverage_by_category(
         &self,
-        results: &BTreeMap<String, ArrowFunctionResult>,
+        results: &BTreeMap<String, Test262Result>,
     ) -> BTreeMap<ArrowFunctionCategory, CategoryCoverage> {
         let mut coverage: BTreeMap<ArrowFunctionCategory, CategoryCoverage> = BTreeMap::new();
 
@@ -443,7 +436,7 @@ impl ArrowFunctionHarness {
             category_coverage.total += 1;
 
             if let Some(result) = results.get(&test.id)
-                && matches!(result, ArrowFunctionResult::Pass)
+                && matches!(result, Test262Result::Pass)
             {
                 category_coverage.passed += 1;
             }
@@ -477,7 +470,7 @@ pub struct ArrowFunctionReport {
     pub schema_version: String,
     pub security_epoch: SecurityEpoch,
     pub timestamp: String,
-    pub test_results: BTreeMap<String, ArrowFunctionResult>,
+    pub test_results: BTreeMap<String, Test262Result>,
     pub statistics: ConformanceStatistics,
     pub coverage_by_category: BTreeMap<ArrowFunctionCategory, CategoryCoverage>,
 }
@@ -514,14 +507,14 @@ impl ArrowFunctionReport {
         summary.push_str("\n## Test Results\n\n");
         for (test_id, result) in &self.test_results {
             match result {
-                ArrowFunctionResult::Pass => summary.push_str(&format!("✅ {}\n", test_id)),
-                ArrowFunctionResult::Fail { reason } => {
+                Test262Result::Pass => summary.push_str(&format!("✅ {}\n", test_id)),
+                Test262Result::Fail { reason } => {
                     summary.push_str(&format!("❌ {}: {}\n", test_id, reason))
                 }
-                ArrowFunctionResult::Error { error } => {
+                Test262Result::Error { error } => {
                     summary.push_str(&format!("🔥 {}: {}\n", test_id, error))
                 }
-                ArrowFunctionResult::Skip { reason } => {
+                Test262Result::Skip { reason } => {
                     summary.push_str(&format!("⏭️ {}: {}\n", test_id, reason))
                 }
             }
@@ -612,14 +605,14 @@ mod tests {
         let mut observed_detail: Vec<(String, String)> = Vec::new();
         for (id, result) in &report.test_results {
             match result {
-                ArrowFunctionResult::Pass => {}
-                ArrowFunctionResult::Fail { reason } => {
+                Test262Result::Pass => {}
+                Test262Result::Fail { reason } => {
                     observed_detail.push((id.clone(), format!("fail: {reason}")))
                 }
-                ArrowFunctionResult::Error { error } => {
+                Test262Result::Error { error } => {
                     observed_detail.push((id.clone(), format!("error: {error}")))
                 }
-                ArrowFunctionResult::Skip { reason } => {
+                Test262Result::Skip { reason } => {
                     observed_detail.push((id.clone(), format!("skip: {reason}")))
                 }
             }
@@ -655,7 +648,7 @@ mod tests {
         let result = harness.execute_test(&test, SecurityEpoch::from_raw(1));
 
         match result {
-            ArrowFunctionResult::Fail { reason } => {
+            Test262Result::Fail { reason } => {
                 assert!(reason.contains("Output mismatch"));
                 assert!(reason.contains("regression-output-mismatch"));
             }

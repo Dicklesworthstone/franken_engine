@@ -162,6 +162,7 @@ apply_fix.py
 fix_mut.py
 fix_mut2.py
 refactor_ternary.py
+fix_convergence_test.py
 
 # Remote compilation helper local config
 .rch/

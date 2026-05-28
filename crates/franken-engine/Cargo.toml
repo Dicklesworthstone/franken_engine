@@ -282,3 +282,11 @@ regex = "1.0"
 criterion = { version = "0.5", features = ["html_reports"] }
 tempfile = "3.0"
 tracing = "0.1"
+# insta snapshot-testing crate — adoption spike for bd-ub6x8.11. One demo
+# test (`tests/insta_spike_demo.rs`) exercises `assert_snapshot!`,
+# `assert_debug_snapshot!`, `Settings::add_filter`, and the bound-trait
+# rendering helper to show how the project's hand-rolled golden helpers
+# (~13 inline `assert_golden` copies, bd-ub6x8.3) would migrate. The
+# `yaml` feature is opt-out by default; we keep the default features so
+# `cargo insta review` works out of the box.
+insta = "1.39"

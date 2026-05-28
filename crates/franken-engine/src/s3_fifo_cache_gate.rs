@@ -2118,8 +2118,8 @@ mod tests {
             total_capacity: 10,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         let d = gate
             .insert(artifact("new_item"), 100, payload("new_item"))
             .expect("operation should succeed for valid inputs");
@@ -2163,8 +2163,8 @@ mod tests {
             reference_policy: ReferencePolicyKind::Clock,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         let parity = gate.evaluate_parity();
         assert_eq!(parity.reference_policy, ReferencePolicyKind::Clock);
     }
@@ -2199,8 +2199,8 @@ mod tests {
             small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         // Lots of misses.
         for i in 0..20 {
             let label = format!("miss{i}");
@@ -2225,8 +2225,8 @@ mod tests {
             rollback_cooldown_ops: 5,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         // Lookups should tick down cooldown.
         for _ in 0..5 {
@@ -2241,8 +2241,8 @@ mod tests {
             rollback_cooldown_ops: 100,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         let result = gate.re_enable();
         assert!(matches!(
@@ -2257,8 +2257,8 @@ mod tests {
             rollback_cooldown_ops: 3,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         for _ in 0..3 {
             gate.lookup("tick");
@@ -2281,8 +2281,8 @@ mod tests {
             rollback_cooldown_ops: 1,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         gate.lookup("tick"); // Expire cooldown.
         let _ = gate.re_enable();
@@ -2311,8 +2311,8 @@ mod tests {
             auto_adapt_split: true,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         assert!(gate.adapt_split_ratio().is_none());
     }
 
@@ -2326,8 +2326,8 @@ mod tests {
             max_small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         // Simulate high ghost hits.
         gate.benchmark.total_evictions = 10;
         gate.benchmark.ghost_hits = 8; // 80% ghost hit ratio.
@@ -2347,8 +2347,8 @@ mod tests {
             max_small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         gate.benchmark.total_evictions = 100;
         gate.benchmark.ghost_hits = 5; // 5% ghost hit ratio.
         let old = gate.effective_small_ratio_millionths();
@@ -2367,8 +2367,8 @@ mod tests {
             max_small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         gate.benchmark.total_evictions = 100;
         gate.benchmark.ghost_hits = 1;
         let result = gate.adapt_split_ratio();
@@ -2384,8 +2384,8 @@ mod tests {
             rollback_cooldown_ops: 0,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         gate.active = false;
         gate.rollback_state = RollbackState::Completed;
         let _ = gate.re_enable();
@@ -2441,8 +2441,8 @@ mod tests {
             admission_policy: AdmissionPolicy::FrequencyAware,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         let receipt = gate.emit_receipt(DecisionKind::GatePassContinue);
         assert!(receipt.admission_policy_label.contains("frequency_aware"));
     }
@@ -2473,8 +2473,8 @@ mod tests {
             small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         for i in 0..20 {
             gate.lookup(&format!("miss{i}"));
         }
@@ -2888,8 +2888,8 @@ mod tests {
             parity_tolerance_millionths: MILLION, // 100% — disables parity gate
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         // Insert and access items.
         for i in 0..10 {
             let label = format!("item{i}");
@@ -2914,8 +2914,8 @@ mod tests {
             small_ratio_millionths: 500_000,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
 
         // Trigger rollback.
         gate.operator_rollback("ops", "test");
@@ -2992,8 +2992,8 @@ mod tests {
             rollback_cooldown_ops: 100,
             ..S3FifoCacheConfig::default()
         };
-        let mut gate =
-            S3FifoCacheGate::new(config, epoch(1)).expect("operation should succeed for valid inputs");
+        let mut gate = S3FifoCacheGate::new(config, epoch(1))
+            .expect("operation should succeed for valid inputs");
         gate.execute_rollback(RollbackTrigger::ParityGateFailure);
         let result = gate.insert(artifact("x"), 10, payload("x"));
         assert!(result.is_err());

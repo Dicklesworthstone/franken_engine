@@ -1054,9 +1054,13 @@ mod tests {
         });
 
         // SAFETY: Test thread without panic paths; join() will succeed
-        writer.join().expect("operation should succeed for valid inputs");
+        writer
+            .join()
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Test thread without panic paths; join() will succeed
-        let total_reads = reader.join().expect("operation should succeed for valid inputs");
+        let total_reads = reader
+            .join()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(total_reads, 200);
 
         let t = fast_path.telemetry();

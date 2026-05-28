@@ -1844,8 +1844,7 @@ mod tests {
         let json = serde_json::to_string(&val).expect("serialize derived Serialize");
         assert_eq!(
             val,
-            serde_json::from_str::<RenderSurface>(&json)
-                .expect("deserialization should succeed")
+            serde_json::from_str::<RenderSurface>(&json).expect("deserialization should succeed")
         );
     }
 
@@ -1855,8 +1854,7 @@ mod tests {
         let json = serde_json::to_string(&val).expect("serialize derived Serialize");
         assert_eq!(
             val,
-            serde_json::from_str::<ModuleRole>(&json)
-                .expect("deserialization should succeed")
+            serde_json::from_str::<ModuleRole>(&json).expect("deserialization should succeed")
         );
     }
 
@@ -1866,8 +1864,7 @@ mod tests {
         let json = serde_json::to_string(&val).expect("serialize derived Serialize");
         assert_eq!(
             val,
-            serde_json::from_str::<GraphNodeId>(&json)
-                .expect("deserialization should succeed")
+            serde_json::from_str::<GraphNodeId>(&json).expect("deserialization should succeed")
         );
     }
 

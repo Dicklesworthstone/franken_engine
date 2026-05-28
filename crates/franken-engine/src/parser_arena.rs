@@ -1994,8 +1994,7 @@ mod tests {
     #[test]
     fn enrichment_arena_budget_kind_json_snake_case() {
         assert_eq!(
-            serde_json::to_string(&ArenaBudgetKind::Nodes)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ArenaBudgetKind::Nodes).expect("serialization should succeed"),
             "\"nodes\""
         );
         assert_eq!(
@@ -2004,13 +2003,11 @@ mod tests {
             "\"expressions\""
         );
         assert_eq!(
-            serde_json::to_string(&ArenaBudgetKind::Spans)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ArenaBudgetKind::Spans).expect("serialization should succeed"),
             "\"spans\""
         );
         assert_eq!(
-            serde_json::to_string(&ArenaBudgetKind::Bytes)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ArenaBudgetKind::Bytes).expect("serialization should succeed"),
             "\"bytes\""
         );
     }
@@ -2117,8 +2114,7 @@ mod tests {
     #[test]
     fn enrichment_handle_audit_kind_json_snake_case() {
         assert_eq!(
-            serde_json::to_string(&HandleAuditKind::Node)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&HandleAuditKind::Node).expect("serialization should succeed"),
             "\"node\""
         );
         assert_eq!(
@@ -2127,8 +2123,7 @@ mod tests {
             "\"expression\""
         );
         assert_eq!(
-            serde_json::to_string(&HandleAuditKind::Span)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&HandleAuditKind::Span).expect("serialization should succeed"),
             "\"span\""
         );
     }

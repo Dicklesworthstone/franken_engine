@@ -1798,7 +1798,9 @@ mod tests {
         r.drain_tick();
         r.drain_tick();
         assert!(r.drain_tick()); // timed out
-        let result = r.finalize().expect("operation should succeed for valid inputs");
+        let result = r
+            .finalize()
+            .expect("operation should succeed for valid inputs");
         // obligation was force-aborted
         assert_eq!(result.obligations_aborted, 1);
         assert!(result.drain_timeout_escalated);

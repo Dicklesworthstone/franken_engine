@@ -1338,8 +1338,7 @@ mod tests {
 
     #[test]
     fn schema_version_serde_roundtrip() {
-        let json = serde_json::to_string(&SchemaVersion::V1)
-            .expect("serialization should succeed");
+        let json = serde_json::to_string(&SchemaVersion::V1).expect("serialization should succeed");
         let restored: SchemaVersion =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(SchemaVersion::V1, restored);
@@ -2463,7 +2462,8 @@ mod tests {
 
     #[test]
     fn signer_entry_serde_roundtrip() {
-        let sk = SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
         let entry = SignerEntry {
             role: "admin".to_string(),
             verification_key: sk.verification_key(),

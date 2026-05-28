@@ -1410,8 +1410,8 @@ mod tests {
         ctrl.update_expected_head(10, "t-degrade");
 
         let override_token = make_override(OperationType::ExtensionActivation, 2000);
-        let wrong_vk =
-            VerificationKey::from_bytes([0xFF; 32]).expect("operation should succeed for valid inputs");
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32])
+            .expect("operation should succeed for valid inputs");
 
         let result = ctrl.evaluate_with_override(
             OperationType::ExtensionActivation,

@@ -867,8 +867,8 @@ mod tests {
             iteration: 0,
             is_warmup: false,
         }];
-        let stats =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
+        let stats = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stats.p50_ns, 5000);
         assert_eq!(stats.min_ns, 5000);
         assert_eq!(stats.max_ns, 5000);
@@ -884,8 +884,8 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
+        let stats = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stats.min_ns, 100);
         assert_eq!(stats.max_ns, 10000);
         assert_eq!(stats.sample_count, 100);
@@ -902,8 +902,8 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
+        let stats = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
         assert!(stats.jitter_ns() > 0);
     }
 
@@ -916,8 +916,8 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
+        let stats = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
         let cv = stats.cv_millionths();
         assert!(cv >= 0, "cv should be non-negative, got {cv}");
     }
@@ -931,10 +931,10 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let s1 =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
-        let s2 =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
+        let s1 = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
+        let s2 = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(s1.derive_id(), s2.derive_id());
     }
 
@@ -1338,8 +1338,8 @@ mod tests {
             })
             .collect();
 
-        let stats =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
+        let stats = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stats.sample_count, 110); // 120 - 10 warmup
 
         // 3. Build benchmark result
@@ -1663,8 +1663,8 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
+        let stats = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
         let mut cloned = stats.clone();
         cloned.p50_ns = 999_999;
         assert_ne!(stats.p50_ns, 999_999);
@@ -1910,8 +1910,8 @@ mod tests {
                 is_warmup: false,
             })
             .collect();
-        let stats =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
+        let stats = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stats.jitter_ns(), 0);
         assert_eq!(stats.cv_millionths(), 0);
     }
@@ -1935,8 +1935,8 @@ mod tests {
                 is_warmup: false,
             },
         ];
-        let stats =
-            PercentileStats::from_samples(&samples).expect("operation should succeed for valid inputs");
+        let stats = PercentileStats::from_samples(&samples)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(stats.sample_count, 2);
         assert_eq!(stats.min_ns, 1000);
         assert_eq!(stats.max_ns, 2000);

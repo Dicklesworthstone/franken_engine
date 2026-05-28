@@ -5898,7 +5898,9 @@ mod tests {
         let active = registry.active_for_zone(TEST_ZONE);
         assert!(active.is_some());
         assert_eq!(
-            active.expect("operation should succeed for valid inputs").zone,
+            active
+                .expect("operation should succeed for valid inputs")
+                .zone,
             TEST_ZONE
         );
     }

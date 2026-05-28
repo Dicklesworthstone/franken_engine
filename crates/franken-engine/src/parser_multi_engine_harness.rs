@@ -2168,12 +2168,12 @@ mod tests {
     #[test]
     fn engine_outcome_kind_serialize() {
         // SAFETY: EngineOutcomeKind derives Serialize and has no non-serializable fields
-        let hash_json = serde_json::to_string(&EngineOutcomeKind::Hash)
-            .expect("serialization should succeed");
+        let hash_json =
+            serde_json::to_string(&EngineOutcomeKind::Hash).expect("serialization should succeed");
         assert_eq!(hash_json, "\"hash\"");
         // SAFETY: EngineOutcomeKind derives Serialize and has no non-serializable fields
-        let error_json = serde_json::to_string(&EngineOutcomeKind::Error)
-            .expect("serialization should succeed");
+        let error_json =
+            serde_json::to_string(&EngineOutcomeKind::Error).expect("serialization should succeed");
         assert_eq!(error_json, "\"error\"");
     }
 

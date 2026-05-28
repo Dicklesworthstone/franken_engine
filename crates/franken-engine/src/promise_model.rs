@@ -1382,7 +1382,9 @@ mod tests {
     fn new_promise_is_pending() {
         let mut store = PromiseStore::new();
         let h = store.create();
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Pending);
         assert!(!p.state.is_settled());
     }
@@ -1395,7 +1397,9 @@ mod tests {
         store
             .fulfill(h, js_int(42), Label::Public, &mut queue)
             .expect("operation should succeed for valid inputs");
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Fulfilled(js_int(42)));
         assert!(p.state.is_fulfilled());
     }
@@ -1408,7 +1412,9 @@ mod tests {
         store
             .reject(h, js_str("error"), Label::Public, &mut queue)
             .expect("operation should succeed for valid inputs");
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.state, PromiseState::Rejected(js_str("error")));
         assert!(p.state.is_rejected());
     }
@@ -1472,7 +1478,9 @@ mod tests {
         assert!(queue.is_empty());
 
         // Reactions registered.
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.reactions.len(), 2);
 
         // Result promise exists.
@@ -1542,7 +1550,9 @@ mod tests {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
         let h = store.resolve(js_int(7), Label::Public, &mut queue);
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert!(p.state.is_fulfilled());
     }
 
@@ -1551,7 +1561,9 @@ mod tests {
         let mut store = PromiseStore::new();
         let mut queue = MicrotaskQueue::new();
         let h = store.reject_with(js_str("boom"), Label::Public, &mut queue);
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert!(p.state.is_rejected());
     }
 
@@ -2023,7 +2035,9 @@ mod tests {
         store
             .fulfill(h, js_str("secret_data"), Label::Secret, &mut queue)
             .expect("operation should succeed for valid inputs");
-        let p = store.get(h).expect("operation should succeed for valid inputs");
+        let p = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(p.label, Label::Secret);
     }
 
@@ -2239,7 +2253,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         assert_ne!(r1, r2);
         // Both register reactions on the same pending promise.
-        let record = store.get(p).expect("operation should succeed for valid inputs");
+        let record = store
+            .get(p)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(record.reactions.len(), 4); // 2 per .then (fulfill + reject)
     }
 

@@ -1188,8 +1188,7 @@ impl DriftDetector {
             let alert = DriftAlert {
                 id: derive_drift_alert_id(&format!(
                     "effect_boundary_{}_{epoch}",
-                    serde_json::to_string(effect_kind)
-                        .expect("serialization should succeed")
+                    serde_json::to_string(effect_kind).expect("serialization should succeed")
                 )),
                 kind: DriftKind::EffectBoundaryLeak,
                 severity: ViolationSeverity::Error,
@@ -2013,14 +2012,16 @@ mod tests {
     #[test]
     fn package_double_freeze_fails() {
         let mut pkg = make_full_package();
-        pkg.freeze(1).expect("operation should succeed for valid inputs");
+        pkg.freeze(1)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pkg.freeze(2), Err(FoundationError::PackageAlreadyFrozen));
     }
 
     #[test]
     fn package_frozen_reject_add() {
         let mut pkg = make_full_package();
-        pkg.freeze(1).expect("operation should succeed for valid inputs");
+        pkg.freeze(1)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             pkg.add_hook_contract(HookSemanticContract::canonical_use_state()),
             Err(FoundationError::PackageAlreadyFrozen)
@@ -2245,7 +2246,9 @@ mod tests {
         );
         assert!(result.is_some());
         assert_eq!(
-            result.expect("operation should succeed for valid inputs").kind,
+            result
+                .expect("operation should succeed for valid inputs")
+                .kind,
             DriftKind::EffectBoundaryLeak
         );
     }
@@ -2287,7 +2290,9 @@ mod tests {
         );
         assert!(result.is_some());
         assert_eq!(
-            result.expect("operation should succeed for valid inputs").kind,
+            result
+                .expect("operation should succeed for valid inputs")
+                .kind,
             DriftKind::HookContractBreach
         );
     }

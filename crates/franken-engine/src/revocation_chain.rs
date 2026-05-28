@@ -1358,8 +1358,8 @@ mod tests {
 
         // Sign the revocation.
         let preimage = rev.preimage_bytes();
-        let sig =
-            sign_preimage(signing_key, &preimage).expect("operation should succeed for valid inputs");
+        let sig = sign_preimage(signing_key, &preimage)
+            .expect("operation should succeed for valid inputs");
         rev.signature = sig;
         rev
     }
@@ -1851,8 +1851,8 @@ mod tests {
             .append(rev, &sk, "t-wrong")
             .expect("operation should succeed for valid inputs");
 
-        let wrong_vk =
-            VerificationKey::from_bytes([0xFF; 32]).expect("operation should succeed for valid inputs");
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32])
+            .expect("operation should succeed for valid inputs");
         let err = chain.verify_head_signature(&wrong_vk).unwrap_err();
         assert!(matches!(err, ChainError::SignatureInvalid { .. }));
     }

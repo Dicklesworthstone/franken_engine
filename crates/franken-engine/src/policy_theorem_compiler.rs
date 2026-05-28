@@ -924,9 +924,7 @@ impl SignaturePreimage for PolicyValidationReceipt {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
         // SAFETY: PolicyValidationRecord derives Serialize and has no non-serializable fields
-        CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serialization should succeed"),
-        )
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization should succeed"))
     }
 }
 
@@ -1575,7 +1573,8 @@ mod tests {
         let result = compiler
             .compile(&ir)
             .expect("operation should succeed for valid inputs");
-        let sk = SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
         let vk = sk.verification_key();
 
         let mut receipt = PolicyValidationReceipt::from_compilation(
@@ -1599,7 +1598,8 @@ mod tests {
         let result = compiler
             .compile(&ir)
             .expect("operation should succeed for valid inputs");
-        let sk = SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
         let vk = sk.verification_key();
 
         let mut receipt = PolicyValidationReceipt::from_compilation(
@@ -1624,7 +1624,8 @@ mod tests {
         let result = compiler
             .compile(&ir)
             .expect("operation should succeed for valid inputs");
-        let sk = SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
         let vk = sk.verification_key();
 
         let mut receipt = PolicyValidationReceipt::from_compilation(
@@ -2268,7 +2269,8 @@ mod tests {
             .compile(&ir)
             .expect("operation should succeed for valid inputs");
 
-        let sk = SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
         let vk = sk.verification_key();
         let mut receipt = PolicyValidationReceipt::from_compilation(
             &result,
@@ -2289,7 +2291,8 @@ mod tests {
             .compile(&ir)
             .expect("operation should succeed for valid inputs");
 
-        let sk = SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([42u8; 32]).expect("operation should succeed for valid inputs");
         let vk = sk.verification_key();
         let receipt = PolicyValidationReceipt::from_compilation(
             &result,

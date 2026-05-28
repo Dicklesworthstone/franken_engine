@@ -854,7 +854,8 @@ mod tests {
         c.policy_id = "  p1  ".to_string();
         c.extension_id = "  e1  ".to_string();
         c.scenario_id = "  s1  ".to_string();
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert_eq!(eval.trace_id, "t1");
         assert_eq!(eval.decision_id, "d1");
         assert_eq!(eval.policy_id, "p1");
@@ -1073,7 +1074,8 @@ mod tests {
     #[test]
     fn evaluate_pass_case() {
         let c = make_case();
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(eval.pass);
         assert!(eval.failure_class.is_none());
         assert!(eval.failure_detail.is_none());
@@ -1087,7 +1089,8 @@ mod tests {
     #[test]
     fn evaluate_pass_ids_propagated() {
         let c = make_case();
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert_eq!(eval.trace_id, "t1");
         assert_eq!(eval.decision_id, "d1");
         assert_eq!(eval.policy_id, "p1");
@@ -1099,7 +1102,8 @@ mod tests {
     fn evaluate_pass_with_both_references() {
         let mut c = make_case();
         c.bun_reference = Some(obs(LockstepRuntime::Bun));
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(eval.pass);
         assert_eq!(eval.comparisons.len(), 3); // minimal + node + bun
     }
@@ -1109,7 +1113,8 @@ mod tests {
         let mut c = make_case();
         c.node_reference = None;
         c.bun_reference = Some(obs(LockstepRuntime::Bun));
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(eval.pass);
         assert_eq!(eval.comparisons.len(), 2); // minimal + bun
     }
@@ -1120,7 +1125,8 @@ mod tests {
     fn evaluate_correctness_regression_output_mismatch() {
         let mut c = make_case();
         c.minimal_policy.output_digest = "diverged".to_string();
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
@@ -1146,7 +1152,8 @@ mod tests {
         let mut c = make_case();
         c.minimal_policy.output_digest = "different".to_string();
         c.minimal_policy.capability_denials = vec!["net.connect".to_string()];
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
@@ -1168,7 +1175,8 @@ mod tests {
         c.full_manifest.elapsed_ns = 1_000_000;
         c.minimal_policy.elapsed_ns = 1_200_000; // 20% slower = 200_000 millionths
         c.max_performance_degradation_millionths = 100_000; // 10% threshold
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
@@ -1189,7 +1197,8 @@ mod tests {
         c.full_manifest.elapsed_ns = 1_000_000;
         c.minimal_policy.elapsed_ns = 1_100_000; // 10% slower = 100_000 millionths
         c.max_performance_degradation_millionths = 150_000; // 15% threshold
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(eval.pass);
         assert_eq!(eval.performance_degradation_millionths, 100_000);
     }
@@ -1202,7 +1211,8 @@ mod tests {
         let mut node = obs(LockstepRuntime::Node);
         node.output_digest = "node_different".to_string();
         c.node_reference = Some(node);
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
@@ -1224,7 +1234,8 @@ mod tests {
             b.state_digest = "bun_different".to_string();
             b
         });
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(!eval.pass);
         assert_eq!(
             eval.failure_class,
@@ -1251,7 +1262,8 @@ mod tests {
                 ..Default::default()
             },
         );
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(eval.pass);
     }
 
@@ -1266,7 +1278,8 @@ mod tests {
         let mut node = obs(LockstepRuntime::Node);
         node.output_digest = "node_diff".to_string();
         c.node_reference = Some(node);
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         assert!(!eval.pass);
         // Correctness regression should be the failure class, not platform divergence
         assert_eq!(
@@ -1314,7 +1327,8 @@ mod tests {
     #[test]
     fn evaluation_serde_roundtrip() {
         let c = make_case();
-        let eval = evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
+        let eval =
+            evaluate_plas_lockstep_case(c).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&eval).expect("serialize derived Serialize");
         let back: PlasLockstepEvaluation =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

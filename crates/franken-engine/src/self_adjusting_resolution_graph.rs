@@ -1309,7 +1309,8 @@ mod tests {
     fn test_add_module_recomputes_hash() {
         let mut graph = simple_graph();
         let old_hash = graph.content_hash;
-        add_module(&mut graph, make_node("new")).expect("operation should succeed for valid inputs");
+        add_module(&mut graph, make_node("new"))
+            .expect("operation should succeed for valid inputs");
         assert_ne!(graph.content_hash, old_hash);
     }
 
@@ -1330,7 +1331,8 @@ mod tests {
     #[test]
     fn test_remove_module_success() {
         let mut graph = simple_graph();
-        let receipt = remove_module(&mut graph, "b").expect("operation should succeed for valid inputs");
+        let receipt =
+            remove_module(&mut graph, "b").expect("operation should succeed for valid inputs");
         assert!(!graph.nodes.contains_key("b"));
         assert_eq!(graph.node_count(), 2);
         assert_eq!(receipt.trigger_module, "b");
@@ -1371,7 +1373,8 @@ mod tests {
     #[test]
     fn test_invalidate_module_leaf() {
         let graph = simple_graph();
-        let receipt = invalidate_module(&graph, "c").expect("operation should succeed for valid inputs");
+        let receipt =
+            invalidate_module(&graph, "c").expect("operation should succeed for valid inputs");
         // c is a leaf — affected set includes c, b (depends on c), a (depends on b).
         assert!(receipt.affected_modules.contains(&"c".to_string()));
         assert_eq!(receipt.scope, InvalidationScope::FullGraph);
@@ -1380,7 +1383,8 @@ mod tests {
     #[test]
     fn test_invalidate_module_root() {
         let graph = simple_graph();
-        let receipt = invalidate_module(&graph, "a").expect("operation should succeed for valid inputs");
+        let receipt =
+            invalidate_module(&graph, "a").expect("operation should succeed for valid inputs");
         // a is a root with no reverse deps — only a is affected.
         assert_eq!(receipt.affected_modules.len(), 1);
         assert_eq!(receipt.scope, InvalidationScope::SingleModule);
@@ -1389,7 +1393,8 @@ mod tests {
     #[test]
     fn test_invalidate_module_middle() {
         let graph = diamond_graph();
-        let receipt = invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
+        let receipt =
+            invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
         // b's reverse dep is a.
         assert!(receipt.affected_modules.contains(&"b".to_string()));
         assert!(receipt.affected_modules.contains(&"a".to_string()));
@@ -1568,7 +1573,8 @@ mod tests {
         let graph = simple_graph();
         let checkpoint = create_checkpoint(&graph);
         assert!(
-            verify_checkpoint(&graph, &checkpoint).expect("operation should succeed for valid inputs")
+            verify_checkpoint(&graph, &checkpoint)
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1578,7 +1584,8 @@ mod tests {
         let checkpoint = create_checkpoint(&graph);
         add_module(&mut graph, make_node("d")).expect("operation should succeed for valid inputs");
         assert!(
-            !verify_checkpoint(&graph, &checkpoint).expect("operation should succeed for valid inputs")
+            !verify_checkpoint(&graph, &checkpoint)
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -1806,7 +1813,8 @@ mod tests {
     #[test]
     fn test_serde_roundtrip_invalidation_receipt() {
         let graph = simple_graph();
-        let receipt = invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
+        let receipt =
+            invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let restored: InvalidationReceipt =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1876,8 +1884,8 @@ mod tests {
     #[test]
     fn test_manifest_invalidation() {
         let graph = franken_engine_resolution_manifest();
-        let receipt =
-            invalidate_module(&graph, "scheduler").expect("operation should succeed for valid inputs");
+        let receipt = invalidate_module(&graph, "scheduler")
+            .expect("operation should succeed for valid inputs");
         assert!(receipt.affected_modules.contains(&"scheduler".to_string()));
         // scheduler is depended on by react and react-dom, so those propagate to app.
         assert!(receipt.affected_modules.len() >= 2);
@@ -1888,7 +1896,8 @@ mod tests {
         let graph = franken_engine_resolution_manifest();
         let checkpoint = create_checkpoint(&graph);
         assert!(
-            verify_checkpoint(&graph, &checkpoint).expect("operation should succeed for valid inputs")
+            verify_checkpoint(&graph, &checkpoint)
+                .expect("operation should succeed for valid inputs")
         );
     }
 
@@ -2022,7 +2031,8 @@ mod tests {
     #[test]
     fn test_receipt_hash_self_consistent() {
         let graph = simple_graph();
-        let receipt = invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
+        let receipt =
+            invalidate_module(&graph, "b").expect("operation should succeed for valid inputs");
         let expected =
             compute_receipt_hash(&receipt).expect("receipt hash computation should not fail");
         assert_eq!(receipt.content_hash, expected);
@@ -2203,7 +2213,8 @@ mod tests {
         // (reverse deps propagate to all importers).
         // Total before = 3, recomputed = 3, skipped = 0.
         let mut graph = simple_graph();
-        let receipt = remove_module(&mut graph, "c").expect("operation should succeed for valid inputs");
+        let receipt =
+            remove_module(&mut graph, "c").expect("operation should succeed for valid inputs");
         assert_eq!(receipt.recomputed_count, 3);
         assert_eq!(receipt.skipped_count, 0);
         // The key invariant: recomputed + skipped == total_nodes_before_removal

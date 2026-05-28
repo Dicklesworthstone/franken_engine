@@ -1846,7 +1846,8 @@ mod tests {
     fn test_classic_simple_div() {
         let node = simple_div();
         let cfg = classic_config();
-        let result = lower_jsx_to_react(&node, &cfg).expect("operation should succeed for valid inputs");
+        let result =
+            lower_jsx_to_react(&node, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(
             result.element.element_type,
             ElementType::Intrinsic {
@@ -2776,8 +2777,8 @@ mod tests {
             classic_pragma: Some("h".to_string()),
             ..classic_config()
         };
-        let result =
-            lower_jsx_to_react(&simple_div(), &cfg).expect("operation should succeed for valid inputs");
+        let result = lower_jsx_to_react(&simple_div(), &cfg)
+            .expect("operation should succeed for valid inputs");
         match &result.element.call_convention {
             CallConvention::Classic { object, .. } => {
                 assert_eq!(object, "h");
@@ -2792,8 +2793,8 @@ mod tests {
             automatic_import_source: Some("preact/jsx-runtime".to_string()),
             ..automatic_config()
         };
-        let result =
-            lower_jsx_to_react(&simple_div(), &cfg).expect("operation should succeed for valid inputs");
+        let result = lower_jsx_to_react(&simple_div(), &cfg)
+            .expect("operation should succeed for valid inputs");
         assert!(
             result
                 .required_imports

@@ -1751,8 +1751,8 @@ mod tests {
     fn lane_id_deserialize_accepts_legacy_lineage_labels() {
         // SAFETY: String literal is valid JSON format for LaneId deserialization.
         // from_str only fails on invalid JSON or schema mismatch (both impossible here).
-        let back: LaneId = serde_json::from_str("\"v8_inspired_native\"")
-            .expect("deserialization should succeed");
+        let back: LaneId =
+            serde_json::from_str("\"v8_inspired_native\"").expect("deserialization should succeed");
         assert_eq!(back, LaneId::v8_native());
         assert_eq!(back.to_string(), THROUGHPUT_PROFILE_LABEL);
     }

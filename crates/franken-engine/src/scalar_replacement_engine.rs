@@ -1922,7 +1922,8 @@ mod tests {
             precise: true,
         };
         // SAFETY: Test-only unwrap expecting valid inputs to build sinking plan successfully
-        let plan = build_sinking_plan(&cert, &[]).expect("operation should succeed for valid inputs");
+        let plan =
+            build_sinking_plan(&cert, &[]).expect("operation should succeed for valid inputs");
         assert_eq!(plan.site_id, "s1");
         assert_eq!(plan.sunk_position, 20);
         assert_eq!(plan.instructions_saved, 20);
@@ -1949,8 +1950,8 @@ mod tests {
             description: "call before use".to_string(),
         }];
         // SAFETY: Test-only unwrap expecting valid inputs to build sinking plan successfully
-        let plan =
-            build_sinking_plan(&cert, &barriers).expect("operation should succeed for valid inputs");
+        let plan = build_sinking_plan(&cert, &barriers)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(plan.sunk_position, 11); // Just after the barrier.
     }
 

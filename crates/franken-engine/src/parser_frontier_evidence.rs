@@ -869,8 +869,8 @@ mod tests {
         let out = unique_temp_dir("frontier-events");
         let cmds = vec!["test".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
-        let events =
-            fs::read_to_string(&arts.events_path).expect("operation should succeed for valid inputs");
+        let events = fs::read_to_string(&arts.events_path)
+            .expect("operation should succeed for valid inputs");
         let corpus = frontier_corpus();
         assert_eq!(events.lines().count(), corpus.len() + 2);
     }
@@ -1197,8 +1197,8 @@ mod tests {
         let out = unique_temp_dir("frontier-cmds-match");
         let cmds = vec!["alpha".to_string(), "beta".to_string(), "gamma".to_string()];
         let arts = write_frontier_evidence_bundle(&out, &cmds).expect("write");
-        let content =
-            fs::read_to_string(&arts.commands_path).expect("operation should succeed for valid inputs");
+        let content = fs::read_to_string(&arts.commands_path)
+            .expect("operation should succeed for valid inputs");
         assert!(content.contains("alpha"));
         assert!(content.contains("beta"));
         assert!(content.contains("gamma"));

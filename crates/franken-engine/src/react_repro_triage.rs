@@ -1106,8 +1106,7 @@ mod tests {
     fn catalog_serde_roundtrip() {
         let catalog = ReproCatalog::build(vec![sample_entry()], SecurityEpoch::from_raw(1));
         // SAFETY: ReproCatalog derives Serialize and has no non-serializable fields.
-        let json =
-            serde_json::to_string_pretty(&catalog).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&catalog).expect("serialization should succeed");
         // SAFETY: JSON was just produced by valid ReproCatalog serialization.
         let parsed: ReproCatalog =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

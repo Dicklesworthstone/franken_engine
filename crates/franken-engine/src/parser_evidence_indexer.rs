@@ -883,7 +883,8 @@ mod tests {
 
     #[test]
     fn schema_version_parse_zero_major() {
-        let tag = SchemaVersionTag::parse("fam.v0").expect("operation should succeed for valid inputs");
+        let tag =
+            SchemaVersionTag::parse("fam.v0").expect("operation should succeed for valid inputs");
         assert_eq!(tag.family, "fam");
         assert_eq!(tag.major, 0);
     }
@@ -900,9 +901,12 @@ mod tests {
 
     #[test]
     fn schema_version_tag_ordering() {
-        let a = SchemaVersionTag::parse("alpha.v1").expect("operation should succeed for valid inputs");
-        let b = SchemaVersionTag::parse("alpha.v2").expect("operation should succeed for valid inputs");
-        let c = SchemaVersionTag::parse("beta.v1").expect("operation should succeed for valid inputs");
+        let a =
+            SchemaVersionTag::parse("alpha.v1").expect("operation should succeed for valid inputs");
+        let b =
+            SchemaVersionTag::parse("alpha.v2").expect("operation should succeed for valid inputs");
+        let c =
+            SchemaVersionTag::parse("beta.v1").expect("operation should succeed for valid inputs");
         assert!(a < b);
         assert!(a < c);
     }
@@ -1952,7 +1956,8 @@ mod tests {
     #[test]
     fn enrichment_schema_version_parse_multiple_dot_v_picks_last() {
         // rsplit_once(".v") picks the last ".v" so family includes earlier segments.
-        let tag = SchemaVersionTag::parse("a.v1.v2").expect("operation should succeed for valid inputs");
+        let tag =
+            SchemaVersionTag::parse("a.v1.v2").expect("operation should succeed for valid inputs");
         assert_eq!(tag.family, "a.v1");
         assert_eq!(tag.major, 2);
     }
@@ -2033,8 +2038,7 @@ mod tests {
                 to_schema: "fam.event.v2".into(),
             }],
         };
-        let json =
-            serde_json::to_string_pretty(&index).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&index).expect("serialization should succeed");
         let back: ParserEvidenceIndex =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(index, back);

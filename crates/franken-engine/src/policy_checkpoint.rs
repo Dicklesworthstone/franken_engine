@@ -961,8 +961,8 @@ mod tests {
     fn quorum_fails_with_wrong_keys() {
         let sk1 = make_sk(1);
         let sk2 = make_sk(2);
-        let wrong_vk =
-            VerificationKey::from_bytes([0xFF; 32]).expect("operation should succeed for valid inputs");
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32])
+            .expect("operation should succeed for valid inputs");
         let cp = build_genesis(&[sk1, sk2]);
 
         let err = verify_checkpoint_quorum(&cp, 2, &[wrong_vk]).unwrap_err();

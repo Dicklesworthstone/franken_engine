@@ -1050,8 +1050,8 @@ pub fn write_proof_bundle(
         .map_err(|e| format!("create_dir_all({}): {e}", bundle_dir.display()))?;
 
     let proof_path = bundle_dir.join(format!("{}.proof.json", body.claim_id));
-    let mut value = serde_json::to_value(body)
-        .map_err(|e| format!("serialize {} body: {e}", body.claim_id))?;
+    let mut value =
+        serde_json::to_value(body).map_err(|e| format!("serialize {} body: {e}", body.claim_id))?;
     let content_hash = canonical_body_hash(&value)?;
     if let serde_json::Value::Object(ref mut map) = value {
         map.insert(

@@ -841,8 +841,7 @@ impl FileArtifact {
     fn jsonl<T: Serialize>(path: &str, records: &[T]) -> Self {
         let mut contents = Vec::new();
         for record in records {
-            let mut line =
-                serde_json::to_vec(record).expect("serialization should succeed");
+            let mut line = serde_json::to_vec(record).expect("serialization should succeed");
             line.push(b'\n');
             contents.extend_from_slice(&line);
         }
@@ -1219,8 +1218,7 @@ mod tests {
                 },
             ],
         };
-        let json =
-            serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
         let back: RetryBudgetPolicyArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
@@ -1256,8 +1254,7 @@ mod tests {
                 exact_fallback_conditions: vec!["uninitialized".to_string()],
             }],
         };
-        let json =
-            serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
         let back: IncumbentFallbackMatrixArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
@@ -1345,8 +1342,7 @@ mod tests {
                 latest_read_source: "fast_path".to_string(),
             }],
         };
-        let json =
-            serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
         let back: ReaderWriterContractArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
@@ -1355,8 +1351,7 @@ mod tests {
     #[test]
     fn docs_contract_fixture_serde_round_trip() {
         let fixture = build_docs_contract_fixture();
-        let json =
-            serde_json::to_string_pretty(&fixture).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&fixture).expect("serialization should succeed");
         let back: DocsContractFixture =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fixture, back);

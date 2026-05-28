@@ -2392,7 +2392,9 @@ mod tests {
         let result = compile_regexp("(a)\\1", &flags, &ast, &config, epoch);
         assert!(result.is_ok());
         assert_eq!(
-            result.expect("operation should succeed for valid inputs").tier,
+            result
+                .expect("operation should succeed for valid inputs")
+                .tier,
             AutomataTier::InterpreterFallback
         );
     }

@@ -1264,8 +1264,8 @@ mod tests {
 
     #[test]
     fn corpus_tier_individual_serde_adversarial() {
-        let json = serde_json::to_string(&CorpusTier::Adversarial)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&CorpusTier::Adversarial).expect("serialization should succeed");
         assert_eq!(json, "\"adversarial\"");
         let recovered: CorpusTier =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1313,15 +1313,15 @@ mod tests {
 
     #[test]
     fn equivalence_verdict_serde_pass_json_string() {
-        let json = serde_json::to_string(&EquivalenceVerdict::Pass)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&EquivalenceVerdict::Pass).expect("serialization should succeed");
         assert_eq!(json, "\"pass\"");
     }
 
     #[test]
     fn equivalence_verdict_serde_fail_json_string() {
-        let json = serde_json::to_string(&EquivalenceVerdict::Fail)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&EquivalenceVerdict::Fail).expect("serialization should succeed");
         assert_eq!(json, "\"fail\"");
     }
 
@@ -1479,8 +1479,11 @@ mod tests {
         let corpus = equivalence_corpus();
         let ev0 = evaluate_specimen(&corpus[0]);
         // Pick the last specimen which has a different tier/tamper
-        let ev_last =
-            evaluate_specimen(corpus.last().expect("operation should succeed for valid inputs"));
+        let ev_last = evaluate_specimen(
+            corpus
+                .last()
+                .expect("operation should succeed for valid inputs"),
+        );
         assert_ne!(
             ev0.canonical_hash(),
             ev_last.canonical_hash(),
@@ -2335,8 +2338,7 @@ mod tests {
     #[test]
     fn inventory_serde_full_equality_round_trip() {
         let inventory = run_equivalence_corpus();
-        let json =
-            serde_json::to_string_pretty(&inventory).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&inventory).expect("serialization should succeed");
         let recovered: EquivalenceInventory =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(inventory, recovered);

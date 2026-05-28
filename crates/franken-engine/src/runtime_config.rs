@@ -993,7 +993,8 @@ mod tests {
 
     #[test]
     fn empty_toml_produces_default() {
-        let config = RuntimeConfig::from_toml("").expect("operation should succeed for valid inputs");
+        let config =
+            RuntimeConfig::from_toml("").expect("operation should succeed for valid inputs");
         assert_eq!(config, RuntimeConfig::default());
     }
 

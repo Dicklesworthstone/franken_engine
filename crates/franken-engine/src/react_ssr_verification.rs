@@ -1779,8 +1779,8 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r1", b"a"), ssr_evidence("c1", b"a")),
             DifferentialPair::new(ssr_evidence("r2", b"b"), ssr_evidence("c2", b"b")),
         ];
-        let result =
-            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
+        let result = verify_batch(&pairs, &default_config())
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.overall_verdict, PathVerdict::Verified);
         assert_eq!(result.verified_count, 2);
         assert_eq!(result.divergent_count, 0);
@@ -1797,8 +1797,8 @@ mod tests {
                 vec![make_mismatch(MismatchKind::OutputMismatch)],
             ),
         ];
-        let result =
-            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
+        let result = verify_batch(&pairs, &default_config())
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.overall_verdict, PathVerdict::Divergent);
         assert_eq!(result.verified_count, 1);
         assert_eq!(result.divergent_count, 1);
@@ -1827,16 +1827,16 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r2", b"b"), ssr_evidence("c2", b"b")),
             DifferentialPair::new(ssr_evidence("r3", b"c"), ssr_evidence("c3", b"c")),
         ];
-        let result =
-            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
+        let result = verify_batch(&pairs, &default_config())
+            .expect("operation should succeed for valid inputs");
         // First receipt has no previous hash.
         assert!(result.results[0].receipt.previous_hash.is_none());
         // Subsequent receipts chain to previous.
         assert!(result.results[1].receipt.previous_hash.is_some());
         assert!(result.results[2].receipt.previous_hash.is_some());
         // Chain is deterministic.
-        let r2 =
-            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
+        let r2 = verify_batch(&pairs, &default_config())
+            .expect("operation should succeed for valid inputs");
         assert_eq!(
             result.results[2].receipt.previous_hash,
             r2.results[2].receipt.previous_hash
@@ -1857,8 +1857,8 @@ mod tests {
                 vec![make_mismatch(MismatchKind::OutputMismatch)],
             ),
         ];
-        let result =
-            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
+        let result = verify_batch(&pairs, &default_config())
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.pass_rate(), 0);
     }
 
@@ -1868,10 +1868,10 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r1", b"x"), ssr_evidence("c1", b"x")),
             DifferentialPair::new(ssr_evidence("r2", b"y"), ssr_evidence("c2", b"y")),
         ];
-        let b1 =
-            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
-        let b2 =
-            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
+        let b1 = verify_batch(&pairs, &default_config())
+            .expect("operation should succeed for valid inputs");
+        let b2 = verify_batch(&pairs, &default_config())
+            .expect("operation should succeed for valid inputs");
         assert_eq!(b1.content_hash, b2.content_hash);
     }
 
@@ -2004,8 +2004,8 @@ mod tests {
             DifferentialPair::new(ssr_evidence("r1", b"a"), ssr_evidence("c1", b"a")),
             DifferentialPair::new(ssr_evidence("r2", b"b"), ssr_evidence("c2", b"b")),
         ];
-        let bv =
-            verify_batch(&pairs, &default_config()).expect("operation should succeed for valid inputs");
+        let bv = verify_batch(&pairs, &default_config())
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&bv).expect("serialize derived Serialize");
         let back: BatchVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(bv, back);

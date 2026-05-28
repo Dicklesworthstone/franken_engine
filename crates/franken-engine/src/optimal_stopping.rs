@@ -941,8 +941,8 @@ mod tests {
     fn snell_envelope_simple() {
         // Payoffs: [1, 3, 2].  Without discount, optimal is to stop at t=1 (payoff 3).
         let payoffs = vec![1_000_000, 3_000_000, 2_000_000];
-        let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
+        let env = SnellEnvelope::compute(payoffs, MILLION)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(env.optimal_stopping_time, 1);
         assert_eq!(env.optimal_value_millionths, 3_000_000);
     }
@@ -951,8 +951,8 @@ mod tests {
     fn snell_envelope_monotone_increasing() {
         // Payoffs: [1, 2, 3, 4, 5].  Best to wait until last.
         let payoffs = vec![1_000_000, 2_000_000, 3_000_000, 4_000_000, 5_000_000];
-        let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
+        let env = SnellEnvelope::compute(payoffs, MILLION)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(env.optimal_stopping_time, 4); // last index
     }
 
@@ -960,8 +960,8 @@ mod tests {
     fn snell_envelope_monotone_decreasing() {
         // Payoffs: [5, 4, 3, 2, 1].  Best to stop immediately.
         let payoffs = vec![5_000_000, 4_000_000, 3_000_000, 2_000_000, 1_000_000];
-        let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
+        let env = SnellEnvelope::compute(payoffs, MILLION)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(env.optimal_stopping_time, 0);
     }
 
@@ -969,8 +969,8 @@ mod tests {
     fn snell_envelope_with_discount() {
         // Payoffs: [1, 10].  With high discount (0.5), future payoff discounted.
         let payoffs = vec![1_000_000, 10_000_000];
-        let env =
-            SnellEnvelope::compute(payoffs, 500_000).expect("operation should succeed for valid inputs");
+        let env = SnellEnvelope::compute(payoffs, 500_000)
+            .expect("operation should succeed for valid inputs");
         // Discounted continuation = 0.5 * 10 = 5 > 1, so wait.
         assert_eq!(env.optimal_stopping_time, 1);
     }
@@ -998,8 +998,8 @@ mod tests {
     #[test]
     fn snell_should_stop_at() {
         let payoffs = vec![1_000_000, 3_000_000, 2_000_000];
-        let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
+        let env = SnellEnvelope::compute(payoffs, MILLION)
+            .expect("operation should succeed for valid inputs");
         assert!(!env.should_stop_at(0));
         assert!(env.should_stop_at(1));
     }
@@ -1007,8 +1007,8 @@ mod tests {
     #[test]
     fn snell_envelope_serde_roundtrip() {
         let payoffs = vec![1_000_000, 3_000_000, 2_000_000];
-        let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
+        let env = SnellEnvelope::compute(payoffs, MILLION)
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&env).expect("serialize derived Serialize");
         let restored: SnellEnvelope =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1243,8 +1243,8 @@ mod tests {
     #[test]
     fn snell_envelope_single_payoff() {
         let payoffs = vec![2_000_000];
-        let env =
-            SnellEnvelope::compute(payoffs, MILLION).expect("operation should succeed for valid inputs");
+        let env = SnellEnvelope::compute(payoffs, MILLION)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(env.optimal_stopping_time, 0);
         assert_eq!(env.optimal_value_millionths, 2_000_000);
         assert!(env.should_stop_at(0));
@@ -1652,7 +1652,8 @@ mod tests {
         // With discount factor 0, continuation value is always 0,
         // so optimal stopping is at the max payoff if it's positive
         let payoffs = vec![-1_000_000, 3_000_000, -500_000];
-        let env = SnellEnvelope::compute(payoffs, 0).expect("operation should succeed for valid inputs");
+        let env =
+            SnellEnvelope::compute(payoffs, 0).expect("operation should succeed for valid inputs");
         // With zero discount, each envelope value is just max(payoff, 0 * next)
         // so envelope = max(payoff, 0) for each step
         // optimal_stopping_time = first t where envelope_t == payoff_t

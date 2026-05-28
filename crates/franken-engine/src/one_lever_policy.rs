@@ -1309,20 +1309,20 @@ mod tests {
 
     #[test]
     fn enrichment_lever_category_serde_snake_case_field_names() {
-        let json = serde_json::to_string(&LeverCategory::Execution)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&LeverCategory::Execution).expect("serialization should succeed");
         assert_eq!(json, "\"execution\"");
-        let json = serde_json::to_string(&LeverCategory::Memory)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&LeverCategory::Memory).expect("serialization should succeed");
         assert_eq!(json, "\"memory\"");
-        let json = serde_json::to_string(&LeverCategory::Security)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&LeverCategory::Security).expect("serialization should succeed");
         assert_eq!(json, "\"security\"");
-        let json = serde_json::to_string(&LeverCategory::Benchmark)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&LeverCategory::Benchmark).expect("serialization should succeed");
         assert_eq!(json, "\"benchmark\"");
-        let json = serde_json::to_string(&LeverCategory::Config)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&LeverCategory::Config).expect("serialization should succeed");
         assert_eq!(json, "\"config\"");
     }
 

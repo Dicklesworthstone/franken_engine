@@ -708,8 +708,7 @@ impl RegimeShiftManifest {
         let mut h = Sha256::new();
         h.update(REGIME_SHIFT_SCHEMA_VERSION.as_bytes());
         h.update(REGIME_SHIFT_BEAD_ID.as_bytes());
-        let summary_bytes =
-            serde_json::to_vec(&summary).expect("serialization should succeed");
+        let summary_bytes = serde_json::to_vec(&summary).expect("serialization should succeed");
         h.update(&summary_bytes);
         let hash_bytes: [u8; 32] = h.finalize().into();
 

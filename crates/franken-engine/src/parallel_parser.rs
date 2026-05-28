@@ -2640,8 +2640,8 @@ mod tests {
 
         let split = plan.chunks[0].1 as usize;
         // SAFETY: Test input is valid UTF-8 JavaScript source code
-        let first_chunk =
-            std::str::from_utf8(&source[..split]).expect("operation should succeed for valid inputs");
+        let first_chunk = std::str::from_utf8(&source[..split])
+            .expect("operation should succeed for valid inputs");
         assert!(
             first_chunk.contains("}\n"),
             "expected split to occur on/after a block boundary, got: {first_chunk:?}"
@@ -2952,7 +2952,8 @@ mod tests {
         };
         let serial_input = make_input(&source, &serial_config);
         // SAFETY: Test-only unwrap expecting valid JS parsing with known source
-        let serial_output = parse(&serial_input).expect("operation should succeed for valid inputs");
+        let serial_output =
+            parse(&serial_input).expect("operation should succeed for valid inputs");
 
         // Token counts should match.
         assert_eq!(output.token_count, serial_output.token_count);

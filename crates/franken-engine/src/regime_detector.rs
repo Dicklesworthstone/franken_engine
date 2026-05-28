@@ -752,7 +752,9 @@ mod tests {
         let events = det.drain_events();
         assert!(!events.is_empty());
 
-        let last = events.last().expect("operation should succeed for valid inputs");
+        let last = events
+            .last()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.detector_id, "det-1");
         assert_eq!(last.metric_stream, "hostcall_rate");
     }

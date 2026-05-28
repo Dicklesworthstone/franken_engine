@@ -1569,8 +1569,10 @@ mod tests {
     #[test]
     fn build_bundle_deterministic() {
         let r = make_request();
-        let d1 = build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
-        let d2 = build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
+        let d1 =
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
+        let d2 =
+            build_plas_benchmark_bundle(&r).expect("operation should succeed for valid inputs");
         assert_eq!(d1.bundle_id, d2.bundle_id);
     }
 

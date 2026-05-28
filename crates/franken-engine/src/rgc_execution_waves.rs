@@ -949,23 +949,19 @@ mod tests {
     #[test]
     fn execution_wave_serde_tags_are_stable() {
         assert_eq!(
-            serde_json::to_string(&ExecutionWave::Wave0)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ExecutionWave::Wave0).expect("serialization should succeed"),
             "\"wave_0\""
         );
         assert_eq!(
-            serde_json::to_string(&ExecutionWave::Wave1)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ExecutionWave::Wave1).expect("serialization should succeed"),
             "\"wave_1\""
         );
         assert_eq!(
-            serde_json::to_string(&ExecutionWave::Wave2)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ExecutionWave::Wave2).expect("serialization should succeed"),
             "\"wave_2\""
         );
         assert_eq!(
-            serde_json::to_string(&ExecutionWave::Wave3)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ExecutionWave::Wave3).expect("serialization should succeed"),
             "\"wave_3\""
         );
     }

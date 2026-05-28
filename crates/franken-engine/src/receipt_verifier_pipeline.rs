@@ -2261,8 +2261,10 @@ mod tests {
         let software_root = SoftwareTrustRoot::new("root-1", 7);
         let measurement = software_root.measure(b"a", b"b", b"c", b"d", "e");
         let quote = software_root.attest(&measurement, [0u8; 32], 1000, 0);
-        let a = attestation_quote_digest(&quote).expect("operation should succeed for valid inputs");
-        let b = attestation_quote_digest(&quote).expect("operation should succeed for valid inputs");
+        let a =
+            attestation_quote_digest(&quote).expect("operation should succeed for valid inputs");
+        let b =
+            attestation_quote_digest(&quote).expect("operation should succeed for valid inputs");
         assert_eq!(a, b);
     }
 

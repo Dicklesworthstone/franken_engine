@@ -1444,27 +1444,24 @@ impl EvidenceLog {
         self.receipts.is_empty()
     }
 
-    /// Generate a signing key for HMAC.
+    /// Generate a fresh 256-bit HMAC signing key from the operating-system
+    /// CSPRNG (bd-7r0ty).
     ///
-    /// Dev-only stopgap — production must wire in a CSPRNG. The 128-bit
-    /// nanosecond timestamp is spread across bytes 0..=15 of the key, then
-    /// wrapped into bytes 16..=31. The `% 16` is load-bearing: without it,
-    /// `i * 8` reaches 128+ once `i >= 16` and shifting a `u128` by 128 bits
-    /// panics with "attempt to shift right with overflow" in debug builds —
-    /// which is why every interpreter test that constructed an
-    /// `InterpreterCore` was failing at runtime.
+    /// Previously the key was constructed from `SystemTime::now().as_nanos()`
+    /// with bytes 16..=31 replicating bytes 0..=15, yielding at most 128 bits
+    /// of source entropy and as little as ~30 bits of *practical* entropy when
+    /// the construction moment could be bounded to a one-second window —
+    /// trivially recoverable by an attacker who could approximate when the
+    /// `EvidenceLog` was constructed, which forged the entire downstream
+    /// receipt chain. The new construction reads 32 random bytes from
+    /// `rand::rngs::OsRng` (same source `revocation_freshness` and
+    /// `secure_aggregation` already use), so every byte of the key carries
+    /// 8 bits of entropy. Tests that need a deterministic key continue to use
+    /// [`EvidenceLog::with_key`].
     fn generate_signing_key() -> [u8; 32] {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-
+        use rand::RngCore;
         let mut key = [0u8; 32];
-        for (i, byte) in key.iter_mut().enumerate() {
-            let shift = ((i % 16) * 8) as u32; // stays in 0..=120, inside u128 width
-            *byte = ((timestamp >> shift) & 0xFF) as u8;
-        }
-
+        rand::rngs::OsRng.fill_bytes(&mut key);
         key
     }
 
@@ -1555,6 +1552,70 @@ impl EvidenceLog {
 impl Default for EvidenceLog {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod evidence_log_signing_key_tests {
+    //! bd-7r0ty: the production signing key used to be built from
+    //! `SystemTime::now().as_nanos()` with bytes 16..=31 mirroring bytes 0..=15,
+    //! yielding at most 128 bits of source entropy and as few as ~30 bits of
+    //! practical entropy when the construction moment was observable. The
+    //! switch to `OsRng` removes both defects; these tests pin the new
+    //! invariants so a regression is impossible to reintroduce silently.
+
+    use super::*;
+
+    #[test]
+    fn signing_key_is_not_byte_repetitive() {
+        // Two independently-constructed logs MUST produce different keys.
+        // Collision probability with OsRng on 32 bytes is 2^-256, well below
+        // any realistic flake threshold.
+        let log_a = EvidenceLog::new();
+        let log_b = EvidenceLog::new();
+        assert_ne!(
+            log_a.signing_key, log_b.signing_key,
+            "OsRng-derived keys must be distinct across constructions",
+        );
+
+        // A single key must NOT have bytes 16..=31 mirror bytes 0..=15 — the
+        // exact pattern the bd-7r0ty pre-fix `SystemTime`-derived construction
+        // produced.
+        let key = log_a.signing_key;
+        assert_ne!(
+            &key[0..16],
+            &key[16..32],
+            "bytes 16..=31 must not mirror bytes 0..=15 (bd-7r0ty regression)",
+        );
+
+        // Sanity: not every byte equal — a zeroed/all-same key would still
+        // satisfy the mirror check above. OsRng draws are uniform over
+        // u8::MIN..=u8::MAX so the probability of all-same bytes is 256/256^32.
+        assert!(
+            key.iter().any(|&b| b != key[0]),
+            "key must contain at least two distinct byte values",
+        );
+    }
+
+    #[test]
+    fn signing_key_passes_basic_byte_spread_check() {
+        // Quick sanity that the byte distribution looks like CSPRNG output:
+        // across 32 bytes from a fresh key, expect at least 16 distinct byte
+        // values. (Birthday-collision math: P[< 16 distinct] is negligibly
+        // small for uniform 8-bit draws.) Catches a regression where the new
+        // construction accidentally collapses entropy to a single byte source.
+        let log = EvidenceLog::new();
+        let mut seen = std::collections::BTreeSet::new();
+        for &b in log.signing_key.iter() {
+            seen.insert(b);
+        }
+        assert!(
+            seen.len() >= 16,
+            "expected >=16 distinct byte values from a CSPRNG-derived 32-byte key, got {} \
+             (key bytes: {:?})",
+            seen.len(),
+            log.signing_key,
+        );
     }
 }
 

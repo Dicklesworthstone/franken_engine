@@ -8,12 +8,16 @@
 //! Pattern: Exact Golden (Pattern 1) with scrubbing for non-deterministic values.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use frankenengine_engine::deterministic_serde::{
     CanonicalValue, SchemaRegistry, decode_value, encode_value, serialize_with_schema,
 };
+
+// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
+// so we don't waste a per-crate test-binary compile on the helper alone.
+#[path = "_support/golden_diag.rs"]
+mod golden_diag;
 
 // Render a `CanonicalValue` via its `Serialize` impl (a stable contract), not
 // Rust's `Debug` (which is not a stability contract). bd-ub6x8.9.1.
@@ -36,92 +40,16 @@ fn render_bytes(bytes: &[u8]) -> String {
     out
 }
 
-/// Core golden comparison function following testing-golden-artifacts pattern
+// Inline assert_golden + summarize_golden_diff replaced by the shared
+// GoldenDiag helper (bd-ub6x8.3 sweep).
 fn assert_golden(test_name: &str, actual: &str) {
-    let golden_path = Path::new("tests/golden").join(format!("{test_name}.golden"));
-
-    // UPDATE MODE: overwrite golden with actual output
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(
-            golden_path
-                .parent()
-                .expect("Golden path must have parent directory"),
-        )
-        .expect("Failed to create golden artifacts directory");
-        fs::write(&golden_path, actual).expect("Failed to write golden artifact file");
-        eprintln!("[GOLDEN] Updated: {}", golden_path.display());
-        return;
+    let fixture_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/golden/{test_name}.golden"));
+    golden_diag::GoldenDiag {
+        framework_name: "Decode artifacts golden",
+        regen_env_var: "UPDATE_GOLDENS",
     }
-
-    // COMPARE MODE: diff actual vs golden
-    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
-        panic!(
-            "Golden file missing: {}\n\
-             Run with UPDATE_GOLDENS=1 to create it\n\
-             Then review and commit: git diff tests/golden/",
-            golden_path.display()
-        )
-    });
-
-    if actual != expected {
-        // Write actual for easy diffing
-        let actual_path = golden_path.with_extension("actual");
-        fs::write(&actual_path, actual)
-            .expect("Failed to write actual artifact file for comparison");
-
-        panic!(
-            "GOLDEN MISMATCH: {test_name}\n{}\n\
-             To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
-             To review: diff {} {}",
-            summarize_golden_diff(actual, &expected),
-            golden_path.display(),
-            actual_path.display(),
-        );
-    }
-
-    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
-    let _ = fs::remove_file(golden_path.with_extension("actual"));
-}
-
-/// Inline unified-diff summary for the golden mismatch panic (bd-ub6x8.8).
-/// Locates first/last differing line and prints a small context window so
-/// the panic message is actually reviewable instead of just byte lengths.
-fn summarize_golden_diff(actual: &str, expected: &str) -> String {
-    let a: Vec<&str> = actual.lines().collect();
-    let e: Vec<&str> = expected.lines().collect();
-    let n = a.len().max(e.len());
-    let mut first = None;
-    let mut last = None;
-    for i in 0..n {
-        if a.get(i).copied().unwrap_or("") != e.get(i).copied().unwrap_or("") {
-            first.get_or_insert(i);
-            last = Some(i);
-        }
-    }
-    let (Some(first), Some(last)) = (first, last) else {
-        return format!(
-            "    expected={} actual={} chars; no line-level diff (whitespace/encoding?)",
-            expected.len(),
-            actual.len()
-        );
-    };
-    let pick = |v: &[&str], i: usize| -> String {
-        v.get(i)
-            .copied()
-            .map(|s| s.chars().take(160).collect::<String>())
-            .unwrap_or_else(|| "<EOF>".to_string())
-    };
-    format!(
-        "    expected={} actual={} lines; first diff @ line {}, last @ line {}\n    -L{}: {}\n    +L{}: {}",
-        e.len(),
-        a.len(),
-        first + 1,
-        last + 1,
-        first + 1,
-        pick(&e, first),
-        first + 1,
-        pick(&a, first),
-    )
+    .assert_golden_match(actual, &fixture_path, test_name, None);
 }
 
 /// Generate deterministic synthetic value from seed

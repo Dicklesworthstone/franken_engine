@@ -17,6 +17,9 @@ use std::sync::{Arc, Weak};
 use serde::{Deserialize, Serialize};
 
 use crate::engine_object_id::{EngineObjectId, IdError, ObjectDomain, SchemaId, derive_id};
+use crate::runtime_observability::{
+    CrossZoneReferenceType, RuntimeSecurityObservability, SecurityEventContext,
+};
 
 use super::RuntimeCapability;
 
@@ -868,6 +871,60 @@ impl ZoneHierarchy {
         checker.validate(request)
     }
 
+    /// Observability-aware variant of
+    /// [`validate_cross_zone_reference`](Self::validate_cross_zone_reference)
+    /// that wires the `record_cross_zone_reference` runtime-security counter
+    /// into its real decision site (bd-x92qq, follow-up to bd-unc29).
+    ///
+    /// The cross-zone reference taxonomy collapses onto the two-valued
+    /// observability counter as follows:
+    /// - a reference that validates (an allow-listed provenance reference or a
+    ///   same-zone reference) is recorded as
+    ///   [`CrossZoneReferenceType::ProvenanceAllowed`];
+    /// - any denial — an authority leak across zones, a provenance reference
+    ///   that is not permitted, or a structural error such as a missing source
+    ///   or target zone — is recorded as
+    ///   [`CrossZoneReferenceType::AuthorityDenied`], classified fail-closed so a
+    ///   reference that cannot be authorised is never under-reported.
+    ///
+    /// `timestamp_ns` is supplied by the caller so replays produce byte-identical
+    /// events; the underlying
+    /// [`validate_cross_zone_reference`](Self::validate_cross_zone_reference)
+    /// call is delegated to unchanged, so the checker state, emitted
+    /// [`ZoneEvent`]s, and returned result are identical to the non-observed
+    /// path.
+    pub fn validate_cross_zone_reference_observed(
+        &self,
+        checker: &mut CrossZoneReferenceChecker,
+        request: CrossZoneReferenceRequest,
+        observability: &mut RuntimeSecurityObservability,
+        timestamp_ns: u64,
+    ) -> Result<(), TrustZoneError> {
+        // Capture the endpoints and decision context before the (consuming)
+        // delegate call so the recorded event names both zones even when the
+        // reference is denied.
+        let source_zone = request.source_zone.clone();
+        let target_zone = request.target_zone.clone();
+        let context = SecurityEventContext {
+            timestamp_ns,
+            trace_id: request.trace_id.clone(),
+            principal_id: source_zone.clone(),
+            decision_id: request.decision_id.clone().unwrap_or_default(),
+            policy_id: request.policy_id.clone().unwrap_or_default(),
+            zone_id: target_zone.clone(),
+            component: "trust_zone".to_string(),
+        };
+
+        let result = self.validate_cross_zone_reference(checker, request);
+        let reference_type = if result.is_ok() {
+            CrossZoneReferenceType::ProvenanceAllowed
+        } else {
+            CrossZoneReferenceType::AuthorityDenied
+        };
+        observability.record_cross_zone_reference(context, reference_type, &source_zone, &target_zone);
+        result
+    }
+
     pub fn events(&self) -> &[ZoneEvent] {
         &self.events
     }
@@ -1498,6 +1555,132 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err2, TrustZoneError::ZoneMissing { .. }));
+    }
+
+    #[test]
+    fn validate_cross_zone_reference_observed_records_provenance_allowed() {
+        let hierarchy = ZoneHierarchy::standard("maintainer", 1).expect("build hierarchy");
+        let mut checker = CrossZoneReferenceChecker::new();
+        checker.allow_provenance("community", "team");
+        let mut obs = RuntimeSecurityObservability::new();
+
+        hierarchy
+            .validate_cross_zone_reference_observed(
+                &mut checker,
+                CrossZoneReferenceRequest::new(
+                    "community",
+                    "team",
+                    ReferenceType::Provenance,
+                    "trace-obs-prov",
+                ),
+                &mut obs,
+                11,
+            )
+            .expect("allow-listed provenance reference must pass");
+
+        // Behaviour preserved: the checker recorded the allowed reference event.
+        assert_eq!(
+            checker.events().last().expect("event").outcome,
+            ZoneEventOutcome::Allowed
+        );
+        // The cross-zone reference was recorded as provenance-allowed.
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::ProvenanceAllowed)
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::AuthorityDenied)
+                .copied(),
+            Some(0)
+        );
+        let event = obs.logs().last().expect("security event");
+        assert_eq!(event.event_type, "cross_zone_reference");
+        assert_eq!(event.outcome, "allowed");
+        assert_eq!(
+            event.metadata.get("source_zone").map(String::as_str),
+            Some("community")
+        );
+        assert_eq!(
+            event.metadata.get("target_zone").map(String::as_str),
+            Some("team")
+        );
+        assert_eq!(event.timestamp_ns, 11);
+    }
+
+    #[test]
+    fn validate_cross_zone_reference_observed_records_authority_denied() {
+        let hierarchy = ZoneHierarchy::standard("maintainer", 1).expect("build hierarchy");
+        let mut checker = CrossZoneReferenceChecker::new();
+        let mut obs = RuntimeSecurityObservability::new();
+
+        let err = hierarchy
+            .validate_cross_zone_reference_observed(
+                &mut checker,
+                CrossZoneReferenceRequest::new(
+                    "community",
+                    "team",
+                    ReferenceType::Authority,
+                    "trace-obs-auth",
+                ),
+                &mut obs,
+                22,
+            )
+            .expect_err("cross-zone authority reference must be denied");
+
+        assert!(matches!(err, TrustZoneError::CrossZoneAuthorityLeak { .. }));
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::AuthorityDenied)
+                .copied(),
+            Some(1)
+        );
+        let event = obs.logs().last().expect("security event");
+        assert_eq!(event.event_type, "cross_zone_reference");
+        assert_eq!(event.outcome, "denied");
+    }
+
+    #[test]
+    fn validate_cross_zone_reference_observed_fails_closed_on_missing_zone() {
+        let hierarchy = ZoneHierarchy::standard("maintainer", 1).expect("build hierarchy");
+        let mut checker = CrossZoneReferenceChecker::new();
+        let mut obs = RuntimeSecurityObservability::new();
+
+        let err = hierarchy
+            .validate_cross_zone_reference_observed(
+                &mut checker,
+                CrossZoneReferenceRequest::new(
+                    "ghost-zone",
+                    "team",
+                    ReferenceType::Provenance,
+                    "trace-obs-missing",
+                ),
+                &mut obs,
+                33,
+            )
+            .expect_err("missing source zone must be rejected");
+
+        assert!(matches!(err, TrustZoneError::ZoneMissing { .. }));
+        // A structural failure is fail-closed: recorded as an authority denial.
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::AuthorityDenied)
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::ProvenanceAllowed)
+                .copied(),
+            Some(0)
+        );
     }
 
     // -- AuthorityRef --

@@ -473,15 +473,58 @@ impl RuntimeSecurityMetrics {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// Default number of structured-log events retained by
+/// `RuntimeSecurityObservability` before the oldest event is evicted.
+///
+/// Picked at 16 384 (≈ 16 K events) as a balance between keeping enough
+/// context for an operator inspecting a recent incident and bounding the
+/// in-memory cost. At ~512 bytes per `StructuredSecurityLogEvent` (rough
+/// estimate, dominated by the metadata `BTreeMap`), the cap caps the log
+/// memory budget at ~8 MiB — well below anything that could OOM a host
+/// process under sustained capability-denial flooding from a malicious
+/// extension (bd-rcrlc).
+pub const DEFAULT_MAX_LOG_CAPACITY: usize = 16_384;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeSecurityObservability {
     pub metrics: RuntimeSecurityMetrics,
     pub logs: Vec<StructuredSecurityLogEvent>,
+    /// Maximum number of `StructuredSecurityLogEvent` records retained in
+    /// `logs`. When `logs.len() == max_log_capacity`, the next event evicts
+    /// the oldest entry (FIFO) and increments `overflow_drops`. Defaults
+    /// to [`DEFAULT_MAX_LOG_CAPACITY`].
+    pub max_log_capacity: usize,
+    /// Count of `StructuredSecurityLogEvent` records dropped due to
+    /// ring-buffer overflow. A non-zero value is the operator-visible
+    /// signal that "the observability surface is being flooded" — the
+    /// Guardplane should treat sustained growth as a containment signal
+    /// rather than ignore it (bd-rcrlc).
+    pub overflow_drops: u64,
+}
+
+impl Default for RuntimeSecurityObservability {
+    fn default() -> Self {
+        Self {
+            metrics: RuntimeSecurityMetrics::default(),
+            logs: Vec::new(),
+            max_log_capacity: DEFAULT_MAX_LOG_CAPACITY,
+            overflow_drops: 0,
+        }
+    }
 }
 
 impl RuntimeSecurityObservability {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Builder helper to override the log-buffer capacity. A cap of `0`
+    /// is clamped to `1` because every `record_*` call must be able to
+    /// return the event it just produced — a 0-cap buffer would always
+    /// overflow and the caller would see an empty `logs` snapshot.
+    pub fn with_max_log_capacity(mut self, max_log_capacity: usize) -> Self {
+        self.max_log_capacity = max_log_capacity.max(1);
+        self
     }
 
     pub fn metrics(&self) -> &RuntimeSecurityMetrics {
@@ -490,6 +533,14 @@ impl RuntimeSecurityObservability {
 
     pub fn logs(&self) -> &[StructuredSecurityLogEvent] {
         &self.logs
+    }
+
+    /// Count of events dropped from the ring buffer due to overflow.
+    /// Non-zero values are an operator signal that the observability log
+    /// is being flooded (bd-rcrlc) and the Guardplane should treat them
+    /// as a containment-relevant input.
+    pub fn overflow_drops(&self) -> u64 {
+        self.overflow_drops
     }
 
     pub fn export_prometheus_metrics(&self) -> String {
@@ -712,6 +763,16 @@ impl RuntimeSecurityObservability {
         F: FnOnce(&mut RuntimeSecurityMetrics),
     {
         mutate_metrics(&mut self.metrics);
+        // Bounded ring buffer (bd-rcrlc): when full, evict the oldest
+        // entry and increment `overflow_drops` so the operator surface
+        // sees that the log is being flooded. Removing from the front of
+        // a `Vec` is O(n) but the overflow path is the unhappy path under
+        // attack — preserving the public `pub logs: Vec<...>` API matters
+        // more than overflow-path microseconds.
+        if self.logs.len() >= self.max_log_capacity {
+            self.logs.remove(0);
+            self.overflow_drops = self.overflow_drops.saturating_add(1);
+        }
         self.logs.push(event.clone());
         event
     }
@@ -2091,5 +2152,116 @@ mod tests {
         obs.record_auth_failure(test_context(), AuthFailureType::KeyExpired, None, None);
         assert_eq!(obs.logs().len(), 2);
         assert_eq!(cloned.logs().len(), 1);
+    }
+
+    // ── bd-rcrlc: bounded log ring buffer ─────────────────────────────────
+
+    #[test]
+    fn observability_default_uses_default_max_log_capacity() {
+        let obs = RuntimeSecurityObservability::new();
+        assert_eq!(obs.max_log_capacity, DEFAULT_MAX_LOG_CAPACITY);
+        assert_eq!(obs.overflow_drops(), 0);
+    }
+
+    #[test]
+    fn observability_under_capacity_does_not_drop_or_increment() {
+        let mut obs = RuntimeSecurityObservability::new().with_max_log_capacity(8);
+        for _ in 0..5 {
+            obs.record_auth_failure(
+                test_context(),
+                AuthFailureType::SignatureInvalid,
+                None,
+                None,
+            );
+        }
+        assert_eq!(obs.logs().len(), 5);
+        assert_eq!(obs.overflow_drops(), 0);
+    }
+
+    #[test]
+    fn observability_at_capacity_evicts_oldest_and_increments_overflow() {
+        let mut obs = RuntimeSecurityObservability::new().with_max_log_capacity(3);
+        // Push 5 events into a 3-slot buffer; the first two should be evicted.
+        let first = obs.record_auth_failure(
+            test_context(),
+            AuthFailureType::SignatureInvalid,
+            None,
+            None,
+        );
+        let second =
+            obs.record_auth_failure(test_context(), AuthFailureType::KeyExpired, None, None);
+        let _third = obs.record_auth_failure(
+            test_context(),
+            AuthFailureType::SignatureInvalid,
+            None,
+            None,
+        );
+        let _fourth =
+            obs.record_auth_failure(test_context(), AuthFailureType::KeyExpired, None, None);
+        let _fifth = obs.record_auth_failure(
+            test_context(),
+            AuthFailureType::SignatureInvalid,
+            None,
+            None,
+        );
+
+        assert_eq!(obs.logs().len(), 3, "buffer must stay capped at 3");
+        assert_eq!(
+            obs.overflow_drops(),
+            2,
+            "two oldest events should have been evicted",
+        );
+        assert!(
+            !obs.logs().contains(&first),
+            "first event should have been evicted",
+        );
+        assert!(
+            !obs.logs().contains(&second),
+            "second event should have been evicted",
+        );
+    }
+
+    #[test]
+    fn observability_with_max_log_capacity_clamps_zero_to_one() {
+        let obs = RuntimeSecurityObservability::new().with_max_log_capacity(0);
+        // A 0-cap buffer would always overflow and surprise the caller;
+        // the builder clamps to a minimum of 1 so the bound is sane.
+        assert_eq!(obs.max_log_capacity, 1);
+    }
+
+    #[test]
+    fn observability_overflow_counter_saturates_not_wraps() {
+        // Verify the counter uses saturating_add. We can't realistically push
+        // u64::MAX events, so just confirm the saturating arithmetic by
+        // setting the field directly via the public surface.
+        let mut obs = RuntimeSecurityObservability::new().with_max_log_capacity(1);
+        obs.overflow_drops = u64::MAX - 1;
+        // Two records: the first fills the buffer (no drop because we're at
+        // len=0 before push); the second triggers a drop (overflow_drops
+        // saturates from u64::MAX-1 → u64::MAX); the third saturates at MAX.
+        obs.record_auth_failure(
+            test_context(),
+            AuthFailureType::SignatureInvalid,
+            None,
+            None,
+        );
+        obs.record_auth_failure(
+            test_context(),
+            AuthFailureType::SignatureInvalid,
+            None,
+            None,
+        );
+        assert_eq!(obs.overflow_drops(), u64::MAX);
+        obs.record_auth_failure(
+            test_context(),
+            AuthFailureType::SignatureInvalid,
+            None,
+            None,
+        );
+        assert_eq!(
+            obs.overflow_drops(),
+            u64::MAX,
+            "saturating_add must not wrap to 0"
+        );
     }
 }

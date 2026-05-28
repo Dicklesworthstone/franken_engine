@@ -20,6 +20,9 @@ use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::proof_schema::OptimizationClass;
 use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::{
+    SIGNATURE_LEN, Signature, SigningKey, VerificationKey, sign_preimage, verify_signature,
+};
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -423,6 +426,8 @@ pub enum IngestionError {
     UnsupportedProofType { proof_type: ProofType },
     /// ID derivation failed.
     IdDerivation(String),
+    /// Issuer signing failed (e.g. malformed signing key).
+    Signing(String),
     /// Engine is in conservative mode due to churn dampening.
     ConservativeModeActive {
         invalidation_count: u64,
@@ -446,6 +451,7 @@ impl fmt::Display for IngestionError {
                 write!(f, "unsupported proof type: {proof_type}")
             }
             Self::IdDerivation(msg) => write!(f, "id derivation: {msg}"),
+            Self::Signing(msg) => write!(f, "issuer signing failed: {msg}"),
             Self::ConservativeModeActive {
                 invalidation_count,
                 window_ns,
@@ -468,10 +474,17 @@ impl std::error::Error for IngestionError {}
 pub struct IngestionConfig {
     /// Active policy ID that proofs must match.
     pub active_policy_id: String,
-    /// Signing key for receipts and signatures.
+    /// Symmetric key used to sign the engine's own ingestion *receipts*.
     /// SECURITY: excluded from serialization to prevent key leakage.
     #[serde(skip, default)]
     pub signing_key: [u8; 32],
+    /// Issuer's Ed25519 *public* key, used to asymmetrically verify incoming
+    /// proof signatures. `None` (the default) fails closed — every proof is
+    /// rejected with `SignatureInvalid` until a trusted issuer key is set.
+    /// SECURITY: holding only the public key means the verifier cannot forge
+    /// issuer signatures (unlike the prior symmetric keyed-hash MAC).
+    #[serde(skip, default)]
+    pub issuer_verification_key: Option<VerificationKey>,
     /// Churn dampening threshold: max invalidations per window.
     pub churn_threshold: u64,
     /// Churn dampening window in nanoseconds.
@@ -489,6 +502,7 @@ impl Default for IngestionConfig {
         Self {
             active_policy_id: String::new(),
             signing_key: [0u8; 32],
+            issuer_verification_key: None,
             churn_threshold: 10,
             churn_window_ns: 60_000_000_000,    // 60 seconds
             plas_speedup_estimate: 1_200_000,   // 1.2x
@@ -717,9 +731,20 @@ impl ProofIngestionEngine {
             };
         }
 
-        // Signature verification (simplified: verify hash-based signature).
-        let expected_sig = self.compute_signature(&proof.canonical_bytes());
-        if proof.issuer_signature != expected_sig {
+        // Asymmetric (Ed25519) issuer-signature verification. The verifier holds
+        // only the issuer's PUBLIC key, so — unlike the prior symmetric
+        // keyed-hash MAC, where the verifier could forge any signature — a
+        // compromised verifier cannot mint valid proofs. Fail closed if no
+        // issuer key is configured or the signature bytes are malformed.
+        let Some(issuer_key) = self.config.issuer_verification_key.as_ref() else {
+            return ProofValidationStatus::SignatureInvalid;
+        };
+        let Ok(sig_bytes) = <[u8; SIGNATURE_LEN]>::try_from(proof.issuer_signature.as_slice())
+        else {
+            return ProofValidationStatus::SignatureInvalid;
+        };
+        let signature = Signature::from_bytes(sig_bytes);
+        if verify_signature(issuer_key, &proof.canonical_bytes(), &signature).is_err() {
             return ProofValidationStatus::SignatureInvalid;
         }
 
@@ -1106,10 +1131,14 @@ pub fn create_proof_input(
         payload: payload.to_vec(),
     };
 
-    // Sign the proof using proper keyed hash (matching compute_signature).
-    proof.issuer_signature = AuthenticityHash::compute_keyed(signing_key, &proof.canonical_bytes())
-        .as_bytes()
-        .to_vec();
+    // Sign the proof with the issuer's Ed25519 private key (the 32 bytes are
+    // the Ed25519 seed). Verification uses the matching public key
+    // (`SigningKey::verification_key`) stored in `IngestionConfig`.
+    let issuer_key =
+        SigningKey::from_bytes(*signing_key).map_err(|e| IngestionError::Signing(e.to_string()))?;
+    let signature = sign_preimage(&issuer_key, &proof.canonical_bytes())
+        .map_err(|e| IngestionError::Signing(e.to_string()))?;
+    proof.issuer_signature = signature.to_bytes().to_vec();
 
     Ok(proof)
 }
@@ -1138,6 +1167,14 @@ mod tests {
         IngestionConfig {
             active_policy_id: "policy-001".to_string(),
             signing_key: test_key(),
+            // Proofs in tests are signed with `test_key()` as the Ed25519 seed
+            // (see `make_proof`/`create_proof_input`), so the verifier trusts the
+            // matching public key.
+            issuer_verification_key: Some(
+                SigningKey::from_bytes(test_key())
+                    .expect("test key is a valid Ed25519 seed")
+                    .verification_key(),
+            ),
             ..Default::default()
         }
     }
@@ -1431,15 +1468,67 @@ mod tests {
         ));
     }
 
+    // bd-smcdu: asymmetric Ed25519 verification — the verifier holds only the
+    // issuer's public key and cannot accept proofs from any other key.
+
+    #[test]
+    fn rejects_proof_signed_by_untrusted_issuer() {
+        // Engine trusts test_key()'s public key; sign a well-formed proof with a
+        // DIFFERENT Ed25519 key. Under the old symmetric MAC this kind of forgery
+        // was possible to anyone holding the shared key; under Ed25519 it fails.
+        let mut engine = test_engine();
+        let untrusted_seed = [0x5Au8; 32];
+        let proof = create_proof_input(
+            ProofType::PlasCapabilityWitness,
+            test_epoch(),
+            0,
+            0,
+            "policy-001",
+            b"test-payload",
+            &untrusted_seed,
+        )
+        .expect("proof creation should succeed");
+
+        let err = engine.ingest_proof(proof, 1000).unwrap_err();
+        assert!(matches!(
+            err,
+            IngestionError::ValidationFailed {
+                status: ProofValidationStatus::SignatureInvalid,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn fails_closed_when_no_issuer_key_configured() {
+        let mut config = test_config();
+        config.issuer_verification_key = None; // no trusted issuer
+        let mut engine = ProofIngestionEngine::new(test_epoch(), config);
+        let proof = make_default_proof(ProofType::PlasCapabilityWitness);
+
+        let err = engine.ingest_proof(proof, 1000).unwrap_err();
+        assert!(matches!(
+            err,
+            IngestionError::ValidationFailed {
+                status: ProofValidationStatus::SignatureInvalid,
+                ..
+            }
+        ));
+    }
+
     #[test]
     fn rejects_payload_hash_mismatch_even_with_valid_signature() {
         let mut engine = test_engine();
         let mut proof = make_default_proof(ProofType::PlasCapabilityWitness);
         proof.canonical_hash = ContentHash::compute(b"different-payload");
-        proof.issuer_signature =
-            AuthenticityHash::compute_keyed(&test_key(), &proof.canonical_bytes())
-                .as_bytes()
-                .to_vec();
+        // Re-sign over the (now hash-mismatched) canonical bytes with a VALID
+        // Ed25519 issuer signature, so the rejection is attributable to the hash
+        // check (which precedes signature verification), not to a bad signature.
+        let issuer_key = SigningKey::from_bytes(test_key()).expect("valid Ed25519 seed");
+        proof.issuer_signature = sign_preimage(&issuer_key, &proof.canonical_bytes())
+            .expect("signing should succeed")
+            .to_bytes()
+            .to_vec();
 
         let err = engine.ingest_proof(proof, 1000).unwrap_err();
         assert!(matches!(

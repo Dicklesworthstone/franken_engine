@@ -3012,6 +3012,28 @@ impl InterpreterCore {
         self.set_register_label(dst, self.get_register_label(src)?.clone())
     }
 
+    /// Join (least-upper-bound) of the IFC labels on every register in a
+    /// `RegRange`. Empty range returns `Public`. Hoisted out of HostCall /
+    /// Call / Apply / Construct so every call-shape that resolves to a
+    /// register-range argument list uses the same join contract (bd-n2mjy).
+    fn join_arg_range_label(
+        &self,
+        args: crate::ir_contract::RegRange,
+    ) -> Result<Label, InterpreterError> {
+        let mut joined = Label::Public;
+        for i in 0..args.count {
+            let reg = args.start.checked_add(i).ok_or(
+                InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: u32::MAX,
+                },
+            )?;
+            joined = joined.join(self.get_register_label(reg)?);
+        }
+        Ok(joined)
+    }
+
+
     // ---------------------------------------------------------------------------
     // GC write barrier management
     // ---------------------------------------------------------------------------
@@ -6096,6 +6118,11 @@ impl InterpreterCore {
                         Some(&format!("cap:{}", capability.0)),
                     );
 
+                    // bd-n2mjy: capture the join of arg labels BEFORE dispatch so
+                    // hostcalls that mutate their arg slots don't strip the
+                    // input taint we owe to the dst register.
+                    let args_label = self.join_arg_range_label(args)?;
+
                     // Dispatch promise hostcalls to the promise subsystem.
                     let is_promise_cap = capability.0.starts_with("promise:");
                     let result = if is_promise_cap {
@@ -6128,6 +6155,7 @@ impl InterpreterCore {
                         Value::Undefined
                     };
                     self.write_reg(dst, result)?;
+                    self.set_register_label(dst, args_label)?;
                     self.ip += 1;
                 }
                 Ir3Instruction::ImportModule { specifier, dst } => {
@@ -23089,6 +23117,85 @@ mod async_runtime_tests_current {
             .get(crate::promise_model::PromiseHandle(0))
             .expect("synthetic await promise should exist");
         assert_eq!(promise.label, crate::ifc_artifacts::Label::Secret);
+    }
+
+    /// bd-n2mjy: a HostCall whose arg register carries a Secret label must
+    /// re-stamp the dst register's label with the join of the arg labels, so
+    /// information flowing INTO the hostcall taints its return value.
+    /// Previously `write_reg(dst, result)` left `register_labels[dst]`
+    /// whatever it was before — an under-tainting hole on every hostcall.
+    #[test]
+    fn hostcall_propagates_arg_label_join_to_dst() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:resolve".to_string()),
+                    args: RegRange { start: 0, count: 1 },
+                    dst: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        core.mutate_registers(|r| {
+            r[0] = Value::Int(42);
+        });
+        core.set_register_label(0, crate::ifc_artifacts::Label::Secret)
+            .expect("arg label should be settable");
+        // Seed dst with a label strictly below Secret to prove the helper
+        // overwrites it. If propagation were a no-op the dst label would
+        // stay `Public` after dispatch (the bug bd-n2mjy describes).
+        core.set_register_label(1, crate::ifc_artifacts::Label::Public)
+            .expect("dst label should be settable");
+
+        core.execute(&module)
+            .expect("promise:resolve hostcall should dispatch");
+
+        assert_eq!(
+            core.get_register_label(1)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Secret,
+            "hostcall dst register must inherit join(args' labels)"
+        );
+    }
+
+    /// bd-n2mjy: a HostCall with zero args resets the dst register's label to
+    /// `Public`. The dst can carry no operand-derived taint because no
+    /// operand was read; leaving a stale (possibly higher) prior label there
+    /// would over-taint subsequent flows (availability hazard called out in
+    /// the bead).
+    #[test]
+    fn hostcall_with_zero_args_resets_dst_label_to_public() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::HostCall {
+                    capability: CapabilityTag("promise:resolve".to_string()),
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::Halt,
+            ],
+            vec![],
+        );
+
+        let mut core = test_interpreter();
+        // Prior content of dst was Confidential. After a zero-arg hostcall
+        // the dst's label must reflect the new value's provenance (none of
+        // the prior taint), so it should drop to Public.
+        core.set_register_label(1, crate::ifc_artifacts::Label::Confidential)
+            .expect("dst label should be settable");
+
+        core.execute(&module)
+            .expect("zero-arg promise:resolve hostcall should dispatch");
+
+        assert_eq!(
+            core.get_register_label(1)
+                .expect("dst register label should exist"),
+            &crate::ifc_artifacts::Label::Public,
+            "zero-arg hostcall dst must reset to Public"
+        );
     }
 
     #[test]

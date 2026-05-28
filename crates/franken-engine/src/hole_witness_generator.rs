@@ -1310,7 +1310,8 @@ mod tests {
     fn generate_for_parser_hole() {
         let hole = make_hole("h1", HoleSurface::Parser, 200_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
+        let batch =
+            generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(batch.hole_id, "h1");
         assert!(!batch.witnesses.is_empty());
         assert!(batch.has_confident_witness);
@@ -1320,7 +1321,8 @@ mod tests {
     fn generate_for_react_hole() {
         let hole = make_hole("h2", HoleSurface::React, 300_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
+        let batch =
+            generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(batch.surface, HoleSurface::React);
         assert!(!batch.witnesses.is_empty());
     }
@@ -1329,7 +1331,8 @@ mod tests {
     fn generate_for_module_hole() {
         let hole = make_hole("h3", HoleSurface::Module, 400_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
+        let batch =
+            generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(batch.surface, HoleSurface::Module);
         // Module templates have 3 files
         for w in &batch.witnesses {
@@ -1341,7 +1344,8 @@ mod tests {
     fn generate_below_persistence_threshold_returns_empty() {
         let hole = make_hole("low", HoleSurface::Parser, 10_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
+        let batch =
+            generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert!(batch.witnesses.is_empty());
         assert!(!batch.has_confident_witness);
     }
@@ -1366,7 +1370,8 @@ mod tests {
         let hole = make_hole("h1", HoleSurface::Parser, 300_000);
         let mut cfg = default_config();
         cfg.max_witnesses_per_hole = 1;
-        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
+        let batch =
+            generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         assert!(batch.witnesses.len() <= 1);
     }
 
@@ -1423,8 +1428,10 @@ mod tests {
     fn report_seal_deterministic() {
         let holes = vec![make_hole("h1", HoleSurface::Parser, 200_000)];
         let cfg = default_config();
-        let r1 = generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
-        let r2 = generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
+        let r1 =
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
+        let r2 =
+            generate_witnesses(&holes, &cfg).expect("operation should succeed for valid inputs");
         assert_eq!(r1.content_hash, r2.content_hash);
     }
 
@@ -1660,7 +1667,8 @@ mod tests {
     fn interop_hole_generates_package_witness() {
         let hole = make_hole("int1", HoleSurface::Interop, 300_000);
         let cfg = default_config();
-        let batch = generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
+        let batch =
+            generate_for_hole(&hole, &cfg).expect("operation should succeed for valid inputs");
         let has_pkg = batch
             .witnesses
             .iter()

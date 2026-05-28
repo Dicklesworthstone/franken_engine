@@ -1455,7 +1455,8 @@ mod tests {
         let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[])
             .expect("operation should succeed for valid inputs");
         let manifest: LoweringGapInventoryRunManifest = serde_json::from_slice(
-            &fs::read(&artifacts.run_manifest_path).expect("operation should succeed for valid inputs"),
+            &fs::read(&artifacts.run_manifest_path)
+                .expect("operation should succeed for valid inputs"),
         )
         .expect("deserialization should succeed");
         let short_hash = &artifacts.inventory_hash[..16];
@@ -1475,7 +1476,8 @@ mod tests {
         let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &[])
             .expect("operation should succeed for valid inputs");
         let manifest: LoweringGapInventoryRunManifest = serde_json::from_slice(
-            &fs::read(&artifacts.run_manifest_path).expect("operation should succeed for valid inputs"),
+            &fs::read(&artifacts.run_manifest_path)
+                .expect("operation should succeed for valid inputs"),
         )
         .expect("deserialization should succeed");
         assert!(!manifest.artifact_paths.lowering_gap_inventory.contains('/'));
@@ -1524,8 +1526,8 @@ mod tests {
         let fc: LoweringGapStatus =
             serde_json::from_str("\"fail_closed\"").expect("deserialize known-valid JSON");
         assert_eq!(fc, LoweringGapStatus::FailClosed);
-        let op: LoweringGapStatus = serde_json::from_str("\"open_placeholder\"")
-            .expect("deserialization should succeed");
+        let op: LoweringGapStatus =
+            serde_json::from_str("\"open_placeholder\"").expect("deserialization should succeed");
         assert_eq!(op, LoweringGapStatus::OpenPlaceholder);
         let res: LoweringGapStatus =
             serde_json::from_str("\"resolved\"").expect("deserialize known-valid JSON");
@@ -1685,7 +1687,8 @@ mod tests {
         let target = Path::new("/some/deep/path/inventory.json");
         let temp = unique_temp_path(target);
         assert_eq!(
-            temp.parent().expect("operation should succeed for valid inputs"),
+            temp.parent()
+                .expect("operation should succeed for valid inputs"),
             Path::new("/some/deep/path")
         );
     }
@@ -1923,7 +1926,9 @@ mod tests {
         let inventory = lowering_gap_inventory();
         let report = lowering_gap_truth_consumer_parity_report(&inventory, "t", "d");
         let events = build_inventory_events(&inventory, &report, "t", "d");
-        let completed = events.last().expect("operation should succeed for valid inputs");
+        let completed = events
+            .last()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(completed.event, "inventory_completed");
         assert_eq!(completed.outcome, "completed");
         let detail = completed

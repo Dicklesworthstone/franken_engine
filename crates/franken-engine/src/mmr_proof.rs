@@ -828,7 +828,8 @@ mod tests {
         assert_eq!(proof.proof_type, ProofType::Inclusion);
         assert_eq!(proof.marker_index, 0);
         // SAFETY: Valid proof from inclusion_proof, verify_inclusion should succeed
-        verify_inclusion(&leaf_hash(0), 0, &proof).expect("operation should succeed for valid inputs");
+        verify_inclusion(&leaf_hash(0), 0, &proof)
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1610,17 +1611,17 @@ mod tests {
 
     #[test]
     fn proof_type_serde_variants_produce_distinct_json() {
-        let inc = serde_json::to_string(&ProofType::Inclusion)
-            .expect("serialization should succeed");
-        let con = serde_json::to_string(&ProofType::Consistency)
-            .expect("serialization should succeed");
+        let inc =
+            serde_json::to_string(&ProofType::Inclusion).expect("serialization should succeed");
+        let con =
+            serde_json::to_string(&ProofType::Consistency).expect("serialization should succeed");
         assert_ne!(inc, con);
     }
 
     #[test]
     fn proof_error_serde_variants_produce_distinct_json() {
-        let v1 = serde_json::to_string(&ProofError::EmptyStream)
-            .expect("serialization should succeed");
+        let v1 =
+            serde_json::to_string(&ProofError::EmptyStream).expect("serialization should succeed");
         let v2 = serde_json::to_string(&ProofError::InvalidProof { reason: "r".into() })
             .expect("serialization should succeed");
         let v3 = serde_json::to_string(&ProofError::IndexOutOfRange {
@@ -2037,7 +2038,8 @@ mod tests {
         let proof = mmr
             .inclusion_proof(0)
             .expect("operation should succeed for valid inputs");
-        verify_inclusion(&leaf_hash(0), 0, &proof).expect("operation should succeed for valid inputs");
+        verify_inclusion(&leaf_hash(0), 0, &proof)
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]

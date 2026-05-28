@@ -1848,16 +1848,16 @@ mod tests {
 
     #[test]
     fn signature_status_serde_snake_case_convention() {
-        let json = serde_json::to_string(&SignatureStatus::Signed)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&SignatureStatus::Signed).expect("serialization should succeed");
         assert_eq!(json, "\"signed\"");
 
         let json = serde_json::to_string(&SignatureStatus::Unsigned)
             .expect("serialization should succeed");
         assert_eq!(json, "\"unsigned\"");
 
-        let json = serde_json::to_string(&SignatureStatus::Invalid)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&SignatureStatus::Invalid).expect("serialization should succeed");
         assert_eq!(json, "\"invalid\"");
     }
 

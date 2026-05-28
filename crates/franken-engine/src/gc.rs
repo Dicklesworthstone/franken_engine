@@ -2117,7 +2117,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         heap.add_reference(a, b)
             .expect("operation should succeed for valid inputs"); // duplicate
-        let obj = heap.get(a).expect("operation should succeed for valid inputs");
+        let obj = heap
+            .get(a)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(obj.references.len(), 1); // BTreeSet deduplicates
     }
 
@@ -2125,8 +2127,11 @@ mod tests {
     fn extension_heap_root_already_rooted_object() {
         let mut heap = ExtensionHeap::new("ext".into());
         let id = heap.allocate(10); // starts rooted
-        heap.root(id).expect("operation should succeed for valid inputs"); // re-root is no-op
-        let obj = heap.get(id).expect("operation should succeed for valid inputs");
+        heap.root(id)
+            .expect("operation should succeed for valid inputs"); // re-root is no-op
+        let obj = heap
+            .get(id)
+            .expect("operation should succeed for valid inputs");
         assert!(obj.rooted);
     }
 

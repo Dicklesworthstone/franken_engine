@@ -1169,7 +1169,8 @@ mod tests {
         g.register(d, SignalKind::Derived, deps)
             .expect("operation should succeed for valid inputs");
 
-        g.dispose(d).expect("operation should succeed for valid inputs");
+        g.dispose(d)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(g.node_count(), 1); // only source remains active
         assert!(
             g.get(s)
@@ -1318,7 +1319,9 @@ mod tests {
         .expect("operation should succeed for valid inputs");
         assert_eq!(t.element_count(), 1);
         assert_eq!(
-            t.get(id).expect("operation should succeed for valid inputs").tag,
+            t.get(id)
+                .expect("operation should succeed for valid inputs")
+                .tag,
             "div"
         );
     }
@@ -2120,7 +2123,8 @@ mod tests {
         let s = g.next_signal_id();
         g.register(s, SignalKind::Source, BTreeSet::new())
             .expect("operation should succeed for valid inputs");
-        g.dispose(s).expect("operation should succeed for valid inputs");
+        g.dispose(s)
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             g.mark_dirty(s),
             Err(SignalGraphError::Disposed(_))
@@ -2133,7 +2137,8 @@ mod tests {
         let s = g.next_signal_id();
         g.register(s, SignalKind::Source, BTreeSet::new())
             .expect("operation should succeed for valid inputs");
-        g.dispose(s).expect("operation should succeed for valid inputs");
+        g.dispose(s)
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             g.mark_clean(s),
             Err(SignalGraphError::Disposed(_))
@@ -2584,7 +2589,8 @@ mod tests {
         g.register(s2, SignalKind::Source, BTreeSet::new())
             .expect("operation should succeed for valid inputs");
         assert_eq!(g.node_count(), 2);
-        g.dispose(s1).expect("operation should succeed for valid inputs");
+        g.dispose(s1)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(g.node_count(), 1);
     }
 

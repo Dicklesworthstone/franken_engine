@@ -1552,7 +1552,9 @@ mod tests {
     #[test]
     fn send_with_empty_creator_trace_id() {
         let mut chan = test_channel();
-        let id = chan.send("").expect("operation should succeed for valid inputs");
+        let id = chan
+            .send("")
+            .expect("operation should succeed for valid inputs");
         let oldest = chan
             .oldest_pending()
             .expect("operation should succeed for valid inputs");

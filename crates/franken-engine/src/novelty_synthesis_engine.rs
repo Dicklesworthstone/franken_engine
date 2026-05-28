@@ -2042,8 +2042,8 @@ mod tests {
 
     #[test]
     fn test_build_batch_empty() {
-        let batch =
-            build_batch(test_epoch(), Vec::new()).expect("operation should succeed for valid inputs");
+        let batch = build_batch(test_epoch(), Vec::new())
+            .expect("operation should succeed for valid inputs");
         assert!(batch.is_empty());
         assert_eq!(batch.candidate_count(), 0);
         assert_eq!(batch.total_novelty_millionths, 0);
@@ -2113,7 +2113,8 @@ mod tests {
     #[test]
     fn test_build_batch_epoch() {
         let epoch = SecurityEpoch::from_raw(42);
-        let batch = build_batch(epoch, Vec::new()).expect("operation should succeed for valid inputs");
+        let batch =
+            build_batch(epoch, Vec::new()).expect("operation should succeed for valid inputs");
         assert_eq!(batch.epoch, epoch);
     }
 
@@ -2121,15 +2122,15 @@ mod tests {
     fn test_batch_average_novelty() {
         let c1 = make_candidate_with_novelty("c1", 600_000);
         let c2 = make_candidate_with_novelty("c2", 400_000);
-        let batch =
-            build_batch(test_epoch(), vec![c1, c2]).expect("operation should succeed for valid inputs");
+        let batch = build_batch(test_epoch(), vec![c1, c2])
+            .expect("operation should succeed for valid inputs");
         assert_eq!(batch.average_novelty_millionths(), 500_000);
     }
 
     #[test]
     fn test_batch_average_novelty_empty() {
-        let batch =
-            build_batch(test_epoch(), Vec::new()).expect("operation should succeed for valid inputs");
+        let batch = build_batch(test_epoch(), Vec::new())
+            .expect("operation should succeed for valid inputs");
         assert_eq!(batch.average_novelty_millionths(), 0);
     }
 
@@ -2281,8 +2282,8 @@ mod tests {
     fn test_receipt_all_accepted() {
         let c1 = make_candidate_with_novelty("c1", 500_000);
         let c2 = make_candidate_with_novelty("c2", 400_000);
-        let batch =
-            build_batch(test_epoch(), vec![c1, c2]).expect("operation should succeed for valid inputs");
+        let batch = build_batch(test_epoch(), vec![c1, c2])
+            .expect("operation should succeed for valid inputs");
         let receipt = build_receipt(&batch, 2);
         assert_eq!(receipt.candidates_proposed, 2);
         assert_eq!(receipt.candidates_accepted, 2);
@@ -2307,8 +2308,8 @@ mod tests {
     fn test_receipt_partial_accepted() {
         let c1 = make_candidate_with_novelty("c1", 600_000);
         let c2 = make_candidate_with_novelty("c2", 400_000);
-        let batch =
-            build_batch(test_epoch(), vec![c1, c2]).expect("operation should succeed for valid inputs");
+        let batch = build_batch(test_epoch(), vec![c1, c2])
+            .expect("operation should succeed for valid inputs");
         let receipt = build_receipt(&batch, 1);
         assert_eq!(receipt.candidates_proposed, 2);
         assert_eq!(receipt.candidates_accepted, 1);
@@ -2359,7 +2360,8 @@ mod tests {
     #[test]
     fn test_receipt_epoch_matches() {
         let epoch = SecurityEpoch::from_raw(42);
-        let batch = build_batch(epoch, Vec::new()).expect("operation should succeed for valid inputs");
+        let batch =
+            build_batch(epoch, Vec::new()).expect("operation should succeed for valid inputs");
         let receipt = build_receipt(&batch, 0);
         assert_eq!(receipt.timestamp_epoch, epoch);
     }

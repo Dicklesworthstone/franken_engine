@@ -2735,8 +2735,8 @@ mod tests {
             assert_eq!(step, deser);
         }
         // Also test Rollback
-        let json = serde_json::to_string(&MigrationStep::Rollback)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&MigrationStep::Rollback).expect("serialization should succeed");
         let deser: MigrationStep =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(MigrationStep::Rollback, deser);

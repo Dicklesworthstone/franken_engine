@@ -1591,7 +1591,9 @@ mod tests {
         append_security_marker(&mut stream, "1");
         append_security_marker(&mut stream, "2");
 
-        let m = stream.get(2).expect("operation should succeed for valid inputs");
+        let m = stream
+            .get(2)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(m.marker_id, 2);
     }
 
@@ -1899,8 +1901,8 @@ mod tests {
     fn marker_json_field_presence() {
         let mut stream = make_stream();
         append_security_marker(&mut stream, "1");
-        let json = serde_json::to_string(&stream.markers()[0])
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&stream.markers()[0]).expect("serialization should succeed");
         for field in &[
             "marker_id",
             "timestamp_ticks",
@@ -2549,7 +2551,9 @@ mod tests {
             action: SecurityActionKind::Quarantine,
         });
         stream.append(input);
-        let marker = stream.get(1).expect("operation should succeed for valid inputs");
+        let marker = stream
+            .get(1)
+            .expect("operation should succeed for valid inputs");
         let dbg = format!("{marker:?}");
         assert!(!dbg.is_empty());
         assert!(dbg.contains("DecisionMarker"));

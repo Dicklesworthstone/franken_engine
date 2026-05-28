@@ -122,8 +122,7 @@ impl HostcallType {
             Self::MemAlloc
         } else if tag == "ifc.check_flow" {
             Self::Builtin
-        } else if tag.starts_with("module:") || tag.starts_with("module.") || tag == "module_load"
-        {
+        } else if tag.starts_with("module:") || tag.starts_with("module.") || tag == "module_load" {
             Self::Builtin
         } else {
             Self::Builtin

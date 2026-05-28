@@ -2094,8 +2094,7 @@ mod tests {
     #[test]
     fn escalation_level_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&EscalationLevel::Minimal)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&EscalationLevel::Minimal).expect("serialization should succeed"),
             "\"minimal\""
         );
         assert_eq!(
@@ -2104,8 +2103,7 @@ mod tests {
             "\"extended\""
         );
         assert_eq!(
-            serde_json::to_string(&EscalationLevel::Full)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&EscalationLevel::Full).expect("serialization should succeed"),
             "\"full\""
         );
         assert_eq!(
@@ -2162,13 +2160,11 @@ mod tests {
     #[test]
     fn trigger_severity_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&TriggerSeverity::Info)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&TriggerSeverity::Info).expect("serialization should succeed"),
             "\"info\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerSeverity::Warning)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&TriggerSeverity::Warning).expect("serialization should succeed"),
             "\"warning\""
         );
         assert_eq!(
@@ -2177,8 +2173,7 @@ mod tests {
             "\"critical\""
         );
         assert_eq!(
-            serde_json::to_string(&TriggerSeverity::Fatal)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&TriggerSeverity::Fatal).expect("serialization should succeed"),
             "\"fatal\""
         );
     }

@@ -824,8 +824,7 @@ mod tests {
                 commands_txt: "commands.txt".to_string(),
             },
         };
-        let json =
-            serde_json::to_string_pretty(&manifest).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&manifest).expect("serialization should succeed");
         let back: ParityEvidenceRunManifest =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back.schema_version, manifest.schema_version);
@@ -1253,7 +1252,9 @@ mod tests {
     fn generate_events_end_event_detail_contains_contract_status() {
         let inv = parity_evidence_inventory();
         let events = generate_events(&inv);
-        let end = events.last().expect("operation should succeed for valid inputs");
+        let end = events
+            .last()
+            .expect("operation should succeed for valid inputs");
         assert!(
             end.detail
                 .as_ref()
@@ -1284,7 +1285,9 @@ mod tests {
             }],
         };
         let events = generate_events(&inv);
-        let end = events.last().expect("operation should succeed for valid inputs");
+        let end = events
+            .last()
+            .expect("operation should succeed for valid inputs");
         assert!(
             end.detail
                 .as_ref()
@@ -1380,8 +1383,7 @@ mod tests {
     #[test]
     fn parity_verdict_serde_snake_case_encoding() {
         assert_eq!(
-            serde_json::to_string(&ParityVerdict::Covered)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ParityVerdict::Covered).expect("serialization should succeed"),
             "\"covered\""
         );
         assert_eq!(
@@ -1400,8 +1402,7 @@ mod tests {
             "\"lowering_leads_parser\""
         );
         assert_eq!(
-            serde_json::to_string(&ParityVerdict::OpenGap)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ParityVerdict::OpenGap).expect("serialization should succeed"),
             "\"open_gap\""
         );
     }

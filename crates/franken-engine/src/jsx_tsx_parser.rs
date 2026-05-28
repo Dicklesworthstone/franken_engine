@@ -1550,8 +1550,8 @@ mod tests {
     #[test]
     fn test_parse_self_closing() {
         // SAFETY: Test-only unwrap expecting valid JSX parsing
-        let result =
-            parse_jsx("<br />", &default_config()).expect("operation should succeed for valid inputs");
+        let result = parse_jsx("<br />", &default_config())
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert!(el.self_closing);
@@ -1565,8 +1565,8 @@ mod tests {
     #[test]
     fn test_parse_component() {
         // SAFETY: Test-only unwrap expecting valid JSX parsing
-        let result =
-            parse_jsx("<App />", &default_config()).expect("operation should succeed for valid inputs");
+        let result = parse_jsx("<App />", &default_config())
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert!(el.name.is_component());
@@ -1793,8 +1793,8 @@ mod tests {
 
     #[test]
     fn test_parse_namespaced_name() {
-        let result =
-            parse_jsx("<svg:rect />", &ns_config()).expect("operation should succeed for valid inputs");
+        let result = parse_jsx("<svg:rect />", &ns_config())
+            .expect("operation should succeed for valid inputs");
         match &result.node {
             JsxNode::Element(el) => {
                 assert_eq!(el.name.to_string_repr(), "svg:rect");
@@ -1882,8 +1882,8 @@ mod tests {
 
     #[test]
     fn test_span_starts_at_zero() {
-        let result =
-            parse_jsx("<div />", &default_config()).expect("operation should succeed for valid inputs");
+        let result = parse_jsx("<div />", &default_config())
+            .expect("operation should succeed for valid inputs");
         let span = result.node.span();
         assert_eq!(span.start_offset, 0);
         assert_eq!(span.start_line, 1);
@@ -1893,8 +1893,8 @@ mod tests {
     #[test]
     fn test_span_covers_full_element() {
         let source = "<div>hello</div>";
-        let result =
-            parse_jsx(source, &default_config()).expect("operation should succeed for valid inputs");
+        let result = parse_jsx(source, &default_config())
+            .expect("operation should succeed for valid inputs");
         let span = result.node.span();
         assert_eq!(span.start_offset, 0);
         assert_eq!(span.end_offset, source.len() as u64);

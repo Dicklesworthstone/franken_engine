@@ -794,9 +794,7 @@ impl SignaturePreimage for FlowPolicy {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serialization should succeed"),
-        )
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization should succeed"))
     }
 }
 
@@ -915,9 +913,7 @@ impl SignaturePreimage for FlowProof {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serialization should succeed"),
-        )
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization should succeed"))
     }
 }
 
@@ -1347,9 +1343,7 @@ impl SignaturePreimage for DeclassificationReceipt {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serialization should succeed"),
-        )
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization should succeed"))
     }
 }
 
@@ -1463,9 +1457,7 @@ impl SignaturePreimage for ConfinementClaim {
     fn unsigned_view(&self) -> CanonicalValue {
         let mut copy = self.clone();
         copy.signature = Signature::from_bytes(SIGNATURE_SENTINEL);
-        CanonicalValue::Bytes(
-            serde_json::to_vec(&copy).expect("serialization should succeed"),
-        )
+        CanonicalValue::Bytes(serde_json::to_vec(&copy).expect("serialization should succeed"))
     }
 }
 

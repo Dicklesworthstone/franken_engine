@@ -1836,8 +1836,8 @@ mod tests {
     fn enrichment_dimension_summary_json_field_names() {
         let sentinel = make_sentinel();
         let report = generate_report(&sentinel);
-        let json = serde_json::to_string(&report.dimensions[0])
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&report.dimensions[0]).expect("serialization should succeed");
         assert!(json.contains("\"dimension\""));
         assert!(json.contains("\"current_regime\""));
         assert!(json.contains("\"last_value_millionths\""));

@@ -1350,8 +1350,8 @@ mod tests {
     #[test]
     fn record_update_returns_correct_key() {
         let mut site = make_site_with_budget("r2", 5);
-        let update =
-            record_update(&mut site, "my_key", 42).expect("operation should succeed for valid inputs");
+        let update = record_update(&mut site, "my_key", 42)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(update.key, "my_key");
         assert_eq!(update.weight_millionths, 42);
         assert_eq!(update.site_id, "r2");

@@ -2989,8 +2989,7 @@ mod tests {
         .build()
         .expect("builder should produce a valid value");
 
-        let json =
-            serde_json::to_string_pretty(&expl).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&expl).expect("serialization should succeed");
         let back: DecisionExplanation =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(expl, back);

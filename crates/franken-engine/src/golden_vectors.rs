@@ -511,7 +511,8 @@ mod tests {
 
     #[test]
     fn golden_signature_creation_deterministic() {
-        let sk = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
         let preimage = b"golden-preimage-for-signing";
         let sig1 = sign_preimage(&sk, preimage).expect("sign1");
         let sig2 = sign_preimage(&sk, preimage).expect("sign2");
@@ -520,7 +521,8 @@ mod tests {
 
     #[test]
     fn golden_signature_verify_valid() {
-        let sk = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
         let vk = sk.verification_key();
         let preimage = b"golden-verify-payload";
         let sig = sign_preimage(&sk, preimage).expect("sign");
@@ -529,8 +531,10 @@ mod tests {
 
     #[test]
     fn golden_signature_verify_wrong_key() {
-        let sk1 = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
-        let sk2 = SigningKey::from_bytes([0x43; 32]).expect("operation should succeed for valid inputs");
+        let sk1 =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk2 =
+            SigningKey::from_bytes([0x43; 32]).expect("operation should succeed for valid inputs");
         let vk2 = sk2.verification_key();
         let preimage = b"golden-wrong-key-payload";
         let sig = sign_preimage(&sk1, preimage).expect("sign");
@@ -540,7 +544,8 @@ mod tests {
 
     #[test]
     fn golden_signature_verify_tampered_preimage() {
-        let sk = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
         let vk = sk.verification_key();
         let sig = sign_preimage(&sk, b"original-preimage").expect("sign");
         let result = verify_signature(&vk, b"tampered-preimage", &sig);
@@ -555,7 +560,8 @@ mod tests {
 
     #[test]
     fn golden_signature_different_preimages_different_sigs() {
-        let sk = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
         let sig1 = sign_preimage(&sk, b"preimage-alpha").expect("sig1");
         let sig2 = sign_preimage(&sk, b"preimage-beta").expect("sig2");
         assert_ne!(
@@ -566,8 +572,10 @@ mod tests {
 
     #[test]
     fn golden_signature_different_keys_different_sigs() {
-        let sk1 = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
-        let sk2 = SigningKey::from_bytes([0x43; 32]).expect("operation should succeed for valid inputs");
+        let sk1 =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk2 =
+            SigningKey::from_bytes([0x43; 32]).expect("operation should succeed for valid inputs");
         let preimage = b"same-preimage";
         let sig1 = sign_preimage(&sk1, preimage).expect("sig1");
         let sig2 = sign_preimage(&sk2, preimage).expect("sig2");
@@ -576,7 +584,8 @@ mod tests {
 
     #[test]
     fn golden_verification_key_derivation_deterministic() {
-        let sk = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
         let vk1 = sk.verification_key();
         let vk2 = sk.verification_key();
         assert_eq!(vk1, vk2, "vk derivation must be deterministic");
@@ -584,8 +593,10 @@ mod tests {
 
     #[test]
     fn golden_verification_key_different_for_different_sk() {
-        let sk1 = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
-        let sk2 = SigningKey::from_bytes([0x43; 32]).expect("operation should succeed for valid inputs");
+        let sk1 =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk2 =
+            SigningKey::from_bytes([0x43; 32]).expect("operation should succeed for valid inputs");
         assert_ne!(
             sk1.verification_key(),
             sk2.verification_key(),
@@ -599,9 +610,12 @@ mod tests {
 
     #[test]
     fn golden_multisig_ordering_deterministic() {
-        let sk1 = SigningKey::from_bytes([0x01; 32]).expect("operation should succeed for valid inputs");
-        let sk2 = SigningKey::from_bytes([0x02; 32]).expect("operation should succeed for valid inputs");
-        let sk3 = SigningKey::from_bytes([0x03; 32]).expect("operation should succeed for valid inputs");
+        let sk1 =
+            SigningKey::from_bytes([0x01; 32]).expect("operation should succeed for valid inputs");
+        let sk2 =
+            SigningKey::from_bytes([0x02; 32]).expect("operation should succeed for valid inputs");
+        let sk3 =
+            SigningKey::from_bytes([0x03; 32]).expect("operation should succeed for valid inputs");
         let preimage = b"multisig-golden-payload";
 
         let sig1 = sign_preimage(&sk1, preimage).expect("sig1");
@@ -629,8 +643,10 @@ mod tests {
     #[test]
     fn golden_multisig_ordering_stable() {
         // Create the same set twice, verify identical ordering.
-        let sk1 = SigningKey::from_bytes([0x10; 32]).expect("operation should succeed for valid inputs");
-        let sk2 = SigningKey::from_bytes([0x20; 32]).expect("operation should succeed for valid inputs");
+        let sk1 =
+            SigningKey::from_bytes([0x10; 32]).expect("operation should succeed for valid inputs");
+        let sk2 =
+            SigningKey::from_bytes([0x20; 32]).expect("operation should succeed for valid inputs");
         let preimage = b"multisig-stable-test";
 
         let sig1 = sign_preimage(&sk1, preimage).expect("sig1");
@@ -658,7 +674,8 @@ mod tests {
 
     #[test]
     fn golden_multisig_duplicate_signer_rejected() {
-        let sk = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
         let preimage = b"dup-signer-test";
         let sig1 = sign_preimage(&sk, preimage).expect("sig1");
         let sig2 = sign_preimage(&sk, preimage).expect("sig2");

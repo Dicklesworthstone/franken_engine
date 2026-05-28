@@ -1634,12 +1634,12 @@ mod tests {
     #[test]
     fn enrichment_json_value_check_operating_mode_variants() {
         // Verify the JSON representation of each mode variant
-        let normal_json = serde_json::to_string(&OperatingMode::Normal)
-            .expect("serialization should succeed");
-        let degraded_json = serde_json::to_string(&OperatingMode::Degraded)
-            .expect("serialization should succeed");
-        let incident_json = serde_json::to_string(&OperatingMode::Incident)
-            .expect("serialization should succeed");
+        let normal_json =
+            serde_json::to_string(&OperatingMode::Normal).expect("serialization should succeed");
+        let degraded_json =
+            serde_json::to_string(&OperatingMode::Degraded).expect("serialization should succeed");
+        let incident_json =
+            serde_json::to_string(&OperatingMode::Incident).expect("serialization should succeed");
         assert_eq!(normal_json, "\"Normal\"");
         assert_eq!(degraded_json, "\"Degraded\"");
         assert_eq!(incident_json, "\"Incident\"");
@@ -1651,8 +1651,7 @@ mod tests {
         let budget = ObservabilityBudget::normal();
         let result = greedy_submodular_select(&u, &budget);
         let ledger = ProbeUtilityLedger::from_optimization(&u, &result);
-        let json = serde_json::to_string(&ledger.entries[0])
-            .expect("serialization should succeed");
+        let json = serde_json::to_string(&ledger.entries[0]).expect("serialization should succeed");
         assert!(json.contains("\"probe_id\""));
         assert!(json.contains("\"probe_name\""));
         assert!(json.contains("\"marginal_gain_millionths\""));

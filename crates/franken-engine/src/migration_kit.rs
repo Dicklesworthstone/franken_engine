@@ -1437,8 +1437,8 @@ pub fn validate_behavior(
 
     divergences.sort_by_key(|d| d.severity);
 
-    let report_bytes = serde_json::to_vec(&(&passing_count, &divergences))
-        .expect("serialization should succeed");
+    let report_bytes =
+        serde_json::to_vec(&(&passing_count, &divergences)).expect("serialization should succeed");
     let report_content_hash = ContentHash::compute(&report_bytes);
 
     Ok(BehaviorValidationReport {
@@ -1859,8 +1859,8 @@ mod tests {
 
     #[test]
     fn test_analyze_empty_package() {
-        let report =
-            analyze_package("{}", &default_config()).expect("operation should succeed for valid inputs");
+        let report = analyze_package("{}", &default_config())
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.total_apis_used, 0);
         assert_eq!(report.compatibility_score_millionths, 1_000_000);
     }
@@ -1880,8 +1880,8 @@ mod tests {
     #[test]
     fn test_analyze_no_dependencies() {
         let json = r#"{"name": "bare", "version": "0.0.1"}"#;
-        let report =
-            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
+        let report = analyze_package(json, &default_config())
+            .expect("operation should succeed for valid inputs");
         assert!(report.dependency_entries.is_empty());
     }
 
@@ -1899,8 +1899,8 @@ mod tests {
     #[test]
     fn test_analyze_esm_entry_point() {
         let json = r#"{"name": "esm-pkg", "version": "1.0.0", "module": "dist/index.mjs"}"#;
-        let report =
-            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
+        let report = analyze_package(json, &default_config())
+            .expect("operation should succeed for valid inputs");
         let esm_entries: Vec<_> = report
             .api_entries
             .iter()
@@ -1913,8 +1913,8 @@ mod tests {
     fn test_analyze_scripts_with_node_cli() {
         let json =
             r#"{"name": "cli-pkg", "version": "1.0.0", "scripts": {"start": "node server.js"}}"#;
-        let report =
-            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
+        let report = analyze_package(json, &default_config())
+            .expect("operation should succeed for valid inputs");
         let cli_entries: Vec<_> = report
             .api_entries
             .iter()
@@ -1926,8 +1926,8 @@ mod tests {
     #[test]
     fn test_analyze_known_incompatible_dependency() {
         let json = r#"{"name": "x", "version": "1.0.0", "dependencies": {"sharp": "^0.33.0"}}"#;
-        let report =
-            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
+        let report = analyze_package(json, &default_config())
+            .expect("operation should succeed for valid inputs");
         let sharp = report
             .dependency_entries
             .iter()
@@ -1940,8 +1940,8 @@ mod tests {
     fn test_analyze_unknown_dependency() {
         let json =
             r#"{"name": "x", "version": "1.0.0", "dependencies": {"my-custom-lib": "^1.0.0"}}"#;
-        let report =
-            analyze_package(json, &default_config()).expect("operation should succeed for valid inputs");
+        let report = analyze_package(json, &default_config())
+            .expect("operation should succeed for valid inputs");
         let custom = report
             .dependency_entries
             .iter()
@@ -3589,8 +3589,8 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 500, // >2x
         }];
-        let report =
-            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
+        let report = validate_behavior(&results, &config)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(report.divergences[0].kind, DivergenceKind::TimingDifference);
     }
@@ -3607,8 +3607,8 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 120, // within 2x
         }];
-        let report =
-            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
+        let report = validate_behavior(&results, &config)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -3628,8 +3628,8 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 100,
         }];
-        let report =
-            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
+        let report = validate_behavior(&results, &config)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -3650,8 +3650,8 @@ mod tests {
             node_duration_us: 100,
             franken_duration_us: 100,
         }];
-        let report =
-            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
+        let report = validate_behavior(&results, &config)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.divergence_count, 1);
         assert_eq!(
             report.divergences[0].kind,
@@ -3683,8 +3683,8 @@ mod tests {
                 franken_duration_us: 50,
             },
         ];
-        let report =
-            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
+        let report = validate_behavior(&results, &config)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.total_test_cases, 2);
         assert_eq!(report.passing_count, 1);
         assert_eq!(report.divergence_count, 1);
@@ -4082,7 +4082,8 @@ mod tests {
             ..MigrationConfig::default()
         };
         let pkg = r#"{"name":"bun-pkg","dependencies":{"express":"^4"}}"#;
-        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
+        let report =
+            analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         assert_eq!(report.source_runtime, SourceRuntime::Bun);
     }
 
@@ -4090,7 +4091,8 @@ mod tests {
     fn analyze_package_peer_deps() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"test","peerDependencies":{"react":"^18"}}"#;
-        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
+        let report =
+            analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         assert!(!report.dependency_entries.is_empty());
         assert_eq!(report.dependency_entries[0].name, "react");
     }
@@ -4099,7 +4101,8 @@ mod tests {
     fn analyze_package_ts_entry_as_esm() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"ts-app","main":"index.ts"}"#;
-        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
+        let report =
+            analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         let esm_entry = report
             .api_entries
             .iter()
@@ -4111,7 +4114,8 @@ mod tests {
     fn analyze_package_mjs_entry_as_esm() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"esm-app","module":"dist/index.mjs"}"#;
-        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
+        let report =
+            analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         let esm_entry = report
             .api_entries
             .iter()
@@ -4123,7 +4127,8 @@ mod tests {
     fn analyze_package_cjs_entry() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"cjs-app","main":"dist/index.js"}"#;
-        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
+        let report =
+            analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         let cjs_entry = report
             .api_entries
             .iter()
@@ -4135,7 +4140,8 @@ mod tests {
     fn analyze_package_node_cli_scripts() {
         let config = MigrationConfig::default();
         let pkg = r#"{"name":"cli","scripts":{"build":"node build.js","test":"npx jest"}}"#;
-        let report = analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
+        let report =
+            analyze_package(pkg, &config).expect("operation should succeed for valid inputs");
         let cli_entries: Vec<_> = report
             .api_entries
             .iter()
@@ -4206,8 +4212,8 @@ mod tests {
             node_duration_us: 10,
             franken_duration_us: 10,
         }];
-        let report =
-            validate_behavior(&results, &config).expect("operation should succeed for valid inputs");
+        let report = validate_behavior(&results, &config)
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&report).expect("serialize derived Serialize");
         let back: BehaviorValidationReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

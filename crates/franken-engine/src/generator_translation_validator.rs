@@ -249,7 +249,11 @@ pub fn lower_to_state_machine(src: &GeneratorSource) -> GeneratorStateMachine {
             id: i as u32,
             on_enter: Some(effect),
             // Last state is terminal; others resume into the next.
-            resume: if i + 1 < n { Some((i + 1) as u32) } else { None },
+            resume: if i + 1 < n {
+                Some((i + 1) as u32)
+            } else {
+                None
+            },
         })
         .collect();
 
@@ -439,7 +443,11 @@ fn rechain(
         .map(|(i, on_enter)| GeneratorState {
             id: i as u32,
             on_enter,
-            resume: if i + 1 < n { Some((i + 1) as u32) } else { None },
+            resume: if i + 1 < n {
+                Some((i + 1) as u32)
+            } else {
+                None
+            },
         })
         .collect();
     GeneratorStateMachine {
@@ -603,7 +611,10 @@ impl std::fmt::Display for GeneratorValidationError {
         match self {
             Self::EmptyStateMachine => write!(f, "generator state machine has no states"),
             Self::MissingState { id } => {
-                write!(f, "generator state machine resume targets missing state {id}")
+                write!(
+                    f,
+                    "generator state machine resume targets missing state {id}"
+                )
             }
             Self::StepBudgetExceeded => {
                 write!(f, "generator replay exceeded step budget (likely a cycle)")
@@ -630,7 +641,10 @@ mod tests {
 
     #[test]
     fn source_trace_flattens_yields_then_return() {
-        let src = sync(vec![GeneratorStep::Yield(7), GeneratorStep::Yield(9)], Some(3));
+        let src = sync(
+            vec![GeneratorStep::Yield(7), GeneratorStep::Yield(9)],
+            Some(3),
+        );
         assert_eq!(
             source_trace(&src),
             vec![
@@ -713,7 +727,10 @@ mod tests {
     #[test]
     fn lowering_has_one_state_per_effect_plus_return() {
         let src = sync(
-            vec![GeneratorStep::Yield(1), GeneratorStep::YieldDelegate(vec![2, 3])],
+            vec![
+                GeneratorStep::Yield(1),
+                GeneratorStep::YieldDelegate(vec![2, 3]),
+            ],
             None,
         );
         let sm = lower_to_state_machine(&src);
@@ -743,7 +760,10 @@ mod tests {
 
     #[test]
     fn witness_reports_effect_counts() {
-        let src = sync(vec![GeneratorStep::Yield(1), GeneratorStep::Yield(2)], Some(0));
+        let src = sync(
+            vec![GeneratorStep::Yield(1), GeneratorStep::Yield(2)],
+            Some(0),
+        );
         let w = validate_generator(&src).unwrap();
         assert_eq!(w.source_effects, 3); // 2 yields + return
         assert_eq!(w.machine_effects, 3);
@@ -754,7 +774,11 @@ mod tests {
     #[test]
     fn dropped_yield_is_detected() {
         let src = sync(
-            vec![GeneratorStep::Yield(1), GeneratorStep::Yield(2), GeneratorStep::Yield(3)],
+            vec![
+                GeneratorStep::Yield(1),
+                GeneratorStep::Yield(2),
+                GeneratorStep::Yield(3),
+            ],
             None,
         );
         let sm = lower_to_state_machine(&src);
@@ -762,7 +786,10 @@ mod tests {
         let w = validate_lowering(&src, &broken).unwrap();
         assert!(!w.equivalent);
         // First mismatch at index 1 (source Yield(2) vs machine Yield(3)).
-        assert_eq!(w.divergence, Some(TraceDivergence::EffectMismatch { index: 1 }));
+        assert_eq!(
+            w.divergence,
+            Some(TraceDivergence::EffectMismatch { index: 1 })
+        );
     }
 
     #[test]
@@ -775,7 +802,10 @@ mod tests {
         let broken = apply_mutation(&sm, &LoweringMutation::SwapEffects(0, 1));
         let w = validate_lowering(&src, &broken).unwrap();
         assert!(!w.equivalent);
-        assert_eq!(w.divergence, Some(TraceDivergence::EffectMismatch { index: 0 }));
+        assert_eq!(
+            w.divergence,
+            Some(TraceDivergence::EffectMismatch { index: 0 })
+        );
     }
 
     #[test]
@@ -785,7 +815,10 @@ mod tests {
         let broken = apply_mutation(&sm, &LoweringMutation::CorruptReturn(Some(43)));
         let w = validate_lowering(&src, &broken).unwrap();
         assert!(!w.equivalent);
-        assert_eq!(w.divergence, Some(TraceDivergence::EffectMismatch { index: 1 }));
+        assert_eq!(
+            w.divergence,
+            Some(TraceDivergence::EffectMismatch { index: 1 })
+        );
     }
 
     #[test]
@@ -805,7 +838,10 @@ mod tests {
         let w = validate_lowering(&src, &broken).unwrap();
         assert!(!w.equivalent);
         // Index 1: source Yield(2) vs machine duplicated Yield(1).
-        assert_eq!(w.divergence, Some(TraceDivergence::EffectMismatch { index: 1 }));
+        assert_eq!(
+            w.divergence,
+            Some(TraceDivergence::EffectMismatch { index: 1 })
+        );
     }
 
     #[test]
@@ -825,7 +861,10 @@ mod tests {
         assert!(!w.equivalent);
         assert_eq!(
             w.divergence,
-            Some(TraceDivergence::LengthMismatch { source: 3, machine: 1 })
+            Some(TraceDivergence::LengthMismatch {
+                source: 3,
+                machine: 1
+            })
         );
     }
 
@@ -866,8 +905,16 @@ mod tests {
         let sm = GeneratorStateMachine {
             kind: GeneratorKind::Sync,
             states: vec![
-                GeneratorState { id: 0, on_enter: None, resume: Some(1) },
-                GeneratorState { id: 1, on_enter: None, resume: Some(0) },
+                GeneratorState {
+                    id: 0,
+                    on_enter: None,
+                    resume: Some(1),
+                },
+                GeneratorState {
+                    id: 1,
+                    on_enter: None,
+                    resume: Some(0),
+                },
             ],
             initial: 0,
         };
@@ -883,7 +930,12 @@ mod tests {
     fn corpus_has_at_least_fifty_programs_across_four_categories() {
         let corpus = generate_generator_corpus();
         assert!(corpus.len() >= 50, "corpus = {}", corpus.len());
-        let cats = |prefix: &str| corpus.iter().filter(|s| s.program_id.starts_with(prefix)).count();
+        let cats = |prefix: &str| {
+            corpus
+                .iter()
+                .filter(|s| s.program_id.starts_with(prefix))
+                .count()
+        };
         assert!(cats("sync-multiyield-") > 0);
         assert!(cats("sync-return-") > 0);
         assert!(cats("async-await-yield-") > 0);
@@ -959,9 +1011,7 @@ mod tests {
     #[test]
     fn error_display_is_descriptive() {
         assert!(format!("{}", GeneratorValidationError::MissingState { id: 7 }).contains('7'));
-        assert!(
-            format!("{}", GeneratorValidationError::StepBudgetExceeded).contains("budget")
-        );
+        assert!(format!("{}", GeneratorValidationError::StepBudgetExceeded).contains("budget"));
     }
 
     #[test]

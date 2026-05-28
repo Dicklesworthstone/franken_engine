@@ -2457,8 +2457,8 @@ mod tests {
     #[test]
     fn test_serde_deserialize_from_known_json_substrate_kind() {
         // Backwards compatibility: deserialize from a known JSON string.
-        let kind: SubstrateKind = serde_json::from_str("\"compact_bitmap\"")
-            .expect("deserialization should succeed");
+        let kind: SubstrateKind =
+            serde_json::from_str("\"compact_bitmap\"").expect("deserialization should succeed");
         assert_eq!(kind, SubstrateKind::CompactBitmap);
         let kind2: SubstrateKind =
             serde_json::from_str("\"art_tree\"").expect("deserialize known-valid JSON");

@@ -1922,7 +1922,8 @@ mod tests {
             benefit_on_success_millionths: 1_000_000,
             harm_on_failure_millionths: -50_000,
         };
-        ev.validate().expect("operation should succeed for valid inputs");
+        ev.validate()
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1937,7 +1938,8 @@ mod tests {
             benefit_on_success_millionths: 1_000_000,
             harm_on_failure_millionths: -50_000,
         };
-        ev.validate().expect("operation should succeed for valid inputs");
+        ev.validate()
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -1952,7 +1954,8 @@ mod tests {
             benefit_on_success_millionths: 1_000_000,
             harm_on_failure_millionths: -50_000,
         };
-        ev.validate().expect("operation should succeed for valid inputs");
+        ev.validate()
+            .expect("operation should succeed for valid inputs");
     }
 
     #[test]
@@ -2078,7 +2081,8 @@ mod tests {
     fn enrich_contract_no_governance_signature() {
         let mut c = test_contract();
         c.governance_signature = None;
-        c.validate().expect("operation should succeed for valid inputs");
+        c.validate()
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let back: MoonshotContract =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2294,7 +2298,8 @@ mod tests {
                 blocking: (i % 2 == 0),
             });
         }
-        c.validate().expect("operation should succeed for valid inputs");
+        c.validate()
+            .expect("operation should succeed for valid inputs");
         let blocking_research: Vec<_> = c
             .artifact_obligations
             .iter()
@@ -2314,7 +2319,8 @@ mod tests {
         let rb = RiskBudget {
             dimension_caps: caps,
         };
-        rb.validate().expect("operation should succeed for valid inputs");
+        rb.validate()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(rb.dimension_caps.len(), 4);
         let json = serde_json::to_string(&rb).expect("serialize derived Serialize");
         let back: RiskBudget = serde_json::from_str(&json).expect("deserialize known-valid JSON");

@@ -2558,8 +2558,8 @@ mod tests {
     fn severity_classification_advisory_boundary() {
         // Score just below 200K => Advisory
         let r = make_result(0, 10, false, 100_000, 1, false);
-        let s =
-            ExploitObjectiveScore::from_result(&r).expect("operation should succeed for valid inputs");
+        let s = ExploitObjectiveScore::from_result(&r)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(classify_severity(&s), CampaignSeverity::Advisory);
     }
 
@@ -2567,8 +2567,8 @@ mod tests {
     fn severity_classification_moderate_boundary() {
         // Build a result with high evasion and damage to push composite >= 200K
         let r = make_result(7, 10, false, 600_000, 15, false);
-        let s =
-            ExploitObjectiveScore::from_result(&r).expect("operation should succeed for valid inputs");
+        let s = ExploitObjectiveScore::from_result(&r)
+            .expect("operation should succeed for valid inputs");
         let sev = classify_severity(&s);
         assert!(
             sev == CampaignSeverity::Moderate

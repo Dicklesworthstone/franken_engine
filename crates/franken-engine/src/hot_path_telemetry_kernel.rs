@@ -1783,8 +1783,10 @@ mod tests {
     #[test]
     fn submit_exhausts_budget() {
         let mut k = make_kernel("k1", MILLION, 2);
-        submit_observation(&mut k, "key_a", MILLION).expect("operation should succeed for valid inputs");
-        submit_observation(&mut k, "key_b", MILLION).expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_a", MILLION)
+            .expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_b", MILLION)
+            .expect("operation should succeed for valid inputs");
         assert!(k.exhausted);
         assert_eq!(k.capture_mode, CaptureMode::Degraded);
         let err = submit_observation(&mut k, "key_c", MILLION).unwrap_err();
@@ -1794,17 +1796,22 @@ mod tests {
     #[test]
     fn submit_increments_sequence() {
         let mut k = make_kernel("k1", MILLION, 100);
-        submit_observation(&mut k, "key_a", MILLION).expect("operation should succeed for valid inputs");
-        submit_observation(&mut k, "key_b", MILLION).expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_a", MILLION)
+            .expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_b", MILLION)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(k.sequence, 2);
     }
 
     #[test]
     fn submit_accumulates_sketch_buckets() {
         let mut k = make_kernel("k1", MILLION, 100);
-        submit_observation(&mut k, "key_a", 500_000).expect("operation should succeed for valid inputs");
-        submit_observation(&mut k, "key_a", 300_000).expect("operation should succeed for valid inputs");
-        submit_observation(&mut k, "key_b", 200_000).expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_a", 500_000)
+            .expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_a", 300_000)
+            .expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key_b", 200_000)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(k.sketch_buckets.len(), 2);
         let bucket_a = k
             .sketch_buckets
@@ -1841,8 +1848,8 @@ mod tests {
                 .expect("operation should succeed for valid inputs");
             shadow.observe(&key, MILLION);
         }
-        let evidence =
-            calibrate_kernel(&k, &shadow, epoch(1)).expect("operation should succeed for valid inputs");
+        let evidence = calibrate_kernel(&k, &shadow, epoch(1))
+            .expect("operation should succeed for valid inputs");
         assert!(evidence.passed);
         assert_eq!(evidence.mean_error_millionths, 0);
         assert_eq!(evidence.max_error_millionths, 0);
@@ -1877,8 +1884,8 @@ mod tests {
         for _ in 0..10 {
             shadow.observe("key_a", MILLION);
         }
-        let evidence =
-            calibrate_kernel(&k, &shadow, epoch(1)).expect("operation should succeed for valid inputs");
+        let evidence = calibrate_kernel(&k, &shadow, epoch(1))
+            .expect("operation should succeed for valid inputs");
         // Error = |5 - 10| / 10 = 50% = 500_000 millionths.
         assert_eq!(evidence.per_key_results.len(), 1);
         let r = &evidence.per_key_results[0];
@@ -2076,7 +2083,8 @@ mod tests {
         let mut registry = build_registry("reg1".to_string(), epoch(1));
         let mut k = make_kernel("k1", MILLION, 1);
         // Exhaust the kernel.
-        submit_observation(&mut k, "key", MILLION).expect("operation should succeed for valid inputs");
+        submit_observation(&mut k, "key", MILLION)
+            .expect("operation should succeed for valid inputs");
         assert!(k.exhausted);
         register_kernel(&mut registry, k).expect("operation should succeed for valid inputs");
         let manifest = build_manifest(
@@ -2206,8 +2214,8 @@ mod tests {
                 .expect("operation should succeed for valid inputs");
             shadow.observe(&key, MILLION);
         }
-        let evidence =
-            calibrate_kernel(&k, &shadow, epoch(1)).expect("operation should succeed for valid inputs");
+        let evidence = calibrate_kernel(&k, &shadow, epoch(1))
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&evidence).expect("serialize derived Serialize");
         let restored: CalibrationEvidence =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2278,8 +2286,8 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         for i in 0..20 {
             let key = format!("op_{}", i % 5);
-            if let Some(entry) =
-                submit_observation(k, &key, MILLION).expect("operation should succeed for valid inputs")
+            if let Some(entry) = submit_observation(k, &key, MILLION)
+                .expect("operation should succeed for valid inputs")
             {
                 entries.push(entry);
             }
@@ -2290,8 +2298,8 @@ mod tests {
         let k = registry
             .find_kernel("e2e-kernel")
             .expect("operation should succeed for valid inputs");
-        let calibration =
-            calibrate_kernel(k, &shadow, epoch(5)).expect("operation should succeed for valid inputs");
+        let calibration = calibrate_kernel(k, &shadow, epoch(5))
+            .expect("operation should succeed for valid inputs");
         assert!(calibration.passed);
 
         // Thin.

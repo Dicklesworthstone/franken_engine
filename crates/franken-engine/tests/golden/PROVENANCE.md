@@ -126,6 +126,45 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
   `early_termination.golden`, `minimal_single_dimension.golden`,
   `repeated_violations.golden`, `shed_decision.golden`.
 
+### `certificates/`
+
+- **Owning test:** `tests/certificate_golden_tests.rs` (local
+  `assert_golden` helper at L28).
+- **Subject under test:** governance / capability certificate
+  serialization, including mixed-verdict bundles and timescale
+  separation verdicts.
+- **Regen:**
+  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test certificate_golden_tests`
+- **Scrubbing:** none — fixtures are constructed from hand-curated
+  inputs with deterministic content hashes.
+- **Fixtures (10):** `certificate_bundle_mixed_verdicts.golden.json`,
+  `certificate_evidence_basic.golden.json`,
+  `certificate_evidence_memory.golden.json`,
+  `certificate_evidence_network_io.golden.json`,
+  `golden_workflow_test.golden.json`,
+  `governance_receipt_comprehensive.golden.json`,
+  `governance_receipt_denial.golden.json`,
+  `timescale_certificate_insufficient.golden.json`,
+  `timescale_certificate_marginal.golden.json`,
+  `timescale_certificate_sufficient.golden.json`.
+- **Migrated from:** `tests/goldens/certificates/` (bd-ub6x8.6.4).
+
+### `policy_theorem_compiler/`
+
+- **Owning test:** `tests/policy_theorem_compiler_integration.rs`
+  (helper `assert_policy_compiler_golden`).
+- **Subject under test:** policy theorem compiler outputs for valid
+  policies, complex constraint sets, and explicit failure
+  counterexamples.
+- **Regen:**
+  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test policy_theorem_compiler_integration`
+- **Scrubbing:** none — the policy compiler output is canonically
+  serialised.
+- **Fixtures (3):** `valid_policy_all_passes.json`,
+  `complex_constraints_all_passes.json`,
+  `failure_counterexamples.json`.
+- **Migrated from:** `tests/goldens/policy_theorem_compiler/` (bd-ub6x8.6.4).
+
 ### `deterministic_serde/` (created on first bless)
 
 - **Owning test:** `tests/deterministic_serde_golden.rs` (helper
@@ -199,27 +238,13 @@ that points at the same regen command.
 
 ## Other Golden Roots
 
-For historical reasons three additional golden directories exist
-outside this tree:
-
-- `crates/franken-engine/tests/goldens/` — react/JSX compilation, CLI
-  output, and IR fixtures (multi-helper, see bd-ub6x8.6 for the planned
-  consolidation).
-- `crates/franken-engine/tests/golden_tests/` — proof-manifest
-  fixtures (bd-ub6x8.5 landed a `proof_manifest_v1.json`) and CLI
-  capture JSONs for `frankenctl_help`, `frankenctl_version`, and
-  `decision_demo_help`. The three former
-  `architecture_inventory_{help,stdout,check}.json` captures (76 KB
-  combined) were removed in bd-ub6x8.10 because their substantive
-  contract is already covered by
-  `architecture_inventory_golden.rs` against
-  `docs/ARCHITECTURE_INVENTORY.md`.
-- `crates/franken-engine/tests/golden_vectors/` — vector-format
-  fixtures used by the certificate suites.
-
-Consolidation into a single `golden/` root is tracked in bd-ub6x8.6.
-Until that lands, the helpers in each suite locate their fixtures
-relative to `CARGO_MANIFEST_DIR`, not relative to this file.
+Consolidation of the historical `tests/goldens/`, `tests/golden_tests/`,
+and `tests/golden_vectors/` sibling roots into this single
+`tests/golden/` tree is complete (bd-ub6x8.6 + bd-ub6x8.6.2 +
+bd-ub6x8.6.3 + bd-ub6x8.6.4). The migration tombstone (a stub
+`PROVENANCE.md` recording the historical paths and where each
+subdirectory landed) survives under `tests/goldens/` per the
+bd-ub6x8.6.1 RATIONALIZATION decision.
 
 ## Toolchain
 

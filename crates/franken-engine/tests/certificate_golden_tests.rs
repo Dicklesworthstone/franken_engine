@@ -27,7 +27,7 @@ use std::collections::BTreeSet;
 /// Test helper: assert golden file matches actual serialization.
 fn assert_golden(test_name: &str, actual: &str) {
     let golden_path =
-        Path::new("tests/goldens/certificates").join(format!("{}.golden.json", test_name));
+        Path::new("tests/golden/certificates").join(format!("{}.golden.json", test_name));
 
     if std::env::var("UPDATE_GOLDENS").is_ok() {
         fs::create_dir_all(golden_path.parent().unwrap()).unwrap();

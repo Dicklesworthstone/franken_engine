@@ -113,7 +113,7 @@ fn signing_pair() -> (
 fn policy_compiler_golden_path(test_name: &str) -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.push("tests");
-    path.push("goldens");
+    path.push("golden");
     path.push("policy_theorem_compiler");
     path.push(format!("{test_name}.json"));
     path

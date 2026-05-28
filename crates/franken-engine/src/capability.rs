@@ -175,6 +175,52 @@ impl RuntimeCapability {
 }
 
 // ---------------------------------------------------------------------------
+// Canonicalisation helper (bd-y4h7h)
+//
+// The audit (bd-ooaka FIND-y4h7h) flagged that the engine accepts 5+ wire
+// representations for some logical capabilities ("fs_read" / "fs" / "fs:read"
+// / "fs.read" all map to FsRead). External tools that re-parse capability
+// tags from policy files, audit logs, or wire formats drift away from the
+// engine's `from_tag_str` table — a policy that blocks `fs:write` does not
+// catch `fs.write` or `fs_write` even though all three are accepted at the
+// gate.
+//
+// `canonicalize_capability_tag` gives downstream consumers a single
+// authoritative normaliser: any recognised alias returns the canonical
+// snake_case form (`Display::fmt`); unknown tags return `None`. Prefix-
+// based capabilities (`console:*`, `timer:*`, `builtin:*`, `number:*`)
+// return their root capability's canonical name with no suffix, because
+// the suffix is hostcall-method routing, not a distinct capability.
+// ---------------------------------------------------------------------------
+
+/// Map any accepted capability-tag wire form to its single canonical
+/// snake_case representation.
+///
+/// Returns `None` for tags that `RuntimeCapability::from_tag_str` does not
+/// recognise (i.e. for internal-only namespaces like `promise:*` /
+/// `ifc.check_flow` / or genuinely unknown tags that fail closed at the
+/// gate).
+///
+/// Use this helper at every boundary where a capability tag enters the
+/// engine from an external source: policy file loaders, audit-log
+/// aggregators, capability-comparison code in tooling. Calling
+/// `canonicalize_capability_tag` at boundary entry ensures the same
+/// logical capability is named identically in every downstream record,
+/// closing the parser-divergence drift hazard.
+///
+/// Example:
+/// ```ignore
+/// assert_eq!(canonicalize_capability_tag("fs.read"), Some("fs_read".to_string()));
+/// assert_eq!(canonicalize_capability_tag("net"), Some("network_egress".to_string()));
+/// assert_eq!(canonicalize_capability_tag("console:log"), Some("console".to_string()));
+/// assert_eq!(canonicalize_capability_tag("promise:resolve"), None);
+/// assert_eq!(canonicalize_capability_tag("unknown_tag"), None);
+/// ```
+pub fn canonicalize_capability_tag(tag: &str) -> Option<String> {
+    RuntimeCapability::from_tag_str(tag).map(|cap| cap.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // CapabilityProfile — named profiles with their capability sets
 // ---------------------------------------------------------------------------
 
@@ -1924,5 +1970,113 @@ mod tests {
                 name
             );
         }
+    }
+
+    // ── bd-y4h7h: canonicalize_capability_tag ──────────────────────────
+
+    #[test]
+    fn canonicalize_capability_tag_maps_dot_alias_to_snake() {
+        assert_eq!(
+            canonicalize_capability_tag("fs.read"),
+            Some("fs_read".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("fs.write"),
+            Some("fs_write".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("network.write"),
+            Some("network_egress".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("module.import"),
+            Some("module_load".to_string())
+        );
+    }
+
+    #[test]
+    fn canonicalize_capability_tag_maps_colon_alias_to_snake() {
+        assert_eq!(
+            canonicalize_capability_tag("fs:read"),
+            Some("fs_read".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("fs:write"),
+            Some("fs_write".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("net:connect"),
+            Some("network_egress".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("module:require"),
+            Some("module_load".to_string())
+        );
+    }
+
+    #[test]
+    fn canonicalize_capability_tag_maps_short_alias_to_snake() {
+        assert_eq!(
+            canonicalize_capability_tag("fs"),
+            Some("fs_read".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("net"),
+            Some("network_egress".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("network"),
+            Some("network_egress".to_string())
+        );
+    }
+
+    #[test]
+    fn canonicalize_capability_tag_is_identity_for_canonical_form() {
+        // Every variant's Display string must round-trip through the
+        // helper unchanged — the canonical form is the fixed point.
+        for cap in RuntimeCapability::ALL {
+            let canonical = cap.to_string();
+            assert_eq!(
+                canonicalize_capability_tag(&canonical),
+                Some(canonical.clone()),
+                "Display form of {canonical} must be the helper's fixed point",
+            );
+        }
+    }
+
+    #[test]
+    fn canonicalize_capability_tag_prefix_namespaces_drop_suffix() {
+        // The hostcall suffix ("log", "warn", "set", …) is method routing,
+        // not a distinct capability — the canonical capability tag is the
+        // namespace root.
+        assert_eq!(
+            canonicalize_capability_tag("console:log"),
+            Some("console".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("timer:set"),
+            Some("timer".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("builtin:Object.create"),
+            Some("builtin".to_string())
+        );
+        assert_eq!(
+            canonicalize_capability_tag("number:isFinite"),
+            Some("builtin".to_string())
+        );
+    }
+
+    #[test]
+    fn canonicalize_capability_tag_internal_and_unknown_return_none() {
+        // Internal namespaces (promise:* / ifc.check_flow) are NOT
+        // security capabilities — from_tag_str returns None on them, so
+        // the canonicaliser must too.
+        assert_eq!(canonicalize_capability_tag("promise:resolve"), None);
+        assert_eq!(canonicalize_capability_tag("promise:reject"), None);
+        assert_eq!(canonicalize_capability_tag("ifc.check_flow"), None);
+        // Genuinely unknown tags fail closed.
+        assert_eq!(canonicalize_capability_tag("totally_unknown_capability"), None);
+        assert_eq!(canonicalize_capability_tag(""), None);
     }
 }

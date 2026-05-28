@@ -2136,6 +2136,162 @@ fn merge_logical_lines_requires_continuation(
     )
 }
 
+/// Replace comment bytes with spaces so the line-merge and statement-segment
+/// passes never observe comment characters. Newlines are preserved (for line/
+/// column accuracy) and every blanked character emits exactly `len_utf8()`
+/// spaces, so total byte length and the byte offset of every non-comment byte
+/// are identical to the original source — spans stay accurate.
+///
+/// Strings, template literals, and regex literals are left intact. This mirrors
+/// the string/regex/comment state machine in `merge_logical_lines` so the
+/// regex-vs-division heuristic and comment boundaries are detected identically.
+fn strip_comments_to_whitespace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_quote: Option<char> = None;
+    let mut in_block_comment = false;
+    let mut in_line_comment = false;
+    let mut in_regex_literal = false;
+    let mut regex_in_char_class = false;
+    let mut escaped = false;
+    let mut last_significant: Option<char> = None;
+    let mut trailing_identifier = String::new();
+
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if in_line_comment {
+            if ch == '\n' {
+                in_line_comment = false;
+                out.push('\n');
+            } else {
+                push_blanked(&mut out, ch);
+            }
+            continue;
+        }
+        if in_block_comment {
+            if ch == '*' && matches!(chars.peek(), Some('/')) {
+                chars.next();
+                push_blanked(&mut out, '*');
+                push_blanked(&mut out, '/');
+                in_block_comment = false;
+            } else if ch == '\n' {
+                out.push('\n');
+            } else {
+                push_blanked(&mut out, ch);
+            }
+            continue;
+        }
+        if let Some(q) = in_quote {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                continue;
+            }
+            if ch == q {
+                in_quote = None;
+            }
+            continue;
+        }
+        if in_regex_literal {
+            out.push(ch);
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '[' if !regex_in_char_class => regex_in_char_class = true,
+                ']' if regex_in_char_class => regex_in_char_class = false,
+                '/' if !regex_in_char_class => {
+                    in_regex_literal = false;
+                    last_significant = Some('/');
+                    trailing_identifier.clear();
+                }
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '/' => match chars.peek() {
+                Some('/') => {
+                    in_line_comment = true;
+                    push_blanked(&mut out, '/');
+                    chars.next();
+                    push_blanked(&mut out, '/');
+                }
+                Some('*') => {
+                    in_block_comment = true;
+                    push_blanked(&mut out, '/');
+                    chars.next();
+                    push_blanked(&mut out, '*');
+                }
+                next_char
+                    if merge_logical_lines_slash_starts_regex(
+                        last_significant,
+                        trailing_identifier.as_str(),
+                        next_char.copied(),
+                    ) =>
+                {
+                    out.push(ch);
+                    in_regex_literal = true;
+                    regex_in_char_class = false;
+                    escaped = false;
+                    trailing_identifier.clear();
+                }
+                _ => {
+                    out.push(ch);
+                }
+            },
+            '\'' | '"' | '`' => {
+                out.push(ch);
+                in_quote = Some(ch);
+                last_significant = Some(ch);
+                trailing_identifier.clear();
+            }
+            '{' | '}' | '(' | ')' | '[' | ']' => {
+                out.push(ch);
+                last_significant = Some(ch);
+                trailing_identifier.clear();
+            }
+            ch if ch.is_ascii_whitespace() => {
+                out.push(ch);
+            }
+            ch if ch.is_ascii_alphabetic() || ch == '_' || ch == '$' => {
+                out.push(ch);
+                trailing_identifier.push(ch);
+                last_significant = Some(ch);
+            }
+            ch if ch.is_ascii_digit() => {
+                out.push(ch);
+                if !trailing_identifier.is_empty() {
+                    trailing_identifier.push(ch);
+                } else {
+                    trailing_identifier.clear();
+                }
+                last_significant = Some(ch);
+            }
+            ch => {
+                out.push(ch);
+                last_significant = Some(ch);
+                trailing_identifier.clear();
+            }
+        }
+    }
+    out
+}
+
+/// Emit `len_utf8()` spaces for a blanked (comment) character, preserving the
+/// byte length of the original source so downstream byte offsets stay aligned.
+#[inline]
+fn push_blanked(out: &mut String, ch: char) {
+    for _ in 0..ch.len_utf8() {
+        out.push(' ');
+    }
+}
+
 /// Merge physical lines into logical lines by tracking brace/paren/bracket depth.
 /// When a line ends with unbalanced delimiters, subsequent lines are merged until balance.
 fn merge_logical_lines(text: &str) -> Vec<LogicalLine> {
@@ -2418,7 +2574,8 @@ fn parse_source(
         ));
     }
 
-    let logical_lines = merge_logical_lines(text);
+    let stripped = strip_comments_to_whitespace(text);
+    let logical_lines = merge_logical_lines(&stripped);
     let mut statements = Vec::with_capacity(8);
 
     // Check for "use strict" directive in the first statement of global scripts
@@ -12598,6 +12755,74 @@ mod tests {
     fn merge_logical_lines_simple() {
         let lines = merge_logical_lines("a;\nb;");
         assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn strip_comments_blanks_trailing_line_comment_preserving_length() {
+        let src = "var x = 1; // Should be 1\n";
+        let stripped = strip_comments_to_whitespace(src);
+        assert_eq!(stripped.len(), src.len(), "byte length must be preserved");
+        assert!(stripped.starts_with("var x = 1; "));
+        assert!(!stripped.contains("Should"));
+        // The newline that terminates the comment is preserved.
+        assert!(stripped.ends_with('\n'));
+    }
+
+    #[test]
+    fn strip_comments_blanks_block_comment_preserving_newlines() {
+        let src = "var x =\n/* multi\n line */ 2;\n";
+        let stripped = strip_comments_to_whitespace(src);
+        assert_eq!(stripped.len(), src.len());
+        assert!(!stripped.contains("multi"));
+        assert!(!stripped.contains("line"));
+        // Both interior newlines survive so line numbers do not shift.
+        assert_eq!(stripped.matches('\n').count(), src.matches('\n').count());
+        assert!(stripped.contains("2;"));
+    }
+
+    #[test]
+    fn strip_comments_leaves_double_slash_inside_string_intact() {
+        let src = "var u = \"http://example.com\"; // trailing\n";
+        let stripped = strip_comments_to_whitespace(src);
+        assert!(stripped.contains("\"http://example.com\""));
+        assert!(!stripped.contains("trailing"));
+    }
+
+    #[test]
+    fn strip_comments_leaves_double_slash_inside_template_literal_intact() {
+        let src = "var u = `a//b`; // c\n";
+        let stripped = strip_comments_to_whitespace(src);
+        assert!(stripped.contains("`a//b`"));
+        assert!(!stripped.contains("// c"));
+    }
+
+    #[test]
+    fn strip_comments_leaves_regex_literal_intact() {
+        // The `/` inside the char class and body must not be read as a comment.
+        let src = "var re = /a\\/b[/]c/; // note\n";
+        let stripped = strip_comments_to_whitespace(src);
+        assert!(stripped.contains("/a\\/b[/]c/"));
+        assert!(!stripped.contains("note"));
+    }
+
+    #[test]
+    fn strip_comments_division_is_not_a_comment() {
+        let src = "var q = a / b; // q\n";
+        let stripped = strip_comments_to_whitespace(src);
+        assert!(stripped.contains("a / b"));
+        assert!(!stripped.contains("// q"));
+    }
+
+    #[test]
+    fn merge_logical_lines_after_strip_drops_trailing_comment_segment() {
+        // End-to-end at the merge+split boundary: a trailing line comment after
+        // `;` must not survive as a separate statement segment.
+        let stripped = strip_comments_to_whitespace("var x = 1; // Should be 1\n");
+        let lines = merge_logical_lines(&stripped);
+        assert_eq!(lines.len(), 1);
+        let segs = split_statement_segments(&lines[0].text);
+        assert_eq!(segs.len(), 1, "comment must not become its own segment");
+        assert_eq!(segs[0].2.trim(), "var x = 1");
     }
 
     #[test]

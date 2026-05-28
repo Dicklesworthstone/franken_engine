@@ -206,8 +206,14 @@ outside this tree:
   output, and IR fixtures (multi-helper, see bd-ub6x8.6 for the planned
   consolidation).
 - `crates/franken-engine/tests/golden_tests/` — proof-manifest
-  fixtures, currently inlined via `concat!()` rather than read from
-  disk (bd-ub6x8.5).
+  fixtures (bd-ub6x8.5 landed a `proof_manifest_v1.json`) and CLI
+  capture JSONs for `frankenctl_help`, `frankenctl_version`, and
+  `decision_demo_help`. The three former
+  `architecture_inventory_{help,stdout,check}.json` captures (76 KB
+  combined) were removed in bd-ub6x8.10 because their substantive
+  contract is already covered by
+  `architecture_inventory_golden.rs` against
+  `docs/ARCHITECTURE_INVENTORY.md`.
 - `crates/franken-engine/tests/golden_vectors/` — vector-format
   fixtures used by the certificate suites.
 

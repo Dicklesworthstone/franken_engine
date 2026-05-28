@@ -1553,10 +1553,8 @@ mod tests {
         let variants = [
             serde_json::to_string(&CheckpointAction::Continue)
                 .expect("serialization should succeed"),
-            serde_json::to_string(&CheckpointAction::Drain)
-                .expect("serialization should succeed"),
-            serde_json::to_string(&CheckpointAction::Abort)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&CheckpointAction::Drain).expect("serialization should succeed"),
+            serde_json::to_string(&CheckpointAction::Abort).expect("serialization should succeed"),
         ];
         let set: std::collections::BTreeSet<_> = variants.iter().collect();
         assert_eq!(
@@ -1571,24 +1569,17 @@ mod tests {
         let variants = [
             serde_json::to_string(&LoopSite::BytecodeDispatch)
                 .expect("serialization should succeed"),
-            serde_json::to_string(&LoopSite::GcScanning)
-                .expect("serialization should succeed"),
-            serde_json::to_string(&LoopSite::GcSweep)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&LoopSite::GcScanning).expect("serialization should succeed"),
+            serde_json::to_string(&LoopSite::GcSweep).expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::PolicyIteration)
                 .expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::ContractEvaluation)
                 .expect("serialization should succeed"),
-            serde_json::to_string(&LoopSite::ReplayStep)
-                .expect("serialization should succeed"),
-            serde_json::to_string(&LoopSite::ModuleDecode)
-                .expect("serialization should succeed"),
-            serde_json::to_string(&LoopSite::ModuleVerify)
-                .expect("serialization should succeed"),
-            serde_json::to_string(&LoopSite::IrLowering)
-                .expect("serialization should succeed"),
-            serde_json::to_string(&LoopSite::IrCompilation)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&LoopSite::ReplayStep).expect("serialization should succeed"),
+            serde_json::to_string(&LoopSite::ModuleDecode).expect("serialization should succeed"),
+            serde_json::to_string(&LoopSite::ModuleVerify).expect("serialization should succeed"),
+            serde_json::to_string(&LoopSite::IrLowering).expect("serialization should succeed"),
+            serde_json::to_string(&LoopSite::IrCompilation).expect("serialization should succeed"),
             serde_json::to_string(&LoopSite::Custom("unique_name".to_string()))
                 .expect("serialization should succeed"),
         ];

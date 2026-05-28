@@ -4,7 +4,7 @@
   "source_revision": "fixture-revision",
   "decision": "degraded",
   "command": {
-    "text": "rch exec -- env UPDATE_GOLDEN=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine golden_ --lib -- --nocapture",
+    "text": "rch exec -- env UPDATE_GOLDENS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine golden_ --lib -- --nocapture",
     "class": "cargo_test",
     "package": "frankenengine-engine",
     "target": "lib"

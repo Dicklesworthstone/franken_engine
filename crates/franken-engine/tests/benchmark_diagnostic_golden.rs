@@ -290,7 +290,7 @@ fn test_benchmark_diagnostic_golden(test_case: &BenchmarkDiagnosticTestCase) {
 
     let diag = golden_diag::GoldenDiag {
         framework_name: "Benchmark/diagnostic golden",
-        regen_env_var: "REGENERATE_GOLDEN",
+        regen_env_var: "UPDATE_GOLDENS",
     };
 
     diag.assert_golden_match(

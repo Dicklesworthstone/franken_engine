@@ -32,7 +32,7 @@ impl GoldenDiag {
     pub fn cli() -> Self {
         Self {
             framework_name: "CLI golden",
-            regen_env_var: "REGENERATE_GOLDEN",
+            regen_env_var: "UPDATE_GOLDENS",
         }
     }
 
@@ -41,7 +41,7 @@ impl GoldenDiag {
     pub fn react() -> Self {
         Self {
             framework_name: "React golden",
-            regen_env_var: "REGENERATE_GOLDEN",
+            regen_env_var: "UPDATE_GOLDENS",
         }
     }
 

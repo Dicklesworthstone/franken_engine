@@ -1,5 +1,19 @@
 # Golden File Provenance
 
+## Regeneration Convention (Project-Wide)
+
+All franken-engine golden tests honor a single environment variable:
+
+```bash
+UPDATE_GOLDENS=1 cargo test ...
+```
+
+Setting `UPDATE_GOLDENS=1` puts every golden-aware test into write mode
+(creating or rewriting its golden fixture); leaving it unset puts every
+test into compare mode. There is no per-suite alias — older sites that
+used `UPDATE_GOLDEN`, `REGENERATE_GOLDEN`, or `BLESS_GOLDEN` have all
+been migrated (bd-ub6x8.2).
+
 ## Generation
 
 Golden files in this directory were generated from adversarial fuzzing harness outputs to lock down behavior for regression testing.

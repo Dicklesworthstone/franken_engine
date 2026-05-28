@@ -3892,15 +3892,15 @@ mod tests {
         );
         let snapshot_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/golden/evidence_h1_fixed_signature.hex");
-        if std::env::var("BLESS_GOLDEN").is_ok() {
+        if std::env::var("UPDATE_GOLDENS").is_ok() {
             std::fs::write(&snapshot_path, &observed_sig_hex).unwrap();
         } else {
             let golden = std::fs::read_to_string(&snapshot_path)
-                .expect("golden must exist; re-run with BLESS_GOLDEN=1 the first time");
+                .expect("golden must exist; re-run with UPDATE_GOLDENS=1 the first time");
             assert_eq!(
                 observed_sig_hex,
                 golden.trim(),
-                "evidence signature must match the golden; if intentional, BLESS_GOLDEN=1"
+                "evidence signature must match the golden; if intentional, UPDATE_GOLDENS=1"
             );
         }
     }

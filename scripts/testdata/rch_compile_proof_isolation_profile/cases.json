@@ -28,7 +28,7 @@
     {
       "case_id": "broad_lib_test_drift",
       "metadata": {
-        "command": "rch exec -- env UPDATE_GOLDEN=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine golden_ --lib -- --nocapture",
+        "command": "rch exec -- env UPDATE_GOLDENS=1 CARGO_INCREMENTAL=0 cargo test -p frankenengine-engine golden_ --lib -- --nocapture",
         "package": "frankenengine-engine",
         "target": "lib",
         "golden_validation_command": "git diff --check -- tests/golden/build_report_output.golden",

@@ -1076,7 +1076,7 @@ mod tests {
         let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/golden/attack_surface_game_model_generate_report_expected.json");
 
-        if std::env::var_os("UPDATE_GOLDEN").is_some() {
+        if std::env::var_os("UPDATE_GOLDENS").is_some() {
             std::fs::create_dir_all(
                 golden_path
                     .parent()

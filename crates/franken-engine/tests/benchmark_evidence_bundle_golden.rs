@@ -20,12 +20,12 @@ use frankenengine_engine::security_epoch::SecurityEpoch;
 // Golden test helpers
 // ---------------------------------------------------------------------------
 
-/// Assert golden output matches expected, with UPDATE_GOLDEN=1 support
+/// Assert golden output matches expected, with UPDATE_GOLDENS=1 support
 fn assert_golden(test_name: &str, actual: &str) {
     let golden_path = Path::new("tests/golden").join(format!("{test_name}.golden"));
 
     // UPDATE MODE: overwrite golden with actual output
-    if std::env::var("UPDATE_GOLDEN").is_ok() {
+    if std::env::var("UPDATE_GOLDENS").is_ok() {
         fs::create_dir_all(
             golden_path
                 .parent()
@@ -41,7 +41,7 @@ fn assert_golden(test_name: &str, actual: &str) {
     let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
         panic!(
             "Golden file missing: {}\n\
-             Run with UPDATE_GOLDEN=1 to create it\n\
+             Run with UPDATE_GOLDENS=1 to create it\n\
              Then review and commit: git diff tests/golden/",
             golden_path.display()
         )
@@ -57,7 +57,7 @@ fn assert_golden(test_name: &str, actual: &str) {
             "GOLDEN MISMATCH: {test_name}\n\n\
              Expected length: {} bytes\n\
              Actual length:   {} bytes\n\n\
-             To update: UPDATE_GOLDEN=1 cargo test -- {test_name}\n\
+             To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
              To review: diff {} {}",
             expected.len(),
             actual.len(),

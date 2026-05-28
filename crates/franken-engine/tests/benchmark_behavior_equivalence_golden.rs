@@ -15,7 +15,7 @@ fn golden_path() -> PathBuf {
 }
 
 fn update_golden() -> bool {
-    std::env::var_os("UPDATE_GOLDEN").is_some()
+    std::env::var_os("UPDATE_GOLDENS").is_some()
 }
 
 fn assert_golden_json(actual: &str) {
@@ -32,7 +32,7 @@ fn assert_golden_json(actual: &str) {
 
     let expected = fs::read_to_string(&path).unwrap_or_else(|err| {
         panic!(
-            "failed to read golden snapshot {}: {err}; rerun with UPDATE_GOLDEN=1",
+            "failed to read golden snapshot {}: {err}; rerun with UPDATE_GOLDENS=1",
             path.display()
         )
     });

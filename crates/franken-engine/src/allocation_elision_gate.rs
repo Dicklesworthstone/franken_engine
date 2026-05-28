@@ -2879,7 +2879,7 @@ mod tests {
         let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/golden/generate_savings_report_output.golden");
 
-        if std::env::var("UPDATE_GOLDEN").is_ok() {
+        if std::env::var("UPDATE_GOLDENS").is_ok() {
             // Write new golden file
             std::fs::write(&golden_path, &json_output)
                 .expect("Should be able to write golden file");
@@ -2887,12 +2887,12 @@ mod tests {
         } else {
             // Read expected output and compare
             let expected = std::fs::read_to_string(&golden_path)
-                .expect("Golden file should exist. Run with UPDATE_GOLDEN=1 to create it.");
+                .expect("Golden file should exist. Run with UPDATE_GOLDENS=1 to create it.");
 
             assert_eq!(
                 expected.trim(),
                 json_output.trim(),
-                "generate_savings_report output has changed. If this is intentional, run: UPDATE_GOLDEN=1 cargo test"
+                "generate_savings_report output has changed. If this is intentional, run: UPDATE_GOLDENS=1 cargo test"
             );
         }
 

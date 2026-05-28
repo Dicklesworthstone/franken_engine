@@ -13,7 +13,7 @@
 //! intentionally regenerate them (e.g. after a deliberate format change), run:
 //!
 //! ```bash
-//! BLESS_GOLDEN=1 cargo test --test deterministic_serde_golden
+//! UPDATE_GOLDENS=1 cargo test --test deterministic_serde_golden
 //! ```
 //!
 //! API note: the bead draft referenced an aspirational `encode_into_with_buffer`
@@ -174,7 +174,7 @@ fn golden_corpus() -> Vec<(&'static str, CanonicalValue)> {
 }
 
 fn blessing() -> bool {
-    std::env::var("BLESS_GOLDEN").is_ok()
+    std::env::var("UPDATE_GOLDENS").is_ok()
 }
 
 fn run_golden(name: &str, value: &CanonicalValue) {
@@ -198,7 +198,7 @@ fn run_golden(name: &str, value: &CanonicalValue) {
 
     let content = std::fs::read_to_string(&path).unwrap_or_else(|_| {
         panic!(
-            "missing golden {}; regenerate with BLESS_GOLDEN=1",
+            "missing golden {}; regenerate with UPDATE_GOLDENS=1",
             path.display()
         )
     });
@@ -209,7 +209,7 @@ fn run_golden(name: &str, value: &CanonicalValue) {
     assert_eq!(
         stored_hash, pair.expected_sha256_hex,
         "canonical encoding for {name} produced an unexpected hash. \
-         If intentional, re-run with BLESS_GOLDEN=1; otherwise this is a \
+         If intentional, re-run with UPDATE_GOLDENS=1; otherwise this is a \
          load-bearing content_hash regression.",
     );
     // (b) Constructor stability: the live in-code shape must match the committed golden.

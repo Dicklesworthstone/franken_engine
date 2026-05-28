@@ -367,9 +367,24 @@ impl FullIrValidationContext {
     }
 
     /// Verify that all global invariants hold.
+    ///
+    /// **bd-1lw7r.8 honesty note**: every `GlobalInvariantType` arm currently
+    /// rubber-stamps `true`. That's a placeholder, not a real discharge —
+    /// the actual verification would invoke a theorem prover or a type-system
+    /// checker over the merged IR. Consult
+    /// [`VerificationMethod::is_runner_wired`] (sibling enum in
+    /// `statement_translation_validator`) before claiming any of these
+    /// invariants has been formally proven. The structural well-formedness
+    /// checks earlier in the pipeline (`validate_transformation_step` at
+    /// line ~314, which rejects vacuous lemmas and no-op transitions) remain
+    /// honest — only this *global-invariant* verifier is the rubber stamp.
     fn verify_global_invariants(&mut self) -> bool {
         for invariant in &self.global_invariants {
-            // Simplified verification - would invoke theorem provers
+            // FIXME (bd-1lw7r.8): rubber-stamp until a real prover/checker is
+            // wired. Each arm should route to its discipline-appropriate
+            // backend (Z3 for SemanticEquivalence / TypeSafety, region-based
+            // analysis for VariableLifetimeCorrectness, etc.) when that
+            // infrastructure lands under bd-cixqu.7 Track G.
             let verification_success = match invariant.invariant_type {
                 GlobalInvariantType::TypeSafety => true,
                 GlobalInvariantType::MemorySafety => true,

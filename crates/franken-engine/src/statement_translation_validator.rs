@@ -94,6 +94,36 @@ pub enum VerificationMethod {
     DifferentialTesting,
 }
 
+impl VerificationMethod {
+    /// Whether a real backend runner for this method is currently wired into
+    /// the validator. When this returns `false`, [`StatementValidationContext::
+    /// verify_proof_obligation`] (and the equivalent path in
+    /// `full_ir_translation_validator`) returns `true` as a placeholder — the
+    /// `true` is a *rubber stamp*, not a real discharge. The proof-bundle and
+    /// matrix-promotion machinery (bd-cixqu.7 Track G / FE-CLAIM-016..021)
+    /// should consult this helper before claiming any obligation verified by
+    /// these methods has been formally discharged. Tracked under bd-1lw7r.8;
+    /// the parallel optimization_proof_carriers path already routes
+    /// `Z3`-discharged methods through `invoke_z3` (bd-cixqu.7.17 /
+    /// bd-cixqu.7.17.1) and fail-closes the runner-dependent ones.
+    pub fn is_runner_wired(&self) -> bool {
+        match self {
+            // LeanFormal only does a non-empty-string check in
+            // `verify_proof_obligation` — that's structural well-formedness,
+            // not a Lean 4 proof discharge. Until the Lean runner is wired
+            // (bd-cixqu.7.17.3 / bd-cixqu.7.17), treat as unwired.
+            VerificationMethod::LeanFormal => false,
+            // The remaining three methods unconditionally return `true` in
+            // the current validator. They need: symbolic-execution engine,
+            // model-checker (TLA+ / Spin / Z3), and a differential-testing
+            // runner respectively.
+            VerificationMethod::SymbolicExecution => false,
+            VerificationMethod::ModelChecking => false,
+            VerificationMethod::DifferentialTesting => false,
+        }
+    }
+}
+
 /// Result of statement translation validation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatementValidationResult {
@@ -269,27 +299,85 @@ impl StatementValidationContext {
         }
     }
 
-    /// Verify a single proof obligation (simplified for demonstration).
+    /// Verify a single proof obligation.
+    ///
+    /// **bd-1lw7r.8 honesty note**: the current implementation does NOT
+    /// discharge runner-dependent obligations. `LeanFormal` only checks the
+    /// premise/conclusion strings are non-empty (structural well-formedness),
+    /// and the other three methods unconditionally return `true`. A `true`
+    /// return from this function therefore means "structurally well-formed
+    /// *or* rubber-stamped" — not "formally verified". Use
+    /// [`VerificationMethod::is_runner_wired`] to filter results that depend
+    /// on a real backend before reporting them as proven.
+    ///
+    /// The matching path in `optimization_proof_carriers::verify_proof_obligation`
+    /// already routes `Z3`-discharged methods through `invoke_z3` and
+    /// fail-closes the runner-dependent ones (bd-cixqu.7.17,
+    /// bd-cixqu.7.17.1); the statement-level validator here is queued for the
+    /// equivalent treatment under bd-1lw7r.8.
     fn verify_proof_obligation(&self, obligation: &ProofObligation) -> bool {
         match obligation.verification_method {
             VerificationMethod::LeanFormal => {
-                // In a real implementation, would invoke Lean 4 verification
-                // For now, assume verification succeeds for well-formed obligations
+                // FIXME (bd-1lw7r.8): rubber-stamp until the Lean 4 runner
+                // is wired (bd-cixqu.7.17.3). This is *structural*
+                // well-formedness, not a Lean proof discharge — do not
+                // interpret a `true` here as a verified obligation.
                 !obligation.premise.is_empty() && !obligation.conclusion.is_empty()
             }
             VerificationMethod::SymbolicExecution => {
-                // Would invoke symbolic execution engine
-                true // Simplified assumption
+                // FIXME (bd-1lw7r.8): rubber-stamp until a symbolic-execution
+                // engine is wired. `is_runner_wired()` returns false for this
+                // method so downstream proof-bundle emitters can detect.
+                true
             }
             VerificationMethod::ModelChecking => {
-                // Would invoke model checker (e.g., TLA+, Spin)
-                true // Simplified assumption
+                // FIXME (bd-1lw7r.8): rubber-stamp until a model checker
+                // (TLA+ / Spin / Z3) is wired. The Z3 route already exists in
+                // `optimization_proof_carriers::verify_proof_obligation`
+                // (bd-cixqu.7.17.1); the statement validator should route
+                // here when the integration is generalised.
+                true
             }
             VerificationMethod::DifferentialTesting => {
-                // Would run differential tests between source and target
-                true // Simplified assumption
+                // FIXME (bd-1lw7r.8): rubber-stamp until a differential
+                // tester is wired. `optimization_proof_carriers` fail-closes
+                // this method explicitly (`Ok(ProofResult::Failed)`); the
+                // equivalent fail-close in the statement validator awaits a
+                // companion downstream-test sweep.
+                true
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod verification_method_wired_tests {
+    use super::VerificationMethod;
+
+    // bd-1lw7r.8: every variant must currently report itself as NOT wired.
+    // When a real runner lands for any method, flip its arm in
+    // `VerificationMethod::is_runner_wired` AND update this test to assert
+    // `true` for that variant. The assertion order matches the enum order
+    // above so a future addition to the enum forces a deliberate decision.
+
+    #[test]
+    fn lean_formal_is_not_runner_wired() {
+        assert!(!VerificationMethod::LeanFormal.is_runner_wired());
+    }
+
+    #[test]
+    fn symbolic_execution_is_not_runner_wired() {
+        assert!(!VerificationMethod::SymbolicExecution.is_runner_wired());
+    }
+
+    #[test]
+    fn model_checking_is_not_runner_wired() {
+        assert!(!VerificationMethod::ModelChecking.is_runner_wired());
+    }
+
+    #[test]
+    fn differential_testing_is_not_runner_wired() {
+        assert!(!VerificationMethod::DifferentialTesting.is_runner_wired());
     }
 }
 

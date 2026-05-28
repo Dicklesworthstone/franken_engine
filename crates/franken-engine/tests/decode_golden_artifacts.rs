@@ -15,6 +15,27 @@ use frankenengine_engine::deterministic_serde::{
     CanonicalValue, SchemaRegistry, decode_value, encode_value, serialize_with_schema,
 };
 
+// Render a `CanonicalValue` via its `Serialize` impl (a stable contract), not
+// Rust's `Debug` (which is not a stability contract). bd-ub6x8.9.1.
+fn render_value(value: &CanonicalValue) -> String {
+    serde_json::to_string(value).expect("CanonicalValue is always JSON-serializable")
+}
+
+// Render a byte slice as `[0xHH, 0xHH, ...]` — lower-case, two-hex-digit per
+// byte, stable across compiler / Debug-impl changes. bd-ub6x8.9.1.
+fn render_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(2 + bytes.len() * 6);
+    out.push('[');
+    for (i, byte) in bytes.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&format!("0x{byte:02x}"));
+    }
+    out.push(']');
+    out
+}
+
 /// Core golden comparison function following testing-golden-artifacts pattern
 fn assert_golden(test_name: &str, actual: &str) {
     let golden_path = Path::new("tests/golden").join(format!("{test_name}.golden"));
@@ -140,8 +161,8 @@ fn test_decode_encode_roundtrip_golden() {
         let original = synthetic_value(seed);
         output.push_str(&format!("=== Seed {} ===\n", seed));
 
-        // Show original value
-        output.push_str(&format!("Original: {:?}\n", original));
+        // Show original value (serde_json: stable, not Debug).
+        output.push_str(&format!("Original: {}\n", render_value(&original)));
 
         // Encode -> Decode roundtrip
         let encoded = encode_value(&original);
@@ -149,11 +170,11 @@ fn test_decode_encode_roundtrip_golden() {
 
         match decode_value(&encoded) {
             Ok(decoded) => {
-                output.push_str(&format!("Decoded: {:?}\n", decoded));
+                output.push_str(&format!("Decoded: {}\n", render_value(&decoded)));
                 output.push_str(&format!("Roundtrip OK: {}\n", original == decoded));
             }
             Err(e) => {
-                output.push_str(&format!("Decode Error: {:?}\n", e));
+                output.push_str(&format!("Decode Error: {e}\n"));
             }
         }
 
@@ -170,14 +191,14 @@ fn test_decode_encode_roundtrip_golden() {
 
         match registry.deserialize_checked(&schema_encoded) {
             Ok((_schema_def, schema_decoded)) => {
-                output.push_str(&format!("Schema decoded: {:?}\n", schema_decoded));
+                output.push_str(&format!("Schema decoded: {}\n", render_value(&schema_decoded)));
                 output.push_str(&format!(
                     "Schema roundtrip OK: {}\n",
                     original == schema_decoded
                 ));
             }
             Err(e) => {
-                output.push_str(&format!("Schema decode error: {:?}\n", e));
+                output.push_str(&format!("Schema decode error: {e}\n"));
             }
         }
 
@@ -202,14 +223,14 @@ fn test_malformed_input_behavior_golden() {
 
     for (i, input) in malformed_inputs.iter().enumerate() {
         output.push_str(&format!("=== Malformed input {} ===\n", i));
-        output.push_str(&format!("Input: {:?}\n", input));
+        output.push_str(&format!("Input: {}\n", render_bytes(input)));
 
         match decode_value(input) {
             Ok(decoded) => {
-                output.push_str(&format!("Decoded: {:?}\n", decoded));
+                output.push_str(&format!("Decoded: {}\n", render_value(&decoded)));
             }
             Err(e) => {
-                output.push_str(&format!("Error: {:?}\n", e));
+                output.push_str(&format!("Error: {e}\n"));
             }
         }
         output.push('\n');
@@ -233,11 +254,16 @@ fn test_schema_hash_determinism_golden() {
 
     for (name, schema_bytes) in test_schemas {
         output.push_str(&format!("=== Schema: {} ===\n", name));
-        output.push_str(&format!("Schema bytes: {:?}\n", schema_bytes.as_bytes()));
+        output.push_str(&format!(
+            "Schema bytes: {}\n",
+            render_bytes(schema_bytes.as_bytes())
+        ));
 
         let mut registry = SchemaRegistry::new();
         let schema = registry.register(name, 1, schema_bytes.as_bytes());
-        output.push_str(&format!("Schema hash: {:?}\n", schema));
+        // `SchemaHash` Display impl is lower-case hex — a stable contract,
+        // distinct from `Debug`'s `SchemaHash([byte; 32])` rendering.
+        output.push_str(&format!("Schema hash: {schema}\n"));
         output.push('\n');
     }
 

@@ -1,45 +1,45 @@
 === Seed 0 ===
-Original: U64(0)
+Original: {"U64":0}
 Encoded bytes: 9 bytes
-Decoded: U64(0)
+Decoded: {"U64":0}
 Roundtrip OK: true
 Schema encoded: 41 bytes
-Schema decoded: U64(0)
+Schema decoded: {"U64":0}
 Schema roundtrip OK: true
 
 === Seed 1 ===
-Original: Bytes([1, 2, 3, 4, 5, 6, 7, 8])
+Original: {"Bytes":[1,2,3,4,5,6,7,8]}
 Encoded bytes: 13 bytes
-Decoded: Bytes([1, 2, 3, 4, 5, 6, 7, 8])
+Decoded: {"Bytes":[1,2,3,4,5,6,7,8]}
 Roundtrip OK: true
 Schema encoded: 45 bytes
-Schema decoded: Bytes([1, 2, 3, 4, 5, 6, 7, 8])
+Schema decoded: {"Bytes":[1,2,3,4,5,6,7,8]}
 Schema roundtrip OK: true
 
 === Seed 42 ===
-Original: String("qrstuvwx")
+Original: {"String":"qrstuvwx"}
 Encoded bytes: 13 bytes
-Decoded: String("qrstuvwx")
+Decoded: {"String":"qrstuvwx"}
 Roundtrip OK: true
 Schema encoded: 45 bytes
-Schema decoded: String("qrstuvwx")
+Schema decoded: {"String":"qrstuvwx"}
 Schema roundtrip OK: true
 
 === Seed 127 ===
-Original: String("xyzabcde")
+Original: {"String":"xyzabcde"}
 Encoded bytes: 13 bytes
-Decoded: String("xyzabcde")
+Decoded: {"String":"xyzabcde"}
 Roundtrip OK: true
 Schema encoded: 45 bytes
-Schema decoded: String("xyzabcde")
+Schema decoded: {"String":"xyzabcde"}
 Schema roundtrip OK: true
 
 === Seed 255 ===
-Original: U64(255)
+Original: {"U64":255}
 Encoded bytes: 9 bytes
-Decoded: U64(255)
+Decoded: {"U64":255}
 Roundtrip OK: true
 Schema encoded: 41 bytes
-Schema decoded: U64(255)
+Schema decoded: {"U64":255}
 Schema roundtrip OK: true
 

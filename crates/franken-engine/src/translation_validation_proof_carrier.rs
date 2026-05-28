@@ -816,9 +816,7 @@ pub fn emit_fe_claim_017_proof_bundle(
     };
 
     crate::policy_theorem_engine::write_proof_bundle(&body, bundle_dir).map_err(|e| {
-        TranslationValidationError::StorageFailed(format!(
-            "FE-CLAIM-017 bundle write failed: {e}"
-        ))
+        TranslationValidationError::StorageFailed(format!("FE-CLAIM-017 bundle write failed: {e}"))
     })
 }
 
@@ -1202,7 +1200,10 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
 
         // Gate schema checks the bundle must satisfy.
-        assert_eq!(parsed["schema_version"], "franken-engine.theorem-backed-compiler.proof.v1");
+        assert_eq!(
+            parsed["schema_version"],
+            "franken-engine.theorem-backed-compiler.proof.v1"
+        );
         assert_eq!(parsed["claim_id"], "FE-CLAIM-017");
         assert_eq!(parsed["verdict"], "proven");
         assert_eq!(parsed["track"], "track-g");

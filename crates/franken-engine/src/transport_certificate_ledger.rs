@@ -1987,8 +1987,8 @@ mod tests {
             ResidualComponent::new("other", 200_000, 180_000, "misc"),
         ];
 
-        let ledger =
-            build_residual_ledger(&cert, components).expect("operation should succeed for valid inputs");
+        let ledger = build_residual_ledger(&cert, components)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ledger.total_source_millionths, 900_000);
         assert_eq!(ledger.total_transported_millionths, 780_000);
         assert_eq!(ledger.component_count(), 3);
@@ -2007,8 +2007,8 @@ mod tests {
         )
         .expect("operation should succeed for valid inputs");
 
-        let ledger =
-            build_residual_ledger(&cert, vec![]).expect("operation should succeed for valid inputs");
+        let ledger = build_residual_ledger(&cert, vec![])
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ledger.total_source_millionths, 0);
         assert_eq!(ledger.total_transported_millionths, 0);
         assert_eq!(ledger.component_count(), 0);
@@ -2056,8 +2056,8 @@ mod tests {
             "profile portability",
         )];
 
-        let ledger =
-            build_residual_ledger(&cert, components).expect("operation should succeed for valid inputs");
+        let ledger = build_residual_ledger(&cert, components)
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&ledger).expect("serialize derived Serialize");
         let back: ResidualLedger =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2079,10 +2079,10 @@ mod tests {
         let comps1 = vec![ResidualComponent::new("a", 300_000, 250_000, "x")];
         let comps2 = vec![ResidualComponent::new("a", 300_000, 250_000, "x")];
 
-        let l1 =
-            build_residual_ledger(&cert, comps1).expect("operation should succeed for valid inputs");
-        let l2 =
-            build_residual_ledger(&cert, comps2).expect("operation should succeed for valid inputs");
+        let l1 = build_residual_ledger(&cert, comps1)
+            .expect("operation should succeed for valid inputs");
+        let l2 = build_residual_ledger(&cert, comps2)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(l1.content_hash, l2.content_hash);
     }
 
@@ -2097,8 +2097,8 @@ mod tests {
             800_000,
         )
         .expect("operation should succeed for valid inputs");
-        let ledger =
-            build_residual_ledger(&cert, vec![]).expect("operation should succeed for valid inputs");
+        let ledger = build_residual_ledger(&cert, vec![])
+            .expect("operation should succeed for valid inputs");
         let s = format!("{ledger}");
         assert!(s.contains("ledger:"));
         assert!(s.contains("cert="));
@@ -2121,8 +2121,8 @@ mod tests {
             ResidualComponent::new("cache", 300_000, 250_000, "y"),
         ];
 
-        let ledger =
-            build_residual_ledger(&cert, components).expect("operation should succeed for valid inputs");
+        let ledger = build_residual_ledger(&cert, components)
+            .expect("operation should succeed for valid inputs");
         assert!(ledger.component_by_name("branch").is_some());
         assert!(ledger.component_by_name("cache").is_some());
         assert!(ledger.component_by_name("missing").is_none());
@@ -2147,8 +2147,8 @@ mod tests {
             ResidualComponent::new("b", 300_000, 250_000, "y"),
         ];
 
-        let ledger =
-            build_residual_ledger(&cert, components).expect("operation should succeed for valid inputs");
+        let ledger = build_residual_ledger(&cert, components)
+            .expect("operation should succeed for valid inputs");
         assert!(validate_ledger_consistency(&ledger).is_ok());
     }
 
@@ -2495,8 +2495,8 @@ mod tests {
             ResidualComponent::new("b", 400_000, 320_000, "y"),
         ];
 
-        let ledger =
-            build_residual_ledger(&cert, components).expect("operation should succeed for valid inputs");
+        let ledger = build_residual_ledger(&cert, components)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(ledger.survival_fraction_millionths(), 800_000);
         assert_eq!(ledger.total_loss_millionths(), 200_000);
     }
@@ -2513,8 +2513,8 @@ mod tests {
         )
         .expect("operation should succeed for valid inputs");
 
-        let ledger =
-            build_residual_ledger(&cert, vec![]).expect("operation should succeed for valid inputs");
+        let ledger = build_residual_ledger(&cert, vec![])
+            .expect("operation should succeed for valid inputs");
         // Zero source total → returns MILLIONTHS.
         assert_eq!(ledger.survival_fraction_millionths(), MILLIONTHS);
     }

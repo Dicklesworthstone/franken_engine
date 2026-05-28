@@ -871,8 +871,7 @@ mod tests {
             let j = serde_json::to_string(d).expect("serialize derived Serialize");
             assert_eq!(
                 *d,
-                serde_json::from_str::<TransferDomain>(&j)
-                    .expect("deserialization should succeed")
+                serde_json::from_str::<TransferDomain>(&j).expect("deserialization should succeed")
             );
         }
     }
@@ -926,8 +925,7 @@ mod tests {
             let j = serde_json::to_string(&l).expect("serialize derived Serialize");
             assert_eq!(
                 l,
-                serde_json::from_str::<CoverageLevel>(&j)
-                    .expect("deserialization should succeed")
+                serde_json::from_str::<CoverageLevel>(&j).expect("deserialization should succeed")
             );
         }
     }
@@ -995,8 +993,7 @@ mod tests {
         let j = serde_json::to_string(&e).expect("serialize derived Serialize");
         assert_eq!(
             e,
-            serde_json::from_str::<TransferEvidence>(&j)
-                .expect("deserialization should succeed")
+            serde_json::from_str::<TransferEvidence>(&j).expect("deserialization should succeed")
         );
     }
 

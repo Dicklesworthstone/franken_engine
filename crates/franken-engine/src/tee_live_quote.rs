@@ -33,7 +33,7 @@ use thiserror::Error;
 
 use crate::evidence_contract::{AttestationValidityWindow, TeeAttestationBinding};
 use crate::hash_tiers::ContentHash;
-use crate::signature_preimage::{SigningKey, VerificationKey, Signature, sign_preimage};
+use crate::signature_preimage::{Signature, SigningKey, VerificationKey, sign_preimage};
 use crate::tee_attestation_policy::{TeeAttestationPolicy, TeePlatform};
 
 /// Configuration for TEE quote generation.
@@ -317,19 +317,13 @@ impl TeeQuoteGenerator {
         quote_data.insert("platform", platform.canonical_tag());
         quote_data.insert("nonce", nonce);
         let decision_hash = hex::encode(ContentHash::compute(decision_data).as_bytes());
-        quote_data.insert(
-            "decision_data_hash",
-            decision_hash.as_str(),
-        );
+        quote_data.insert("decision_data_hash", decision_hash.as_str());
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
         let timestamp_str = timestamp.to_string();
-        quote_data.insert(
-            "timestamp",
-            timestamp_str.as_str(),
-        );
+        quote_data.insert("timestamp", timestamp_str.as_str());
 
         let quote_json =
             serde_json::to_string(&quote_data).map_err(|e| TeeQuoteError::GenerationFailed {
@@ -383,9 +377,8 @@ impl TeeQuoteGenerator {
             record_id, initiated_at, reason, decision_data_hash
         );
 
-        let signature = sign_preimage(&self.signing_key, signature_payload.as_bytes()).unwrap_or_else(|_|
-            Signature::from_bytes([0u8; 64])
-        );
+        let signature = sign_preimage(&self.signing_key, signature_payload.as_bytes())
+            .unwrap_or_else(|_| Signature::from_bytes([0u8; 64]));
         let signature_hex = hex::encode(signature.to_bytes());
 
         SafeModeAttestationRecord {

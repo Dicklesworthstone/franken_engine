@@ -166,8 +166,12 @@ fn valid_attestation_policy() -> TeeAttestationPolicy {
 fn test_tee_capability_detection_not_available() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
-        unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
-        unsafe { std::env::remove_var("FRANKEN_TEE_ERROR"); }
+        unsafe {
+            std::env::remove_var("FRANKEN_TEE_ENABLED");
+        }
+        unsafe {
+            std::env::remove_var("FRANKEN_TEE_ERROR");
+        }
     }
 
     let generator = create_test_generator();
@@ -180,8 +184,12 @@ fn test_tee_capability_detection_not_available() {
 fn test_tee_capability_detection_available() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
-        unsafe { std::env::set_var("FRANKEN_TEE_ENABLED", "true"); }
-        unsafe { std::env::remove_var("FRANKEN_TEE_ERROR"); }
+        unsafe {
+            std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+        }
+        unsafe {
+            std::env::remove_var("FRANKEN_TEE_ERROR");
+        }
     }
 
     let generator = create_test_generator();
@@ -195,7 +203,9 @@ fn test_tee_capability_detection_available() {
     );
 
     unsafe {
-        unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
+        unsafe {
+            std::env::remove_var("FRANKEN_TEE_ENABLED");
+        }
     }
 }
 
@@ -203,8 +213,12 @@ fn test_tee_capability_detection_available() {
 fn test_tee_capability_detection_error() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     unsafe {
-        unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
-        unsafe { std::env::set_var("FRANKEN_TEE_ERROR", "Hardware malfunction"); }
+        unsafe {
+            std::env::remove_var("FRANKEN_TEE_ENABLED");
+        }
+        unsafe {
+            std::env::set_var("FRANKEN_TEE_ERROR", "Hardware malfunction");
+        }
     }
 
     let generator = create_test_generator();
@@ -213,7 +227,9 @@ fn test_tee_capability_detection_error() {
     assert!(matches!(capability, TeeCapability::Error { .. }));
 
     unsafe {
-        unsafe { std::env::remove_var("FRANKEN_TEE_ERROR"); }
+        unsafe {
+            std::env::remove_var("FRANKEN_TEE_ERROR");
+        }
     }
 }
 
@@ -228,8 +244,12 @@ fn test_tee_capability_detection_error() {
 #[test]
 fn test_live_quote_generation_is_simulated() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe { std::env::set_var("FRANKEN_TEE_ENABLED", "true"); }
-    unsafe { std::env::remove_var("FRANKEN_TEE_QUOTE_FAIL"); }
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+    }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_QUOTE_FAIL");
+    }
 
     let generator = create_test_generator();
     let decision_data = b"test decision data for quote generation";
@@ -266,14 +286,20 @@ fn test_live_quote_generation_is_simulated() {
         _ => panic!("Expected simulated quote generation, got: {:?}", result),
     }
 
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
 }
 
 #[test]
 fn test_live_quote_generation_failure() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe { std::env::set_var("FRANKEN_TEE_ENABLED", "true"); }
-    unsafe { std::env::set_var("FRANKEN_TEE_QUOTE_FAIL", "1"); }
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+    }
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_QUOTE_FAIL", "1");
+    }
 
     let generator = create_test_generator();
     let decision_data = b"test decision data";
@@ -283,8 +309,12 @@ fn test_live_quote_generation_failure() {
 
     assert!(matches!(result, TeeQuoteResult::Failed { .. }));
 
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
-    unsafe { std::env::remove_var("FRANKEN_TEE_QUOTE_FAIL"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_QUOTE_FAIL");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -294,8 +324,12 @@ fn test_live_quote_generation_failure() {
 #[test]
 fn test_safe_mode_fallback() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
-    unsafe { std::env::remove_var("FRANKEN_TEE_ERROR"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ERROR");
+    }
 
     let generator = create_test_generator();
     let decision_data = b"test decision data for safe mode";
@@ -335,7 +369,9 @@ fn test_safe_mode_attestation_record_structure() {
 
     // Use the internal method for testing
     // Note: In a real implementation, this would be a public testing utility
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
     let result = generator.generate_quote(decision_data, "test_nonce");
 
     match result {
@@ -366,7 +402,9 @@ fn test_safe_mode_attestation_record_structure() {
 #[test]
 fn test_receipt_with_tee_attestation_binding() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe { std::env::set_var("FRANKEN_TEE_ENABLED", "true"); }
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+    }
 
     let generator = create_test_generator();
     let decision_data = b"receipt integration test data";
@@ -394,7 +432,9 @@ fn test_receipt_with_tee_attestation_binding() {
         _ => panic!("Expected successful quote generation for receipt test"),
     }
 
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
 }
 
 #[test]
@@ -409,7 +449,9 @@ fn test_receipt_without_tee_attestation_binding() {
 #[test]
 fn test_receipt_serialization_with_tee_binding() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe { std::env::set_var("FRANKEN_TEE_ENABLED", "true"); }
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+    }
 
     let generator = create_test_generator();
     let decision_data = b"serialization test data";
@@ -435,7 +477,9 @@ fn test_receipt_serialization_with_tee_binding() {
         _ => panic!("Expected successful quote generation for serialization test"),
     }
 
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +600,9 @@ fn test_attestation_binding_validation_unsupported_platform() {
 #[test]
 fn test_end_to_end_tee_workflow() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe { std::env::set_var("FRANKEN_TEE_ENABLED", "true"); }
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+    }
 
     let generator = create_test_generator();
     let policy = valid_attestation_policy();
@@ -598,14 +644,20 @@ fn test_end_to_end_tee_workflow() {
         _ => panic!("End-to-end test expected successful TEE quote generation"),
     }
 
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
 }
 
 #[test]
 fn test_end_to_end_safe_mode_workflow() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
-    unsafe { std::env::remove_var("FRANKEN_TEE_ERROR"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ERROR");
+    }
 
     let generator = create_test_generator();
 
@@ -653,16 +705,24 @@ fn test_end_to_end_safe_mode_workflow() {
 fn test_quote_generation_timeout_simulation() {
     let _env_guard = ENV_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
     // This test verifies error handling paths
-    unsafe { std::env::set_var("FRANKEN_TEE_ENABLED", "true"); }
-    unsafe { std::env::set_var("FRANKEN_TEE_QUOTE_FAIL", "1"); }
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+    }
+    unsafe {
+        std::env::set_var("FRANKEN_TEE_QUOTE_FAIL", "1");
+    }
 
     let generator = create_test_generator();
     let result = generator.generate_quote(b"timeout test", "timeout_nonce");
 
     assert!(matches!(result, TeeQuoteResult::Failed { .. }));
 
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
-    unsafe { std::env::remove_var("FRANKEN_TEE_QUOTE_FAIL"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_QUOTE_FAIL");
+    }
 }
 
 #[test]
@@ -700,7 +760,9 @@ fn test_tee_quote_config_customization() {
     // Verify the configuration is applied
     // (This would be more testable with accessor methods on TeeQuoteGenerator)
     unsafe {
-        unsafe { std::env::set_var("FRANKEN_TEE_ENABLED", "true"); }
+        unsafe {
+            std::env::set_var("FRANKEN_TEE_ENABLED", "true");
+        }
     }
     let result = generator.generate_quote(b"config test", "config_nonce");
 
@@ -716,5 +778,7 @@ fn test_tee_quote_config_customization() {
         }
     }
 
-    unsafe { std::env::remove_var("FRANKEN_TEE_ENABLED"); }
+    unsafe {
+        std::env::remove_var("FRANKEN_TEE_ENABLED");
+    }
 }

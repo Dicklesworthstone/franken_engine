@@ -1776,8 +1776,8 @@ mod tests {
         assert_eq!(json, "\"synthetic-contention\"");
         // SAFETY: StressProfile derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json_balanced = serde_json::to_string(&StressProfile::Balanced)
-            .expect("serialization should succeed");
+        let json_balanced =
+            serde_json::to_string(&StressProfile::Balanced).expect("serialization should succeed");
         assert_eq!(json_balanced, "\"balanced\"");
     }
 
@@ -2264,8 +2264,7 @@ mod tests {
     fn serde_roundtrip_full_report() {
         let report = build_tail_latency_control_plane_report(StressProfile::Balanced, 1)
             .expect("operation should succeed for valid inputs");
-        let json =
-            serde_json::to_string_pretty(&report).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&report).expect("serialization should succeed");
         let deserialized: TailLatencyControlPlaneReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized.schema_version, report.schema_version);

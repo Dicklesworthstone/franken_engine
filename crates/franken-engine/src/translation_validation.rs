@@ -1664,7 +1664,9 @@ mod tests {
 
         let events = gate.events();
         // SAFETY: Test performed submit, record_verdict, lift_quarantine operations; events non-empty
-        let last = events.last().expect("operation should succeed for valid inputs");
+        let last = events
+            .last()
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             last.event_type,
             ValidationEventType::QuarantineLifted { .. }
@@ -1928,7 +1930,9 @@ mod tests {
         .expect("operation should succeed for valid inputs");
 
         let events = gate.events();
-        let last = events.last().expect("operation should succeed for valid inputs");
+        let last = events
+            .last()
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             last.event_type,
             ValidationEventType::StageDemoted {

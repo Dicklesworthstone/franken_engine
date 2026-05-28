@@ -1560,7 +1560,8 @@ mod tests {
 
     #[test]
     fn share_holder_display() {
-        let sk = SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
+        let sk =
+            SigningKey::from_bytes([0x42; 32]).expect("operation should succeed for valid inputs");
         let holder = ShareHolderId::from_verification_key(&sk.verification_key());
         let display = holder.to_string();
         assert!(display.starts_with("share:"));

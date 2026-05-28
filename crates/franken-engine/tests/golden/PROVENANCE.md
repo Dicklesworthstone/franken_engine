@@ -196,14 +196,19 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
 - **Regen:**
   `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test benchmark_behavior_equivalence_golden`
 
-### `decode_encode_roundtrip.golden`, `malformed_input_behavior.golden`, `schema_hash_determinism.golden`
+### `decode_golden_artifacts__{decode_encode_roundtrip,malformed_input_behavior,schema_hash_determinism}.snap` *(moved to `tests/snapshots/` — bd-drdxa)*
 
-- **Owning test:** `tests/decode_golden_artifacts.rs` (helper
-  `assert_golden`).
+- **Owning test:** `tests/decode_golden_artifacts.rs`. Migrated from the
+  ad-hoc `assert_golden` helper to `insta::assert_snapshot!` in commit
+  `a5a6e3a6` (bd-ub6x8.21 sub-bead `bd-drdxa`). The three fixtures moved
+  from `tests/golden/<name>.golden` → `tests/snapshots/decode_golden_artifacts__<name>.snap`
+  with the canonical insta YAML header.
 - **Subject under test:** canonical decoder behavior under
   malformed/well-formed inputs and schema-hash determinism.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test decode_golden_artifacts`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test decode_golden_artifacts`,
+  followed by `cargo insta review` for interactive blessing. The legacy
+  `UPDATE_GOLDENS=1` regen flow no longer applies to this suite.
 
 ### `deterministic_formatting.golden`, `error_message_formatting.golden`
 

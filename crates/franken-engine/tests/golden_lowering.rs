@@ -51,7 +51,12 @@ fn render_lowered_ir3(case: &LoweringGoldenCase) -> String {
         rendered.push_str("  <empty>\n");
     } else {
         for (index, value) in output.ir3.constant_pool.iter().enumerate() {
-            rendered.push_str(&format!("  [{index:04}] {value:?}\n"));
+            // serde_json on String is byte-for-byte the same as Debug for ASCII
+            // payloads but uses the stable JSON-escape contract for non-ASCII
+            // (bd-ub6x8.9.2: Debug is not a stability contract).
+            let encoded = serde_json::to_string(value)
+                .expect("String should always serialize via serde_json");
+            rendered.push_str(&format!("  [{index:04}] {encoded}\n"));
         }
     }
     rendered.push('\n');
@@ -68,7 +73,13 @@ fn render_lowered_ir3(case: &LoweringGoldenCase) -> String {
 }
 
 fn render_instruction(instruction: &Ir3Instruction) -> String {
-    format!("{instruction:?}")
+    // Ir3Instruction derives Serialize; the JSON form is the stability
+    // contract. The previous `{instruction:?}` rendering coupled all 6
+    // lowering goldens to derive(Debug) field order + variant naming, so any
+    // unrelated edit to Ir3Instruction's Debug shape would silently break
+    // every fixture (bd-ub6x8.9.2).
+    serde_json::to_string(instruction)
+        .expect("Ir3Instruction derives Serialize, JSON encoding cannot fail")
 }
 
 fn assert_lowering_golden(case: &LoweringGoldenCase) {

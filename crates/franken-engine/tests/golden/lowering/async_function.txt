@@ -11,8 +11,8 @@ constant_pool:
   <empty>
 
 instructions:
-  0000: CreateClosure { dst: 0, function_index: 1, capture_count: 0 }
-  0001: Return { value: 0 }
-  0002: Halt
-  0003: LoadInt { dst: 0, value: 1 }
-  0004: Return { value: 0 }
+  0000: {"CreateClosure":{"dst":0,"function_index":1,"capture_count":0}}
+  0001: {"Return":{"value":0}}
+  0002: "Halt"
+  0003: {"LoadInt":{"dst":0,"value":1}}
+  0004: {"Return":{"value":0}}

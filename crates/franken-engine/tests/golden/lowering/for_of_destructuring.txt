@@ -11,19 +11,19 @@ constant_pool:
   [0000] "0"
 
 instructions:
-  0000: Move { dst: 1, src: 0 }
-  0001: ForOfInit { src: 1, dst: 2 }
-  0002: ForOfNext { iterator: 2, value_dst: 3, done_target: 14 }
-  0003: Move { dst: 4, src: 3 }
-  0004: Move { dst: 0, src: 4 }
-  0005: Move { dst: 5, src: 4 }
-  0006: LoadStr { dst: 6, pool_index: 0 }
-  0007: GetProperty { obj: 5, key: 6, dst: 7 }
-  0008: Move { dst: 8, src: 7 }
-  0009: Move { dst: 0, src: 8 }
-  0010: Move { dst: 9, src: 8 }
-  0011: Move { dst: 0, src: 9 }
-  0012: Jump { target: 2 }
-  0013: IteratorClose { iterator: 2, reason: Break }
-  0014: Return { value: 0 }
-  0015: Halt
+  0000: {"Move":{"dst":1,"src":0}}
+  0001: {"ForOfInit":{"src":1,"dst":2}}
+  0002: {"ForOfNext":{"iterator":2,"value_dst":3,"done_target":14}}
+  0003: {"Move":{"dst":4,"src":3}}
+  0004: {"Move":{"dst":0,"src":4}}
+  0005: {"Move":{"dst":5,"src":4}}
+  0006: {"LoadStr":{"dst":6,"pool_index":0}}
+  0007: {"GetProperty":{"obj":5,"key":6,"dst":7}}
+  0008: {"Move":{"dst":8,"src":7}}
+  0009: {"Move":{"dst":0,"src":8}}
+  0010: {"Move":{"dst":9,"src":8}}
+  0011: {"Move":{"dst":0,"src":9}}
+  0012: {"Jump":{"target":2}}
+  0013: {"IteratorClose":{"iterator":2,"reason":"Break"}}
+  0014: {"Return":{"value":0}}
+  0015: "Halt"

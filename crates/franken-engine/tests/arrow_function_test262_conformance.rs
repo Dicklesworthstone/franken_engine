@@ -16,7 +16,8 @@ use std::collections::BTreeMap;
 
 mod _support;
 use _support::test262_common::{
-    ExpectedResult, RequirementLevel, Test262Result, evaluate_test262_result,
+    ExpectedResult, RequirementLevel, Test262Result, assert_report_json_round_trips,
+    evaluate_test262_result,
 };
 
 // ---------------------------------------------------------------------------
@@ -279,6 +280,41 @@ impl ArrowFunctionHarness {
                 expected_result: ExpectedResult::SyntaxError { error_type: "SyntaxError".to_string() },
             },
 
+            // bd-vj6kn (FIND-9): expand error-case coverage. The harness
+            // imported ExpectedResult::SyntaxError but only exercised it once
+            // (duplicate-params above). These three add the other classic
+            // arrow-function parse errors ES2020 specifies. Each is registered
+            // in KNOWN_ARROW_FUNCTION_GAPS below until the parser rejects them,
+            // so the harness exercises the SyntaxError code path without
+            // turning the gate red on a known engine gap.
+            ArrowFunctionTest {
+                id: "ES2020-14.1.20-syntax-error-rest-not-last".to_string(),
+                description: "Rest parameter must be the last formal parameter (ES2020 §14.1.2 / Annex B)".to_string(),
+                es2020_section: "14.1.20".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: ArrowFunctionCategory::EdgeCases,
+                source: "const f = (...rest, last) => last;".to_string(),
+                expected_result: ExpectedResult::SyntaxError { error_type: "SyntaxError".to_string() },
+            },
+            ArrowFunctionTest {
+                id: "ES2020-14.2.1-syntax-error-yield-in-arrow".to_string(),
+                description: "yield expression inside a non-generator arrow body is a SyntaxError".to_string(),
+                es2020_section: "14.2.1".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: ArrowFunctionCategory::EdgeCases,
+                source: "const f = () => { yield 1; };".to_string(),
+                expected_result: ExpectedResult::SyntaxError { error_type: "SyntaxError".to_string() },
+            },
+            ArrowFunctionTest {
+                id: "ES2020-14.2.1-syntax-error-await-in-non-async-arrow".to_string(),
+                description: "await expression inside a non-async arrow body is a SyntaxError".to_string(),
+                es2020_section: "14.2.1".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: ArrowFunctionCategory::EdgeCases,
+                source: "const f = (x) => await x;".to_string(),
+                expected_result: ExpectedResult::SyntaxError { error_type: "SyntaxError".to_string() },
+            },
+
             // No parameters require parentheses
             ArrowFunctionTest {
                 id: "ES2020-14.2.1-no-params".to_string(),
@@ -516,7 +552,14 @@ mod tests {
         "ES2020-14.1.19-default-params",
         "ES2020-14.1.19-default-params-override",
         "ES2020-14.1.20-rest-params",
+        // bd-vj6kn (FIND-9): three newly-added SyntaxError cases. Listed here
+        // until the parser rejects them so the drift detector treats them as
+        // known engine gaps rather than failing the gate. Remove from this
+        // list when the parser starts emitting the expected SyntaxError.
+        "ES2020-14.1.20-syntax-error-rest-not-last",
+        "ES2020-14.2.1-syntax-error-await-in-non-async-arrow",
         "ES2020-14.2.1-syntax-error-duplicate-params",
+        "ES2020-14.2.1-syntax-error-yield-in-arrow",
         "ES2020-14.2.16-arrow-in-method",
         "ES2020-14.2.16-lexical-this",
         "ES2020-14.7-async-arrow",
@@ -647,5 +690,18 @@ mod tests {
         assert!(summary.contains("Arrow Function Test262 Conformance Report"));
         assert!(summary.contains("Coverage by Category"));
         assert!(summary.contains("Test Results"));
+    }
+
+    /// bd-rqev5 (FIND-10): every conformance harness must prove its report
+    /// survives a serde_json round-trip and carries the canonical schema pin.
+    #[test]
+    fn report_round_trips_through_serde_json() {
+        let harness = ArrowFunctionHarness::new();
+        let report = harness.run_conformance(SecurityEpoch::from_raw(3));
+        assert_report_json_round_trips(
+            &report,
+            ARROW_FUNCTION_CONFORMANCE_SCHEMA,
+            &report.schema_version,
+        );
     }
 }

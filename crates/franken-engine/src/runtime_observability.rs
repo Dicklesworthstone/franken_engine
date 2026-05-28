@@ -827,13 +827,45 @@ fn build_event(
     }
 }
 
+/// Maximum length (in bytes) for a sanitised security-log field. Inputs
+/// longer than this are replaced with `fallback` rather than truncated
+/// because a truncated tag would still look like a real value to a
+/// downstream parser (bd-a1eu8: log-injection defence).
+const MAX_SANITISED_FIELD_LEN: usize = 128;
+
+/// Sanitise a free-form attacker-controlled string before it lands in
+/// security-log metadata. Returns `fallback` on inputs that fail any of:
+///
+/// 1. Empty after `trim()`.
+/// 2. UTF-8 byte length > [`MAX_SANITISED_FIELD_LEN`].
+/// 3. Contains an ASCII control byte (0x00..=0x1F or 0x7F DEL) — these
+///    include newline, carriage return, the ANSI ESC byte (0x1B) and the
+///    record-separator family. Newlines specifically can forge a log
+///    line in line-delimited downstream parsers (rsyslog, JSONLD record
+///    reader, etc.); ESC can corrupt terminal log viewers via colour
+///    codes the operator didn't ask for.
+///
+/// Inputs that pass are returned trimmed. This is a deliberately strict
+/// policy: capability tags, principal ids, etc. should not legitimately
+/// contain control characters or be over 128 bytes; if one does, the
+/// fallback surfaces the anomaly to the operator as
+/// `<missing>`/`<malformed>` rather than letting attacker bytes through
+/// into the observability stream.
 fn sanitize_required(value: &str, fallback: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        fallback.to_string()
-    } else {
-        trimmed.to_string()
+        return fallback.to_string();
     }
+    if trimmed.len() > MAX_SANITISED_FIELD_LEN {
+        return fallback.to_string();
+    }
+    if trimmed
+        .bytes()
+        .any(|b| b.is_ascii_control() || b == 0x7f)
+    {
+        return fallback.to_string();
+    }
+    trimmed.to_string()
 }
 
 fn zeroed_metric_map<K>(values: &[K]) -> BTreeMap<K, u64>
@@ -1529,6 +1561,74 @@ mod tests {
     fn sanitize_required_empty_uses_fallback() {
         assert_eq!(sanitize_required("", "fallback"), "fallback");
         assert_eq!(sanitize_required("  ", "fallback"), "fallback");
+    }
+
+    // ── bd-a1eu8: log-injection defence ──────────────────────────────
+
+    #[test]
+    fn sanitize_required_rejects_newline_injection() {
+        // The "[SECURITY] ALL_OK" line is the canonical injection scenario
+        // — newline-bearing capability tags can forge a record in
+        // line-delimited downstream parsers (rsyslog, JSONLD readers).
+        let attack = "fs_read\n[SECURITY] CapabilityDenial reason=ALL_OK";
+        assert_eq!(sanitize_required(attack, "unspecified"), "unspecified");
+    }
+
+    #[test]
+    fn sanitize_required_rejects_carriage_return() {
+        assert_eq!(sanitize_required("a\rb", "unspecified"), "unspecified");
+    }
+
+    #[test]
+    fn sanitize_required_rejects_ansi_escape() {
+        // \x1b is the ANSI ESC byte; ESC[31m would colour a terminal-log
+        // viewer red, signalling something the operator didn't ask for.
+        let attack = "fs_read\x1b[31mALL_OK\x1b[0m";
+        assert_eq!(sanitize_required(attack, "unspecified"), "unspecified");
+    }
+
+    #[test]
+    fn sanitize_required_rejects_other_control_bytes() {
+        for byte in [0x00u8, 0x07u8, 0x08u8, 0x09u8, 0x1Fu8, 0x7Fu8] {
+            // Embed the byte in a valid-utf8 wrapper.
+            let s = format!("x{}y", byte as char);
+            assert_eq!(
+                sanitize_required(&s, "unspecified"),
+                "unspecified",
+                "control byte 0x{:02x} must be rejected",
+                byte
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_required_rejects_too_long() {
+        // 129-byte input — one byte over the cap — must fall back even
+        // though the prefix is otherwise valid.
+        let s = "a".repeat(MAX_SANITISED_FIELD_LEN + 1);
+        assert_eq!(sanitize_required(&s, "unspecified"), "unspecified");
+    }
+
+    #[test]
+    fn sanitize_required_accepts_at_max_length() {
+        // A 128-byte input — exactly the cap — must NOT fall back.
+        let s = "a".repeat(MAX_SANITISED_FIELD_LEN);
+        assert_eq!(sanitize_required(&s, "unspecified"), s);
+    }
+
+    #[test]
+    fn sanitize_required_accepts_typical_capability_tags() {
+        // Tags the engine actually uses must continue to pass through.
+        for tag in [
+            "fs.read",
+            "net.send",
+            "promise:resolve",
+            "ifc.check_flow",
+            "capability.dom.read",
+            "dom.observation.timer",
+        ] {
+            assert_eq!(sanitize_required(tag, "unspecified"), tag);
+        }
     }
 
     // ── export methods ────────────────────────────────────────────────

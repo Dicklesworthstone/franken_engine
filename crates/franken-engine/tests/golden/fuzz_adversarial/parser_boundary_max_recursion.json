@@ -1,8 +1,8 @@
 {
   "input_hex": "00ffff28282828",
-  "goal": "Script",
+  "goal": "script",
   "options": {
-    "mode": "ScalarReference",
+    "mode": "scalar_reference",
     "max_source_bytes": 8192,
     "max_token_count": 271,
     "max_recursion_depth": 71
@@ -13,10 +13,10 @@
   "event_ir_hash": "sha256:[HASH]",
   "event_count": 4,
   "event_types": [
-    "ParseStarted",
-    "StatementParsed",
-    "StatementParsed",
-    "ParseCompleted"
+    "parse_started",
+    "statement_parsed",
+    "statement_parsed",
+    "parse_completed"
   ],
   "deterministic": true
 }

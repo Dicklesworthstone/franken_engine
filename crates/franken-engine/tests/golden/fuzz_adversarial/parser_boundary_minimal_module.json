@@ -1,8 +1,8 @@
 {
   "input_hex": "01000000",
-  "goal": "Module",
+  "goal": "module",
   "options": {
-    "mode": "ScalarReference",
+    "mode": "scalar_reference",
     "max_source_bytes": 8192,
     "max_token_count": 16,
     "max_recursion_depth": 8
@@ -13,11 +13,11 @@
   "event_ir_hash": "sha256:[HASH]",
   "event_count": 5,
   "event_types": [
-    "ParseStarted",
-    "StatementParsed",
-    "StatementParsed",
-    "StatementParsed",
-    "ParseCompleted"
+    "parse_started",
+    "statement_parsed",
+    "statement_parsed",
+    "statement_parsed",
+    "parse_completed"
   ],
   "deterministic": true
 }

@@ -181,17 +181,23 @@ fn run_parser_boundary_golden(data: &[u8]) -> ParserGoldenResult {
     let (result, event_ir) = parser.parse_with_event_ir(source.as_str(), goal, &options);
     let event_ir_hash = event_ir.canonical_hash();
 
+    // bd-ub6x8.9: route through the types' canonical `as_str()` rather than
+    // through Debug. `Debug` is not a stability contract — a future enum
+    // variant rename, derived-Debug field reorder, or hand-written impl change
+    // would silently break every parser_boundary_case_* golden. `as_str()` is
+    // the documented stable snake_case tag (`ParseEventKind::as_str`,
+    // `ParseGoal::as_str`, `ParserMode::as_str`).
     let event_types: Vec<String> = event_ir
         .events
         .iter()
-        .map(|e| format!("{:?}", e.kind))
+        .map(|e| e.kind.as_str().to_string())
         .collect();
 
     let mut golden = ParserGoldenResult {
         input_hex: hex::encode(data),
-        goal: format!("{:?}", goal),
+        goal: goal.as_str().to_string(),
         options: ParserOptionsSnapshot {
-            mode: format!("{:?}", options.mode),
+            mode: options.mode.as_str().to_string(),
             max_source_bytes: options.budget.max_source_bytes,
             max_token_count: options.budget.max_token_count,
             max_recursion_depth: options.budget.max_recursion_depth,

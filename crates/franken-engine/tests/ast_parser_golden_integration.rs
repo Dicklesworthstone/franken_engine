@@ -119,6 +119,9 @@ fn assert_ast_golden(test_name: &str, tree: &SyntaxTree) {
             actual_path.display(),
         );
     }
+
+    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
+    let _ = fs::remove_file(golden_path.with_extension("actual"));
 }
 
 /// Assert parse error matches golden file with scrubbed dynamic values.
@@ -164,6 +167,9 @@ fn assert_parse_error_golden(test_name: &str, error: &ParseError) {
             actual_path.display(),
         );
     }
+
+    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
+    let _ = fs::remove_file(golden_path.with_extension("actual"));
 }
 
 // ---------------------------------------------------------------------------

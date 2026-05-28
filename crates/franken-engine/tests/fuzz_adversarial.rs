@@ -1338,6 +1338,9 @@ fn assert_golden_parser_boundary(test_name: &str, output: &ParserBoundaryOutput)
             actual_path.display(),
         );
     }
+
+    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
+    let _ = fs::remove_file(golden_path.with_extension("actual"));
 }
 
 /// Scrub non-deterministic values from parser output

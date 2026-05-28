@@ -156,6 +156,9 @@ fn assert_policy_compiler_golden(result: &CompilationResult, test_name: &str) {
             actual_path.display()
         );
     }
+
+    // Sweep any stale .actual.json sibling left by a prior failing run (bd-ub6x8.7).
+    let _ = fs::remove_file(golden_file.with_extension("actual.json"));
 }
 
 fn complex_policy_with_constraints() -> PolicyIr {

@@ -1739,6 +1739,9 @@ fn assert_evidence_golden(test_name: &str, entry: &EvidenceEntry) {
             actual_path.display(),
         );
     }
+
+    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
+    let _ = fs::remove_file(golden_path.with_extension("actual"));
 }
 
 /// Scrub dynamic values from evidence entry JSON for stable golden comparison.

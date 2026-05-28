@@ -111,6 +111,9 @@ fn assert_lowering_golden(case: &LoweringGoldenCase) {
             actual_path.display()
         );
     }
+
+    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
+    let _ = fs::remove_file(golden_path.with_extension("actual"));
 }
 
 #[test]

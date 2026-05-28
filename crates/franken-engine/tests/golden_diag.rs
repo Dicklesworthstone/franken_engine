@@ -84,6 +84,9 @@ impl GoldenDiag {
 
         // Compare content
         if actual == expected {
+            // Sweep any stale .actual sibling left by a prior failing run so the
+            // working tree stays tidy once the test goes green again (bd-ub6x8.7).
+            let _ = fs::remove_file(fixture_path.with_extension("actual"));
             return; // Test passes
         }
 

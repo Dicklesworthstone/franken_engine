@@ -59,6 +59,9 @@ fn assert_golden(test_name: &str, actual: &str) {
             actual_path.display(),
         );
     }
+
+    // Sweep any stale .actual.json sibling left by a prior failing run (bd-ub6x8.7).
+    let _ = fs::remove_file(golden_path.with_extension("actual.json"));
 }
 
 /// Create deterministic JSON from serde-serializable type.

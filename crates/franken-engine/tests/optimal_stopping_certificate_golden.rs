@@ -41,7 +41,8 @@ fn assert_golden(actual: &str) {
         let actual_path = path.with_extension("actual");
         fs::write(&actual_path, actual).expect("failed to write optimal stopping actual fixture");
         panic!(
-            "optimal stopping certificate golden mismatch\nexpected: {}\nactual: {}",
+            "optimal stopping certificate golden mismatch\n{}\nexpected: {}\nactual: {}",
+            summarize_golden_diff(actual, &expected),
             path.display(),
             actual_path.display()
         );
@@ -49,6 +50,45 @@ fn assert_golden(actual: &str) {
 
     // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
     let _ = fs::remove_file(path.with_extension("actual"));
+}
+
+/// Inline unified-diff summary for the golden mismatch panic (bd-ub6x8.8).
+fn summarize_golden_diff(actual: &str, expected: &str) -> String {
+    let a: Vec<&str> = actual.lines().collect();
+    let e: Vec<&str> = expected.lines().collect();
+    let n = a.len().max(e.len());
+    let mut first = None;
+    let mut last = None;
+    for i in 0..n {
+        if a.get(i).copied().unwrap_or("") != e.get(i).copied().unwrap_or("") {
+            first.get_or_insert(i);
+            last = Some(i);
+        }
+    }
+    let (Some(first), Some(last)) = (first, last) else {
+        return format!(
+            "    expected={} actual={} chars; no line-level diff (whitespace/encoding?)",
+            expected.len(),
+            actual.len()
+        );
+    };
+    let pick = |v: &[&str], i: usize| -> String {
+        v.get(i)
+            .copied()
+            .map(|s| s.chars().take(160).collect::<String>())
+            .unwrap_or_else(|| "<EOF>".to_string())
+    };
+    format!(
+        "    expected={} actual={} lines; first diff @ line {}, last @ line {}\n    -L{}: {}\n    +L{}: {}",
+        e.len(),
+        a.len(),
+        first + 1,
+        last + 1,
+        first + 1,
+        pick(&e, first),
+        first + 1,
+        pick(&a, first),
+    )
 }
 
 fn certificate_snapshot() -> OptimalStoppingCertificateSnapshot {

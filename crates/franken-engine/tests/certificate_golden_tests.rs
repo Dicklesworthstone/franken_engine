@@ -48,11 +48,12 @@ fn assert_golden(test_name: &str, actual: &str) {
         let actual_path = golden_path.with_extension("actual.json");
         fs::write(&actual_path, actual).unwrap();
         panic!(
-            "GOLDEN MISMATCH: {}\n\
+            "GOLDEN MISMATCH: {}\n{}\n\
              Expected: {}\n\
              Actual:   {}\n\
              Run: diff {} {}",
             test_name,
+            summarize_golden_diff(actual.trim(), expected.trim()),
             golden_path.display(),
             actual_path.display(),
             golden_path.display(),
@@ -62,6 +63,45 @@ fn assert_golden(test_name: &str, actual: &str) {
 
     // Sweep any stale .actual.json sibling left by a prior failing run (bd-ub6x8.7).
     let _ = fs::remove_file(golden_path.with_extension("actual.json"));
+}
+
+/// Inline unified-diff summary for the golden mismatch panic (bd-ub6x8.8).
+fn summarize_golden_diff(actual: &str, expected: &str) -> String {
+    let a: Vec<&str> = actual.lines().collect();
+    let e: Vec<&str> = expected.lines().collect();
+    let n = a.len().max(e.len());
+    let mut first = None;
+    let mut last = None;
+    for i in 0..n {
+        if a.get(i).copied().unwrap_or("") != e.get(i).copied().unwrap_or("") {
+            first.get_or_insert(i);
+            last = Some(i);
+        }
+    }
+    let (Some(first), Some(last)) = (first, last) else {
+        return format!(
+            "    expected={} actual={} chars; no line-level diff (whitespace/encoding?)",
+            expected.len(),
+            actual.len()
+        );
+    };
+    let pick = |v: &[&str], i: usize| -> String {
+        v.get(i)
+            .copied()
+            .map(|s| s.chars().take(160).collect::<String>())
+            .unwrap_or_else(|| "<EOF>".to_string())
+    };
+    format!(
+        "    expected={} actual={} lines; first diff @ line {}, last @ line {}\n    -L{}: {}\n    +L{}: {}",
+        e.len(),
+        a.len(),
+        first + 1,
+        last + 1,
+        first + 1,
+        pick(&e, first),
+        first + 1,
+        pick(&a, first),
+    )
 }
 
 /// Create deterministic JSON from serde-serializable type.

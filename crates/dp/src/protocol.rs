@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! Core protocol implementation for secure aggregation
 
-use crate::{Result, SecureAggregationError, participant::ParticipantId};
+use crate::{participant::ParticipantId, Result, SecureAggregationError};
 use serde::{Deserialize, Serialize};
 
 /// Phases of the secure aggregation protocol

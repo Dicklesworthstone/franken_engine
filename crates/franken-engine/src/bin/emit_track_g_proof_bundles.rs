@@ -90,7 +90,10 @@ fn main() -> ExitCode {
     };
     eprintln!(
         "[track-g] verification report: total={} verified={} failed={} (failed_ids={:?})",
-        report.total_theorems, report.verified_theorems, report.failed_theorems, report.failed_theorem_ids
+        report.total_theorems,
+        report.verified_theorems,
+        report.failed_theorems,
+        report.failed_theorem_ids
     );
 
     if report.verified_theorems == 0 {

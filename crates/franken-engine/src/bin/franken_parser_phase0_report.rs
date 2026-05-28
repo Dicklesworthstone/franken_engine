@@ -148,8 +148,7 @@ fn run() -> Result<BaselineReport, String> {
 fn main() {
     match run() {
         Ok(report) => {
-            let json = serde_json::to_string_pretty(&report)
-                .expect("serialization should succeed");
+            let json = serde_json::to_string_pretty(&report).expect("serialization should succeed");
             println!("{json}");
         }
         Err(error) => {

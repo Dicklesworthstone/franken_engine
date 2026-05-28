@@ -129,9 +129,7 @@ fn main() {
     let golden_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("golden");
-    if !golden_dir.exists()
-        && env::var("UPDATE_GOLDENS").is_err()
-    {
+    if !golden_dir.exists() && env::var("UPDATE_GOLDENS").is_err() {
         eprintln!(
             "golden_pattern: fixture directory missing ({}). Run with UPDATE_GOLDENS=1 first.",
             golden_dir.display()

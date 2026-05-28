@@ -1982,6 +1982,9 @@ fn estimate_statement_allocation_count(statement: &Statement) -> u64 {
             .saturating_add(estimate_statement_allocation_count(
                 for_of_stmt.body.as_ref(),
             )),
+        Statement::Labeled(labeled) => {
+            1_u64.saturating_add(estimate_statement_allocation_count(labeled.body.as_ref()))
+        }
     }
 }
 

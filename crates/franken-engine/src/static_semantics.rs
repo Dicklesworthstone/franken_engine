@@ -802,7 +802,10 @@ fn analyze_statement(
         }
 
         Statement::Break(brk) => {
-            if !state.in_loop && !state.in_switch {
+            // A labelled `break <label>;` is governed by label scope, not by
+            // loop/switch nesting (e.g. `lbl: { break lbl; }` is valid). Label
+            // resolution is enforced fail-closed in the lowering pipeline.
+            if brk.label.is_none() && !state.in_loop && !state.in_switch {
                 state.push_error(
                     StaticErrorKind::BreakOutsideLoop,
                     "break statement must be inside a loop or switch",
@@ -812,13 +815,27 @@ fn analyze_statement(
         }
 
         Statement::Continue(cont) => {
-            if !state.in_loop {
+            // `continue <label>;` legality (label must name an enclosing
+            // iteration statement) is enforced in the lowering pipeline; the
+            // bare form must be inside a loop.
+            if cont.label.is_none() && !state.in_loop {
                 state.push_error(
                     StaticErrorKind::ContinueOutsideLoop,
                     "continue statement must be inside a loop",
                     cont.span,
                 );
             }
+        }
+
+        Statement::Labeled(labeled) => {
+            analyze_statement(
+                state,
+                &labeled.body,
+                scope_id,
+                bindings,
+                lexical_names,
+                var_names,
+            );
         }
 
         Statement::FunctionDeclaration(func) => {

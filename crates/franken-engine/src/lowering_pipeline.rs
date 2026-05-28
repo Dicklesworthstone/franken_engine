@@ -507,7 +507,8 @@ pub fn validate_ir0_static_semantics(ir0: &Ir0Module) -> SemanticValidationResul
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::FunctionDeclaration(_)
-            | Statement::ClassDeclaration(_) => {
+            | Statement::ClassDeclaration(_)
+            | Statement::Labeled(_) => {
                 // Control flow, function and class declarations: static
                 // semantic analysis for these is handled recursively as needed.
             }
@@ -1079,6 +1080,17 @@ pub fn lower_ir0_to_ir1(
                     &mut label_counter,
                 )?;
             }
+            Statement::Labeled(_labeled_statement) => {
+                lower_statement_to_ir1(
+                    statement,
+                    &mut ir1.ops,
+                    &mut bindings,
+                    &mut binding_lookup,
+                    &mut binding_index,
+                    root_scope_id,
+                    &mut label_counter,
+                )?;
+            }
         }
     }
 
@@ -1137,6 +1149,58 @@ fn alloc_label(counter: &mut u32) -> u32 {
 struct ControlFlowTargets {
     break_label: Option<u32>,
     continue_label: Option<u32>,
+}
+
+/// A labelled-statement target resolved during lowering: the IR1 label a
+/// `break <name>;` jumps to, and (for iteration labels only) the label a
+/// `continue <name>;` jumps to.
+#[derive(Debug, Clone)]
+struct LabelFrame {
+    name: String,
+    break_target: u32,
+    continue_target: Option<u32>,
+}
+
+/// Lexical label context threaded through statement lowering.
+///
+/// `frames` holds labels currently in scope (resolved to their jump
+/// targets). `pending` holds labels seen on enclosing `LabeledStatement`s
+/// that have not yet been bound to an iteration statement — they attach to
+/// the next loop body (so `outer: for (..) { break outer; }` binds `outer`
+/// to that loop's break/continue targets).
+#[derive(Debug, Clone, Default)]
+struct LabelContext {
+    frames: Vec<LabelFrame>,
+    pending: Vec<String>,
+}
+
+impl LabelContext {
+    fn resolve(&self, name: &str) -> Option<&LabelFrame> {
+        self.frames.iter().rev().find(|frame| frame.name == name)
+    }
+
+    /// Child context for a non-iteration labelled body: returns a new
+    /// `pending` label appended.
+    fn with_pending(&self, label: String) -> Self {
+        let mut child = self.clone();
+        child.pending.push(label);
+        child
+    }
+
+    /// Child context entering an iteration body: bind every pending label to
+    /// this loop's break/continue targets, then clear pending.
+    fn enter_loop(&self, break_target: u32, continue_target: u32) -> Self {
+        let mut child = self.clone();
+        for name in &self.pending {
+            child.frames.push(LabelFrame {
+                name: name.clone(),
+                break_target,
+                continue_target: Some(continue_target),
+            });
+        }
+        child.pending.clear();
+        child
+    }
 }
 
 fn make_internal_binding_name(purpose: &str, index: u32) -> String {
@@ -1211,7 +1275,8 @@ fn reserve_root_scope_bindings(
             | Statement::Break(_)
             | Statement::Continue(_)
             | Statement::ForIn(_)
-            | Statement::ForOf(_) => {
+            | Statement::ForOf(_)
+            | Statement::Labeled(_) => {
                 // These statements don't introduce bindings at root scope
             }
         }
@@ -1623,6 +1688,7 @@ fn lower_statement_to_ir1(
         scope_id,
         label_counter,
         ControlFlowTargets::default(),
+        &LabelContext::default(),
     )
 }
 
@@ -1636,6 +1702,7 @@ fn lower_statement_to_ir1_with_flow(
     scope_id: ScopeId,
     label_counter: &mut u32,
     control_flow: ControlFlowTargets,
+    label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
     match statement {
         Statement::Expression(stmt) => {
@@ -1748,6 +1815,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     control_flow,
+                    label_ctx,
                 )?;
             }
         }
@@ -1776,6 +1844,7 @@ fn lower_statement_to_ir1_with_flow(
                 scope_id,
                 label_counter,
                 control_flow,
+                label_ctx,
             )?;
             ops.push(Ir1Op::Jump {
                 label_id: end_label,
@@ -1791,6 +1860,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     control_flow,
+                    label_ctx,
                 )?;
             }
             ops.push(Ir1Op::Label { id: end_label });
@@ -1806,6 +1876,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     control_flow,
+                    label_ctx,
                 )?;
             }
             let loop_label = alloc_label(label_counter);
@@ -1839,6 +1910,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             if let Some(update) = &for_stmt.update {
@@ -1953,6 +2025,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             ops.push(Ir1Op::Jump {
@@ -2055,6 +2128,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(close_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(close_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             ops.push(Ir1Op::Jump {
@@ -2105,6 +2179,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(loop_label),
                 },
+                &label_ctx.enter_loop(end_label, loop_label),
             )?;
             ops.push(Ir1Op::Jump {
                 label_id: loop_label,
@@ -2128,6 +2203,7 @@ fn lower_statement_to_ir1_with_flow(
                     break_label: Some(end_label),
                     continue_label: Some(continue_label),
                 },
+                &label_ctx.enter_loop(end_label, continue_label),
             )?;
             ops.push(Ir1Op::Label { id: continue_label });
             lower_expression_to_ir1(
@@ -2224,6 +2300,7 @@ fn lower_statement_to_ir1_with_flow(
                     scope_id,
                     label_counter,
                     inner_control_flow,
+                    label_ctx,
                 )?;
             }
             ops.push(Ir1Op::EndTry);
@@ -2277,6 +2354,7 @@ fn lower_statement_to_ir1_with_flow(
                             scope_id,
                             label_counter,
                             inner_control_flow,
+                            label_ctx,
                         )?;
                     }
                 }
@@ -2305,6 +2383,7 @@ fn lower_statement_to_ir1_with_flow(
                             scope_id,
                             label_counter,
                             control_flow,
+                            label_ctx,
                         )?;
                     }
                 }
@@ -2330,6 +2409,7 @@ fn lower_statement_to_ir1_with_flow(
                             scope_id,
                             label_counter,
                             control_flow,
+                            label_ctx,
                         )?;
                     }
                     ops.push(Ir1Op::Jump {
@@ -2352,6 +2432,7 @@ fn lower_statement_to_ir1_with_flow(
                             scope_id,
                             label_counter,
                             control_flow,
+                            label_ctx,
                         )?;
                     }
                     ops.push(Ir1Op::Jump {
@@ -2371,45 +2452,126 @@ fn lower_statement_to_ir1_with_flow(
                 scope_id,
                 label_counter,
                 control_flow,
+                label_ctx,
             )?;
         }
         Statement::Break(brk) => {
-            if let Some(label) = &brk.label {
-                return Err(LoweringPipelineError::SemanticViolation(
-                    SemanticError::new(
-                        SemanticErrorCode::UndefinedLabel,
-                        Some(label.clone()),
+            let label_id = if let Some(label) = &brk.label {
+                // `break <label>;` jumps to the break target of the enclosing
+                // labelled statement of that name. An unknown label is a
+                // SyntaxError (also caught by static semantics; fail-closed
+                // here too).
+                match label_ctx.resolve(label) {
+                    Some(frame) => frame.break_target,
+                    None => {
+                        return Err(LoweringPipelineError::SemanticViolation(
+                            SemanticError::new(
+                                SemanticErrorCode::UndefinedLabel,
+                                Some(label.clone()),
+                                Some(brk.span),
+                            ),
+                        ));
+                    }
+                }
+            } else {
+                control_flow.break_label.ok_or_else(|| {
+                    LoweringPipelineError::SemanticViolation(SemanticError::new(
+                        SemanticErrorCode::IllegalBreak,
+                        None,
                         Some(brk.span),
-                    ),
-                ));
-            }
-            let label_id = control_flow.break_label.ok_or_else(|| {
-                LoweringPipelineError::SemanticViolation(SemanticError::new(
-                    SemanticErrorCode::IllegalBreak,
-                    None,
-                    Some(brk.span),
-                ))
-            })?;
+                    ))
+                })?
+            };
             ops.push(Ir1Op::Jump { label_id });
         }
         Statement::Continue(cont) => {
-            if let Some(label) = &cont.label {
-                return Err(LoweringPipelineError::SemanticViolation(
-                    SemanticError::new(
-                        SemanticErrorCode::UndefinedLabel,
-                        Some(label.clone()),
+            let label_id = if let Some(label) = &cont.label {
+                // `continue <label>;` is only legal when the named label is on
+                // an iteration statement; a non-iteration label has no
+                // continue target.
+                match label_ctx.resolve(label) {
+                    Some(frame) => frame.continue_target.ok_or_else(|| {
+                        LoweringPipelineError::SemanticViolation(SemanticError::new(
+                            SemanticErrorCode::IllegalContinue,
+                            Some(label.clone()),
+                            Some(cont.span),
+                        ))
+                    })?,
+                    None => {
+                        return Err(LoweringPipelineError::SemanticViolation(
+                            SemanticError::new(
+                                SemanticErrorCode::UndefinedLabel,
+                                Some(label.clone()),
+                                Some(cont.span),
+                            ),
+                        ));
+                    }
+                }
+            } else {
+                control_flow.continue_label.ok_or_else(|| {
+                    LoweringPipelineError::SemanticViolation(SemanticError::new(
+                        SemanticErrorCode::IllegalContinue,
+                        None,
                         Some(cont.span),
-                    ),
-                ));
-            }
-            let label_id = control_flow.continue_label.ok_or_else(|| {
-                LoweringPipelineError::SemanticViolation(SemanticError::new(
-                    SemanticErrorCode::IllegalContinue,
-                    None,
-                    Some(cont.span),
-                ))
-            })?;
+                    ))
+                })?
+            };
             ops.push(Ir1Op::Jump { label_id });
+        }
+        Statement::Labeled(labeled) => {
+            // §14.13. A label on an iteration statement (directly or through
+            // nested labels) binds to that loop's break+continue targets — so
+            // accumulate it in `pending` and let the loop body lowering bind
+            // it. A label on any other statement is break-only: allocate a
+            // join label past the body for `break <label>;`.
+            let body = labeled.body.as_ref();
+            let defers_to_loop = matches!(
+                body,
+                Statement::For(_)
+                    | Statement::While(_)
+                    | Statement::DoWhile(_)
+                    | Statement::ForIn(_)
+                    | Statement::ForOf(_)
+                    | Statement::Labeled(_)
+            );
+            if defers_to_loop {
+                let child = label_ctx.with_pending(labeled.label.clone());
+                lower_statement_to_ir1_with_flow(
+                    body,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    control_flow,
+                    &child,
+                )?;
+            } else {
+                let after_label = alloc_label(label_counter);
+                let mut child = label_ctx.clone();
+                let mut names: Vec<String> = child.pending.drain(..).collect();
+                names.push(labeled.label.clone());
+                for name in names {
+                    child.frames.push(LabelFrame {
+                        name,
+                        break_target: after_label,
+                        continue_target: None,
+                    });
+                }
+                lower_statement_to_ir1_with_flow(
+                    body,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    scope_id,
+                    label_counter,
+                    control_flow,
+                    &child,
+                )?;
+                ops.push(Ir1Op::Label { id: after_label });
+            }
         }
         Statement::FunctionDeclaration(func) => {
             let name = func.name.clone().unwrap_or_else(|| "anonymous".to_string());
@@ -2734,6 +2896,7 @@ fn lower_statement_to_ir1_with_flow(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 fn lower_switch_to_ir1(
     switch_stmt: &crate::ast::SwitchStatement,
     ops: &mut Vec<Ir1Op>,
@@ -2743,6 +2906,7 @@ fn lower_switch_to_ir1(
     scope_id: ScopeId,
     label_counter: &mut u32,
     control_flow: ControlFlowTargets,
+    label_ctx: &LabelContext,
 ) -> Result<(), LoweringPipelineError> {
     lower_expression_to_ir1(
         &switch_stmt.discriminant,
@@ -2827,6 +2991,7 @@ fn lower_switch_to_ir1(
                 scope_id,
                 label_counter,
                 switch_flow,
+                label_ctx,
             )?;
         }
     }

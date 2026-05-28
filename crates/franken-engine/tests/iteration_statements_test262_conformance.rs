@@ -602,6 +602,41 @@ mod tests {
         );
     }
 
+    /// bd-bg9l1.27.4 / DISC-006: a labelled `break` must escape the named outer
+    /// loop. The source nests two `for (;;)` infinite loops that only terminate
+    /// if `break outer` targets the outer loop's exit — a regression would hang
+    /// or fault rather than eval `Ok`.
+    #[test]
+    fn labeled_break_escapes_outer_loop() {
+        let mut engine = HybridRouter::default();
+        assert!(
+            engine
+                .eval("outer: for (;;) { inner: for (;;) { break outer; } }")
+                .is_ok(),
+            "labelled break must escape both nested loops"
+        );
+    }
+
+    /// bd-t7txt / DISC-006b: KNOWN GAP. A labelled `continue` that re-enters an
+    /// enclosing loop from inside a nested loop currently faults
+    /// (`RuntimeFault: expected function, got string`) because the cross-loop
+    /// back-jump does not unwind the operand stack / intervening scopes. This
+    /// test pins the current behaviour so the fix flips it to `Ok` loudly.
+    #[test]
+    fn labeled_continue_cross_loop_is_known_failing() {
+        let mut engine = HybridRouter::default();
+        let result = engine.eval(
+            "let done = false; loop: while (!done) { done = true; \
+             for (;;) { continue loop; } } done;",
+        );
+        assert!(
+            result.is_err(),
+            "bd-t7txt: labelled continue across a loop boundary unexpectedly \
+             succeeded — promote labeled-continue-statement to EXPECTED_PASS \
+             and close bd-t7txt"
+        );
+    }
+
     #[test]
     fn test_for_statement_basic() {
         assert_parser_accepts(IterationStatementTestCategory::ForStatement);
@@ -781,15 +816,19 @@ fn iteration_statements_test262_conformance_integration() {
         "for-statement-empty-parts",
         "for-statement-let-declaration",
         "for-statement-var-declaration",
+        "labeled-break-statement",
         "while-statement-basic",
         "while-statement-complex-condition",
         "while-statement-empty-body",
     ];
 
-    /// 10 frontier iteration-statement cases the engine currently does NOT pass.
+    /// 9 frontier iteration-statement cases the engine currently does NOT pass.
     /// (Was 14; bd-bg9l1.27.1 resolved the `//` comment-leak — DISC-001 — which
     /// unblocked `continue-for-of-skip` and the three `for-of-destructuring-*`
-    /// cases, all now promoted to `EXPECTED_PASS`.)
+    /// cases; bd-bg9l1.27.4 added labelled `break` — DISC-006 — promoting
+    /// `labeled-break-statement`. `labeled-continue-statement` remains red: a
+    /// labelled `continue` that re-enters an outer loop faults on operand-stack/
+    /// scope unwinding — tracked as bd-t7txt / DISC-006b.)
     /// Each entry pairs the test id with the tracking bead and the
     /// `ECMA262_DISCREPANCIES.md` row that documents the gap (bd-xkbrm FIND-5).
     /// Keep alphabetised by test id. When the engine repairs a gap, move the id
@@ -803,8 +842,7 @@ fn iteration_statements_test262_conformance_integration() {
         ("for-of-iterator-throw-handling", "bd-bg9l1.27", "DISC-009 (IteratorClose throw)"),
         ("for-statement-block-scope-isolation", "bd-bg9l1.27", "DISC-010 (per-iteration env)"),
         ("for-statement-let-tdz", "bd-bg9l1.27", "DISC-007 (let TDZ)"),
-        ("labeled-break-statement", "bd-bg9l1.27", "DISC-006 (labelled break/continue)"),
-        ("labeled-continue-statement", "bd-bg9l1.27", "DISC-006 (labelled break/continue)"),
+        ("labeled-continue-statement", "bd-t7txt", "DISC-006b (continue cross-loop unwinding)"),
         ("unlabeled-break-error", "bd-bg9l1.27", "DISC-008 (bare break/continue outside loop)"),
         ("unlabeled-continue-error", "bd-bg9l1.27", "DISC-008 (bare break/continue outside loop)"),
     ];

@@ -20,7 +20,8 @@ use crate::ast::{
     CatchClause, ClassDeclaration, ContinueStatement, DoWhileStatement, ExportDeclaration,
     ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
     FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
-    ImportSpecifier, MethodDefinition, MethodKind, ObjectPatternProperty, ObjectProperty,
+    ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, ObjectPatternProperty,
+    ObjectProperty,
     ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
     ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
     VariableDeclarator, WhileStatement, WithStatement,
@@ -1591,6 +1592,7 @@ fn statement_kind_label(statement: &Statement) -> &'static str {
         Statement::ClassDeclaration(_) => "class_declaration",
         Statement::ForIn(_) => "for_in",
         Statement::ForOf(_) => "for_of",
+        Statement::Labeled(_) => "labeled",
     }
 }
 
@@ -3003,6 +3005,32 @@ fn parse_statement_inner(
     }
     if statement.starts_with('{') && statement.ends_with('}') {
         return self::parse_block_statement(statement, goal, span, context);
+    }
+
+    // Labelled statement: `label: <statement>` (§14.13). Detect an
+    // identifier immediately followed by `:`. Object literals are blocks at
+    // statement position (handled above), and conditional expressions place
+    // a `?` before the `:`, so an identifier-only prefix is unambiguous. The
+    // label must be a real IdentifierReference — reserved words are rejected.
+    if let Some(colon_idx) = find_top_level_colon(statement) {
+        let label = statement[..colon_idx].trim();
+        if is_identifier(label) && !is_unconditional_reserved_keyword(label) {
+            let body_src = statement[colon_idx + 1..].trim();
+            if body_src.is_empty() {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    "labelled statement is missing its body",
+                    context.source_label.to_string(),
+                    Some(span),
+                ));
+            }
+            let body = parse_statement(body_src, goal, span.clone(), context)?;
+            return Ok(Statement::Labeled(LabeledStatement {
+                label: label.to_string(),
+                body: Box::new(body),
+                span,
+            }));
+        }
     }
 
     let expression = parse_expression(statement, &span, context, 1)?;
@@ -13036,6 +13064,63 @@ process.exit(attackSucceeded ? 0 : 1);"#,
     #[test]
     fn find_top_level_colon_none() {
         assert_eq!(find_top_level_colon("abc"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // Labelled statements (§14.13) — bd-bg9l1.27.4 / DISC-006
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_labeled_loop_and_break_label() {
+        let tree = parse_script("outer: while (false) { break outer; }");
+        match &tree.body[0] {
+            Statement::Labeled(labeled) => {
+                assert_eq!(labeled.label, "outer");
+                match labeled.body.as_ref() {
+                    Statement::While(while_stmt) => match while_stmt.body.as_ref() {
+                        Statement::Block(block) => match &block.body[0] {
+                            Statement::Break(brk) => {
+                                assert_eq!(brk.label.as_deref(), Some("outer"));
+                            }
+                            other => panic!("expected Break, got {other:?}"),
+                        },
+                        other => panic!("expected Block, got {other:?}"),
+                    },
+                    other => panic!("expected While, got {other:?}"),
+                }
+            }
+            other => panic!("expected Labeled, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_continue_with_label() {
+        let tree = parse_script("loop: while (false) { continue loop; }");
+        let Statement::Labeled(labeled) = &tree.body[0] else {
+            panic!("expected Labeled, got {:?}", tree.body[0]);
+        };
+        let Statement::While(while_stmt) = labeled.body.as_ref() else {
+            panic!("expected While");
+        };
+        let Statement::Block(block) = while_stmt.body.as_ref() else {
+            panic!("expected Block");
+        };
+        match &block.body[0] {
+            Statement::Continue(cont) => assert_eq!(cont.label.as_deref(), Some("loop")),
+            other => panic!("expected Continue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conditional_expression_is_not_a_labeled_statement() {
+        // `flag ? a : b;` has a `?` before the `:`, so the prefix is not a
+        // bare identifier — it must remain an expression statement, not a label.
+        let tree = parse_script("flag ? a : b;");
+        assert!(
+            matches!(&tree.body[0], Statement::Expression(_)),
+            "ternary must parse as an expression statement, got {:?}",
+            tree.body[0]
+        );
     }
 
     // -----------------------------------------------------------------------

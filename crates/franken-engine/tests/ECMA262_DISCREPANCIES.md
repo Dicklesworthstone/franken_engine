@@ -116,12 +116,24 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-006: Labeled `break` / `continue` not supported
 
-- **Status:** WILL-FIX
+- **Status:** PARTIAL — labelled `break` RESOLVED (bd-bg9l1.27.4, 2026-05-28); labelled `continue` across a loop boundary tracked as **DISC-006b / bd-t7txt**
 - **ES2020 ref:** §13.13 (Labelled Statements), §13.8.2 (Runtime Semantics: Evaluation — ContinueStatement), §13.9.2 (Runtime Semantics: Evaluation — BreakStatement)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
-- **Affected tests:** `labeled-break-statement`, `labeled-continue-statement`
-- **Symptom:** Parser rejects labelled statement form.
-- **Tracking bead:** bd-bg9l1.27
+- **Affected tests:** `labeled-break-statement` (now `EXPECTED_PASS`), `labeled-continue-statement` (still `KNOWN_FAILING`, see DISC-006b)
+- **Symptom (resolved):** Parser produced no `LabeledStatement` node and the lowering pipeline rejected any `break`/`continue` with a label operand as `UndefinedLabel`.
+- **Resolution:** Added `ast::LabeledStatement` + `Statement::Labeled`; parser parses `label: <stmt>`; the lowering pipeline threads a `LabelContext` binding each label to its statement's break/continue targets (iteration labels carry a continue target, others are break-only); `break`/`continue` resolve labels fail-closed. Labelled break verified passing through the engine.
+- **Tracking bead:** bd-bg9l1.27.4 (break); bd-t7txt (continue)
+- **Reviewed:** 2026-05-28
+
+### DISC-006b: Labeled `continue` across a loop boundary faults
+
+- **Status:** WILL-FIX
+- **ES2020 ref:** §13.8.2 (Runtime Semantics: Evaluation — ContinueStatement)
+- **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
+- **Affected tests:** `labeled-continue-statement`
+- **Symptom:** A labelled `continue` that re-enters an enclosing loop from inside a nested loop faults at runtime (`RuntimeFault: type error: expected function, got string`). Label resolution is correct (labelled `break` works); the cross-loop back-jump does not unwind the operand stack / intervening loop+block scopes, so a stale operand is misinterpreted on re-entry.
+- **Fix direction:** Emit scope-pop + operand-stack restore (or reset IR3 stack height to the target label's recorded depth) when a labelled `break`/`continue` crosses enclosing iteration/block scopes.
+- **Tracking bead:** bd-t7txt
 - **Reviewed:** 2026-05-28
 - **Next review:** 2026-06-28
 

@@ -156,6 +156,7 @@ pub enum Statement {
     ClassDeclaration(ClassDeclaration),
     ForIn(ForInStatement),
     ForOf(ForOfStatement),
+    Labeled(LabeledStatement),
 }
 
 impl Statement {
@@ -181,6 +182,7 @@ impl Statement {
             Self::ClassDeclaration(v) => &v.span,
             Self::ForIn(v) => &v.span,
             Self::ForOf(v) => &v.span,
+            Self::Labeled(v) => &v.span,
         }
     }
 
@@ -209,6 +211,7 @@ impl Statement {
             Self::ClassDeclaration(cls) => ("class_declaration", cls.canonical_value()),
             Self::ForIn(stmt) => ("for_in", stmt.canonical_value()),
             Self::ForOf(stmt) => ("for_of", stmt.canonical_value()),
+            Self::Labeled(stmt) => ("labeled", stmt.canonical_value()),
         };
         CanonicalValue::map_from_entries([
             ("kind", CanonicalValue::str(kind)),
@@ -1008,6 +1011,30 @@ impl ContinueStatement {
                     .map(|l| CanonicalValue::str(l.clone()))
                     .unwrap_or(CanonicalValue::Null),
             ),
+            ("span", self.span.canonical_value()),
+        ])
+    }
+}
+
+/// A labelled statement: `label: <statement>` (ECMA-262 §14.13).
+///
+/// The label is in scope for `break label;` anywhere in `body`, and for
+/// `continue label;` only when `body` is (or resolves to) an iteration
+/// statement. Label resolution and the iteration-only restriction are
+/// enforced by static semantics; the lowering pipeline wires the label to
+/// the wrapped loop's break/continue targets.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LabeledStatement {
+    pub label: String,
+    pub body: Box<Statement>,
+    pub span: SourceSpan,
+}
+
+impl LabeledStatement {
+    pub fn canonical_value(&self) -> CanonicalValue {
+        CanonicalValue::map_from_entries([
+            ("label", CanonicalValue::str(self.label.clone())),
+            ("body", self.body.canonical_value()),
             ("span", self.span.canonical_value()),
         ])
     }

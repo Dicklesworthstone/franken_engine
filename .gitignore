@@ -48,10 +48,14 @@ Thumbs.db
 # Ephemeral test artifacts (shadow daemon lifecycle drills, etc.)
 tmp/
 
-# Golden artifact test outputs (transient diff files)
-tests/golden/*.actual
-crates/franken-engine/tests/goldens/**/*.actual
-*.actual.json
+# Golden artifact test outputs (transient diff files written by the
+# assert_golden helpers on mismatch; never committed). One repo-wide rule
+# covers every golden root — golden/, goldens/, golden_tests/, golden_vectors/
+# — so a future helper that writes <fixture>.actual or <fixture>.actual.json
+# under any of them stays ignored without per-suite gitignore upkeep
+# (bd-ub6x8.15).
+crates/franken-engine/tests/**/*.actual
+crates/franken-engine/tests/**/*.actual.*
 
 # Runtime SQLite databases
 storage.sqlite3

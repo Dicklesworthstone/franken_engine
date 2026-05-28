@@ -6,7 +6,6 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::Path;
 
 use frankenengine_engine::benchmark_evidence_bundle::{
@@ -16,95 +15,13 @@ use frankenengine_engine::benchmark_evidence_bundle::{
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
-// ---------------------------------------------------------------------------
-// Golden test helpers
-// ---------------------------------------------------------------------------
+// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
+// so cargo does not compile it as a standalone integration-test binary.
+#[path = "_support/golden_diag.rs"]
+mod golden_diag;
 
-/// Assert golden output matches expected, with UPDATE_GOLDENS=1 support
-fn assert_golden(test_name: &str, actual: &str) {
-    let golden_path = Path::new("tests/golden").join(format!("{test_name}.golden"));
-
-    // UPDATE MODE: overwrite golden with actual output
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(
-            golden_path
-                .parent()
-                .expect("Golden path must have parent directory"),
-        )
-        .expect("Failed to create golden artifacts directory");
-        fs::write(&golden_path, actual).expect("Failed to write golden artifact file");
-        eprintln!("[GOLDEN] Updated: {}", golden_path.display());
-        return;
-    }
-
-    // COMPARE MODE: diff actual vs golden
-    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
-        panic!(
-            "Golden file missing: {}\n\
-             Run with UPDATE_GOLDENS=1 to create it\n\
-             Then review and commit: git diff tests/golden/",
-            golden_path.display()
-        )
-    });
-
-    if actual != expected {
-        // Write actual for easy diffing
-        let actual_path = golden_path.with_extension("actual");
-        fs::write(&actual_path, actual)
-            .expect("Failed to write actual artifact file for comparison");
-
-        panic!(
-            "GOLDEN MISMATCH: {test_name}\n{}\n\
-             To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
-             To review: diff {} {}",
-            summarize_golden_diff(actual, &expected),
-            golden_path.display(),
-            actual_path.display()
-        );
-    }
-
-    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
-    let _ = fs::remove_file(golden_path.with_extension("actual"));
-}
-
-/// Inline unified-diff summary for the golden mismatch panic (bd-ub6x8.8).
-fn summarize_golden_diff(actual: &str, expected: &str) -> String {
-    let a: Vec<&str> = actual.lines().collect();
-    let e: Vec<&str> = expected.lines().collect();
-    let n = a.len().max(e.len());
-    let mut first = None;
-    let mut last = None;
-    for i in 0..n {
-        if a.get(i).copied().unwrap_or("") != e.get(i).copied().unwrap_or("") {
-            first.get_or_insert(i);
-            last = Some(i);
-        }
-    }
-    let (Some(first), Some(last)) = (first, last) else {
-        return format!(
-            "    expected={} actual={} chars; no line-level diff (whitespace/encoding?)",
-            expected.len(),
-            actual.len()
-        );
-    };
-    let pick = |v: &[&str], i: usize| -> String {
-        v.get(i)
-            .copied()
-            .map(|s| s.chars().take(160).collect::<String>())
-            .unwrap_or_else(|| "<EOF>".to_string())
-    };
-    format!(
-        "    expected={} actual={} lines; first diff @ line {}, last @ line {}\n    -L{}: {}\n    +L{}: {}",
-        e.len(),
-        a.len(),
-        first + 1,
-        last + 1,
-        first + 1,
-        pick(&e, first),
-        first + 1,
-        pick(&a, first),
-    )
-}
+// Inline assert_golden + summarize_golden_diff replaced by the shared
+// GoldenDiag helper (bd-ub6x8.3).
 
 // ---------------------------------------------------------------------------
 // Test fixture helpers
@@ -255,6 +172,13 @@ fn golden_bundle_report_deterministic_output() {
     let report_json =
         serde_json::to_string_pretty(&report).expect("BundleReport should be JSON serializable");
 
-    // Assert against golden snapshot
-    assert_golden("bundle_report_output", &report_json);
+    // Assert against golden snapshot via shared GoldenDiag helper.
+    let test_name = "bundle_report_output";
+    let fixture_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/golden/{test_name}.golden"));
+    golden_diag::GoldenDiag {
+        framework_name: "Benchmark evidence bundle golden",
+        regen_env_var: "UPDATE_GOLDENS",
+    }
+    .assert_golden_match(&report_json, &fixture_path, test_name, None);
 }

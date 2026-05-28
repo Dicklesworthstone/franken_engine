@@ -1,12 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::fs;
 use std::path::PathBuf;
 
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::optimal_stopping::{OptimalStoppingCertificate, STOPPING_SCHEMA_VERSION};
 use frankenengine_engine::security_epoch::SecurityEpoch;
 use serde::Serialize;
+
+// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
+// so cargo does not compile it as a standalone integration-test binary.
+#[path = "_support/golden_diag.rs"]
+mod golden_diag;
 
 const GOLDEN_FILE: &str = "tests/golden_vectors/optimal_stopping_certificate_v1.json";
 
@@ -21,75 +25,8 @@ fn golden_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_FILE)
 }
 
-fn assert_golden(actual: &str) {
-    let path = golden_path();
-
-    if std::env::var_os("UPDATE_GOLDENS").is_some() {
-        fs::write(&path, actual).expect("failed to update optimal stopping certificate golden");
-        eprintln!("[GOLDEN] updated {}", path.display());
-        return;
-    }
-
-    let expected = fs::read_to_string(&path).unwrap_or_else(|_| {
-        panic!(
-            "missing golden fixture: {}\nrun with UPDATE_GOLDENS=1 to generate it",
-            path.display()
-        )
-    });
-
-    if actual != expected {
-        let actual_path = path.with_extension("actual");
-        fs::write(&actual_path, actual).expect("failed to write optimal stopping actual fixture");
-        panic!(
-            "optimal stopping certificate golden mismatch\n{}\nexpected: {}\nactual: {}",
-            summarize_golden_diff(actual, &expected),
-            path.display(),
-            actual_path.display()
-        );
-    }
-
-    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
-    let _ = fs::remove_file(path.with_extension("actual"));
-}
-
-/// Inline unified-diff summary for the golden mismatch panic (bd-ub6x8.8).
-fn summarize_golden_diff(actual: &str, expected: &str) -> String {
-    let a: Vec<&str> = actual.lines().collect();
-    let e: Vec<&str> = expected.lines().collect();
-    let n = a.len().max(e.len());
-    let mut first = None;
-    let mut last = None;
-    for i in 0..n {
-        if a.get(i).copied().unwrap_or("") != e.get(i).copied().unwrap_or("") {
-            first.get_or_insert(i);
-            last = Some(i);
-        }
-    }
-    let (Some(first), Some(last)) = (first, last) else {
-        return format!(
-            "    expected={} actual={} chars; no line-level diff (whitespace/encoding?)",
-            expected.len(),
-            actual.len()
-        );
-    };
-    let pick = |v: &[&str], i: usize| -> String {
-        v.get(i)
-            .copied()
-            .map(|s| s.chars().take(160).collect::<String>())
-            .unwrap_or_else(|| "<EOF>".to_string())
-    };
-    format!(
-        "    expected={} actual={} lines; first diff @ line {}, last @ line {}\n    -L{}: {}\n    +L{}: {}",
-        e.len(),
-        a.len(),
-        first + 1,
-        last + 1,
-        first + 1,
-        pick(&e, first),
-        first + 1,
-        pick(&a, first),
-    )
-}
+// Inline assert_golden + summarize_golden_diff replaced by the shared
+// GoldenDiag helper (bd-ub6x8.3).
 
 fn certificate_snapshot() -> OptimalStoppingCertificateSnapshot {
     let certificate_hash = ContentHash::compute(b"optimal-stopping-cusum-certificate-v1");
@@ -118,5 +55,15 @@ fn optimal_stopping_certificate_json_matches_golden() {
         "{}\n",
         serde_json::to_string_pretty(&certificate_snapshot()).unwrap()
     );
-    assert_golden(&actual);
+    let path = golden_path();
+    golden_diag::GoldenDiag {
+        framework_name: "Optimal stopping certificate golden",
+        regen_env_var: "UPDATE_GOLDENS",
+    }
+    .assert_golden_match(
+        &actual,
+        &path,
+        "optimal_stopping_certificate_json_matches_golden",
+        None,
+    );
 }

@@ -17,6 +17,10 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+// golden_diag lives under tests/_support/ so cargo does NOT compile it as a
+// standalone (empty) integration-test binary (bd-ub6x8.18). Sibling callers
+// pull it in via the same #[path] attribute.
+#[path = "_support/golden_diag.rs"]
 mod golden_diag;
 
 // Cross-suite scrub patterns are pulled from golden_diag (bd-ub6x8.12).

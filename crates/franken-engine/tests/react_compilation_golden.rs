@@ -18,6 +18,10 @@ use frankenengine_engine::react_jsx_lowering::{
     BuildMode, ReactLoweringConfig, ReactLoweringResult, lower_jsx_to_react,
 };
 
+// golden_diag lives under tests/_support/ so cargo does NOT compile it as a
+// standalone (empty) integration-test binary (bd-ub6x8.18). Sibling callers
+// pull it in via the same #[path] attribute.
+#[path = "_support/golden_diag.rs"]
 mod golden_diag;
 
 /// Test case configuration for React compilation golden tests.

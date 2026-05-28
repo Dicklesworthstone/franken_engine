@@ -852,7 +852,10 @@ fn execute_real(source: &str, trace_id: &str) -> ExecutionResult {
 fn strict_round_trips_cleanly(recorded: &NondeterminismTrace, live: &NondeterminismTrace) -> bool {
     let mut engine = ReplayEngine::new(recorded.clone(), ReplayMode::Strict);
     for event in &live.events {
-        if engine.replay_next(event.source.clone(), &event.value).is_err() {
+        if engine
+            .replay_next(event.source.clone(), &event.value)
+            .is_err()
+        {
             return false;
         }
     }
@@ -950,7 +953,10 @@ fn real_counterfactual_produces_a_detectable_divergence() {
         // BestEffort returns the recorded value on a value divergence;
         // TraceExhausted (counterfactual longer than baseline) is itself a
         // detected structural divergence.
-        if engine.replay_next(event.source.clone(), &event.value).is_err() {
+        if engine
+            .replay_next(event.source.clone(), &event.value)
+            .is_err()
+        {
             errored = true;
             break;
         }

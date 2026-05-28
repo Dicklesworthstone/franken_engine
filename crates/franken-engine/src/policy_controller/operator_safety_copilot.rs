@@ -2546,8 +2546,8 @@ mod tests {
             restoration_verification: "rv-1".to_string(),
             executed_at_ns: 5000,
         };
-        let receipt =
-            build_rollback_execution_receipt(&input).expect("operation should succeed for valid inputs");
+        let receipt = build_rollback_execution_receipt(&input)
+            .expect("operation should succeed for valid inputs");
         assert!(receipt.receipt_id.starts_with("rollback-receipt-"));
         assert_eq!(receipt.action_receipt_id, "ar-1");
     }
@@ -2580,10 +2580,10 @@ mod tests {
             restoration_verification: "rv-1".to_string(),
             executed_at_ns: 5000,
         };
-        let r1 =
-            build_rollback_execution_receipt(&input).expect("operation should succeed for valid inputs");
-        let r2 =
-            build_rollback_execution_receipt(&input).expect("operation should succeed for valid inputs");
+        let r1 = build_rollback_execution_receipt(&input)
+            .expect("operation should succeed for valid inputs");
+        let r2 = build_rollback_execution_receipt(&input)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(r1.receipt_id, r2.receipt_id);
         assert_eq!(r1.signature, r2.signature);
     }
@@ -2824,8 +2824,8 @@ mod tests {
                 observed_millionths: 750_000,
             }],
         };
-        let view =
-            build_policy_effectiveness_view(&input).expect("operation should succeed for valid inputs");
+        let view = build_policy_effectiveness_view(&input)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(view.detection_rate_by_category.len(), 1);
         assert_eq!(view.detection_rate_by_category[0].rate_millionths, 800_000);
         assert!(view.containment_latency_p50_ms > 0);
@@ -2843,8 +2843,8 @@ mod tests {
             containment_latencies_ms: vec![],
             calibration_history: vec![],
         };
-        let view =
-            build_policy_effectiveness_view(&input).expect("operation should succeed for valid inputs");
+        let view = build_policy_effectiveness_view(&input)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(view.detection_rate_by_category[0].rate_millionths, 0);
     }
 
@@ -2878,8 +2878,8 @@ mod tests {
             containment_latencies_ms: vec![],
             calibration_history: vec![],
         };
-        let view =
-            build_policy_effectiveness_view(&input).expect("operation should succeed for valid inputs");
+        let view = build_policy_effectiveness_view(&input)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(view.detection_rate_by_category[0].category, "aaa");
     }
 

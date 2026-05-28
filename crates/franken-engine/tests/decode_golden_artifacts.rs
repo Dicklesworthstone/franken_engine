@@ -108,7 +108,10 @@ fn test_decode_encode_roundtrip_golden() {
 
         match registry.deserialize_checked(&schema_encoded) {
             Ok((_schema_def, schema_decoded)) => {
-                output.push_str(&format!("Schema decoded: {}\n", render_value(&schema_decoded)));
+                output.push_str(&format!(
+                    "Schema decoded: {}\n",
+                    render_value(&schema_decoded)
+                ));
                 output.push_str(&format!(
                     "Schema roundtrip OK: {}\n",
                     original == schema_decoded

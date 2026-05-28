@@ -2044,7 +2044,9 @@ mod tests {
             };
             let resp = tmpl.control_action_endpoint(&auth, &ctx, &req);
             assert_eq!(resp.status, "ok");
-            let data = resp.data.expect("operation should succeed for valid inputs");
+            let data = resp
+                .data
+                .expect("operation should succeed for valid inputs");
             assert_eq!(data.action, *action);
             assert!(data.accepted);
         }
@@ -2065,7 +2067,9 @@ mod tests {
         let resp = tmpl.control_action_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "error");
         assert!(resp.data.is_none());
-        let err = resp.error.expect("operation should succeed for valid inputs");
+        let err = resp
+            .error
+            .expect("operation should succeed for valid inputs");
         assert_eq!(err.error_code, "invalid_request");
         assert_eq!(counter.get(), 0); // executor never called
     }
@@ -2084,7 +2088,9 @@ mod tests {
         };
         let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "error");
-        let err = resp.error.expect("operation should succeed for valid inputs");
+        let err = resp
+            .error
+            .expect("operation should succeed for valid inputs");
         assert!(
             err.details
                 .values()
@@ -2106,7 +2112,9 @@ mod tests {
         };
         let resp = tmpl.evidence_export_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "ok");
-        let data = resp.data.expect("operation should succeed for valid inputs");
+        let data = resp
+            .data
+            .expect("operation should succeed for valid inputs");
         // MockEvidenceProvider echoes cursor as next_cursor
         assert_eq!(data.next_cursor, Some("cursor-abc".to_string()));
         assert_eq!(data.records.len(), 1);
@@ -2173,7 +2181,9 @@ mod tests {
         };
         let resp = tmpl.replay_control_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "error");
-        let err = resp.error.expect("operation should succeed for valid inputs");
+        let err = resp
+            .error
+            .expect("operation should succeed for valid inputs");
         assert_eq!(err.error_code, "unauthorized");
     }
 
@@ -2190,7 +2200,9 @@ mod tests {
         };
         let resp = tmpl.replay_control_endpoint(&auth, &ctx, &req);
         assert_eq!(resp.status, "error");
-        let err = resp.error.expect("operation should succeed for valid inputs");
+        let err = resp
+            .error
+            .expect("operation should succeed for valid inputs");
         assert_eq!(err.error_code, "unauthorized");
     }
 
@@ -2294,7 +2306,9 @@ mod tests {
         let ctx = context();
         let resp = tmpl.health_endpoint(&auth, &ctx);
         assert_eq!(resp.status, "error");
-        let err = resp.error.expect("operation should succeed for valid inputs");
+        let err = resp
+            .error
+            .expect("operation should succeed for valid inputs");
         assert_eq!(err.error_code, "unauthorized");
         assert!(
             err.details
@@ -2387,7 +2401,9 @@ mod tests {
         let auth = auth_with_scopes(&[SCOPE_HEALTH_READ]);
         let ctx = context();
         let resp = tmpl.health_endpoint(&auth, &ctx);
-        let data = resp.data.expect("operation should succeed for valid inputs");
+        let data = resp
+            .data
+            .expect("operation should succeed for valid inputs");
         assert_eq!(data.runtime_status, "healthy");
         assert!(data.loaded_extensions.contains(&"ext-a".to_string()));
         assert_eq!(data.security_epoch, 42);

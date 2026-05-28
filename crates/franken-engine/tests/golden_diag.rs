@@ -9,9 +9,10 @@
 
 #![forbid(unsafe_code)]
 
+use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
-use std::sync::LazyLock;
+use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex, OnceLock};
 
 use regex::Regex;
 
@@ -50,6 +51,89 @@ pub static SCRUB_TMP_PATH: LazyLock<Regex> =
 #[allow(dead_code)]
 pub static SCRUB_TARGET_PATH: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"target[/\w\-\.]*").unwrap());
+
+// ---------------------------------------------------------------------------
+// Build-on-demand for CLI golden tests (bd-ub6x8.20)
+//
+// Without this helper, `cargo test --test cli_golden` (or
+// `--test benchmark_diagnostic_golden`) would fail with "Binary not found"
+// unless the caller had already run `cargo build --bins`. Worse, if the bin
+// sources had changed since the last full build, the test would compare new
+// goldens against a stale binary — a silent false-positive failure.
+//
+// `resolve_built_cli_binary` invokes `cargo build --bin <name>` exactly once
+// per binary per process, then resolves the produced path. Setting
+// `CLI_GOLDEN_BIN_DIR` skips the build (CI ships pre-built binaries that way).
+// ---------------------------------------------------------------------------
+
+/// Resolve the path to a freshly-built CLI binary, building it on demand.
+///
+/// Honors two environment hooks:
+/// - `CLI_GOLDEN_BIN_DIR`: if set, return `<dir>/<binary_name>` without
+///   invoking cargo (CI uses this with a prebuilt artifact directory).
+/// - `CARGO_TARGET_DIR`: respected as the build output root, defaulting to
+///   the crate's `target/`.
+#[allow(dead_code)]
+pub fn resolve_built_cli_binary(binary_name: &'static str) -> Result<PathBuf, String> {
+    if let Ok(bin_dir) = std::env::var("CLI_GOLDEN_BIN_DIR") {
+        let p = PathBuf::from(bin_dir).join(binary_name);
+        if !p.exists() {
+            return Err(format!(
+                "CLI_GOLDEN_BIN_DIR set but binary not found: {}",
+                p.display()
+            ));
+        }
+        return Ok(p);
+    }
+
+    // Per-binary memo: serialise concurrent test threads asking for the same
+    // bin so we issue at most one `cargo build` per binary per process.
+    static CACHE: OnceLock<Mutex<HashMap<&'static str, Result<PathBuf, String>>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = cache.lock().unwrap_or_else(|poison| poison.into_inner());
+    if let Some(existing) = guard.get(binary_name) {
+        return existing.clone();
+    }
+
+    let result = build_and_locate(binary_name);
+    guard.insert(binary_name, result.clone());
+    result
+}
+
+#[allow(dead_code)]
+fn build_and_locate(binary_name: &'static str) -> Result<PathBuf, String> {
+    use std::process::Command;
+
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
+    let status = Command::new(&cargo)
+        .args(["build", "--bin", binary_name])
+        .status()
+        .map_err(|e| {
+            format!(
+                "spawning `{} build --bin {}` failed: {}",
+                cargo, binary_name, e
+            )
+        })?;
+    if !status.success() {
+        return Err(format!(
+            "`{} build --bin {}` exited with status {}",
+            cargo, binary_name, status
+        ));
+    }
+
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let target_dir =
+        std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| format!("{}/target", manifest_dir));
+    let binary_path = PathBuf::from(target_dir).join("debug").join(binary_name);
+    if !binary_path.exists() {
+        return Err(format!(
+            "binary not found after `cargo build --bin {}`: {}",
+            binary_name,
+            binary_path.display()
+        ));
+    }
+    Ok(binary_path)
+}
 
 /// Golden test error recovery and diagnostic utilities.
 pub struct GoldenDiag {

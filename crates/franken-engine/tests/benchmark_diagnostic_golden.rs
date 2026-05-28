@@ -211,22 +211,9 @@ fn create_input_fixtures() -> Result<BTreeMap<String, PathBuf>, Box<dyn std::err
 fn capture_benchmark_diagnostic_output(
     test_case: &BenchmarkDiagnosticTestCase,
 ) -> Result<BenchmarkDiagnosticOutput, Box<dyn std::error::Error>> {
-    // Find the built binary
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let target_dir =
-        std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| format!("{}/target", manifest_dir));
-
-    let binary_path = std::env::var("CLI_GOLDEN_BIN_DIR")
-        .map(|bin_dir| PathBuf::from(bin_dir).join(test_case.binary))
-        .unwrap_or_else(|_| {
-            PathBuf::from(target_dir)
-                .join("debug")
-                .join(test_case.binary)
-        });
-
-    if !binary_path.exists() {
-        return Err(format!("Binary not found: {}", binary_path.display()).into());
-    }
+    // Build the binary on demand (bd-ub6x8.20). Removes the prebuild
+    // prerequisite and the stale-binary trap from the previous design.
+    let binary_path = golden_diag::resolve_built_cli_binary(test_case.binary)?;
 
     // Create input fixtures if needed
     let _fixtures = if test_case.needs_input_fixture {

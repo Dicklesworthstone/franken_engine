@@ -96,22 +96,9 @@ fn scrub_output(content: &str) -> String {
 
 /// Execute a CLI command and capture its output, scrubbing non-deterministic content.
 fn capture_cli_output(test_case: &CliTestCase) -> Result<CliOutput, Box<dyn std::error::Error>> {
-    // Find the built binary
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let target_dir =
-        std::env::var("CARGO_TARGET_DIR").unwrap_or_else(|_| format!("{}/target", manifest_dir));
-
-    let binary_path = std::env::var("CLI_GOLDEN_BIN_DIR")
-        .map(|bin_dir| PathBuf::from(bin_dir).join(test_case.binary))
-        .unwrap_or_else(|_| {
-            PathBuf::from(target_dir)
-                .join("debug")
-                .join(test_case.binary)
-        });
-
-    if !binary_path.exists() {
-        return Err(format!("Binary not found: {}", binary_path.display()).into());
-    }
+    // Build the binary on demand (bd-ub6x8.20). Removes the prebuild
+    // prerequisite and the stale-binary trap from the previous design.
+    let binary_path = golden_diag::resolve_built_cli_binary(test_case.binary)?;
 
     let output = Command::new(&binary_path).args(test_case.args).output()?;
 

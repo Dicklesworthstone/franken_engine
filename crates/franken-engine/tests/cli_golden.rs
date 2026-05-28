@@ -58,24 +58,16 @@ impl CliTestCase {
     }
 }
 
-/// Test cases for CLI binaries
+/// Test cases for CLI binaries.
+///
+/// The `franken-architecture-inventory` binary intentionally has NO entries
+/// here: its substantive contract (markdown-rendered inventory) is covered by
+/// `architecture_inventory_golden.rs` against `docs/ARCHITECTURE_INVENTORY.md`.
+/// A previous `architecture_inventory_stdout` fixture was 76KB of escaped CLI
+/// output that re-encoded the same module table, with self-referential
+/// generator-banner prose baked into the golden — every module add/rename
+/// invalidated the fixture for zero independent signal (bd-ub6x8.10).
 const CLI_TEST_CASES: &[CliTestCase] = &[
-    // Architecture inventory tests
-    CliTestCase::new(
-        "franken-architecture-inventory",
-        &["--help"],
-        "architecture_inventory_help",
-    ),
-    CliTestCase::new(
-        "franken-architecture-inventory",
-        &["--stdout"],
-        "architecture_inventory_stdout",
-    ),
-    CliTestCase::new(
-        "franken-architecture-inventory",
-        &["--check"],
-        "architecture_inventory_check",
-    ),
     // FrankenCtl tests
     CliTestCase::new("frankenctl", &["--help"], "frankenctl_help"),
     CliTestCase::new("frankenctl", &["version"], "frankenctl_version"),
@@ -216,34 +208,21 @@ mod tests {
         assert_eq!(scrub_output(input), expected);
     }
 
-    // Generate a test function for each CLI test case
+    // Generate a test function for each CLI test case.
+    // (architecture-inventory CLI coverage removed in bd-ub6x8.10;
+    // see CLI_TEST_CASES doc-comment.)
     #[test]
-    fn test_architecture_inventory_help() {
+    fn test_frankenctl_help() {
         test_cli_golden(&CLI_TEST_CASES[0]);
     }
 
     #[test]
-    fn test_architecture_inventory_stdout() {
+    fn test_frankenctl_version() {
         test_cli_golden(&CLI_TEST_CASES[1]);
     }
 
     #[test]
-    fn test_architecture_inventory_check() {
-        test_cli_golden(&CLI_TEST_CASES[2]);
-    }
-
-    #[test]
-    fn test_frankenctl_help() {
-        test_cli_golden(&CLI_TEST_CASES[3]);
-    }
-
-    #[test]
-    fn test_frankenctl_version() {
-        test_cli_golden(&CLI_TEST_CASES[4]);
-    }
-
-    #[test]
     fn test_decision_demo_help() {
-        test_cli_golden(&CLI_TEST_CASES[5]);
+        test_cli_golden(&CLI_TEST_CASES[2]);
     }
 }

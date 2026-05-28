@@ -1664,8 +1664,7 @@ mod tests {
             &make_request(ActionCategory::DecisionContract, "a"),
         )
         .expect("operation should succeed for valid inputs");
-        let json =
-            serde_json::to_string(&em.entries()[0]).expect("serialization should succeed");
+        let json = serde_json::to_string(&em.entries()[0]).expect("serialization should succeed");
         for field in &[
             "entry_id",
             "sequence",

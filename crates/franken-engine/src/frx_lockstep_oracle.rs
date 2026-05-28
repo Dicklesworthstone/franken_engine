@@ -2101,7 +2101,8 @@ mod tests {
     fn compare_traces_event_count_mismatch() {
         let react = mk_trace(vec![mk_event(1, 100)]);
         let franken = mk_trace(vec![mk_event(1, 100), mk_event(2, 200)]);
-        let div = compare_traces(&react, &franken).expect("operation should succeed for valid inputs");
+        let div =
+            compare_traces(&react, &franken).expect("operation should succeed for valid inputs");
         assert_eq!(div.class, FrxDivergenceClass::EventSequence);
         assert!(div.message.contains("event count mismatch"));
     }
@@ -2112,7 +2113,8 @@ mod tests {
         let mut franken_events = vec![mk_event(1, 100)];
         franken_events[0].outcome = "fail".to_string();
         let franken = mk_trace(franken_events);
-        let div = compare_traces(&react, &franken).expect("operation should succeed for valid inputs");
+        let div =
+            compare_traces(&react, &franken).expect("operation should succeed for valid inputs");
         assert!(div.event_index.is_some());
         assert_eq!(div.event_index, Some(0));
         assert!(div.react_signature.is_some());
@@ -2126,7 +2128,8 @@ mod tests {
         let mut franken = mk_trace(events);
         react.outcome = "pass".to_string();
         franken.outcome = "fail".to_string();
-        let div = compare_traces(&react, &franken).expect("operation should succeed for valid inputs");
+        let div =
+            compare_traces(&react, &franken).expect("operation should succeed for valid inputs");
         assert_eq!(div.class, FrxDivergenceClass::EventSequence);
         assert!(div.message.contains("outcome mismatch"));
     }
@@ -2138,7 +2141,8 @@ mod tests {
         let mut franken = mk_trace(events);
         react.error_code = Some("ERR-01".to_string());
         franken.error_code = None;
-        let div = compare_traces(&react, &franken).expect("operation should succeed for valid inputs");
+        let div =
+            compare_traces(&react, &franken).expect("operation should succeed for valid inputs");
         assert_eq!(div.class, FrxDivergenceClass::SchemaViolation);
         assert!(div.message.contains("error_code mismatch"));
     }
@@ -2475,8 +2479,8 @@ mod tests {
     #[test]
     fn fixture_ref_from_valid_filename() {
         let path = PathBuf::from("/traces/my-fixture.trace.json");
-        let fixture =
-            fixture_ref_from_trace_filename(&path).expect("operation should succeed for valid inputs");
+        let fixture = fixture_ref_from_trace_filename(&path)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(fixture, "my-fixture");
     }
 
@@ -2552,7 +2556,8 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_case_result() {
-        let result = evaluate_case(mk_case_input()).expect("operation should succeed for valid inputs");
+        let result =
+            evaluate_case(mk_case_input()).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&result).expect("serialize derived Serialize");
         let back: FrxLockstepCaseResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2561,8 +2566,9 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_summary() {
-        let results =
-            vec![evaluate_case(mk_case_input()).expect("operation should succeed for valid inputs")];
+        let results = vec![
+            evaluate_case(mk_case_input()).expect("operation should succeed for valid inputs"),
+        ];
         let summary = summarize(&results);
         let json = serde_json::to_string(&summary).expect("serialize derived Serialize");
         let back: FrxLockstepSummary =
@@ -2593,8 +2599,9 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_report() {
-        let results =
-            vec![evaluate_case(mk_case_input()).expect("operation should succeed for valid inputs")];
+        let results = vec![
+            evaluate_case(mk_case_input()).expect("operation should succeed for valid inputs"),
+        ];
         let summary = summarize(&results);
         let report = FrxLockstepReport {
             schema_version: FRX_LOCKSTEP_REPORT_SCHEMA_VERSION.to_string(),

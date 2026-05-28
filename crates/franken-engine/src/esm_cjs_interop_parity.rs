@@ -277,8 +277,7 @@ impl InteropSpecimenEvidence {
     pub fn compute_hash(&self) -> String {
         let mut canonical = self.clone();
         canonical.evidence_hash = None;
-        let canonical_json =
-            serde_json::to_vec(&canonical).expect("serialization should succeed");
+        let canonical_json = serde_json::to_vec(&canonical).expect("serialization should succeed");
         hex_encode(ContentHash::compute(&canonical_json).as_bytes())
     }
 
@@ -3047,10 +3046,10 @@ mod tests {
 
     #[test]
     fn verdict_serde_roundtrip() {
-        let json_pass = serde_json::to_string(&InteropVerdict::Pass)
-            .expect("serialization should succeed");
-        let json_fail = serde_json::to_string(&InteropVerdict::Fail)
-            .expect("serialization should succeed");
+        let json_pass =
+            serde_json::to_string(&InteropVerdict::Pass).expect("serialization should succeed");
+        let json_fail =
+            serde_json::to_string(&InteropVerdict::Fail).expect("serialization should succeed");
         assert_eq!(
             serde_json::from_str::<InteropVerdict>(&json_pass)
                 .expect("deserialization should succeed"),
@@ -4896,8 +4895,7 @@ mod tests {
     #[test]
     fn inventory_json_contains_expected_fields() {
         let inv = run_interop_parity_corpus();
-        let json =
-            serde_json::to_string_pretty(&inv).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&inv).expect("serialization should succeed");
         assert!(json.contains("schema_version"));
         assert!(json.contains("component"));
         assert!(json.contains("specimen_count"));

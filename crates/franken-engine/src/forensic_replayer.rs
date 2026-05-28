@@ -155,10 +155,7 @@ impl IncidentTrace {
     /// can replay against the real evidence stream rather than the empty
     /// placeholder that lived here before the recorder was wired in.
     #[must_use]
-    pub fn with_telemetry_log(
-        mut self,
-        telemetry_log: Vec<HostcallTelemetryRecord>,
-    ) -> Self {
+    pub fn with_telemetry_log(mut self, telemetry_log: Vec<HostcallTelemetryRecord>) -> Self {
         self.telemetry_log = telemetry_log;
         self
     }

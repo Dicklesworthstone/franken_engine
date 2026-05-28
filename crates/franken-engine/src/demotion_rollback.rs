@@ -1503,7 +1503,10 @@ mod tests {
         assert_eq!(eval.severity, DemotionSeverity::Critical);
         // SAFETY: Test verifies critical demotion was triggered,
         // so reason field must be Some (severity is Critical).
-        match eval.reason.expect("operation should succeed for valid inputs") {
+        match eval
+            .reason
+            .expect("operation should succeed for valid inputs")
+        {
             DemotionReason::SemanticDivergence {
                 divergence_count, ..
             } => assert_eq!(divergence_count, 1),
@@ -1635,7 +1638,10 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         // SAFETY: Test verifies performance breach demotion was triggered,
         // so reason field must be Some (evaluation exists with specific reason).
-        match eval.reason.expect("operation should succeed for valid inputs") {
+        match eval
+            .reason
+            .expect("operation should succeed for valid inputs")
+        {
             DemotionReason::PerformanceBreach {
                 metric_name,
                 observed_millionths,
@@ -1758,7 +1764,10 @@ mod tests {
         let eval = result
             .evaluation
             .expect("operation should succeed for valid inputs");
-        match eval.reason.expect("operation should succeed for valid inputs") {
+        match eval
+            .reason
+            .expect("operation should succeed for valid inputs")
+        {
             DemotionReason::CapabilityViolation {
                 attempted_capability,
                 ..

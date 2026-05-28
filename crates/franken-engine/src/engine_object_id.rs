@@ -841,8 +841,8 @@ mod tests {
 
         // Verify that the golden vector is stable across calls.
         let expected_hex = hex.clone();
-        let id3 =
-            EngineObjectId::from_hex(&expected_hex).expect("operation should succeed for valid inputs");
+        let id3 = EngineObjectId::from_hex(&expected_hex)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id, id3);
     }
 
@@ -1113,8 +1113,8 @@ mod tests {
         )
         .expect("operation should succeed for valid inputs");
         let hex_upper = id.to_hex().to_uppercase();
-        let restored =
-            EngineObjectId::from_hex(&hex_upper).expect("operation should succeed for valid inputs");
+        let restored = EngineObjectId::from_hex(&hex_upper)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id, restored);
     }
 

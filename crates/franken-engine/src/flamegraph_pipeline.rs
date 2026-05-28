@@ -1728,8 +1728,8 @@ mod tests {
             stack: "a;b".to_string(),
             sample_count: 100,
         }];
-        let entries =
-            build_diff_entries(&samples, &samples).expect("operation should succeed for valid inputs");
+        let entries = build_diff_entries(&samples, &samples)
+            .expect("operation should succeed for valid inputs");
         assert!(entries.is_empty());
     }
 

@@ -1716,8 +1716,8 @@ mod tests {
         let decision = selector.select(&uncertain_posterior());
         // SAFETY: DecisionExplanation derives Serialize and has no non-serializable fields.
         // to_string on derived Serialize types only fails on writer errors (impossible with String).
-        let json = serde_json::to_string(&decision.explanation)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&decision.explanation).expect("serialization should succeed");
         // SAFETY: JSON was just produced by to_string of a valid DecisionExplanation,
         // so from_str back to DecisionExplanation cannot fail (valid format + matching schema).
         let restored: DecisionExplanation =

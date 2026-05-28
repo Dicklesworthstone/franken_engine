@@ -1168,8 +1168,8 @@ mod tests {
         let val = CanonicalValue::U64(42);
         let bytes = serialize_with_schema(&schema, &val);
         assert_eq!(bytes.len(), 32 + 1 + 8); // schema + tag + u64
-        let decoded =
-            deserialize_with_schema(&schema, &bytes).expect("operation should succeed for valid inputs");
+        let decoded = deserialize_with_schema(&schema, &bytes)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decoded, val);
     }
 
@@ -1859,8 +1859,8 @@ mod tests {
         map.insert("data".to_string(), CanonicalValue::Bytes(vec![0xFF; 16]));
         let val = CanonicalValue::Map(map);
         let bytes = serialize_with_schema(&schema, &val);
-        let decoded =
-            deserialize_with_schema(&schema, &bytes).expect("operation should succeed for valid inputs");
+        let decoded = deserialize_with_schema(&schema, &bytes)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(decoded, val);
     }
 
@@ -2259,8 +2259,10 @@ mod tests {
         assert_ne!(bytes_pos, bytes_neg);
 
         // Round-trip preserves distinction
-        let decoded_pos = decode_value(&bytes_pos).expect("operation should succeed for valid inputs");
-        let decoded_neg = decode_value(&bytes_neg).expect("operation should succeed for valid inputs");
+        let decoded_pos =
+            decode_value(&bytes_pos).expect("operation should succeed for valid inputs");
+        let decoded_neg =
+            decode_value(&bytes_neg).expect("operation should succeed for valid inputs");
         assert_ne!(decoded_pos, decoded_neg);
 
         // Verify neg zero detection
@@ -2281,11 +2283,13 @@ mod tests {
         let val_neg = CanonicalValue::Float(neg_inf);
 
         assert_eq!(
-            decode_value(&encode_value(&val_pos)).expect("operation should succeed for valid inputs"),
+            decode_value(&encode_value(&val_pos))
+                .expect("operation should succeed for valid inputs"),
             val_pos
         );
         assert_eq!(
-            decode_value(&encode_value(&val_neg)).expect("operation should succeed for valid inputs"),
+            decode_value(&encode_value(&val_neg))
+                .expect("operation should succeed for valid inputs"),
             val_neg
         );
 
@@ -2424,11 +2428,13 @@ mod tests {
         let val_min_pos = CanonicalValue::Float(min_positive);
 
         assert_eq!(
-            decode_value(&encode_value(&val_max)).expect("operation should succeed for valid inputs"),
+            decode_value(&encode_value(&val_max))
+                .expect("operation should succeed for valid inputs"),
             val_max
         );
         assert_eq!(
-            decode_value(&encode_value(&val_min)).expect("operation should succeed for valid inputs"),
+            decode_value(&encode_value(&val_min))
+                .expect("operation should succeed for valid inputs"),
             val_min
         );
         assert_eq!(

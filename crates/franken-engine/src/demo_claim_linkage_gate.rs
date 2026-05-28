@@ -2248,19 +2248,19 @@ mod tests {
     #[test]
     fn hash_consistency_claim_category() {
         // ClaimCategory does not derive Hash, so we test serde stability instead
-        let a = serde_json::to_string(&ClaimCategory::Security)
-            .expect("serialization should succeed");
-        let b = serde_json::to_string(&ClaimCategory::Security)
-            .expect("serialization should succeed");
+        let a =
+            serde_json::to_string(&ClaimCategory::Security).expect("serialization should succeed");
+        let b =
+            serde_json::to_string(&ClaimCategory::Security).expect("serialization should succeed");
         assert_eq!(a, b);
     }
 
     #[test]
     fn hash_consistency_evidence_kind() {
-        let a = serde_json::to_string(&EvidenceKind::CodeReview)
-            .expect("serialization should succeed");
-        let b = serde_json::to_string(&EvidenceKind::CodeReview)
-            .expect("serialization should succeed");
+        let a =
+            serde_json::to_string(&EvidenceKind::CodeReview).expect("serialization should succeed");
+        let b =
+            serde_json::to_string(&EvidenceKind::CodeReview).expect("serialization should succeed");
         assert_eq!(a, b);
     }
 

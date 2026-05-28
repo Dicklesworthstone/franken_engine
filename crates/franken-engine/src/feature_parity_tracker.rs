@@ -2055,8 +2055,7 @@ mod tests {
 
     #[test]
     fn es_version_serde_roundtrip() {
-        let json = serde_json::to_string(&EsVersion::Es2020)
-            .expect("serialization should succeed");
+        let json = serde_json::to_string(&EsVersion::Es2020).expect("serialization should succeed");
         let restored: EsVersion =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(EsVersion::Es2020, restored);

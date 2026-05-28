@@ -2310,8 +2310,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact =
-                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
+            let artifact = evaluate_safe_mode_startup(&input)
+                .expect("operation should succeed for valid inputs");
             assert!(
                 artifact.safe_mode_active,
                 "env value '{val}' should activate safe mode"
@@ -2331,8 +2331,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact =
-                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
+            let artifact = evaluate_safe_mode_startup(&input)
+                .expect("operation should succeed for valid inputs");
             assert!(
                 !artifact.safe_mode_active,
                 "env value '{val}' should NOT activate safe mode"
@@ -2966,8 +2966,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact =
-                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
+            let artifact = evaluate_safe_mode_startup(&input)
+                .expect("operation should succeed for valid inputs");
             assert!(
                 artifact.safe_mode_active,
                 "'{val}' should activate safe mode"
@@ -2987,8 +2987,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact =
-                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
+            let artifact = evaluate_safe_mode_startup(&input)
+                .expect("operation should succeed for valid inputs");
             assert!(
                 !artifact.safe_mode_active,
                 "'{val}' should NOT activate safe mode"
@@ -3923,8 +3923,8 @@ mod tests {
                 cli_safe_mode: false,
                 environment: env,
             };
-            let artifact =
-                evaluate_safe_mode_startup(&input).expect("operation should succeed for valid inputs");
+            let artifact = evaluate_safe_mode_startup(&input)
+                .expect("operation should succeed for valid inputs");
             assert!(
                 artifact.safe_mode_active,
                 "env value '{val}' should activate safe mode"

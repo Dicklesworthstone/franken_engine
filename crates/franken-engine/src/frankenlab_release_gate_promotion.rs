@@ -1023,8 +1023,7 @@ mod tests {
     #[test]
     fn registry_serde_roundtrip() {
         let reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
-        let json =
-            serde_json::to_string_pretty(&reg).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&reg).expect("serialization should succeed");
         let round: ReleaseGatePromotionRegistry =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(reg, round);
@@ -1075,8 +1074,7 @@ mod tests {
     fn report_serde_roundtrip() {
         let reg = ReleaseGatePromotionRegistry::with_defaults(test_epoch());
         let report = reg.build_report();
-        let json =
-            serde_json::to_string_pretty(&report).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&report).expect("serialization should succeed");
         let round: ReleaseGatePromotionReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);

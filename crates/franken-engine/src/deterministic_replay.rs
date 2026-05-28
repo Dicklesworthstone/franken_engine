@@ -945,8 +945,7 @@ impl IncidentBundleBuilder {
         if self.include_failovers
             && let Some(fc) = failover
         {
-            let data =
-                serde_json::to_vec(&fc.records).expect("serialization should succeed");
+            let data = serde_json::to_vec(&fc.records).expect("serialization should succeed");
             bundle.add_artifact(IncidentArtifact::new(
                 "failover_log",
                 ArtifactKind::FailoverLog,
@@ -958,8 +957,7 @@ impl IncidentBundleBuilder {
             && let Some(re) = replay
             && !re.divergences.is_empty()
         {
-            let data =
-                serde_json::to_vec(&re.divergences).expect("serialization should succeed");
+            let data = serde_json::to_vec(&re.divergences).expect("serialization should succeed");
             bundle.add_artifact(IncidentArtifact::new(
                 "divergence_report",
                 ArtifactKind::DivergenceReport,

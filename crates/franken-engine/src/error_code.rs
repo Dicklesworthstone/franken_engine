@@ -2049,23 +2049,19 @@ mod tests {
     #[test]
     fn error_severity_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&ErrorSeverity::Critical)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ErrorSeverity::Critical).expect("serialization should succeed"),
             "\"critical\""
         );
         assert_eq!(
-            serde_json::to_string(&ErrorSeverity::Error)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ErrorSeverity::Error).expect("serialization should succeed"),
             "\"error\""
         );
         assert_eq!(
-            serde_json::to_string(&ErrorSeverity::Warning)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ErrorSeverity::Warning).expect("serialization should succeed"),
             "\"warning\""
         );
         assert_eq!(
-            serde_json::to_string(&ErrorSeverity::Info)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ErrorSeverity::Info).expect("serialization should succeed"),
             "\"info\""
         );
     }

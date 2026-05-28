@@ -1808,8 +1808,7 @@ mod tests {
         v.record_oracle_result("s1", OracleResult::pass("safety", 100));
         v.record_scenario_execution("s1");
         let report = v.build_report();
-        let json =
-            serde_json::to_string_pretty(&report).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&report).expect("serialization should succeed");
         let round: BridgeContractReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, round);

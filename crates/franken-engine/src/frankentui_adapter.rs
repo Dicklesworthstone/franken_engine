@@ -5878,12 +5878,12 @@ mod tests {
 
     #[test]
     fn snake_case_serde_enum_values_are_lowercase() {
-        let json = serde_json::to_string(&ReplayStatus::NoEvents)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&ReplayStatus::NoEvents).expect("serialization should succeed");
         assert_eq!(json, "\"no_events\"");
 
-        let json = serde_json::to_string(&UpdateKind::Heartbeat)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&UpdateKind::Heartbeat).expect("serialization should succeed");
         assert_eq!(json, "\"heartbeat\"");
 
         let json = serde_json::to_string(&CancellationKind::Quarantine)

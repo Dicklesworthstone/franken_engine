@@ -2344,8 +2344,8 @@ mod tests {
             ]
         });
         let bytes = serde_json::to_vec(&legacy).expect("serialization should succeed");
-        let migrated =
-            parse_fixture_with_migration(&bytes).expect("operation should succeed for valid inputs");
+        let migrated = parse_fixture_with_migration(&bytes)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(migrated.fixture_version, TestFixture::CURRENT_VERSION);
         assert_eq!(migrated.fixture_id, "legacy-fix");
         assert!(migrated.expected_events.is_empty());
@@ -5030,7 +5030,8 @@ mod enrichment_tests {
     #[test]
     fn assert_logs_empty_expectations_pass() {
         let result = run_valid_fixture();
-        assert_structured_logs(&result.events, &[]).expect("operation should succeed for valid inputs");
+        assert_structured_logs(&result.events, &[])
+            .expect("operation should succeed for valid inputs");
     }
 
     // ── parse_fixture_with_migration ────────────────────────────────
@@ -5039,8 +5040,8 @@ mod enrichment_tests {
     fn parse_migration_v1_fixture() {
         let f = valid_fixture();
         let bytes = serde_json::to_vec(&f).expect("serialization should succeed");
-        let parsed =
-            parse_fixture_with_migration(&bytes).expect("operation should succeed for valid inputs");
+        let parsed = parse_fixture_with_migration(&bytes)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parsed.fixture_id, f.fixture_id);
         assert_eq!(parsed.fixture_version, TestFixture::CURRENT_VERSION);
     }
@@ -5056,8 +5057,8 @@ mod enrichment_tests {
             "steps": [{"component": "c", "event": "e"}]
         });
         let bytes = serde_json::to_vec(&json).expect("serialization should succeed");
-        let parsed =
-            parse_fixture_with_migration(&bytes).expect("operation should succeed for valid inputs");
+        let parsed = parse_fixture_with_migration(&bytes)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(parsed.fixture_id, "legacy-1");
         assert_eq!(parsed.fixture_version, TestFixture::CURRENT_VERSION);
         assert!(parsed.determinism_check);

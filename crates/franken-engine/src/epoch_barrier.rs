@@ -1565,22 +1565,21 @@ mod tests {
 
     #[test]
     fn barrier_state_json_field_names_open() {
-        let json =
-            serde_json::to_value(BarrierState::Open).expect("serialization should succeed");
+        let json = serde_json::to_value(BarrierState::Open).expect("serialization should succeed");
         assert_eq!(json, serde_json::json!("Open"));
     }
 
     #[test]
     fn barrier_state_json_field_names_draining() {
-        let json = serde_json::to_value(BarrierState::Draining)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_value(BarrierState::Draining).expect("serialization should succeed");
         assert_eq!(json, serde_json::json!("Draining"));
     }
 
     #[test]
     fn barrier_state_json_field_names_finalizing() {
-        let json = serde_json::to_value(BarrierState::Finalizing)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_value(BarrierState::Finalizing).expect("serialization should succeed");
         assert_eq!(json, serde_json::json!("Finalizing"));
     }
 

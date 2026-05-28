@@ -1171,7 +1171,9 @@ mod tests {
         graph
             .add_module(make_module("main.js", ""))
             .expect("operation should succeed for valid inputs");
-        let result = graph.link().expect("operation should succeed for valid inputs");
+        let result = graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.linked_count, 1);
         assert_eq!(result.cycle_count, 0);
         assert_eq!(
@@ -1202,7 +1204,9 @@ mod tests {
             .add_module(b)
             .expect("operation should succeed for valid inputs");
 
-        let result = graph.link().expect("operation should succeed for valid inputs");
+        let result = graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.linked_count, 3);
         assert_eq!(result.cycle_count, 0);
     }
@@ -1222,7 +1226,9 @@ mod tests {
             .add_module(b)
             .expect("operation should succeed for valid inputs");
 
-        let result = graph.link().expect("operation should succeed for valid inputs");
+        let result = graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.linked_count, 2);
         assert_eq!(result.cycle_count, 1);
     }
@@ -1248,7 +1254,9 @@ mod tests {
         graph
             .add_module(make_module("main.js", ""))
             .expect("operation should succeed for valid inputs");
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .evaluate()
             .expect("operation should succeed for valid inputs");
@@ -1275,7 +1283,9 @@ mod tests {
             .add_module(b)
             .expect("operation should succeed for valid inputs");
 
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .evaluate()
             .expect("operation should succeed for valid inputs");
@@ -1308,7 +1318,9 @@ mod tests {
             .add_module(shared)
             .expect("operation should succeed for valid inputs");
 
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .evaluate()
             .expect("operation should succeed for valid inputs");
@@ -1339,7 +1351,9 @@ mod tests {
             .add_module(b)
             .expect("operation should succeed for valid inputs");
 
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         let result = graph
             .evaluate()
             .expect("operation should succeed for valid inputs");
@@ -1880,7 +1894,9 @@ mod tests {
         graph
             .add_module(make_module("main.js", ""))
             .expect("operation should succeed for valid inputs");
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         graph
             .evaluate()
             .expect("operation should succeed for valid inputs");
@@ -2118,7 +2134,9 @@ mod tests {
         graph
             .add_module(make_module("dep.js", ""))
             .expect("operation should succeed for valid inputs");
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
 
         let m = graph
             .get_module("main.js")
@@ -2145,7 +2163,9 @@ mod tests {
             .add_module(b)
             .expect("operation should succeed for valid inputs");
 
-        let result = graph.link().expect("operation should succeed for valid inputs");
+        let result = graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.cycle_count, 1);
         assert!(!result.cycles.is_empty());
         let cycle = &result.cycles[0];
@@ -2166,7 +2186,9 @@ mod tests {
         graph
             .add_module(make_module("dep.js", ""))
             .expect("operation should succeed for valid inputs");
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         graph
             .evaluate()
             .expect("operation should succeed for valid inputs");
@@ -2309,7 +2331,9 @@ mod tests {
         graph
             .add_module(make_module("main.js", ""))
             .expect("operation should succeed for valid inputs");
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         graph
             .evaluate()
             .expect("operation should succeed for valid inputs");
@@ -2332,7 +2356,9 @@ mod tests {
         graph
             .add_module(b)
             .expect("operation should succeed for valid inputs");
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
 
         let events = graph.trace_events();
         assert!(events.iter().any(|e| e.phase == TracePhase::CycleDetected));
@@ -2649,7 +2675,9 @@ mod tests {
         graph
             .add_module(m)
             .expect("operation should succeed for valid inputs");
-        graph.link().expect("operation should succeed for valid inputs");
+        graph
+            .link()
+            .expect("operation should succeed for valid inputs");
         graph
             .evaluate()
             .expect("operation should succeed for valid inputs");
@@ -2687,7 +2715,9 @@ mod tests {
             graph
                 .add_module(make_module("shared.js", ""))
                 .expect("operation should succeed for valid inputs");
-            graph.link().expect("operation should succeed for valid inputs");
+            graph
+                .link()
+                .expect("operation should succeed for valid inputs");
             let result = graph
                 .evaluate()
                 .expect("operation should succeed for valid inputs");

@@ -2829,7 +2829,8 @@ mod tests {
             }),
         );
         for _ in 0..10 {
-            gr.update(0).expect("operation should succeed for valid inputs");
+            gr.update(0)
+                .expect("operation should succeed for valid inputs");
         }
         assert_eq!(gr.martingale_state().log_m_millionths, 0); // Reset should set log M_n back to 0 // remains 1.0
         assert_eq!(gr.observation_count(), 10);
@@ -2851,9 +2852,11 @@ mod tests {
                 low_ratio_millionths: 500_000,       // 0.5
             }),
         );
-        gr.update(0).expect("operation should succeed for valid inputs"); // log M_n decreases with lr < 1
+        gr.update(0)
+            .expect("operation should succeed for valid inputs"); // log M_n decreases with lr < 1
         assert!(gr.martingale_state().log_m_millionths < 0); // Should be negative after lr = 0.5
-        gr.update(0).expect("operation should succeed for valid inputs"); // log M_n decreases further
+        gr.update(0)
+            .expect("operation should succeed for valid inputs"); // log M_n decreases further
         assert!(gr.martingale_state().log_m_millionths < -693147); // ln(0.5) = -0.693147, so after two updates should be ~2*ln(0.5)
     }
 

@@ -1477,15 +1477,15 @@ mod tests {
 
     #[test]
     fn scenario_kind_startup_serde_token() {
-        let json = serde_json::to_string(&ScenarioKind::Startup)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&ScenarioKind::Startup).expect("serialization should succeed");
         assert!(json.contains("Startup"), "expected 'Startup' in {json}");
     }
 
     #[test]
     fn scenario_kind_quarantine_serde_token() {
-        let json = serde_json::to_string(&ScenarioKind::Quarantine)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&ScenarioKind::Quarantine).expect("serialization should succeed");
         assert!(
             json.contains("Quarantine"),
             "expected 'Quarantine' in {json}"
@@ -1811,8 +1811,7 @@ mod tests {
     fn suite_result_with_full_run_roundtrip() {
         let mut cx = real_cx(100_000);
         let suite = run_all_scenarios(77, &mut cx);
-        let json =
-            serde_json::to_string_pretty(&suite).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&suite).expect("serialization should succeed");
         let back: ScenarioSuiteResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(suite.seed, back.seed);

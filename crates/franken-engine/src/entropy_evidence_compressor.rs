@@ -940,8 +940,8 @@ mod tests {
             est.observe(1);
         }
         // SAFETY: estimator with known observations (0,1 pairs) has valid non-empty alphabet
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(coder.alphabet_size, 2);
     }
 
@@ -993,8 +993,8 @@ mod tests {
             est.observe(1);
         }
         // SAFETY: estimator with known observations has valid non-empty alphabet
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: coder was created successfully, encoding known symbols cannot fail
         let compressed = coder
             .encode(&[0, 1, 0, 1, 0])
@@ -1012,8 +1012,8 @@ mod tests {
         let mut est = EntropyEstimator::new();
         est.observe(0);
         // SAFETY: estimator with observed symbol has valid non-empty alphabet
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(coder.encode(&[]), Err(EntropyError::EmptyInput)));
     }
 
@@ -1022,8 +1022,8 @@ mod tests {
         let mut est = EntropyEstimator::new();
         est.observe(0);
         // SAFETY: estimator with observed symbol has valid non-empty alphabet
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             coder.encode(&[99]),
             Err(EntropyError::UnknownSymbol { symbol: 99 })
@@ -1038,8 +1038,8 @@ mod tests {
                 est.observe(i);
             }
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
             .expect("operation should succeed for valid inputs");
@@ -1071,8 +1071,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let ecl = coder.expected_code_length_millibits();
         // Should be close to 1 bit (uniform binary).
         assert!(ecl > 500_000);
@@ -1084,8 +1084,8 @@ mod tests {
         let mut est = EntropyEstimator::new();
         est.observe(0);
         est.observe(1);
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         let restored: ArithmeticCoder =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1121,8 +1121,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..20).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
@@ -1205,8 +1205,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..200).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
@@ -1226,8 +1226,8 @@ mod tests {
     fn compression_certificate_zero_lower_bound_fails_closed() {
         let mut est = EntropyEstimator::new();
         est.observe(7);
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let compressed = coder
             .encode(&[7])
             .expect("operation should succeed for valid inputs");
@@ -1287,8 +1287,8 @@ mod tests {
         // H(0.99, 0.01) ≈ 0.081 bits.
         assert!(h < 200_000, "skewed entropy should be low, got {h}");
 
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let ecl = coder.expected_code_length_millibits();
         assert!(
             ecl < 500_000,
@@ -1461,8 +1461,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let compressed = coder
             .encode(&[0, 1, 0])
             .expect("operation should succeed for valid inputs");
@@ -1528,8 +1528,8 @@ mod tests {
         for i in 0..MAX_ALPHABET_SIZE as u32 {
             est.observe(i);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(coder.alphabet_size, MAX_ALPHABET_SIZE);
     }
 
@@ -1579,8 +1579,8 @@ mod tests {
             est.observe(1);
             est.observe(2);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let cloned = coder.clone();
         assert_eq!(coder, cloned);
     }
@@ -1907,8 +1907,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let mut cloned = coder.clone();
         cloned.total_frequency = 999;
         assert_ne!(coder, cloned);
@@ -1952,8 +1952,8 @@ mod tests {
     fn json_field_stability_arithmetic_coder() {
         let mut est = EntropyEstimator::new();
         est.observe(0);
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         for field in &["frequency_table", "total_frequency", "alphabet_size"] {
             assert!(
@@ -2124,8 +2124,8 @@ mod tests {
         for _ in 0..100 {
             est.observe(5);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let compressed = coder
             .encode(&[5, 5, 5, 5, 5])
             .expect("operation should succeed for valid inputs");
@@ -2141,8 +2141,8 @@ mod tests {
             est.observe(1);
             est.observe(2);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..1000).map(|i| (i % 3) as u32).collect();
         let compressed = coder
             .encode(&symbols)
@@ -2159,8 +2159,8 @@ mod tests {
                 est.observe(i);
             }
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
             .expect("operation should succeed for valid inputs");
@@ -2178,8 +2178,8 @@ mod tests {
             est.observe(1);
         }
         let h = est.entropy_millibits();
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let ecl = coder.expected_code_length_millibits();
         assert!(
             (ecl - h).abs() < 200_000,
@@ -2294,8 +2294,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..20).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
@@ -2311,8 +2311,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..20).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
@@ -2328,8 +2328,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..10).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)
@@ -2402,8 +2402,8 @@ mod tests {
                 est.observe(i);
             }
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&coder).expect("serialize derived Serialize");
         let restored: ArithmeticCoder =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -2419,8 +2419,8 @@ mod tests {
             est.observe(1);
             est.observe(2);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..500).map(|i| (i % 3) as u32).collect();
         let compressed = coder
             .encode(&symbols)
@@ -2492,8 +2492,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let symbols = [0u32, 1, 0, 1, 0, 1];
         let ce1 = coder
             .encode(&symbols)
@@ -2517,8 +2517,8 @@ mod tests {
             est.observe(1);
             est.observe(2);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let kraft = coder
             .verify_kraft_inequality()
             .expect("operation should succeed for valid inputs");
@@ -2553,8 +2553,8 @@ mod tests {
             est.observe(0);
             est.observe(1);
         }
-        let coder =
-            ArithmeticCoder::from_estimator(&est).expect("operation should succeed for valid inputs");
+        let coder = ArithmeticCoder::from_estimator(&est)
+            .expect("operation should succeed for valid inputs");
         let symbols: Vec<u32> = (0..50).map(|i| i % 2).collect();
         let compressed = coder
             .encode(&symbols)

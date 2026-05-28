@@ -1675,10 +1675,10 @@ mod tests {
 
     #[test]
     fn outcome_serde_distinct_json() {
-        let pass_json = serde_json::to_string(&ScorecardOutcome::Pass)
-            .expect("serialization should succeed");
-        let fail_json = serde_json::to_string(&ScorecardOutcome::Fail)
-            .expect("serialization should succeed");
+        let pass_json =
+            serde_json::to_string(&ScorecardOutcome::Pass).expect("serialization should succeed");
+        let fail_json =
+            serde_json::to_string(&ScorecardOutcome::Fail).expect("serialization should succeed");
         assert_ne!(pass_json, fail_json);
     }
 
@@ -2235,8 +2235,7 @@ mod tests {
             "deep-roundtrip".to_string(),
         )
         .expect("operation should succeed for valid inputs");
-        let json =
-            serde_json::to_string_pretty(&result).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&result).expect("serialization should succeed");
         let back: ScorecardResult =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result, back);

@@ -2255,8 +2255,8 @@ mod tests {
         let ledger = build_ledger(5);
         let mut checker = EvidenceReplayChecker::new(ReplayConfig::default());
         let result = checker.replay(&ledger, None);
-        let json = serde_json::to_string(&result.diagnostics)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&result.diagnostics).expect("serialization should succeed");
         let back: ReplayDiagnostics =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(result.diagnostics, back);

@@ -712,8 +712,7 @@ pub fn run_shift_evidence() -> ShiftEvidenceManifest {
         .filter(|c| matches!(c.verdict, ShiftVerdict::Abstained { .. }))
         .count() as u32;
 
-    let hash_data =
-        serde_json::to_vec(&certificates).expect("serialization should succeed");
+    let hash_data = serde_json::to_vec(&certificates).expect("serialization should succeed");
 
     ShiftEvidenceManifest {
         schema_version: SHIFT_MONITOR_SCHEMA_VERSION.to_string(),

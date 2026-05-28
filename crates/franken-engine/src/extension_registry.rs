@@ -1646,7 +1646,8 @@ mod tests {
         let (mut reg, pub_id, sk, vk) = setup_registry_with_publisher();
         let version = PackageVersion::new(1, 0, 0);
         let manifest = build_manifest("testorg", "weather-ext", version, &pub_id, &vk);
-        sign_and_publish(&mut reg, &manifest, &sk).expect("operation should succeed for valid inputs");
+        sign_and_publish(&mut reg, &manifest, &sk)
+            .expect("operation should succeed for valid inputs");
         let result = sign_and_publish(&mut reg, &manifest, &sk);
         assert!(matches!(
             result,
@@ -2558,7 +2559,8 @@ mod tests {
         sign_and_publish(&mut reg, &later, &sk).expect("operation should succeed for valid inputs");
 
         let earlier = build_manifest("testorg", "aa-first", v, &pub_id, &vk);
-        sign_and_publish(&mut reg, &earlier, &sk).expect("operation should succeed for valid inputs");
+        sign_and_publish(&mut reg, &earlier, &sk)
+            .expect("operation should succeed for valid inputs");
 
         let results = reg.search(&PackageQuery {
             limit: 1,
@@ -2881,10 +2883,10 @@ mod tests {
     fn derive_package_id_deterministic() {
         let (_, pub_id, _, vk) = setup_registry_with_publisher();
         let m = build_manifest("testorg", "ext", PackageVersion::new(1, 0, 0), &pub_id, &vk);
-        let id1 =
-            SignedPackage::derive_package_id(&m).expect("operation should succeed for valid inputs");
-        let id2 =
-            SignedPackage::derive_package_id(&m).expect("operation should succeed for valid inputs");
+        let id1 = SignedPackage::derive_package_id(&m)
+            .expect("operation should succeed for valid inputs");
+        let id2 = SignedPackage::derive_package_id(&m)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(id1, id2, "same manifest must produce same package ID");
     }
 

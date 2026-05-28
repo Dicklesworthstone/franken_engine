@@ -859,10 +859,7 @@ fn sanitize_required(value: &str, fallback: &str) -> String {
     if trimmed.len() > MAX_SANITISED_FIELD_LEN {
         return fallback.to_string();
     }
-    if trimmed
-        .bytes()
-        .any(|b| b.is_ascii_control() || b == 0x7f)
-    {
+    if trimmed.bytes().any(|b| b.is_ascii_control() || b == 0x7f) {
         return fallback.to_string();
     }
     trimmed.to_string()
@@ -1514,7 +1511,8 @@ mod tests {
 
     #[test]
     fn parse_jsonl_empty_input() {
-        let parsed = parse_security_logs_jsonl("").expect("operation should succeed for valid inputs");
+        let parsed =
+            parse_security_logs_jsonl("").expect("operation should succeed for valid inputs");
         assert!(parsed.is_empty());
     }
 

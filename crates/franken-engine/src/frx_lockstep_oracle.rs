@@ -288,6 +288,13 @@ pub struct SignedDivergenceEvidence {
     pub original_divergence: FrxDivergenceDetail,
     pub classification_confidence: ClassificationConfidence,
     pub evidence_sources: Vec<EvidenceSource>,
+    /// Detached signature authenticating this evidence atom.
+    ///
+    /// FIXME (bd-1lw7r.4): always `None` today — [`create_divergence_evidence`]
+    /// never signs, because no evidence-signing facility (key management +
+    /// sign API) is wired here yet. Despite the `Signed` in the type name,
+    /// emitted divergence evidence is currently UNAUTHENTICATED. See
+    /// [`divergence_evidence_signing_wired`].
     pub signature: Option<String>,
 }
 
@@ -1371,8 +1378,24 @@ pub fn create_divergence_evidence(
             identifier: "lockstep-oracle-differential-analysis".to_string(),
             description: "Automated lockstep oracle divergence detection".to_string(),
         }],
-        signature: None, // TODO: Implement evidence signing
+        // FIXME (bd-1lw7r.4): emitted UNSIGNED — no evidence-signing facility
+        // is wired here yet; see `divergence_evidence_signing_wired()`.
+        signature: None,
     }
+}
+
+/// Whether an evidence-signing facility is wired into divergence-evidence
+/// creation.
+///
+/// Returns `false` today: [`create_divergence_evidence`] returns a
+/// [`SignedDivergenceEvidence`] whose `signature` is always `None`
+/// (bd-1lw7r.4), so — despite the `Signed` in the type name — emitted
+/// divergence evidence is UNAUTHENTICATED. A future change that wires a signer
+/// (key management + sign API, cf. the `tee_attestation` / `signature_preimage`
+/// modules) must flip this to `true` and populate `signature`; the unit test
+/// pinning the current state will then force this to be revisited.
+pub const fn divergence_evidence_signing_wired() -> bool {
+    false
 }
 
 /// Classify a divergence into the appropriate evidence atom category.
@@ -2938,6 +2961,28 @@ mod tests {
             }
             _ => panic!("Expected EngineBug classification for schema violation"),
         }
+    }
+
+    #[test]
+    fn divergence_evidence_signing_is_not_yet_wired_bd_1lw7r_4() {
+        // bd-1lw7r.4: divergence evidence is emitted UNSIGNED until an
+        // evidence-signing facility is wired. Pin both the helper and the real
+        // emission path so future wiring is forced to update this test.
+        assert!(!divergence_evidence_signing_wired());
+
+        let divergence = FrxDivergenceDetail {
+            class: FrxDivergenceClass::SchemaViolation,
+            message: "Invalid schema format detected".to_string(),
+            event_index: None,
+            react_signature: None,
+            franken_signature: None,
+        };
+        let evidence =
+            create_divergence_evidence(&divergence, "case-1", ClassificationConfidence::Automated);
+        assert!(
+            evidence.signature.is_none(),
+            "divergence evidence must be unsigned until a signer is wired (bd-1lw7r.4)"
+        );
     }
 
     #[test]

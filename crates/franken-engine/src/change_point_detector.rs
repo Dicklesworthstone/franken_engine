@@ -366,12 +366,34 @@ pub enum ChangePointVerdict {
         cusum_statistic_millionths: i64,
         /// Content hash of the evidence atom for this detection.
         evidence_hash: ContentHash,
-        /// Signed evidence atom (if signing is enabled).
+        /// Detached signature over `evidence_hash`, authenticating this
+        /// detection as an auditable decision artifact.
+        ///
+        /// FIXME (bd-1lw7r.4): always `None` today — no evidence-signing
+        /// facility (key management + sign API) is wired into this detector
+        /// yet, so emitted change-point evidence carries a content hash but is
+        /// UNAUTHENTICATED. See [`ChangePointVerdict::evidence_signing_wired`];
+        /// wiring likely shares infrastructure with the `tee_attestation` /
+        /// `signature_preimage` modules.
         signed_evidence: Option<Vec<u8>>,
     },
 }
 
 impl ChangePointVerdict {
+    /// Whether an evidence-signing facility is wired into change-point
+    /// detection.
+    ///
+    /// Returns `false` today: [`ChangePointVerdict::ChangeDetected`] computes
+    /// an `evidence_hash` but its `signed_evidence` field is always `None`
+    /// (bd-1lw7r.4), so emitted detections are auditable-but-UNAUTHENTICATED.
+    /// A future change that wires a signer (key management + sign API, cf. the
+    /// `tee_attestation` / `signature_preimage` modules) must flip this to
+    /// `true` and populate `signed_evidence`; the unit test pinning the
+    /// current state will then force this to be revisited.
+    pub const fn evidence_signing_wired() -> bool {
+        false
+    }
+
     /// Whether this verdict indicates a change was detected.
     pub fn is_change_detected(&self) -> bool {
         matches!(self, Self::ChangeDetected { .. })
@@ -518,7 +540,11 @@ impl ChangePointDetector {
                 post_change_parameters,
                 cusum_statistic_millionths: self.cusum_statistic_millionths,
                 evidence_hash,
-                signed_evidence: None, // TODO: Implement evidence signing
+                // FIXME (bd-1lw7r.4): emitted UNSIGNED. `evidence_hash` is
+                // computed above but never signed, because no evidence-signing
+                // facility is wired here yet; see
+                // `ChangePointVerdict::evidence_signing_wired()`.
+                signed_evidence: None,
             })
         } else {
             Ok(ChangePointVerdict::Continue)
@@ -1060,6 +1086,26 @@ mod tests {
 
         assert!(change_verdict.is_change_detected());
         assert_eq!(change_verdict.detection_time(), Some(42));
+        // bd-1lw7r.4: emitted change-point evidence is currently UNSIGNED.
+        assert!(matches!(
+            change_verdict,
+            ChangePointVerdict::ChangeDetected {
+                signed_evidence: None,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn evidence_signing_is_not_yet_wired_bd_1lw7r_4() {
+        // bd-1lw7r.4: change-point evidence is emitted UNSIGNED until an
+        // evidence-signing facility is wired. Pin the current state so the
+        // future wiring is forced to flip the helper and populate
+        // `signed_evidence` (this assertion will then fail and demand update).
+        assert!(
+            !ChangePointVerdict::evidence_signing_wired(),
+            "evidence_signing_wired() must report false until a signer is wired (bd-1lw7r.4)"
+        );
     }
 
     #[test]

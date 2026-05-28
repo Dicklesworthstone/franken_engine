@@ -12,22 +12,14 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 use std::str;
-use std::sync::LazyLock;
 
-use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 mod golden_diag;
 
-// Hoisted scrub patterns (bd-ub6x8.13) — compile once at first call instead
-// of every scrub_output invocation.
-static SCRUB_ISO_TIMESTAMP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\d\.\-\+:]*").unwrap());
-static SCRUB_PROJECT_PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/data/projects/franken_engine[/\w\-\.]*").unwrap());
-static SCRUB_TMP_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/tmp/[/\w\-\.]*").unwrap());
-static SCRUB_TARGET_PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"target[/\w\-\.]*").unwrap());
+// Shared scrub patterns now live in golden_diag (bd-ub6x8.12); only re-export
+// the names for readability inside this file.
+use golden_diag::{SCRUB_ISO_TIMESTAMP, SCRUB_PROJECT_PATH, SCRUB_TARGET_PATH, SCRUB_TMP_PATH};
 
 /// Represents the captured output from a CLI command execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

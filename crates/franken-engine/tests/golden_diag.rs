@@ -11,12 +11,45 @@
 
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
+
+use regex::Regex;
 
 /// Maximum lines to show from start/end of diff before truncating.
 const DIFF_CONTEXT_LINES: usize = 10;
 
 /// Maximum total diff lines before truncating.
 const MAX_DIFF_LINES: usize = 50;
+
+// ---------------------------------------------------------------------------
+// Shared scrub patterns (bd-ub6x8.12)
+//
+// These patterns recur across multiple golden suites (cli_golden,
+// benchmark_diagnostic_golden, etc.). Centralising them here keeps the
+// canonical-scrub vocabulary consistent and avoids per-suite recompiles.
+// Suites with bespoke patterns (UUIDs, evidence hashes, etc.) still keep
+// those local — only the cross-suite repeats live in this module.
+// ---------------------------------------------------------------------------
+
+/// ISO 8601 timestamps like `2026-04-30T12:34:56Z`.
+#[allow(dead_code)]
+pub static SCRUB_ISO_TIMESTAMP: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\d\.\-\+:]*").unwrap());
+
+/// Absolute paths rooted at `/data/projects/franken_engine`.
+#[allow(dead_code)]
+pub static SCRUB_PROJECT_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/data/projects/franken_engine[/\w\-\.]*").unwrap());
+
+/// Temporary paths under `/tmp/...`.
+#[allow(dead_code)]
+pub static SCRUB_TMP_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"/tmp/[/\w\-\.]*").unwrap());
+
+/// Cargo `target/...` build-artifact paths.
+#[allow(dead_code)]
+pub static SCRUB_TARGET_PATH: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"target[/\w\-\.]*").unwrap());
 
 /// Golden test error recovery and diagnostic utilities.
 pub struct GoldenDiag {

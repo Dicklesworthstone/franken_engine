@@ -19,19 +19,16 @@ use serde::{Deserialize, Serialize};
 
 mod golden_diag;
 
-// Scrub patterns hoisted once at startup so each scrub call does a single
-// `replace_all` instead of recompiling 8 regexes per invocation (bd-ub6x8.13).
+// Cross-suite scrub patterns are pulled from golden_diag (bd-ub6x8.12).
+// Patterns unique to this suite (timing, hash, memory address) stay local.
+use golden_diag::{SCRUB_ISO_TIMESTAMP, SCRUB_PROJECT_PATH, SCRUB_TARGET_PATH, SCRUB_TMP_PATH};
+
+// Suite-local scrub patterns (bd-ub6x8.13): timing values are specific to
+// the benchmark/diagnostic output format and don't recur in other suites.
 static SCRUB_TIMING_VALUE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b\d+\.\d+\s*(us|ns|ms|μs)\b").unwrap());
 static SCRUB_TIMING_NUMBER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b\d{4,}\.\d+\b").unwrap());
-static SCRUB_ISO_TIMESTAMP: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[Z\d\.\-\+:]*").unwrap());
-static SCRUB_PROJECT_PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"/data/projects/franken_engine[/\w\-\.]*").unwrap());
-static SCRUB_TMP_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"/tmp/[/\w\-\.]*").unwrap());
-static SCRUB_TARGET_PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"target[/\w\-\.]*").unwrap());
 static SCRUB_HASH_VALUE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\b[a-fA-F0-9]{40,64}\b").unwrap());
 static SCRUB_MEMORY_ADDRESS: LazyLock<Regex> =

@@ -25,7 +25,8 @@ use std::collections::BTreeMap;
 
 mod _support;
 use _support::test262_common::{
-    ExpectedResult, RequirementLevel, Test262Result, evaluate_test262_result,
+    ExpectedResult, RequirementLevel, Test262Result, assert_report_round_trips,
+    evaluate_test262_result,
 };
 
 pub const ABSTRACT_OPERATIONS_CONFORMANCE_SCHEMA: &str =
@@ -467,16 +468,21 @@ mod tests {
         );
     }
 
+    /// bd-rqev5 (FIND-10): migrated from an inline serialize/deserialize/
+    /// assert_eq copy onto the shared `assert_report_round_trips` helper from
+    /// `_support::test262_common` (bd-wrmld FIND-22). `AbstractOperationsReport`
+    /// already derives `PartialEq, Eq, Hash`, so the equality-based variant
+    /// applies. The total_tests-vs-harness-tests cross-check is preserved as
+    /// a sibling assertion since it is harness-specific and not part of the
+    /// shared oracle.
     #[test]
     fn report_round_trips_through_serde_json() {
         let harness = AbstractOperationsHarness::new();
         let report = harness.run_conformance(SecurityEpoch::from_raw(7));
-        let json = serde_json::to_string(&report).expect("serialize");
-        let back: AbstractOperationsReport = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(report, back, "report must round-trip");
-        assert_eq!(
-            report.schema_version,
-            ABSTRACT_OPERATIONS_CONFORMANCE_SCHEMA
+        assert_report_round_trips(
+            &report,
+            ABSTRACT_OPERATIONS_CONFORMANCE_SCHEMA,
+            &report.schema_version,
         );
         assert_eq!(report.statistics.total_tests, harness.tests.len() as u64);
     }

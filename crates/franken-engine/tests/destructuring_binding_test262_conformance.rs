@@ -33,7 +33,8 @@ use serde::{Deserialize, Serialize};
 
 mod _support;
 use _support::test262_common::{
-    ExpectedResult, RequirementLevel, Test262Result, evaluate_test262_result,
+    ExpectedResult, RequirementLevel, Test262Result, assert_report_json_round_trips,
+    evaluate_test262_result,
 };
 
 pub const DESTRUCTURING_BINDING_CONFORMANCE_SCHEMA: &str =
@@ -343,13 +344,15 @@ fn destructuring_categories_cover_all_axes() {
     }
 }
 
+/// bd-rqev5 (FIND-10): migrated from an inline serialize/deserialize/
+/// field-equality copy onto the shared `assert_report_json_round_trips` helper
+/// (bd-wrmld FIND-22). `DestructuringReport` does not derive `PartialEq`, so
+/// the JSON-byte-equality variant applies. Sibling assertions (schema, bead
+/// id, statistics-sum) are preserved since they are harness-specific
+/// invariants, not part of the shared oracle.
 #[test]
 fn destructuring_report_round_trip_through_serde() {
     let report = run_conformance_suite();
-    assert_eq!(
-        report.schema_version,
-        DESTRUCTURING_BINDING_CONFORMANCE_SCHEMA
-    );
     assert_eq!(report.bead_id, DESTRUCTURING_BINDING_BEAD_ID);
     assert_eq!(
         report.statistics.total_tests,
@@ -359,15 +362,10 @@ fn destructuring_report_round_trip_through_serde() {
             + report.statistics.skips,
         "case-result counts must sum to total_tests"
     );
-
-    let json = serde_json::to_string(&report).expect("report should serialize");
-    let round_trip: DestructuringReport =
-        serde_json::from_str(&json).expect("report should deserialize");
-    assert_eq!(round_trip.schema_version, report.schema_version);
-    assert_eq!(round_trip.bead_id, report.bead_id);
-    assert_eq!(
-        round_trip.statistics.total_tests,
-        report.statistics.total_tests
+    assert_report_json_round_trips(
+        &report,
+        DESTRUCTURING_BINDING_CONFORMANCE_SCHEMA,
+        &report.schema_version,
     );
 }
 

@@ -508,6 +508,79 @@ impl Handler for ComputeOnlyHandler {
     }
 }
 
+/// Handler granting the `PolicyCaps` capability set.
+///
+/// This is a capability-granting handler, NOT an executor: the algebraic-effects
+/// migration bridge has no concrete `policy:*` effect executors yet, so `handle`
+/// always defers (`Ok(None)`) and `can_handle` is `false`. Its sole job is to
+/// surface the canonical Policy capability set via `provided_capabilities` so a
+/// `HandlerStack` built from a `Policy` profile aggregates the right gate
+/// (`HandlerStack::update_capabilities`). With the gate correct, a policy effect
+/// whose required capabilities are granted but unimplemented surfaces as
+/// `EffectError::Unhandled` (honest) rather than `CapabilityDenied` (wrong) — the
+/// behaviour when this arm was the `ComputeOnlyHandler` placeholder, which
+/// stripped the profile to zero capabilities.
+#[derive(Debug)]
+pub struct PolicyCapsHandler;
+
+impl Handler for PolicyCapsHandler {
+    fn can_handle(&self, _effect_name: &str) -> bool {
+        // No concrete policy:* effect executor exists in the migration bridge.
+        false
+    }
+
+    fn handle(&self, _effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
+        Ok(None)
+    }
+
+    fn provided_capabilities(&self) -> EffectCapabilities {
+        use RuntimeCapability::*;
+        // Mirrors CapabilityProfile::policy() in capability.rs.
+        EffectCapabilities::runtime([PolicyRead, PolicyWrite, EvidenceEmit, DecisionInvoke])
+    }
+
+    fn priority(&self) -> EffectPriority {
+        EffectPriority::Normal
+    }
+
+    fn handler_name(&self) -> &'static str {
+        "policy_caps_handler"
+    }
+}
+
+/// Handler granting the `RemoteCaps` capability set.
+///
+/// Capability-granting handler with the same contract as [`PolicyCapsHandler`]:
+/// it surfaces the canonical Remote capability set so a `Remote` profile's
+/// `HandlerStack` gates correctly, but defers execution (no `remote:*` effect
+/// executor exists in the migration bridge yet).
+#[derive(Debug)]
+pub struct RemoteCapsHandler;
+
+impl Handler for RemoteCapsHandler {
+    fn can_handle(&self, _effect_name: &str) -> bool {
+        false
+    }
+
+    fn handle(&self, _effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
+        Ok(None)
+    }
+
+    fn provided_capabilities(&self) -> EffectCapabilities {
+        use RuntimeCapability::*;
+        // Mirrors CapabilityProfile::remote() in capability.rs.
+        EffectCapabilities::runtime([NetworkEgress, LeaseManagement, IdempotencyDerive])
+    }
+
+    fn priority(&self) -> EffectPriority {
+        EffectPriority::Normal
+    }
+
+    fn handler_name(&self) -> &'static str {
+        "remote_caps_handler"
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Migration API
 // ---------------------------------------------------------------------------
@@ -527,14 +600,14 @@ pub fn create_handler_stack_from_profile(profile: &CapabilityProfile) -> Handler
             stack.add_handler(Arc::new(EngineCoreHandler));
         }
         ProfileKind::Policy => {
-            // Policy profile handler would be implemented here
-            // For now, using ComputeOnly as placeholder
-            stack.add_handler(Arc::new(ComputeOnlyHandler));
+            // Grants the canonical PolicyCaps set so the stack gate matches the
+            // profile (previously stripped to ComputeOnly — zero capabilities).
+            stack.add_handler(Arc::new(PolicyCapsHandler));
         }
         ProfileKind::Remote => {
-            // Remote profile handler would be implemented here
-            // For now, using ComputeOnly as placeholder
-            stack.add_handler(Arc::new(ComputeOnlyHandler));
+            // Grants the canonical RemoteCaps set so the stack gate matches the
+            // profile (previously stripped to ComputeOnly — zero capabilities).
+            stack.add_handler(Arc::new(RemoteCapsHandler));
         }
         ProfileKind::ComputeOnly => {
             stack.add_handler(Arc::new(ComputeOnlyHandler));
@@ -697,6 +770,68 @@ mod tests {
         let compute_profile = CapabilityProfile::compute_only();
         let stack = create_handler_stack_from_profile(&compute_profile);
         assert!(stack.can_handle("hostcall:console")); // Can handle but will deny
+    }
+
+    // bd-08wwg: Policy/Remote profiles must grant their canonical capability sets,
+    // not the empty ComputeOnly set the placeholder used.
+
+    #[test]
+    fn policy_profile_stack_grants_policy_capabilities() {
+        use RuntimeCapability::*;
+        let stack = create_handler_stack_from_profile(&CapabilityProfile::policy());
+        let granted = stack.capabilities();
+        // Every capability CapabilityProfile::policy() grants must be satisfied.
+        let required =
+            EffectCapabilities::runtime([PolicyRead, PolicyWrite, EvidenceEmit, DecisionInvoke]);
+        assert!(
+            required.is_satisfied_by(granted),
+            "Policy stack must grant the PolicyCaps set, got {granted:?}"
+        );
+        // A capability outside the profile must still be denied (no over-grant).
+        let off_profile = EffectCapabilities::runtime([FsWrite]);
+        assert!(
+            !off_profile.is_satisfied_by(granted),
+            "Policy stack must not grant FsWrite"
+        );
+    }
+
+    #[test]
+    fn remote_profile_stack_grants_remote_capabilities() {
+        use RuntimeCapability::*;
+        let stack = create_handler_stack_from_profile(&CapabilityProfile::remote());
+        let granted = stack.capabilities();
+        let required =
+            EffectCapabilities::runtime([NetworkEgress, LeaseManagement, IdempotencyDerive]);
+        assert!(
+            required.is_satisfied_by(granted),
+            "Remote stack must grant the RemoteCaps set, got {granted:?}"
+        );
+        let off_profile = EffectCapabilities::runtime([PolicyWrite]);
+        assert!(
+            !off_profile.is_satisfied_by(granted),
+            "Remote stack must not grant PolicyWrite"
+        );
+    }
+
+    #[test]
+    fn policy_and_remote_stacks_are_not_stripped_to_compute_only() {
+        // Regression for the ComputeOnly placeholder: a ComputeOnly stack grants
+        // nothing, but Policy/Remote stacks must grant a non-empty capability set.
+        let compute = create_handler_stack_from_profile(&CapabilityProfile::compute_only());
+        assert!(
+            compute.capabilities().runtime_caps.is_empty(),
+            "ComputeOnly grants nothing"
+        );
+        let policy = create_handler_stack_from_profile(&CapabilityProfile::policy());
+        let remote = create_handler_stack_from_profile(&CapabilityProfile::remote());
+        assert!(
+            !policy.capabilities().runtime_caps.is_empty(),
+            "Policy must not be stripped to ComputeOnly"
+        );
+        assert!(
+            !remote.capabilities().runtime_caps.is_empty(),
+            "Remote must not be stripped to ComputeOnly"
+        );
     }
 
     #[test]

@@ -9548,7 +9548,7 @@ impl InterpreterCore {
         let timestamp_ns = self.instructions_executed;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = self.dispatch_promise_hostcall_inner(cap, args, module);
-        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
         outcome
     }
 
@@ -11366,7 +11366,7 @@ impl InterpreterCore {
         let timestamp_ns = self.instructions_executed;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = self.dispatch_number_hostcall_inner(cap, args);
-        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
         outcome
     }
 
@@ -11467,7 +11467,7 @@ impl InterpreterCore {
         let timestamp_ns = self.instructions_executed;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = self.dispatch_console_hostcall_inner(cap, args);
-        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
         outcome
     }
 
@@ -11526,7 +11526,7 @@ impl InterpreterCore {
         let timestamp_ns = self.instructions_executed;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = self.dispatch_timer_hostcall_inner(cap, args);
-        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
         outcome
     }
 
@@ -11668,7 +11668,7 @@ impl InterpreterCore {
         let timestamp_ns = self.instructions_executed;
         let args_hash = self.hostcall_arguments_hash(args);
         let outcome = self.dispatch_builtin_hostcall_inner(cap, args, module);
-        self.record_hostcall_telemetry(cap, timestamp_ns, args_hash, &outcome);
+        self.record_hostcall_telemetry(cap, args, timestamp_ns, args_hash, &outcome);
         outcome
     }
 
@@ -20561,6 +20561,7 @@ impl InterpreterCore {
     fn record_hostcall_telemetry(
         &mut self,
         cap: &str,
+        args: crate::ir_contract::RegRange,
         timestamp_ns: u64,
         arguments_hash: ContentHash,
         outcome: &Result<Value, InterpreterError>,
@@ -20582,6 +20583,20 @@ impl InterpreterCore {
             // capability every JS execution already requires, so the schema
             // field stays meaningful instead of being silently dropped.
             .unwrap_or(RuntimeCapability::VmDispatch);
+        // bd-f1w0r: replace the previously-hardcoded
+        // `FlowLabel::new("public", "public")` with the real label dimension
+        // surfaced by bd-n2mjy (HostCall now joins arg labels onto dst).
+        // label_class = join over the input registers' IFC labels — falls
+        // back to Public if the join walks off the register file (which
+        // would also be the previous hardcoded value, so no regression).
+        // clearance_class = "internal" — the engine's baseline operating
+        // clearance, an honest default that beats the prior "public" since
+        // the capability gate has already approved this hostcall by the
+        // time we get here. Wiring a per-capability clearance (e.g. from
+        // the gate's HostcallCapabilityClass) is tracked separately.
+        let args_label = self
+            .join_arg_range_label(args)
+            .unwrap_or(crate::ifc_artifacts::Label::Public);
         let input = RecordInput {
             extension_id,
             hostcall_type: TelemetryHostcallType::from_capability_tag(cap),
@@ -20594,7 +20609,7 @@ impl InterpreterCore {
             // records.
             duration_ns: 0,
             resource_delta: ResourceDelta::default(),
-            flow_label: FlowLabel::new("public", "public"),
+            flow_label: FlowLabel::new(args_label.to_string(), "internal"),
             decision_id: None,
         };
         // Recorder errors are intentionally swallowed: telemetry must never

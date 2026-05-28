@@ -3,15 +3,62 @@
 //! Golden artifact tests for ProofManifest deterministic serialization.
 //!
 //! Tests that ProofManifest structures serialize to canonical JSON and
-//! survive round-trip serialization without data loss.
+//! survive round-trip serialization without data loss. The expected JSON
+//! lives in `tests/golden/proof_manifest_v1.json` and is regenerated via
+//! `UPDATE_GOLDENS=1` (bd-ub6x8.5) — no more hand-editing a multi-line
+//! `concat!()` literal in this file.
 
 use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use chrono::{TimeZone, Utc};
 use frankenengine_engine::proof_artifact::{
     PROOF_MANIFEST_SCHEMA_VERSION, ProofArtifactPaths, ProofArtifactRef, ProofCommand,
     ProofFreshness, ProofManifest, ProofRunStatus, ProofVerifierOutput,
 };
+
+const GOLDEN_RELATIVE_PATH: &str = "tests/golden/proof_manifest_v1.json";
+
+fn golden_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_RELATIVE_PATH)
+}
+
+/// Compare `actual` against the on-disk golden fixture, honoring the
+/// project-wide `UPDATE_GOLDENS=1` regen convention (see
+/// `tests/golden/PROVENANCE.md`).
+fn assert_matches_golden(actual: &str, test_name: &str) {
+    let path = golden_path();
+    if std::env::var_os("UPDATE_GOLDENS").is_some() {
+        fs::write(&path, actual).expect("golden fixture should be writable");
+        return;
+    }
+
+    let expected = fs::read_to_string(&path).unwrap_or_else(|err| {
+        panic!(
+            "{test_name}: golden fixture missing or unreadable at {}: {err}\n\
+             Run with UPDATE_GOLDENS=1 to (re)generate it.",
+            path.display()
+        )
+    });
+
+    if actual != expected {
+        let actual_path = path.with_extension("actual");
+        let _ = fs::write(&actual_path, actual);
+        panic!(
+            "{test_name}: ProofManifest canonical JSON drifted from golden.\n\
+             Expected: {}\n\
+             Actual:   {}\n\
+             To update: UPDATE_GOLDENS=1 cargo test -p frankenengine-engine \
+             --test proof_manifest_golden_artifacts -- {test_name}",
+            path.display(),
+            actual_path.display(),
+        );
+    }
+
+    // Sweep stale .actual sibling once we're green (bd-ub6x8.7).
+    let _ = fs::remove_file(path.with_extension("actual"));
+}
 
 #[test]
 fn test_proof_manifest_deterministic_round_trip() {
@@ -55,18 +102,19 @@ fn test_proof_manifest_deterministic_serialization() {
         );
     }
 
-    assert_eq!(
-        json1,
-        expected_manifest_json(),
-        "ProofManifest canonical JSON drifted; update this test only when the manifest schema intentionally changes"
-    );
+    assert_matches_golden(&json1, "test_proof_manifest_deterministic_serialization");
 
     println!("[proof-manifest-golden] deterministic serialization matches the golden fixture");
 }
 
 #[test]
-fn test_proof_manifest_cross_platform_determinism() {
-    println!("[proof-manifest-golden] checking cross-platform JSON determinism");
+fn test_proof_manifest_no_host_specific_tokens_in_serialization() {
+    // Renamed from test_proof_manifest_cross_platform_determinism: the
+    // single-process loop below proves only intra-process determinism,
+    // not cross-platform behavior, so the new name describes what the
+    // test actually asserts — that the canonical JSON matches the golden
+    // and carries no host-architecture or OS tokens (bd-ub6x8.5).
+    println!("[proof-manifest-golden] checking serialization is host-token-free");
 
     let manifest = create_test_proof_manifest();
 
@@ -80,15 +128,14 @@ fn test_proof_manifest_cross_platform_determinism() {
     for (iteration, json) in &json_outputs[1..] {
         assert_eq!(
             reference_json, json,
-            "Cross-platform determinism violation at iteration {}",
+            "Single-process determinism violation at iteration {}",
             iteration
         );
     }
 
-    assert_eq!(
+    assert_matches_golden(
         reference_json,
-        expected_manifest_json(),
-        "ProofManifest must not include host-specific ordering, paths, or timestamps"
+        "test_proof_manifest_no_host_specific_tokens_in_serialization",
     );
     assert!(!reference_json.contains("windows"));
     assert!(!reference_json.contains("linux"));
@@ -96,7 +143,7 @@ fn test_proof_manifest_cross_platform_determinism() {
     assert!(!reference_json.contains("x86"));
     assert!(!reference_json.contains("arm"));
 
-    println!("[proof-manifest-golden] cross-platform deterministic serialization verified");
+    println!("[proof-manifest-golden] serialization contains no host-specific tokens");
 }
 
 fn create_test_proof_manifest() -> ProofManifest {
@@ -170,51 +217,7 @@ fn create_test_proof_manifest() -> ProofManifest {
     }
 }
 
-fn expected_manifest_json() -> &'static str {
-    concat!(
-        r#"{"schema_version":"franken-engine.proof-artifact-manifest.v1","#,
-        r#""bundle_id":"test_bundle_123","#,
-        r#""gate_name":"test_gate","#,
-        r#""status":"pass","#,
-        r#""generated_utc":"2026-05-01T12:00:00Z","#,
-        r#""source_revision":"abc1234","#,
-        r#""rerun_command":"cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts -- --nocapture","#,
-        r#""artifact_paths":{"run_dir":"artifacts/proof_manifest_golden/run","#,
-        r#""manifest_json":"artifacts/proof_manifest_golden/run/manifest.json","#,
-        r#""commands_txt":"artifacts/proof_manifest_golden/run/commands.txt","#,
-        r#""events_jsonl":"artifacts/proof_manifest_golden/run/events.jsonl","#,
-        r#""report_json":"artifacts/proof_manifest_golden/run/report.json","#,
-        r#""report_md":"artifacts/proof_manifest_golden/run/report.md","#,
-        r#""redaction_policy_json":"artifacts/proof_manifest_golden/run/redaction_policy.json"},"#,
-        r#""claim_ids":["claim_1","claim_2"],"#,
-        r#""bead_ids":["bd-123","bd-456"],"#,
-        r#""environment":{"BUILD_TYPE":"test","RUST_VERSION":"1.89.0"},"#,
-        r#""commands":[{"command_id":"cargo-check","#,
-        r#""display":"cargo check","#,
-        r#""redacted_display":"cargo check","#,
-        r#""cwd":"artifacts/proof_manifest_golden/run","#,
-        r#""exit_code":0,"#,
-        r#""duration_ms":1500},"#,
-        r#"{"command_id":"cargo-test","#,
-        r#""display":"cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts -- --nocapture","#,
-        r#""redacted_display":"cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts -- --nocapture","#,
-        r#""cwd":"artifacts/proof_manifest_golden/run","#,
-        r#""exit_code":0,"#,
-        r#""duration_ms":3000}],"#,
-        r#""generated_artifacts":[{"path":"output/result.json","#,
-        r#""sha256":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","#,
-        r#""schema_version":"franken-engine.test-output.v1","#,
-        r#""role":"generated"}],"#,
-        r#""expected_artifacts":[{"path":"expected/baseline.json","#,
-        r#""sha256":"d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35","#,
-        r#""schema_version":"franken-engine.test-baseline.v1","#,
-        r#""role":"expected"}],"#,
-        r#""verifier_outputs":[{"verifier_id":"test_verifier","#,
-        r#""output_path":"verifier/test_verifier.json","#,
-        r#""status":"pass","#,
-        r#""decision":"All tests passed"}],"#,
-        r#""freshness":{"generated_utc":"2026-05-01T12:00:00Z","#,
-        r#""freshness_days":2,"#,
-        r#""max_freshness_days":14}}"#
-    )
-}
+// `expected_manifest_json()` removed: the canonical expected JSON now
+// lives at `tests/golden/proof_manifest_v1.json`. `assert_matches_golden`
+// reads it from disk and supports the project-wide `UPDATE_GOLDENS=1`
+// regen flow (bd-ub6x8.5).

@@ -16,6 +16,9 @@ use frankenengine_engine::{EvalError, EvalErrorClass, EvalOutcome, EvalResult};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod _support;
+use _support::test262_common::assert_report_json_round_trips;
+
 /// Mirror of test262_common::matches_expected_error_type. Uses both the full
 /// Display string and a class-based fallback so engine-classified errors that
 /// don't happen to mention the JS class name in their message (e.g. a generic
@@ -779,5 +782,18 @@ mod tests {
         assert!(summary.contains("Iterator Protocol ES2020 Conformance Report"));
         assert!(summary.contains("Overall Statistics"));
         assert!(summary.contains("Coverage by Category"));
+    }
+
+    /// bd-rqev5 (FIND-10): every conformance harness must prove its report
+    /// survives a serde_json round-trip and carries the canonical schema pin.
+    #[test]
+    fn report_round_trips_through_serde_json() {
+        let harness = IteratorConformanceHarness::new();
+        let report = harness.run_conformance(SecurityEpoch::from_raw(3));
+        assert_report_json_round_trips(
+            &report,
+            ITERATOR_CONFORMANCE_SCHEMA_VERSION,
+            &report.schema_version,
+        );
     }
 }

@@ -22,6 +22,9 @@ use frankenengine_engine::parser_api_stability::parse_script;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+mod _support;
+use _support::test262_common::assert_report_json_round_trips;
+
 // ---------------------------------------------------------------------------
 // Test262 Strict Mode Conformance Schema
 // ---------------------------------------------------------------------------
@@ -450,5 +453,13 @@ mod tests {
         let result = StrictModeConformanceHarness::execute_test_case(&test);
         // This test should pass - basic strict directive with valid code
         assert_eq!(result, StrictModeResult::CorrectRejection);
+    }
+
+    /// bd-rqev5 (FIND-10): every conformance harness must prove its report
+    /// survives a serde_json round-trip and carries the canonical schema pin.
+    #[test]
+    fn report_round_trips_through_serde_json() {
+        let report = StrictModeConformanceHarness::run_conformance_suite();
+        assert_report_json_round_trips(&report, SCHEMA_VERSION, &report.schema_version);
     }
 }

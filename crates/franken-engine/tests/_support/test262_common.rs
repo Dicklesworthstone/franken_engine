@@ -93,6 +93,39 @@ pub fn assert_report_round_trips<R>(
     );
 }
 
+/// Same as [`assert_report_round_trips`] but for report types that do not
+/// (yet) derive `PartialEq`. Asserts the report round-trips through
+/// `serde_json` by re-serialising the decoded value and comparing the byte
+/// strings — equivalent to value equality for canonically-encoded reports
+/// (serde_json + `BTreeMap`-keyed test_results give a deterministic key
+/// order across runs).
+///
+/// Use this variant when migrating round-trip coverage onto a harness whose
+/// report still lacks the `PartialEq` cascade (bd-rqev5 FIND-10). Prefer
+/// [`assert_report_round_trips`] once the cascade is in place.
+pub fn assert_report_json_round_trips<R>(
+    report: &R,
+    expected_schema_version: &str,
+    actual_schema_version: &str,
+) where
+    R: serde::Serialize + serde::de::DeserializeOwned,
+{
+    let first = serde_json::to_string(report)
+        .expect("conformance report must serialise via serde_json::to_string");
+    let back: R = serde_json::from_str(&first)
+        .expect("conformance report must deserialise back into its report type");
+    let second = serde_json::to_string(&back)
+        .expect("decoded conformance report must re-serialise via serde_json::to_string");
+    assert_eq!(
+        first, second,
+        "conformance report must round-trip through serde_json without byte-level drift"
+    );
+    assert_eq!(
+        actual_schema_version, expected_schema_version,
+        "conformance report schema_version must match the canonical pin"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Common Test262 Enums and Types
 // ---------------------------------------------------------------------------

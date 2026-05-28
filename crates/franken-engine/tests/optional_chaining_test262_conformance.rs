@@ -17,7 +17,8 @@ use std::collections::BTreeMap;
 
 mod _support;
 use _support::test262_common::{
-    ExpectedResult, RequirementLevel, Test262Result, evaluate_test262_result,
+    ExpectedResult, RequirementLevel, Test262Result, assert_report_round_trips,
+    evaluate_test262_result,
 };
 
 // ---------------------------------------------------------------------------
@@ -790,6 +791,22 @@ mod tests {
             "{} MUST-tier test(s) waived in EXPECTED_FAILING_MUSTS now pass — remove their entries:\n  {}",
             unexpected_passes.len(),
             unexpected_passes.join("\n  "),
+        );
+    }
+
+    /// bd-rqev5 (FIND-10): every conformance harness must prove its report
+    /// survives a serde_json round-trip and carries the canonical schema pin.
+    /// `OptionalChainingReport` derives `PartialEq` so this calls into the
+    /// full equality-based `assert_report_round_trips` oracle from
+    /// `_support::test262_common` (bd-wrmld FIND-22).
+    #[test]
+    fn report_round_trips_through_serde_json() {
+        let harness = OptionalChainingHarness::new();
+        let report = harness.run_conformance(SecurityEpoch::from_raw(3));
+        assert_report_round_trips(
+            &report,
+            OPTIONAL_CHAINING_CONFORMANCE_SCHEMA,
+            &report.schema_version,
         );
     }
 }

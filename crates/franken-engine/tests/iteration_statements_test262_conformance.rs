@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
-use _support::test262_common::RequirementLevel;
+use _support::test262_common::{RequirementLevel, assert_report_json_round_trips};
 
 const SCHEMA_VERSION: &str = "franken-engine.iteration-statements-test262-conformance.v1";
 const BEAD_ID: &str = "bd-ai64f";
@@ -681,6 +681,14 @@ mod tests {
         assert!(covered_categories.contains(&IterationStatementTestCategory::ForOfStatement));
         assert!(covered_categories.contains(&IterationStatementTestCategory::WhileStatement));
         assert!(covered_categories.contains(&IterationStatementTestCategory::DoWhileStatement));
+    }
+
+    /// bd-rqev5 (FIND-10): every conformance harness must prove its report
+    /// survives a serde_json round-trip and carries the canonical schema pin.
+    #[test]
+    fn report_round_trips_through_serde_json() {
+        let report = IterationStatementConformanceHarness::run_conformance_tests();
+        assert_report_json_round_trips(&report, SCHEMA_VERSION, &report.schema_version);
     }
 }
 

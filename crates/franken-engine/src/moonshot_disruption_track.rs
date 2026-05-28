@@ -605,6 +605,32 @@ pub fn allows_frontier_release(execution: &DisruptionTrackExecution) -> bool {
             .unwrap_or(false)
 }
 
+/// Elapsed wall-clock nanoseconds from the earliest to the latest gate
+/// execution in `execution`, derived from each gate's RFC 3339
+/// `execution_timestamp`.
+///
+/// Gate results whose timestamp does not parse are skipped; with fewer than
+/// two parseable timestamps the span is undefined and `0` is returned.
+/// `DateTime` comparison is UTC-offset-aware, so this is robust to mixed
+/// offsets and to map iteration order (unlike a lexical string sort).
+fn elapsed_ns_across_gates(execution: &DisruptionTrackExecution) -> u64 {
+    let parsed_instants: Vec<chrono::DateTime<chrono::FixedOffset>> = execution
+        .gate_results
+        .values()
+        .filter_map(|r| chrono::DateTime::parse_from_rfc3339(&r.execution_timestamp).ok())
+        .collect();
+
+    if parsed_instants.len() < 2 {
+        return 0;
+    }
+    let earliest = parsed_instants.iter().min().expect("len >= 2");
+    let latest = parsed_instants.iter().max().expect("len >= 2");
+    (*latest - *earliest)
+        .num_nanoseconds()
+        .unwrap_or(i64::MAX)
+        .max(0) as u64
+}
+
 /// Validate moonshot contracts against execution state.
 pub fn validate_moonshot_contracts(
     execution: &DisruptionTrackExecution,
@@ -628,21 +654,9 @@ pub fn validate_moonshot_contracts(
         );
     }
 
-    // Compute elapsed time from earliest to latest gate execution
-    let mut timestamps: Vec<&str> = execution
-        .gate_results
-        .values()
-        .map(|r| r.execution_timestamp.as_str())
-        .collect();
-    timestamps.sort();
-
-    let elapsed_ns = if timestamps.len() >= 2 {
-        // Parse ISO timestamps and compute difference
-        // For now use a simplified approach - count of gates as proxy for elapsed time
-        (timestamps.len() as u64).saturating_mul(1_000_000_000) // 1 second per gate
-    } else {
-        0
-    };
+    // Elapsed wall-clock time from the earliest to the latest gate execution,
+    // parsed from the RFC 3339 gate timestamps (see `elapsed_ns_across_gates`).
+    let elapsed_ns = elapsed_ns_across_gates(execution);
 
     // Compute budget spent as fraction of completed gates vs total expected gates
     let total_expected_gates = MoonshotGateId::all().len() as u64;
@@ -1498,5 +1512,75 @@ mod tests {
         assert!(!DISRUPTION_TRACK_COMPONENT.is_empty());
         assert!(!DISRUPTION_TRACK_SCHEMA_VERSION.is_empty());
         assert!(DISRUPTION_TRACK_SCHEMA_VERSION.contains("v1"));
+    }
+
+    #[test]
+    fn elapsed_ns_across_gates_uses_real_timestamps() {
+        // Two gates exactly 5 seconds apart. The real elapsed span is
+        // 5_000_000_000 ns — distinct from the former "1 second per gate"
+        // proxy, which for two gates would have reported 2_000_000_000 ns.
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
+        execution.record_gate_result(MoonshotGateResult::pass(
+            MoonshotGateId::NodeBunComparisonHarness,
+            750_000,
+            ContentHash::compute(b"e1"),
+            vec!["bd-a".to_string()],
+            "2026-04-19T00:00:00Z".to_string(),
+        ));
+        execution.record_gate_result(MoonshotGateResult::pass(
+            MoonshotGateId::AdversarialCampaignRunner,
+            750_000,
+            ContentHash::compute(b"e2"),
+            vec!["bd-b".to_string()],
+            "2026-04-19T00:00:05Z".to_string(),
+        ));
+
+        assert_eq!(elapsed_ns_across_gates(&execution), 5_000_000_000);
+    }
+
+    #[test]
+    fn elapsed_ns_across_gates_handles_offsets_and_sub_second() {
+        // Mixed UTC offsets that denote the same instant (00:00:00Z ==
+        // 01:00:00+01:00) plus a 250ms gate: the span is 250_000_000 ns, and
+        // offset-aware comparison must not be fooled by lexical ordering.
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
+        execution.record_gate_result(MoonshotGateResult::pass(
+            MoonshotGateId::NodeBunComparisonHarness,
+            750_000,
+            ContentHash::compute(b"e1"),
+            vec!["bd-a".to_string()],
+            "2026-04-19T01:00:00.250+01:00".to_string(),
+        ));
+        execution.record_gate_result(MoonshotGateResult::pass(
+            MoonshotGateId::AdversarialCampaignRunner,
+            750_000,
+            ContentHash::compute(b"e2"),
+            vec!["bd-b".to_string()],
+            "2026-04-19T00:00:00Z".to_string(),
+        ));
+
+        assert_eq!(elapsed_ns_across_gates(&execution), 250_000_000);
+    }
+
+    #[test]
+    fn elapsed_ns_across_gates_zero_for_fewer_than_two() {
+        let mut execution =
+            DisruptionTrackExecution::new(SecurityEpoch::from_raw(1), "test-env".to_string());
+        assert_eq!(elapsed_ns_across_gates(&execution), 0, "no gates -> 0");
+
+        execution.record_gate_result(MoonshotGateResult::pass(
+            MoonshotGateId::NodeBunComparisonHarness,
+            750_000,
+            ContentHash::compute(b"e1"),
+            vec!["bd-a".to_string()],
+            "2026-04-19T00:00:00Z".to_string(),
+        ));
+        assert_eq!(
+            elapsed_ns_across_gates(&execution),
+            0,
+            "single gate -> undefined span -> 0"
+        );
     }
 }

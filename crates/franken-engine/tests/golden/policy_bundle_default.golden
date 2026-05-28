@@ -1,0 +1,40 @@
+{
+  "version": "1.0.0",
+  "epoch": 1,
+  "lanes": [
+    "baseline_deterministic_profile",
+    "baseline_throughput_profile"
+  ],
+  "cvar_config": {
+    "alpha_millionths": 950000,
+    "max_cvar_millionths": 50000000,
+    "min_observations": 30
+  },
+  "conformal_config": {
+    "alpha_millionths": 100000,
+    "min_calibration_observations": 50,
+    "max_consecutive_violations": 5
+  },
+  "drift_config": {
+    "kl_threshold_millionths": 100000,
+    "reference_window": 100,
+    "test_window": 50,
+    "min_samples": 20
+  },
+  "budget_config": {
+    "compute_budget_us": 50000,
+    "memory_budget_bytes": 134217728,
+    "warning_threshold_millionths": 800000,
+    "deterministic_fallback_on_exhaust": true
+  },
+  "risk_weights": {
+    "Compatibility": 300000,
+    "Latency": 300000,
+    "Memory": 200000,
+    "IncidentSeverity": 200000
+  },
+  "default_action": {
+    "RouteTo": "baseline_deterministic_profile"
+  },
+  "fallback_action": "FallbackSafe"
+}

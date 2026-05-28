@@ -30,6 +30,11 @@ pub enum TemplateLiteralTestCategory {
     EscapeSequences,
     NestedTemplates,
     EdgeCases,
+    /// Negative-path cases the parser MUST reject (`ParseError` or `Fail`).
+    /// Added by bd-t2cgg FIND-8 — the harness had only positive paths
+    /// before, so the parser could silently accept malformed sources
+    /// without a single test catching it.
+    ErrorPaths,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -211,6 +216,67 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with complex expression".to_string(),
                 source_code: "`Result: ${[\"zero\", \"one\"][1]}`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
+                requirement_level: RequirementLevel::Must,
+            },
+            // ─── Error-path cases (bd-t2cgg FIND-8) ──────────────────────────
+            // ES2020 §12.2.9 (Template Literal Lexical Grammar) and §11.8.6
+            // (Template Literal Lexical Components) reject several malformed
+            // shapes at parse time. The audit (FIND-8) flagged that this
+            // harness had ZERO negative-path cases — the parser could silently
+            // accept any of these without a single regression detector seeing
+            // it. The cases below force the parser through each malformed
+            // shape; `test_template_literal_error_cases` (mod tests) asserts
+            // that none of them comes back as `Pass`. If a future engine
+            // change accepts a malformed source, the test fails loudly and
+            // points at the spec clause being violated.
+            TemplateLiteralTestCase {
+                id: "template-literal-error-unterminated-string".to_string(),
+                category: TemplateLiteralTestCategory::ErrorPaths,
+                description:
+                    "Unterminated template literal — no closing backtick (ES2020 §11.8.6 — TemplateCharacter MUST be terminated)."
+                        .to_string(),
+                source_code: "`hello world".to_string(),
+                es_spec_section: "11.8.6".to_string(),
+                requirement_level: RequirementLevel::Must,
+            },
+            TemplateLiteralTestCase {
+                id: "template-literal-error-unterminated-substitution".to_string(),
+                category: TemplateLiteralTestCategory::ErrorPaths,
+                description:
+                    "Template literal with unterminated `${` substitution — no `}` or closing backtick (ES2020 §12.2.9)."
+                        .to_string(),
+                source_code: "`prefix ${value".to_string(),
+                es_spec_section: "12.2.9".to_string(),
+                requirement_level: RequirementLevel::Must,
+            },
+            TemplateLiteralTestCase {
+                id: "template-literal-error-unterminated-after-substitution".to_string(),
+                category: TemplateLiteralTestCategory::ErrorPaths,
+                description:
+                    "Template literal terminated by `}` but missing the trailing backtick (ES2020 §12.2.9 / §11.8.6)."
+                        .to_string(),
+                source_code: "`prefix ${1 + 2} suffix".to_string(),
+                es_spec_section: "12.2.9".to_string(),
+                requirement_level: RequirementLevel::Must,
+            },
+            TemplateLiteralTestCase {
+                id: "template-literal-error-octal-escape".to_string(),
+                category: TemplateLiteralTestCategory::ErrorPaths,
+                description:
+                    "Legacy octal escape `\\01` in a template literal — ES2020 §11.8.6 / Annex B explicitly forbids legacy octals in template literals (the carve-out only applies to string literals in non-strict mode)."
+                        .to_string(),
+                source_code: r"`octal \01 escape`".to_string(),
+                es_spec_section: "11.8.6".to_string(),
+                requirement_level: RequirementLevel::Must,
+            },
+            TemplateLiteralTestCase {
+                id: "template-literal-error-bad-unicode-escape".to_string(),
+                category: TemplateLiteralTestCategory::ErrorPaths,
+                description:
+                    "Malformed `\\u{...}` escape with non-hex content — ES2020 §11.8.4.1 EscapeSequence rejects non-HexDigit content."
+                        .to_string(),
+                source_code: r"`bad unicode \u{XYZ}`".to_string(),
+                es_spec_section: "11.8.4".to_string(),
                 requirement_level: RequirementLevel::Must,
             },
         ]
@@ -404,6 +470,109 @@ mod tests {
     fn report_round_trips_through_serde_json() {
         let report = TemplateLiteralConformanceHarness::run_conformance_tests();
         assert_report_json_round_trips(&report, SCHEMA_VERSION, &report.schema_version);
+    }
+
+    /// 5 currently-uncaught negative-path cases — every one is a genuine
+    /// ES2020 parser gap (the engine returns `Ok` from `eval` on each
+    /// malformed source). Tracked under bd-no788 (the engine repair). The
+    /// exact-gap drift detector below treats this list as the WAIVER set:
+    /// an entry that closes (engine starts rejecting) forces promotion (the
+    /// test fails with PROGRESS); a new uncaught case (engine regresses on
+    /// a different ErrorPaths id) fails as REGRESSION. Either edge prevents
+    /// silent drift.
+    const KNOWN_FAILING_ERROR_REJECTS: &[(&str, &str)] = &[
+        // (test_id, tracking_bead)
+        ("template-literal-error-bad-unicode-escape", "bd-no788"),
+        ("template-literal-error-octal-escape", "bd-no788"),
+        ("template-literal-error-unterminated-after-substitution", "bd-no788"),
+        ("template-literal-error-unterminated-string", "bd-no788"),
+        ("template-literal-error-unterminated-substitution", "bd-no788"),
+    ];
+
+    /// bd-t2cgg (FIND-8): every `ErrorPaths` case MUST be rejected by the
+    /// parser — i.e. come back as `ParseError` or `Fail`, never `Pass`. The
+    /// audit flagged that the harness had no negative-path tests at all, so
+    /// a regression that silently started accepting malformed template
+    /// literals would have gone unnoticed.
+    ///
+    /// Today (HEAD as of bd-t2cgg landing) the engine accepts all 5 of the
+    /// initial ErrorPaths cases — they're listed in
+    /// `KNOWN_FAILING_ERROR_REJECTS` and tracked under bd-no788. The drift
+    /// detector below enforces an exact-gap partition: any deviation
+    /// (newly accepted case OR newly rejected one) fails the test loudly so
+    /// the gap inventory cannot quietly drift.
+    #[test]
+    fn template_literal_error_cases_must_not_pass() {
+        use std::collections::BTreeSet;
+
+        let test_cases = TemplateLiteralConformanceHarness::test_cases();
+        let error_cases: Vec<&TemplateLiteralTestCase> = test_cases
+            .iter()
+            .filter(|tc| matches!(tc.category, TemplateLiteralTestCategory::ErrorPaths))
+            .collect();
+
+        assert!(
+            !error_cases.is_empty(),
+            "bd-t2cgg: TemplateLiteralTestCategory::ErrorPaths must have at least one case — the harness lost its negative-path coverage."
+        );
+
+        // Surface the parser-gap inventory in CI output so reviewers see
+        // it without chasing the bd-no788 follow-up bead.
+        println!(
+            "\nKnown failing error-reject cases (bd-t2cgg / bd-no788 — engine accepts malformed input):"
+        );
+        for (id, bead) in KNOWN_FAILING_ERROR_REJECTS {
+            println!("  {id}  [{bead}]");
+        }
+
+        let waived: BTreeSet<&str> = KNOWN_FAILING_ERROR_REJECTS
+            .iter()
+            .map(|(id, _)| *id)
+            .collect();
+        let all_error_ids: BTreeSet<&str> =
+            error_cases.iter().map(|tc| tc.id.as_str()).collect();
+        let actually_rejected: BTreeSet<&str> = error_cases
+            .iter()
+            .filter(|tc| {
+                !matches!(
+                    TemplateLiteralConformanceHarness::execute_test_case(tc),
+                    TemplateLiteralResult::Pass,
+                )
+            })
+            .map(|tc| tc.id.as_str())
+            .collect();
+
+        // Invariant 1: every waived id refers to an existing ErrorPaths case.
+        let stale_waivers: Vec<&str> =
+            waived.difference(&all_error_ids).copied().collect();
+        assert!(
+            stale_waivers.is_empty(),
+            "bd-t2cgg: KNOWN_FAILING_ERROR_REJECTS references ids not present in the ErrorPaths set — prune them: {stale_waivers:?}"
+        );
+
+        // Invariant 2 (REGRESSION): a previously-correctly-rejected case
+        // (i.e. an ErrorPaths id NOT in the waiver set) now passes.
+        let newly_silently_accepted: Vec<&str> = all_error_ids
+            .difference(&waived)
+            .filter(|id| !actually_rejected.contains(*id))
+            .copied()
+            .collect();
+        assert!(
+            newly_silently_accepted.is_empty(),
+            "bd-t2cgg REGRESSION: the engine silently accepted a previously-rejected malformed template literal — file a follow-up bead and waive the id in KNOWN_FAILING_ERROR_REJECTS only if intentional: {newly_silently_accepted:?}"
+        );
+
+        // Invariant 3 (PROGRESS): a waived case now rejects — promote it
+        // out of KNOWN_FAILING_ERROR_REJECTS so the gap inventory stays
+        // accurate and the cited bd-no788 row can be flipped to RESOLVED.
+        let gap_closed: Vec<&str> = waived
+            .intersection(&actually_rejected)
+            .copied()
+            .collect();
+        assert!(
+            gap_closed.is_empty(),
+            "bd-t2cgg PROGRESS: the engine now rejects waived malformed sources — remove these ids from KNOWN_FAILING_ERROR_REJECTS and flip the bd-no788 entry: {gap_closed:?}"
+        );
     }
 }
 

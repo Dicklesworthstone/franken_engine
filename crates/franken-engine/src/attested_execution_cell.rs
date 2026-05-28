@@ -3303,24 +3303,13 @@ mod tests {
         // Integration smoke: AttestationQuote::signature_bytes must be a
         // 32-byte HMAC tag and roundtrip correctly through the trait surface.
         let root = SoftwareTrustRoot::new("e2e", 7);
-        let measurement = TrustRootBackend::measure(
-            &root,
-            b"code",
-            b"config",
-            b"policy",
-            b"schema",
-            "1.0",
-        );
+        let measurement =
+            TrustRootBackend::measure(&root, b"code", b"config", b"policy", b"schema", "1.0");
         let nonce = [0xAAu8; 32];
         let issued_at_ns = 1_000_000_000_u64;
         let validity_window_ns = 60_000_000_000_u64;
-        let quote = TrustRootBackend::attest(
-            &root,
-            &measurement,
-            nonce,
-            validity_window_ns,
-            issued_at_ns,
-        );
+        let quote =
+            TrustRootBackend::attest(&root, &measurement, nonce, validity_window_ns, issued_at_ns);
         assert_eq!(
             quote.signature_bytes.len(),
             32,

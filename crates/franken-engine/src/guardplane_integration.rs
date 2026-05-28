@@ -875,14 +875,8 @@ impl BasicGuardplaneAdapter {
         // the bd-jn3uv fix: replaces `format!("decision_{}_{}", timestamp,
         // rand::random::<u64>())` with a deterministic hash so two replays
         // produce the same decision_id.
-        let decision_id = derive_deterministic_decision_id(
-            sequence,
-            timestamp,
-            context,
-            risk,
-            action,
-            &reason,
-        )?;
+        let decision_id =
+            derive_deterministic_decision_id(sequence, timestamp, context, risk, action, &reason)?;
 
         let evidence_hash = compute_guardplane_evidence_hash(
             &decision_id,

@@ -24,7 +24,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -369,6 +369,12 @@ impl PersistenceComputer {
     ) -> Result<Vec<PersistenceBar>, PersistenceError> {
         let mut bars = Vec::new();
         let mut union_find = UnionFind::new();
+        // Adjacency of the spanning forest accumulated as components merge.
+        // Each undirected entry records the `EdgeId` that linked two nodes, so
+        // that when a later edge closes a cycle we can reconstruct the unique
+        // tree path between its endpoints and emit a real representative cycle
+        // (replacing the former `edges: vec![]` stub).
+        let mut spanning_adj: BTreeMap<NodeId, Vec<(NodeId, EdgeId)>> = BTreeMap::new();
 
         // Process each simplex in the filtration
         for simplex in &filtration.simplices {
@@ -376,6 +382,7 @@ impl PersistenceComputer {
                 Simplex::Node { id, filter_value } => {
                     // Birth of a 0-dimensional feature (connected component)
                     union_find.make_set(*id);
+                    spanning_adj.entry(*id).or_default();
 
                     let bar = PersistenceBar {
                         birth: *filter_value,
@@ -390,7 +397,7 @@ impl PersistenceComputer {
                     bars.push(bar);
                 }
                 Simplex::Edge {
-                    id: _,
+                    id,
                     source,
                     target,
                     filter_value,
@@ -409,14 +416,24 @@ impl PersistenceComputer {
                         }
 
                         union_find.union(root_source, root_target);
+                        // This edge is a spanning-forest edge; record it in both
+                        // directions so cycle reconstruction can walk the tree.
+                        spanning_adj.entry(*source).or_default().push((*target, *id));
+                        spanning_adj.entry(*target).or_default().push((*source, *id));
                     } else if self.config.detect_cycles {
-                        // Cycle detected - birth of a 1-dimensional feature
+                        // Cycle detected - birth of a 1-dimensional feature. The
+                        // representative cycle is the unique spanning-tree path
+                        // between the endpoints plus this closing edge.
+                        let mut cycle_edges =
+                            spanning_tree_path_edges(&spanning_adj, *source, *target);
+                        cycle_edges.push(*id);
+
                         let cycle_bar = PersistenceBar {
                             birth: *filter_value,
                             death: None, // Cycles persist indefinitely in DAGs
                             dimension: 1,
                             representative: FeatureRepresentative::Cycle {
-                                edges: vec![], // TODO: Compute actual cycle
+                                edges: cycle_edges,
                                 cycle_weight: *weight,
                             },
                             feature_weight: *weight,
@@ -606,6 +623,63 @@ impl Simplex {
             Simplex::Edge { filter_value, .. } => *filter_value,
         }
     }
+}
+
+/// Reconstruct the `EdgeId`s on the unique path between `from` and `to` in the
+/// spanning forest described by `adjacency`.
+///
+/// `adjacency` maps each node to `(neighbour, edge_id)` pairs for the edges that
+/// were chosen as spanning-forest (component-merging) edges. Because a spanning
+/// forest is acyclic, a breadth-first search yields the unique tree path; the
+/// returned `EdgeId`s are ordered from `from` to `to`. Returns an empty vector
+/// when `from == to` or when the two endpoints are not connected in the forest
+/// (the latter cannot happen for a genuine cycle edge, whose endpoints are by
+/// definition already in the same component).
+fn spanning_tree_path_edges(
+    adjacency: &BTreeMap<NodeId, Vec<(NodeId, EdgeId)>>,
+    from: NodeId,
+    to: NodeId,
+) -> Vec<EdgeId> {
+    if from == to {
+        return Vec::new();
+    }
+
+    // BFS recording, for each discovered node, the (predecessor, edge) used to
+    // reach it so the path can be reconstructed by walking back from `to`.
+    let mut came_from: BTreeMap<NodeId, (NodeId, EdgeId)> = BTreeMap::new();
+    let mut visited: BTreeSet<NodeId> = BTreeSet::new();
+    let mut queue: VecDeque<NodeId> = VecDeque::new();
+    visited.insert(from);
+    queue.push_back(from);
+
+    while let Some(node) = queue.pop_front() {
+        if node == to {
+            break;
+        }
+        if let Some(neighbours) = adjacency.get(&node) {
+            for (next, edge_id) in neighbours {
+                if visited.insert(*next) {
+                    came_from.insert(*next, (node, *edge_id));
+                    queue.push_back(*next);
+                }
+            }
+        }
+    }
+
+    let mut edges = Vec::new();
+    let mut cursor = to;
+    while cursor != from {
+        match came_from.get(&cursor) {
+            Some((prev, edge_id)) => {
+                edges.push(*edge_id);
+                cursor = *prev;
+            }
+            // Endpoints unreachable in the forest: no representative path.
+            None => return Vec::new(),
+        }
+    }
+    edges.reverse();
+    edges
 }
 
 // ---------------------------------------------------------------------------
@@ -1877,5 +1951,98 @@ mod tests {
             small.content_hash, large.content_hash,
             "structurally different DAGs must produce different diagram hashes"
         );
+    }
+
+    #[test]
+    fn test_cycle_representative_edges_are_computed() {
+        // Regression guard for the former `edges: vec![]` stub: a triangle
+        // (1-2, 2-3, 3-1) has exactly one 1-dimensional homology cycle, and its
+        // representative must enumerate the three edges that form the loop —
+        // the two spanning-tree edges plus the closing edge.
+        let computer = PersistenceComputer::new();
+        assert!(
+            computer.config.detect_cycles,
+            "default config must detect cycles for this test to be meaningful"
+        );
+
+        let mut filtration = Filtration::new(FilterType::InfluenceWeight);
+        filtration.add_node(NodeId(1), FilterValue::from_millionths(0));
+        filtration.add_node(NodeId(2), FilterValue::from_millionths(0));
+        filtration.add_node(NodeId(3), FilterValue::from_millionths(0));
+        // Explicit ascending filter values so the closing edge (12) is processed
+        // last, after 10 and 11 have built the spanning tree 1-2-3.
+        filtration.add_edge(
+            EdgeId(10),
+            NodeId(1),
+            NodeId(2),
+            FilterValue::from_millionths(100_000),
+            InfluenceWeight::from_millionths(100_000),
+        );
+        filtration.add_edge(
+            EdgeId(11),
+            NodeId(2),
+            NodeId(3),
+            FilterValue::from_millionths(200_000),
+            InfluenceWeight::from_millionths(100_000),
+        );
+        filtration.add_edge(
+            EdgeId(12),
+            NodeId(3),
+            NodeId(1),
+            FilterValue::from_millionths(300_000),
+            InfluenceWeight::from_millionths(100_000),
+        );
+        filtration.sort();
+
+        let bars = computer.compute_persistence_bars(&filtration).unwrap();
+        let cycle = bars
+            .iter()
+            .find(|b| b.dimension == 1)
+            .expect("triangle filtration must produce one 1-D cycle feature");
+
+        match &cycle.representative {
+            FeatureRepresentative::Cycle { edges, .. } => {
+                let mut ids: Vec<u64> = edges.iter().map(|e| e.0).collect();
+                ids.sort_unstable();
+                assert_eq!(
+                    ids,
+                    vec![10, 11, 12],
+                    "cycle representative must contain exactly the triangle's three edges, \
+                     not the empty placeholder"
+                );
+            }
+            other => panic!("expected a Cycle representative, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_spanning_tree_path_edges_reconstructs_unique_path() {
+        // Direct unit test of the path reconstruction over a small spanning
+        // tree: 1-2 (e100), 2-3 (e101), 3-4 (e102). The path 1 -> 4 must
+        // traverse all three edges in order; an identical endpoint yields none.
+        let mut adjacency: BTreeMap<NodeId, Vec<(NodeId, EdgeId)>> = BTreeMap::new();
+        let mut link = |a: u64, b: u64, e: u64| {
+            adjacency.entry(NodeId(a)).or_default().push((NodeId(b), EdgeId(e)));
+            adjacency.entry(NodeId(b)).or_default().push((NodeId(a), EdgeId(e)));
+        };
+        link(1, 2, 100);
+        link(2, 3, 101);
+        link(3, 4, 102);
+
+        let path = spanning_tree_path_edges(&adjacency, NodeId(1), NodeId(4));
+        assert_eq!(
+            path,
+            vec![EdgeId(100), EdgeId(101), EdgeId(102)],
+            "path 1->4 must list edges in traversal order"
+        );
+
+        assert!(
+            spanning_tree_path_edges(&adjacency, NodeId(2), NodeId(2)).is_empty(),
+            "path between a node and itself is empty"
+        );
+
+        // Reverse direction yields the reversed edge order.
+        let reverse = spanning_tree_path_edges(&adjacency, NodeId(4), NodeId(1));
+        assert_eq!(reverse, vec![EdgeId(102), EdgeId(101), EdgeId(100)]);
     }
 }

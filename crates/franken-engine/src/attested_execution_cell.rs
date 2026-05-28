@@ -22,11 +22,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 
 use crate::engine_object_id::{self, EngineObjectId, ObjectDomain, SchemaId};
 use crate::hash_tiers::ContentHash;
 use crate::security_epoch::SecurityEpoch;
+
+/// Domain-separation tag for SoftwareTrustRoot HMAC. Keeps SoftwareTrustRoot
+/// signatures from colliding with any other HMAC-SHA256 tag in the system,
+/// even if the same key bytes are reused.
+const SOFTWARE_TRUST_ROOT_HMAC_DOMAIN: &[u8] = b"franken-engine.software-trust-root.hmac-sha256.v1";
 
 // ---------------------------------------------------------------------------
 // Schema constants
@@ -356,6 +363,17 @@ pub trait TrustRootBackend: fmt::Debug {
 ///
 /// Produces deterministic measurements and self-signed quotes.
 /// **Not for production use** — explicitly labeled `TrustLevel::SoftwareOnly`.
+///
+/// Cryptographic posture (bd-tq53j):
+/// - Signing is `HMAC-SHA256(secret_key_bytes, SOFTWARE_TRUST_ROOT_HMAC_DOMAIN || data)`.
+/// - Verification uses constant-time tag comparison via [`hmac::Mac::verify_slice`].
+/// - The signing key is derived from a 64-bit `seed` argument via a public
+///   formula (see [`SoftwareTrustRoot::new`]) — **the entropy ceiling is 64
+///   bits, not 256**. A real trust root must source the key from a CSPRNG
+///   (e.g., `OsRng::fill_bytes`) and persist it outside this struct. This
+///   type exists only to satisfy the [`TrustRootBackend`] trait in tests and
+///   developer-mode bootstraps; production callers must use a hardware-backed
+///   `TrustRootBackend` implementation instead.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SoftwareTrustRoot {
     /// Key identifier for this software root.
@@ -368,6 +386,13 @@ pub struct SoftwareTrustRoot {
 
 impl SoftwareTrustRoot {
     /// Create a new software trust root with the given key ID and seed.
+    ///
+    /// The resulting `secret_key_bytes` has at most **64 bits of entropy**
+    /// regardless of length (the lower 8 bytes are `seed.to_le_bytes()` and the
+    /// upper 24 bytes are a public deterministic function of those 8 bytes).
+    /// Suitable only for test fixtures and developer-mode bootstraps where the
+    /// key is not protecting real secrets. See type-level docs for the
+    /// production guidance.
     pub fn new(key_id: &str, seed: u64) -> Self {
         let mut key = [0u8; 32];
         let seed_bytes = seed.to_le_bytes();
@@ -389,16 +414,33 @@ impl SoftwareTrustRoot {
     }
 
     fn sign(&self, data: &[u8]) -> Vec<u8> {
-        // Deterministic HMAC-like construction for testing.
-        let mut sig_input = Vec::with_capacity(32 + data.len());
-        sig_input.extend_from_slice(&self.secret_key_bytes);
-        sig_input.extend_from_slice(data);
-        ContentHash::compute(&sig_input).as_bytes().to_vec()
+        // bd-tq53j: HMAC-SHA256 over (domain tag, data). The previous
+        // implementation used SHA-256(secret || data), which is the textbook
+        // length-extension-vulnerable prefix-MAC construction — knowing
+        // H(secret||data) lets an attacker compute H(secret||data||pad||ext)
+        // without knowing the secret. HMAC-SHA256 is the standard fix:
+        // RFC 2104 / FIPS 198, secure under Merkle–Damgård length-extension.
+        // Domain separation tag binds the tag to this trust-root's purpose so
+        // a tag cannot be confused with any other HMAC-SHA256 output in the
+        // system that happens to share the same key bytes.
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.secret_key_bytes)
+            .expect("HMAC-SHA256 accepts any byte slice as key");
+        mac.update(SOFTWARE_TRUST_ROOT_HMAC_DOMAIN);
+        mac.update(data);
+        mac.finalize().into_bytes().to_vec()
     }
 
     fn verify_signature(&self, data: &[u8], signature: &[u8]) -> bool {
-        let expected = self.sign(data);
-        expected == signature
+        // bd-tq53j: constant-time tag verification via hmac::Mac::verify_slice.
+        // The previous implementation recomputed sign() and used `Vec<u8> ==
+        // &[u8]`, which is short-circuit byte-by-byte and leaks the matching
+        // prefix length via timing. verify_slice rejects length mismatches and
+        // performs the comparison in constant time over equal-length tags.
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.secret_key_bytes)
+            .expect("HMAC-SHA256 accepts any byte slice as key");
+        mac.update(SOFTWARE_TRUST_ROOT_HMAC_DOMAIN);
+        mac.update(data);
+        mac.verify_slice(signature).is_ok()
     }
 }
 
@@ -3114,6 +3156,182 @@ mod tests {
         assert_ne!(
             id1, id4,
             "different measurements must produce different IDs"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // bd-tq53j: SoftwareTrustRoot signing crypto
+    //
+    // Direct unit tests on the sign/verify primitives. The
+    // assert_attest_verify_roundtrip test above already covers the integration
+    // path; these test the cryptographic properties (HMAC-SHA256, ct verify,
+    // domain separation, tamper rejection) in isolation so a regression in
+    // the primitive surfaces here before it can hide behind the integration
+    // round-trip.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sign_emits_hmac_sha256_sized_tag() {
+        let root = SoftwareTrustRoot::new("test-key", 42);
+        let tag = root.sign(b"hello");
+        // HMAC-SHA256 always produces a 32-byte tag.
+        assert_eq!(
+            tag.len(),
+            32,
+            "HMAC-SHA256 tag length must be 32 bytes, got {}",
+            tag.len()
+        );
+    }
+
+    #[test]
+    fn sign_verify_roundtrip_succeeds() {
+        let root = SoftwareTrustRoot::new("test-key", 1234);
+        let data = b"attestation payload";
+        let tag = root.sign(data);
+        assert!(
+            root.verify_signature(data, &tag),
+            "freshly signed payload must verify"
+        );
+    }
+
+    #[test]
+    fn sign_is_deterministic() {
+        let root = SoftwareTrustRoot::new("test-key", 7);
+        let data = b"deterministic payload";
+        let tag1 = root.sign(data);
+        let tag2 = root.sign(data);
+        assert_eq!(
+            tag1, tag2,
+            "HMAC-SHA256 over the same (key, data) must be deterministic"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_tampered_data() {
+        let root = SoftwareTrustRoot::new("test-key", 99);
+        let tag = root.sign(b"original payload");
+        assert!(
+            !root.verify_signature(b"modified payload", &tag),
+            "verify must reject when the data has been tampered"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_tampered_signature() {
+        let root = SoftwareTrustRoot::new("test-key", 99);
+        let data = b"payload";
+        let mut tag = root.sign(data);
+        tag[0] ^= 0x01;
+        assert!(
+            !root.verify_signature(data, &tag),
+            "verify must reject when a tag bit has been flipped"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_signature_with_wrong_length() {
+        let root = SoftwareTrustRoot::new("test-key", 99);
+        // hmac::Mac::verify_slice rejects length mismatches up-front (constant
+        // time over equal-length tags, immediate reject otherwise).
+        assert!(
+            !root.verify_signature(b"payload", b"short"),
+            "verify must reject a too-short signature"
+        );
+        assert!(
+            !root.verify_signature(b"payload", &[0u8; 1024]),
+            "verify must reject an oversized signature"
+        );
+    }
+
+    #[test]
+    fn verify_rejects_signature_from_different_key() {
+        let root_a = SoftwareTrustRoot::new("key-a", 1);
+        let root_b = SoftwareTrustRoot::new("key-b", 2);
+        let data = b"shared data";
+        let tag_a = root_a.sign(data);
+        assert!(
+            !root_b.verify_signature(data, &tag_a),
+            "tag signed by key-a must NOT verify under key-b"
+        );
+    }
+
+    #[test]
+    fn domain_separation_tag_is_bound_into_the_mac() {
+        // Regression guard: tag must depend on the SOFTWARE_TRUST_ROOT_HMAC_DOMAIN
+        // tag, so a future refactor that drops the domain tag (and therefore
+        // makes this trust root's tags collide with any other HMAC-SHA256
+        // construction reusing the same key) fails this test.
+        let root = SoftwareTrustRoot::new("test-key", 0);
+        let data = b"some data";
+
+        // Compute what the tag WOULD be without the domain prefix:
+        let mut bare_mac = <Hmac<Sha256> as Mac>::new_from_slice(&root.secret_key_bytes)
+            .expect("HMAC-SHA256 accepts any byte slice as key");
+        bare_mac.update(data);
+        let bare_tag = bare_mac.finalize().into_bytes().to_vec();
+
+        let actual_tag = root.sign(data);
+        assert_ne!(
+            bare_tag, actual_tag,
+            "sign() must HMAC the SOFTWARE_TRUST_ROOT_HMAC_DOMAIN prefix in addition to the data; \\
+             otherwise this trust root's tags collide with any other HMAC-SHA256 user of the same key"
+        );
+    }
+
+    #[test]
+    fn legacy_sha256_prefix_construction_no_longer_verifies() {
+        // Regression guard for bd-tq53j: the old implementation was
+        // ContentHash::compute(secret || data). A test that produced a tag
+        // via the old construction must now fail verification, otherwise the
+        // fix has silently regressed.
+        let root = SoftwareTrustRoot::new("test-key", 0);
+        let data = b"data";
+        let mut legacy_input = Vec::with_capacity(32 + data.len());
+        legacy_input.extend_from_slice(&root.secret_key_bytes);
+        legacy_input.extend_from_slice(data);
+        let legacy_tag = ContentHash::compute(&legacy_input).as_bytes().to_vec();
+
+        assert!(
+            !root.verify_signature(data, &legacy_tag),
+            "verify must reject the legacy SHA-256(secret || data) construction; \\
+             accepting it would mean the bd-tq53j fix has been reverted"
+        );
+    }
+
+    #[test]
+    fn attest_then_verify_uses_the_new_construction_end_to_end() {
+        // Integration smoke: AttestationQuote::signature_bytes must be a
+        // 32-byte HMAC tag and roundtrip correctly through the trait surface.
+        let root = SoftwareTrustRoot::new("e2e", 7);
+        let measurement = TrustRootBackend::measure(
+            &root,
+            b"code",
+            b"config",
+            b"policy",
+            b"schema",
+            "1.0",
+        );
+        let nonce = [0xAAu8; 32];
+        let issued_at_ns = 1_000_000_000_u64;
+        let validity_window_ns = 60_000_000_000_u64;
+        let quote = TrustRootBackend::attest(
+            &root,
+            &measurement,
+            nonce,
+            validity_window_ns,
+            issued_at_ns,
+        );
+        assert_eq!(
+            quote.signature_bytes.len(),
+            32,
+            "signature_bytes must be the HMAC-SHA256 tag length (32 bytes)"
+        );
+        let current_ns = issued_at_ns + validity_window_ns / 2;
+        let result = TrustRootBackend::verify(&root, &quote, &measurement, &nonce, current_ns);
+        assert_eq!(
+            result,
+            VerificationResult::Valid,
+            "attest -> verify roundtrip must succeed under the HMAC-SHA256 construction"
         );
     }
 }

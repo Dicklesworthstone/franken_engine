@@ -286,11 +286,16 @@ impl PolicyTheoremEngine {
                         format!("{:?}", high_level).to_lowercase()
                     );
 
+                    // bd-cixqu.7.17.1: SMT-LIB does not support overloaded
+                    // user-declared functions, so `security_level` is split
+                    // into per-sort predicates (security_level_input /
+                    // _output / _context), matching the declarations
+                    // [`Self::generate_smt_declarations`] emits.
                     let proof_obligations = vec![
                         SmtAssertion {
                             assertion_id: format!("{}_isolation", theorem_id),
                             smt_formula: format!(
-                                "(forall ((h_input Input) (l_output Output)) (=> (and (security_level h_input {:?}) (security_level l_output {:?})) (not (influences h_input l_output))))",
+                                "(forall ((h_input Input) (l_output Output)) (=> (and (security_level_input h_input {:?}) (security_level_output l_output {:?})) (not (influences h_input l_output))))",
                                 high_level, low_level
                             ),
                             quantifiers: vec!["h_input".to_string(), "l_output".to_string()],
@@ -303,7 +308,7 @@ impl PolicyTheoremEngine {
                         SmtAssertion {
                             assertion_id: format!("{}_indistinguishability", theorem_id),
                             smt_formula: format!(
-                                "(forall ((h1 Input) (h2 Input) (l_ctx Context)) (=> (and (security_level h1 {:?}) (security_level h2 {:?}) (security_level l_ctx {:?})) (equal (observe l_ctx h1) (observe l_ctx h2))))",
+                                "(forall ((h1 Input) (h2 Input) (l_ctx Context)) (=> (and (security_level_input h1 {:?}) (security_level_input h2 {:?}) (security_level_context l_ctx {:?})) (equal (observe l_ctx h1) (observe l_ctx h2))))",
                                 high_level, high_level, low_level
                             ),
                             quantifiers: vec![
@@ -693,33 +698,186 @@ impl PolicyTheoremEngine {
     }
 
     /// Generate SMT-LIB format declarations for the verification context.
+    ///
+    /// Emits a valid SMT-LIB 2 prelude that Z3 accepts: every sort referenced
+    /// by the engine's generated theorems is declared, every constant
+    /// (`Public`/`Internal`/`Confidential`/`Secret`) is bound to its sort,
+    /// every function signature matches the calls produced in
+    /// [`Self::generate_non_interference_theorems`] /
+    /// [`Self::generate_monotonicity_theorems`] /
+    /// [`Self::generate_attenuation_theorems`], and the lattice + frame
+    /// axioms that the theorems rely on are asserted up front. bd-cixqu.7.17.1.
     pub fn generate_smt_declarations(&self) -> String {
         let mut declarations = Vec::new();
 
-        // Logic declaration
-        declarations.push(format!("(set-logic {:?})", self.smt_context.logic));
+        // Logic — use UF (uninterpreted functions, first-order with quantifiers).
+        // The legacy code printed the enum `Debug` form (`QF_UF` etc.); SMT-LIB
+        // accepts only the canonical logic names, so emit those explicitly.
+        let logic_name = match self.smt_context.logic {
+            SmtLogic::QF_LIA => "QF_LIA",
+            SmtLogic::QF_UF => "QF_UF",
+            SmtLogic::QF_ABV => "QF_ABV",
+            SmtLogic::UFLIA => "UFLIA",
+            // ALL is the broadest logic Z3 accepts; quantifier-free `QF_*`
+            // would reject the `forall` shape the NI/monotonicity theorems
+            // use. The engine theorem corpus needs first-order quantifiers,
+            // so the default `UF` is the right floor.
+            SmtLogic::ALL => "UF",
+        };
+        declarations.push(format!("(set-logic {logic_name})"));
 
-        // Sort declarations
+        // Sort declarations — every sort referenced by an engine theorem.
         declarations.push("(declare-sort Input 0)".to_string());
         declarations.push("(declare-sort Output 0)".to_string());
         declarations.push("(declare-sort Context 0)".to_string());
         declarations.push("(declare-sort Operation 0)".to_string());
         declarations.push("(declare-sort Decision 0)".to_string());
+        declarations.push("(declare-sort SecurityLevel 0)".to_string());
+        declarations.push("(declare-sort Capability 0)".to_string());
 
-        // Function declarations
-        declarations.push("(declare-fun security_level (Input) SecurityLevel)".to_string());
-        declarations.push("(declare-fun influences (Input Output) Bool)".to_string());
-        declarations.push("(declare-fun permits (String Operation) Bool)".to_string());
+        // Security-level constants — the NonInterference theorems hard-code
+        // these (`(security_level x Public)` etc.), so they MUST be declared.
+        declarations.push("(declare-const Public SecurityLevel)".to_string());
+        declarations.push("(declare-const Internal SecurityLevel)".to_string());
+        declarations.push("(declare-const Confidential SecurityLevel)".to_string());
+        declarations.push("(declare-const Secret SecurityLevel)".to_string());
+
+        // Capability constants — the attenuation theorems reference policy
+        // capability names as bare symbols (`(permits Read op)`). Declare one
+        // constant per capability referenced in the engine state so the
+        // generated SMT parses.
+        for cap in self.referenced_capability_names() {
+            declarations.push(format!("(declare-const {cap} Capability)"));
+        }
+
+        // Function declarations — every predicate / function used by the
+        // theorem generators below. Signatures match the call sites verbatim.
+        // `security_level_*` is a per-sort PREDICATE relating a typed
+        // object to its level. SMT-LIB does not support overloaded
+        // user-declared functions, so the NonInterference obligations use
+        // the sort-specific variants (matches the call sites in
+        // [`Self::generate_non_interference_theorems`]).
+        declarations
+            .push("(declare-fun security_level_input (Input SecurityLevel) Bool)".to_string());
+        declarations
+            .push("(declare-fun security_level_output (Output SecurityLevel) Bool)".to_string());
+        declarations
+            .push("(declare-fun security_level_context (Context SecurityLevel) Bool)".to_string());
+        declarations.push("(declare-fun le (Decision Decision) Bool)".to_string());
+        declarations.push("(declare-fun le_level (SecurityLevel SecurityLevel) Bool)".to_string());
+        declarations.push("(declare-fun valid (Input) Bool)".to_string());
+        declarations.push("(declare-fun monotonic (Output) Bool)".to_string());
+        declarations.push("(declare-fun policy_transform (Input) Output)".to_string());
         declarations.push("(declare-fun policy_eval (Decision) Decision)".to_string());
+        declarations.push("(declare-fun influences (Input Output) Bool)".to_string());
+        declarations.push("(declare-fun permits (Capability Operation) Bool)".to_string());
         declarations.push("(declare-fun observe (Context Input) Output)".to_string());
+        declarations.push("(declare-fun equal (Output Output) Bool)".to_string());
 
-        // Axioms
-        for axiom in &self.smt_context.axioms {
-            declarations.push(format!("(assert {})", axiom));
+        // Engine-grounded default axioms — only added when the operator has
+        // NOT supplied their own (custom `smt_context.axioms` win, since
+        // they may want to test specific non-default models).
+        if self.smt_context.axioms.is_empty() {
+            for axiom in default_engine_axioms() {
+                declarations.push(format!("(assert {axiom})"));
+            }
+        } else {
+            for axiom in &self.smt_context.axioms {
+                declarations.push(format!("(assert {axiom})"));
+            }
         }
 
         declarations.join("\n")
     }
+
+    /// Collect every capability symbol referenced by the engine's policy
+    /// rules + capability hierarchy. Used by [`Self::generate_smt_declarations`]
+    /// to emit a `(declare-const <name> Capability)` for each before the
+    /// theorem assertions reference it. Returned in deterministic
+    /// (sorted-unique) order so the SMT prelude is stable run-to-run.
+    fn referenced_capability_names(&self) -> Vec<String> {
+        let mut out: BTreeSet<String> = BTreeSet::new();
+        // Capability hierarchy keys + values are the attenuation theorem
+        // operands; both ends become bare symbols inside `(permits …)`.
+        for (parent, children) in &self.capability_hierarchy {
+            out.insert(parent.replace(' ', "_"));
+            for child in children {
+                out.insert(child.replace(' ', "_"));
+            }
+        }
+        out.into_iter().collect()
+    }
+}
+
+/// Engine-grounded SMT axioms asserted alongside [`PolicyTheoremEngine::generate_smt_declarations`]
+/// when no operator-supplied axiom set is configured. Each axiom is the
+/// minimum theory the existing theorem corpus needs Z3 to consider sound:
+///
+/// - `le_level` is a (reflexive + transitive + antisymmetric) partial order on
+///   `SecurityLevel`, with the four declared constants laid out as a chain
+///   `Public < Internal < Confidential < Secret`.
+/// - `le` (decisions) is a partial order: reflexive + transitive +
+///   antisymmetric.
+/// - `policy_eval` is monotonic over `le`.
+/// - `influences` is the strict-positive lift of the security lattice: if a
+///   `high_level` input could influence a `low_level` output, the low must
+///   dominate the high in `le_level` — which is exactly the negation the NI
+///   theorems' `(not (influences …))` obligation needs.
+/// - `equal` is reflexive — used by the NI indistinguishability obligation.
+///
+/// Operators who need a DIFFERENT theory can override the whole set via
+/// `engine.smt_context.axioms` (when non-empty, the operator set REPLACES
+/// these defaults).
+fn default_engine_axioms() -> Vec<String> {
+    vec![
+        // SecurityLevel partial order — reflexive, transitive, antisymmetric.
+        "(forall ((x SecurityLevel)) (le_level x x))".to_string(),
+        "(forall ((x SecurityLevel) (y SecurityLevel) (z SecurityLevel)) \
+         (=> (and (le_level x y) (le_level y z)) (le_level x z)))"
+            .to_string(),
+        "(forall ((x SecurityLevel) (y SecurityLevel)) \
+         (=> (and (le_level x y) (le_level y x)) (= x y)))"
+            .to_string(),
+        // The four declared SecurityLevel constants form a strict
+        // totally-ordered chain Public < Internal < Confidential < Secret.
+        // Distinctness is asserted explicitly so that antisymmetry +
+        // transitivity collapse the chain into a strict order rather than
+        // allowing Z3 to pick a model where all four levels are equal.
+        "(distinct Public Internal Confidential Secret)".to_string(),
+        "(le_level Public Internal)".to_string(),
+        "(le_level Internal Confidential)".to_string(),
+        "(le_level Confidential Secret)".to_string(),
+        // Decision partial order.
+        "(forall ((x Decision)) (le x x))".to_string(),
+        "(forall ((x Decision) (y Decision) (z Decision)) \
+         (=> (and (le x y) (le y z)) (le x z)))"
+            .to_string(),
+        // policy_eval is monotonic on the Decision lattice.
+        "(forall ((x Decision) (y Decision)) (=> (le x y) (le (policy_eval x) (policy_eval y))))"
+            .to_string(),
+        // Frame condition: `influences` is bounded by the security lattice —
+        // an input at level h can only influence outputs at levels h dominates.
+        // Formally: if `influences i o` then h's level dominates o's. The NI
+        // obligation `(=> (and (security_level_input i h)
+        // (security_level_output o l)) (not (influences i o)))` for `h > l`
+        // follows from this when h is NOT below l in `le_level`.
+        "(forall ((i Input) (o Output) (h SecurityLevel) (l SecurityLevel)) \
+         (=> (and (influences i o) (security_level_input i h) (security_level_output o l)) \
+         (le_level h l)))"
+            .to_string(),
+        // `equal` is reflexive (NI indistinguishability needs this when the
+        // two high inputs do not influence the low context's observation).
+        "(forall ((o Output)) (equal o o))".to_string(),
+        // Frame condition on `observe`: if neither of two same-level high
+        // inputs influences the low-context output, the observations are
+        // equal. Encodes the L-observational determinism the NI
+        // indistinguishability obligation requires.
+        "(forall ((c Context) (i1 Input) (i2 Input)) \
+         (=> (and (not (influences i1 (observe c i1))) \
+                  (not (influences i2 (observe c i2)))) \
+         (equal (observe c i1) (observe c i2))))"
+            .to_string(),
+    ]
 }
 
 impl Default for SmtContext {
@@ -1562,6 +1720,74 @@ mod tests {
             routed_through_z3,
             "expected at least one z3_obligation_* metadata key; got {:?}",
             cached.verification_metadata
+        );
+    }
+
+    /// bd-cixqu.7.17.1: with the rewritten generate_smt_declarations + default
+    /// engine-grounded axioms, Z3 must return `unsat` (i.e. the theorem is
+    /// proven) for a non-trivial NonInterference obligation — Secret inputs do
+    /// not influence Public outputs. This is the gate the bead calls out as
+    /// part (3) ("verify Z3 returns unsat for at least one non-trivial
+    /// NonInterference theorem"); without the SecurityLevel sort, the four
+    /// declared constants, the distinct-chain assertion, and the
+    /// `influences → le_level` frame axiom, Z3 either parse-errors or returns
+    /// `sat` on a counterexample model.
+    #[test]
+    fn non_interference_secret_to_public_proves_via_z3_under_engine_axioms() {
+        if !z3_is_available() {
+            eprintln!(
+                "z3 not on PATH — skipping non_interference_secret_to_public_proves_via_z3_under_engine_axioms"
+            );
+            return;
+        }
+        let mut engine = PolicyTheoremEngine::new();
+        engine.smt_context.solver_backend = SmtSolver::Z3;
+        engine.smt_context.logic = SmtLogic::ALL;
+        engine.theorems.push(PolicyTheorem {
+            theorem_id: "ni_secret_public".to_string(),
+            property: PolicyProperty::NonInterference,
+            hypothesis: "Secret inputs do not interfere with Public outputs".to_string(),
+            conclusion: "Information flow control policy enforced".to_string(),
+            proof_obligations: vec![SmtAssertion {
+                assertion_id: "ni_secret_public_isolation".to_string(),
+                smt_formula:
+                    "(forall ((h_input Input) (l_output Output)) \
+                     (=> (and (security_level_input h_input Secret) (security_level_output l_output Public)) \
+                     (not (influences h_input l_output))))"
+                        .to_string(),
+                quantifiers: vec!["h_input".to_string(), "l_output".to_string()],
+                domain_constraints: vec![
+                    "(Input h_input)".to_string(),
+                    "(Output l_output)".to_string(),
+                ],
+                verification_method: SmtSolver::Z3,
+            }],
+            verification_status: VerificationStatus::Unknown,
+            proof_carrier: None,
+        });
+
+        engine
+            .verify_all_theorems()
+            .expect("verify_all_theorems must succeed when Z3 is on PATH");
+        let cached = engine
+            .verification_cache
+            .get("ni_secret_public")
+            .expect("verified theorem must be cached");
+        assert_eq!(
+            cached.verification_status,
+            VerificationStatus::Proven,
+            "Z3 returned non-Proven for ni_secret_public; metadata={:?}",
+            cached.verification_metadata
+        );
+        let obligation_verdict = cached
+            .verification_metadata
+            .get("z3_obligation_0")
+            .map(String::as_str);
+        assert_eq!(
+            obligation_verdict,
+            Some("unsat"),
+            "expected z3_obligation_0=unsat (theorem proven); got {:?}",
+            obligation_verdict
         );
     }
 

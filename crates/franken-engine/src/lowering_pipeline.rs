@@ -14039,11 +14039,13 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
 
-    /// Helper to get golden file path for a test case
+    /// Helper to get golden file path for a test case.
+    ///
+    /// bd-ub6x8.6.2: migrated from tests/goldens/ir/ to tests/golden/ir/.
     fn golden_path(test_name: &str) -> PathBuf {
         let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         path.push("tests");
-        path.push("goldens");
+        path.push("golden");
         path.push("ir");
         path.push(format!("{}.json", test_name));
         path
@@ -14094,7 +14096,7 @@ mod tests {
             panic!(
                 "Golden file missing: {}\n\
                  Run with UPDATE_GOLDENS=1 to create it\n\
-                 Then review and commit: git diff tests/goldens/",
+                 Then review and commit: git diff tests/golden/ir/",
                 golden_file.display()
             )
         });

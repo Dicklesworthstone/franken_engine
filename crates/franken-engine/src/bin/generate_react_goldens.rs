@@ -22,7 +22,8 @@ struct ReactCompilationFixture {
 
 fn main() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let goldens_dir = PathBuf::from(manifest_dir).join("tests/goldens/react_compilation");
+    // bd-ub6x8.6.2: migrated from tests/goldens/react_compilation/ to tests/golden/react_compilation/.
+    let goldens_dir = PathBuf::from(manifest_dir).join("tests/golden/react_compilation");
     fs::create_dir_all(&goldens_dir).expect("Failed to create goldens directory");
 
     // Generate all fixtures

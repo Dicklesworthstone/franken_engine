@@ -1,8 +1,8 @@
-# Golden File Provenance — `tests/golden_tests/` (CLI capture JSON)
+# Golden File Provenance — `tests/golden/cli/` (CLI capture JSON)
 
 Companion to the canonical inventory at `tests/golden/PROVENANCE.md` and the
 canonical-location decision in
-[docs/operator-gates/GOLDEN_DIRECTORIES_RATIONALIZATION.md](../../../../docs/operator-gates/GOLDEN_DIRECTORIES_RATIONALIZATION.md).
+[docs/operator-gates/GOLDEN_DIRECTORIES_RATIONALIZATION.md](../../../../../docs/operator-gates/GOLDEN_DIRECTORIES_RATIONALIZATION.md).
 
 This directory holds CLI-binary capture JSONs for `frankenctl_help`,
 `frankenctl_version`, and `decision_demo_help`. The
@@ -11,9 +11,8 @@ lived here were removed in bd-ub6x8.10 because their substantive contract is
 already covered by `tests/architecture_inventory_golden.rs` against
 `docs/ARCHITECTURE_INVENTORY.md`.
 
-This directory is one of three legacy golden roots that pre-date the
-canonical-location decision (bd-ub6x8.6); migration into
-`tests/golden/cli/` is deferred to a follow-up bead.
+This directory was migrated from `tests/golden_tests/` to its current
+canonical location at `tests/golden/cli/` in bd-ub6x8.6.2.
 
 ## Regeneration
 

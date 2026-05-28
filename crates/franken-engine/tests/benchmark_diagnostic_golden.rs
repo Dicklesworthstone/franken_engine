@@ -245,9 +245,10 @@ fn capture_benchmark_diagnostic_output(
 
 /// Get the path to the golden file for a test case.
 fn golden_file_path(test_case: &BenchmarkDiagnosticTestCase) -> PathBuf {
+    // bd-ub6x8.6.2: migrated from tests/goldens/benchmark_diagnostic/ to tests/golden/benchmark_diagnostic/.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
-        .join("goldens")
+        .join("golden")
         .join("benchmark_diagnostic")
         .join(format!("{}.json", test_case.name))
 }

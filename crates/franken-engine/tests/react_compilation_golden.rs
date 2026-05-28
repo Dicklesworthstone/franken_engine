@@ -195,9 +195,10 @@ fn react_compilation_test_cases() -> Vec<ReactCompilationTestCase> {
 
 /// Get the path to the golden file for a test case.
 fn golden_file_path(test_name: &str) -> PathBuf {
+    // bd-ub6x8.6.2: migrated from tests/goldens/react_compilation/ to tests/golden/react_compilation/.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
-        .join("goldens")
+        .join("golden")
         .join("react_compilation")
         .join(format!("{}.json", test_name))
 }

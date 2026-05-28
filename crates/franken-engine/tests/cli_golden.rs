@@ -122,9 +122,11 @@ fn capture_cli_output(test_case: &CliTestCase) -> Result<CliOutput, Box<dyn std:
 
 /// Get the path to the golden file for a test case.
 fn golden_file_path(test_case: &CliTestCase) -> PathBuf {
+    // bd-ub6x8.6.2: migrated from tests/golden_tests/ -> tests/golden/cli/.
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
-        .join("golden_tests")
+        .join("golden")
+        .join("cli")
         .join(format!("{}.json", test_case.name))
 }
 

@@ -555,6 +555,94 @@ Three facts follow, and one **corrects the `bd-o4cbn.3.6` filing hypothesis**:
 `scripts/perf/h7_mimalloc_rss_probe.sh` to re-confirm the floor mechanism and
 the `MIMALLOC_PURGE_DELAY=0` lever.
 
+## Region arena for IR lowering (ALIEN-2)
+
+The ALIEN-2 pass (`bd-o4cbn.10`) is a **Tofte/Talpin-style region** refactor of
+the IR lowering pipeline: the per-pass scratch `Vec`s in `lower_ir2_to_ir3`
+(value-stack working sets, peephole scratch, etc.) move from per-allocation
+`global_allocator` traffic onto a single `bumpalo::Bump`-backed `LoweringArena`
+threaded through every per-pass helper, so the whole region drops in one shot
+(or `reset`s for the next module) instead of paying N independent
+free-list / `mmap` round trips. The arena is a **pure allocation-strategy
+refactor**: emitted ExecIR (`Ir3Module::canonical_bytes` / `content_hash`) is
+byte-identical to pre-ALIEN-2 output, pinned by the ALIEN-2.3 golden
+(`alien2_ir3_output_is_byte_identical_golden`,
+`crates/franken-engine/src/lowering_pipeline.rs`, commit `a8510cad`).
+
+### Sites (ALIEN-2.1 audit / ALIEN-2.2 implementation)
+
+| arena | crate path | introduced |
+|---|---|---|
+| `LoweringArena` (bumpalo `Bump`) | `crates/franken-engine/src/lowering_arena.rs` | ALIEN-2.2 (`4c38f5c1`) |
+| Threaded into `lower_ir2_to_ir3` | `crates/franken-engine/src/lowering_pipeline.rs` | ALIEN-2.2 (`4c38f5c1`) |
+
+### Verification (two reproducible gates)
+
+- **E2E smoke** — `scripts/perf/run_perf_alien2_smoke.sh` (PERF-ALIEN-2.5,
+  `bd-o4cbn.10.5`) runs the ALIEN-2.3 byte-identity golden (`cargo test --lib
+  alien2_ir3_output_is_byte_identical_golden`), builds the `hot_paths` bench
+  with the canonical pass1 flags, and runs both ALIEN-2 targets
+  (`parser_arena_materialization`, `lowering_pipeline_ir3`) under a short
+  Criterion budget asserting each mean ≤ its ALIEN-2.4 cap (26 µs / 70 µs). A
+  `--self-check` mode validates the pipeline without a build (CI-able on a
+  contended tree); `--quick` runs the byte-identity golden only.
+- **Statistical gate** — `scripts/perf/alien2_bench_validate.sh` (PERF-ALIEN-2.4,
+  `bd-o4cbn.10.4`) enforces the bead's ALIEN-2.4 acceptance criteria — absolute
+  cap (parser_arena ≤ 26 µs, lowering ≤ 70 µs), ≥ 2 % drop vs `pass1` on each
+  ALIEN-2 target, and a reframed CI non-overlap clause (`CI95.hi <
+  0.98 * pass1.mean`, since H4 never froze a baseline — see the PearlOx
+  2026-05-26 note on the bead). The script reads from a `--from-run <dir>`
+  perf-run dir for verdict-only mode, or rebuilds + runs benches afresh in the
+  default mode.
+
+### Measured result
+
+`real_runtime_hot_paths` Criterion group, HEAD `34aa0ea0` vs the frozen `pass1`
+baseline (`tests/artifacts/perf/20260520T214829Z-prof-pass1`), bench run-id
+`20260526T071059Z` (the ALIEN-2 numbers were captured during the H7.2 A/B
+measurement; arena + allocator are both in effect on HEAD):
+
+| sub-bench | pass1 (ns) | current (ns) | Δ% |
+|---|---:|---:|---:|
+| parser_arena_materialization *(ALIEN-2 target)* | 31354.0 | 25278.0 | **−19.38** |
+| lowering_pipeline_ir3 *(ALIEN-2 target)* | 87916.5 | 68532.0 | **−22.05** |
+| baseline_interpreter_eval | 494406.8 | 316176.0 | −36.05 |
+| iterator_protocol_trace | 6098.0 | 1451.0 | −76.21 |
+| scheduler_queue_commit | 58223.3 | 45217.0 | −22.34 |
+| evidence_ledger_bundle | 225145.0 | 146203.0 | −35.06 |
+| transport_certificate_serialization | 6674.7 | 3039.0 | −54.47 |
+| baseline_value_string_clone | 245111.9 | 276893.0 | **+12.97** |
+
+**ALIEN-2.4 gate verdict: PASS.** `parser_arena_materialization` mean 25.28 µs
+(CI95 [25.23, 25.34] µs) and `lowering_pipeline_ir3` mean 68.53 µs (CI95
+[68.45, 68.66] µs) both sit below the absolute caps with > 18 % margin and drop
+≥ 19 % vs `pass1`; the reframed `CI95.hi < 0.98 * pass1.mean` clause holds with
+comfortable margin for both. Verdict bundle from
+`scripts/perf/alien2_bench_validate.sh --from-run
+tests/artifacts/perf/h7_bench/20260526T071059Z` is at
+`tests/artifacts/perf/alien2_bench/<ts>/summary.md` (gitignored — local
+evidence).
+
+Two honesty caveats are recorded per the **What counts as a perf win** standard
+above, which is why this is logged as a **measurement, not a promoted win**:
+
+1. **Attribution is cumulative, not ALIEN-2-isolated.** The `pass1` baseline
+   predates the entire perf-pass-v1 stack, so these deltas combine H1/H2/H4/H6
+   + the H7 allocator + ALIEN-2's arena and every other merged optimisation.
+   The arena-isolated delta is approximately bounded by the H6 measurement on
+   the same two benches (parser_arena −18.61 %, lowering −21.25 %) — the
+   difference is small, consistent with arena being mostly an allocator-traffic
+   reduction on top of the mimalloc base. The ALIEN-2.3 byte-identity golden
+   proves the IR output didn't change, so the arena cannot have moved emitted
+   instructions; the delta is allocation-path work removed.
+2. **One sub-bench "regressed" — the same allocator-transition artifact, not
+   code (`bd-o4cbn.15`).** `baseline_value_string_clone` reads +12.97 % vs
+   `pass1` for the documented mimalloc-vs-system allocator + machine-load
+   reasons in the H6 section above. It is reported in every run but excluded
+   from the ALIEN-2 gate via `KNOWN_REGRESSIONS` (ALIEN-2 touched only the
+   `lower_ir2_to_ir3` allocation path; no value/string-clone path was
+   modified).
+
 ## Future Performance Roadmap
 
 ### Planned Optimizations (Future Releases)

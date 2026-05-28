@@ -58,6 +58,29 @@ cargo check --all-features
 | franken-decision | /dp/asupersync/franken_decision | ✓ | ✓ | Stable |  
 | franken-evidence | /dp/asupersync/franken_evidence | ✓ | ✓ | Stable |
 
+## External crates.io Dependencies — perf-track adds
+
+### `bumpalo` (ALIEN-2 region arena)
+
+- **Path:** crates.io (`bumpalo`)
+- **Introduced by:** PERF-ALIEN-2.2 (`bd-o4cbn.10.2`, commit `4c38f5c1`)
+- **Used by:** `crates/franken-engine/src/lowering_arena.rs` (`LoweringArena`
+  wraps `bumpalo::Bump`; `bumpalo::collections::Vec` is used for per-pass
+  scratch in `lower_ir2_to_ir3`).
+- **Why a region arena.** Per-pass scratch `Vec`s in the IR lowering pipeline
+  used to pay N independent `global_allocator` `free` calls when the pass
+  ended; the arena turns that into one bulk drop / `reset`, dropping allocator
+  traffic on the parser-arena + lowering hot paths (see ALIEN-2 row in
+  `docs/PERFORMANCE_BASELINE.md` for measured deltas).
+- **Determinism contract.** The arena is a **pure allocation-strategy refactor**:
+  emitted ExecIR (`Ir3Module::canonical_bytes` / `content_hash`) is byte-
+  identical to pre-ALIEN-2 output, pinned by the ALIEN-2.3 golden
+  `alien2_ir3_output_is_byte_identical_golden` in
+  `crates/franken-engine/src/lowering_pipeline.rs` (commit `a8510cad`). Any
+  future arena/region change that perturbs IR output trips that golden.
+- **Build mode coverage.** Standalone + full integration both build `bumpalo`;
+  it has no `asupersync-integration` feature gate.
+
 ## Recommendations
 
 1. **CI Integration**: Verify both build modes in CI pipelines

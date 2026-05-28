@@ -6974,7 +6974,8 @@ mod tests {
                     .collect(),
             })
             .expect("catalog entry should be added");
-        write_json_file(&catalog_path, &catalog).expect("operation should succeed for valid inputs");
+        write_json_file(&catalog_path, &catalog)
+            .expect("operation should succeed for valid inputs");
 
         let exit_code = execute_react_doctor(ReactDoctorArgs {
             catalog: catalog_path.clone(),

@@ -1656,8 +1656,7 @@ mod tests {
         consumer.consume(&uncertified_certificate());
         consumer.consume(&dynamic_code_gen_certificate());
         let manifest = ConsumptionManifest::from_consumer(&consumer);
-        let json =
-            serde_json::to_string_pretty(&manifest).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&manifest).expect("serialization should succeed");
         let back: ConsumptionManifest =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(manifest, back);

@@ -1053,7 +1053,9 @@ mod tests {
             .subtract(&empty)
             .expect("operation should succeed for valid inputs");
         // SAFETY: Test peeling simple difference (1 inserted element) should succeed
-        let (pos, neg) = diff.peel().expect("operation should succeed for valid inputs");
+        let (pos, neg) = diff
+            .peel()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(pos.len(), 1);
         assert_eq!(pos[0], h);
         assert!(neg.is_empty());
@@ -1084,7 +1086,9 @@ mod tests {
             .subtract(&iblt_b)
             .expect("operation should succeed for valid inputs");
         // SAFETY: Test peeling symmetric difference with known element counts should succeed
-        let (pos, neg) = diff.peel().expect("operation should succeed for valid inputs");
+        let (pos, neg) = diff
+            .peel()
+            .expect("operation should succeed for valid inputs");
 
         // pos = elements in A but not B (a_only).
         // neg = elements in B but not A (b_only).
@@ -1116,7 +1120,9 @@ mod tests {
             .subtract(&iblt_b)
             .expect("operation should succeed for valid inputs");
         // SAFETY: Test peeling empty difference from identical sets should succeed
-        let (pos, neg) = diff.peel().expect("operation should succeed for valid inputs");
+        let (pos, neg) = diff
+            .peel()
+            .expect("operation should succeed for valid inputs");
         assert!(pos.is_empty());
         assert!(neg.is_empty());
     }

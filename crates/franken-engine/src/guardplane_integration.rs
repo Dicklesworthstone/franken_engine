@@ -14,7 +14,6 @@
 //! Reference: [RC-4] Guardplane Wired Into Execution
 
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -324,9 +323,23 @@ impl std::error::Error for GuardplaneError {}
 /// Evidence record for guardplane decisions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GuardplaneDecisionEvidence {
-    /// Unique decision ID.
+    /// Unique decision ID, deterministically derived from the canonical
+    /// content of this evidence record. Format: `decision_<seq>_<hex>` where
+    /// `<seq>` is the issuing adapter's per-adapter sequence number and
+    /// `<hex>` is the 16-hex-digit prefix of the SHA-256 content hash over
+    /// the canonical preimage (excluding decision_id itself). Two replays
+    /// of byte-identical evidence inputs produce byte-identical decision_ids.
+    /// bd-jn3uv: prior to this format the decision_id contained a
+    /// `rand::random::<u64>()` suffix which made the chain unreplayable.
     pub decision_id: String,
-    /// Timestamp of decision.
+    /// Logical decision sequence (NOT a wall-clock timestamp). Monotonically
+    /// increasing per `BasicGuardplaneAdapter` instance. Filled by the
+    /// adapter's `decision_sequence` counter at evidence-generation time so
+    /// the evidence chain replays byte-identically. bd-jn3uv: prior to this
+    /// the field stored `SystemTime::now().as_secs()` which made the
+    /// evidence_hash wall-clock-dependent. Operators who need wall-time
+    /// correlation should use the [`crate::security_epoch::SecurityEpoch`]
+    /// surfaced through the adapter's config rather than this field.
     pub timestamp: u64,
     /// Operation context that triggered the decision.
     pub operation_context: OperationContext,
@@ -455,6 +468,14 @@ pub struct BasicGuardplaneAdapter {
     pub decision_history: Vec<GuardplaneDecisionEvidence>,
     /// Unified substrate from AA.1/AA.2 for martingale-based decisions
     pub unified_guardrail_registry: GuardrailRegistry,
+    /// Monotonic per-adapter counter feeding the deterministic decision_id
+    /// (and the `timestamp` field, which is now interpreted as a logical
+    /// decision sequence — see [`GuardplaneDecisionEvidence::timestamp`]).
+    /// bd-jn3uv: prior to this counter the evidence chain stamped
+    /// `SystemTime::now().as_secs()` and a `rand::random::<u64>()` suffix,
+    /// which made the chain unreplayable; the counter restores the
+    /// "deterministic replay" property the module-level docstring asserts.
+    decision_sequence: u64,
 }
 
 /// Configuration for guardplane behavior.
@@ -682,6 +703,7 @@ impl BasicGuardplaneAdapter {
             config,
             decision_history: Vec::new(),
             unified_guardrail_registry,
+            decision_sequence: 0,
         }
     }
 
@@ -819,18 +841,27 @@ impl BasicGuardplaneAdapter {
     }
 
     /// Generate evidence record for a decision.
+    ///
+    /// bd-jn3uv: the timestamp + decision_id are now derived from a
+    /// deterministic monotonic counter (`self.decision_sequence`) and the
+    /// canonical content hash of the evidence body, rather than
+    /// `SystemTime::now()` and `rand::random::<u64>()`. This restores the
+    /// "deterministic replay" property the module asserts: two byte-identical
+    /// (context, risk, action) inputs to the same adapter produce
+    /// byte-identical evidence records and (if signed) byte-identical
+    /// signatures, so the audit chain re-verifies under replay.
     fn generate_evidence(
-        &self,
+        &mut self,
         context: &OperationContext,
         risk: &RiskAssessment,
         action: HookAction,
     ) -> Result<GuardplaneDecisionEvidence, GuardplaneError> {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
-        let decision_id = format!("decision_{}_{}", timestamp, rand::random::<u64>());
+        let sequence = self.decision_sequence;
+        // Saturate at u64::MAX rather than wrap: counter must remain monotonic
+        // even after pathological volumes; downstream chain-linking relies on
+        // the monotonic property.
+        self.decision_sequence = self.decision_sequence.saturating_add(1);
+        let timestamp = sequence;
 
         let reason = format!(
             "Risk score {:.3} (threshold {:.3}) → {}",
@@ -838,6 +869,21 @@ impl BasicGuardplaneAdapter {
             self.config.challenge_threshold as f64 / 1_000_000.0,
             action
         );
+
+        // decision_id is the content-hash prefix of the canonical preimage
+        // (excluding decision_id itself, since it is being derived). This is
+        // the bd-jn3uv fix: replaces `format!("decision_{}_{}", timestamp,
+        // rand::random::<u64>())` with a deterministic hash so two replays
+        // produce the same decision_id.
+        let decision_id = derive_deterministic_decision_id(
+            sequence,
+            timestamp,
+            context,
+            risk,
+            action,
+            &reason,
+        )?;
+
         let evidence_hash = compute_guardplane_evidence_hash(
             &decision_id,
             timestamp,
@@ -874,6 +920,47 @@ impl BasicGuardplaneAdapter {
 
         Ok(evidence)
     }
+}
+
+/// bd-jn3uv: deterministic decision_id derivation.
+///
+/// The decision_id is `decision_<seq>_<16-hex-prefix>` where the prefix is a
+/// SHA-256 content hash over the canonical preimage *excluding* decision_id
+/// itself (since decision_id is what we are deriving). This replaces the
+/// previous `format!("decision_{}_{}", SystemTime::now().as_secs(),
+/// rand::random::<u64>())` construction, which made decision_ids unique only
+/// to the wall-clock instant of generation and broke the chain's replay
+/// determinism contract.
+///
+/// Sequence number is included BOTH as a prefix and inside the hash so two
+/// records with otherwise-identical canonical bodies but emitted at
+/// different sequence positions get distinct decision_ids; without the
+/// sequence, idempotent retries would produce the same decision_id (which
+/// callers may or may not want — this construction prefers explicit
+/// monotonic identity).
+fn derive_deterministic_decision_id(
+    sequence: u64,
+    timestamp: u64,
+    operation_context: &OperationContext,
+    risk_assessment: &RiskAssessment,
+    action: HookAction,
+    reason: &str,
+) -> Result<String, GuardplaneError> {
+    // Compute the same preimage shape compute_guardplane_evidence_hash uses,
+    // but with a SENTINEL decision_id placeholder. The result is just used to
+    // derive a hex digest; the sentinel ensures no field-boundary collision
+    // with a real decision_id.
+    const DECISION_ID_DERIVATION_SENTINEL: &str = "<bd-jn3uv:deriving-decision-id>";
+    let hash = compute_guardplane_evidence_hash(
+        DECISION_ID_DERIVATION_SENTINEL,
+        timestamp,
+        operation_context,
+        risk_assessment,
+        action,
+        reason,
+    )?;
+    let hex_prefix = &hash.to_hex()[..16];
+    Ok(format!("decision_{sequence}_{hex_prefix}"))
 }
 
 fn compute_guardplane_evidence_hash(
@@ -1331,7 +1418,7 @@ mod tests {
             .evidence_signing_key
             .clone()
             .expect("default config signs evidence");
-        let adapter = BasicGuardplaneAdapter::new(config);
+        let mut adapter = BasicGuardplaneAdapter::new(config);
 
         let context = OperationContext::Call(CallContext {
             function_id: 42,
@@ -1356,7 +1443,14 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         assert!(!evidence.decision_id.is_empty());
-        assert!(evidence.timestamp > 0);
+        // bd-jn3uv: timestamp is now a logical sequence number starting at 0,
+        // not a wall-clock seconds count. First evidence record has timestamp 0.
+        // Asserting decision_id shape covers the determinism contract better.
+        assert!(
+            evidence.decision_id.starts_with("decision_0_"),
+            "first evidence in an adapter must be decision_0_<hex>, got {}",
+            evidence.decision_id
+        );
         assert_eq!(evidence.action, HookAction::Sandbox);
         assert!(evidence.reason.contains("Risk score"));
         assert!(
@@ -1371,6 +1465,153 @@ mod tests {
                 .verify_signature_with_key(&signing_key)
                 .expect("operation should succeed for valid inputs"),
             "decision evidence signature must verify with the configured key"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // bd-jn3uv: deterministic replay regression tests
+    //
+    // Asserts the contract from the module-level docstring ("Deterministic:
+    // risk assessment follows deterministic replay semantics") at the
+    // evidence-generation layer specifically. Two BasicGuardplaneAdapter
+    // instances fed byte-identical (context, risk, action) sequences must
+    // produce byte-identical evidence records — including decision_id,
+    // timestamp, evidence_hash, and signature. The previous SystemTime +
+    // rand::random construction made this assertion impossible.
+    // -----------------------------------------------------------------------
+
+    fn deterministic_test_context() -> OperationContext {
+        OperationContext::Call(CallContext {
+            function_id: 7,
+            arg_count: 1,
+            call_type: CallType::Function,
+            source_span: SourceSpan::new(0, 8, 1, 0, 1, 8),
+            trust_level: CodeTrustLevel::Untrusted,
+            extension_id: Some("ext-jn3uv".to_string()),
+        })
+    }
+
+    fn deterministic_test_risk() -> RiskAssessment {
+        RiskAssessment {
+            risk_score: 500_000,
+            risk_factors: vec!["jn3uv-test".to_string()],
+            confidence: 950_000,
+            e_process_boundaries: Vec::new(),
+            policy_violations: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn evidence_sequence_starts_at_zero_and_increments() {
+        let mut adapter = BasicGuardplaneAdapter::new(GuardplaneConfig::default());
+        let context = deterministic_test_context();
+        let risk = deterministic_test_risk();
+
+        let first = adapter
+            .generate_evidence(&context, &risk, HookAction::Allow)
+            .expect("first generate_evidence");
+        let second = adapter
+            .generate_evidence(&context, &risk, HookAction::Allow)
+            .expect("second generate_evidence");
+        let third = adapter
+            .generate_evidence(&context, &risk, HookAction::Allow)
+            .expect("third generate_evidence");
+
+        assert_eq!(first.timestamp, 0, "first sequence is 0");
+        assert_eq!(second.timestamp, 1, "second sequence is 1");
+        assert_eq!(third.timestamp, 2, "third sequence is 2");
+        assert!(first.decision_id.starts_with("decision_0_"));
+        assert!(second.decision_id.starts_with("decision_1_"));
+        assert!(third.decision_id.starts_with("decision_2_"));
+    }
+
+    #[test]
+    fn two_adapters_with_identical_input_streams_produce_byte_identical_evidence() {
+        // bd-jn3uv core regression: this assertion was impossible under the
+        // previous SystemTime + rand::random construction. If it ever fails
+        // again, the wall-clock dependence has crept back.
+        let config = GuardplaneConfig::default();
+        let mut adapter_a = BasicGuardplaneAdapter::new(config.clone());
+        let mut adapter_b = BasicGuardplaneAdapter::new(config);
+        let context = deterministic_test_context();
+        let risk = deterministic_test_risk();
+
+        for action in [
+            HookAction::Allow,
+            HookAction::Challenge,
+            HookAction::Sandbox,
+        ] {
+            let ev_a = adapter_a
+                .generate_evidence(&context, &risk, action)
+                .expect("adapter_a generate_evidence");
+            let ev_b = adapter_b
+                .generate_evidence(&context, &risk, action)
+                .expect("adapter_b generate_evidence");
+            assert_eq!(
+                ev_a, ev_b,
+                "two adapters fed identical input streams must produce identical evidence; \\
+                 divergence here means bd-jn3uv has regressed and the chain is no longer replayable"
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_decision_id_is_a_deterministic_content_hash() {
+        // The decision_id format is `decision_<seq>_<16-hex>` where the
+        // hex digits are a SHA-256-prefix of the canonical evidence body.
+        // Distinct (context, risk, action) tuples at the same sequence
+        // position must produce distinct hex tails — otherwise the
+        // attacker can collide two different decisions under the same id.
+        let mut adapter = BasicGuardplaneAdapter::new(GuardplaneConfig::default());
+        let context = deterministic_test_context();
+        let risk = deterministic_test_risk();
+
+        let mut adapter_b = BasicGuardplaneAdapter::new(GuardplaneConfig::default());
+        let alt_risk = RiskAssessment {
+            risk_score: risk.risk_score + 1,
+            ..risk.clone()
+        };
+
+        let ev_a = adapter
+            .generate_evidence(&context, &risk, HookAction::Allow)
+            .expect("evidence a");
+        let ev_b = adapter_b
+            .generate_evidence(&context, &alt_risk, HookAction::Allow)
+            .expect("evidence b");
+
+        assert_eq!(ev_a.timestamp, 0);
+        assert_eq!(ev_b.timestamp, 0);
+        assert_ne!(
+            ev_a.decision_id, ev_b.decision_id,
+            "decision_id must depend on the canonical body; \\
+             two decisions differing in risk_score must get different decision_ids"
+        );
+        assert_ne!(
+            ev_a.evidence_hash, ev_b.evidence_hash,
+            "evidence_hash must depend on the canonical body"
+        );
+    }
+
+    #[test]
+    fn evidence_no_longer_calls_systemtime_or_rand() {
+        // Architectural regression guard: this test is more of a code-shape
+        // assertion than a behavior test. If a future refactor reintroduces
+        // SystemTime::now() or rand::random in evidence generation, the
+        // module re-introduces `use std::time::...` or `use rand::...`. Both
+        // were intentionally removed by bd-jn3uv. We assert their absence
+        // here so a code-review reviewer is forced to confront the
+        // deterministic-replay contract.
+        const MODULE_SOURCE: &str = include_str!("guardplane_integration.rs");
+        assert!(
+            !MODULE_SOURCE.contains("SystemTime::now()"),
+            "bd-jn3uv: evidence generation must not call SystemTime::now() — \\
+             if you reintroduce it, you must also reintroduce a deterministic-clock \\
+             alternative for the replay path"
+        );
+        assert!(
+            !MODULE_SOURCE.contains("rand::random"),
+            "bd-jn3uv: evidence generation must not call rand::random — \\
+             decision_id is now a deterministic content hash"
         );
     }
 }

@@ -3247,7 +3247,8 @@ mod tests {
 
     #[test]
     fn transcript_hash_sensitive_to_trace_id() {
-        let key = SigningKey::from_bytes([0x60; 32]).expect("operation should succeed for valid inputs");
+        let key =
+            SigningKey::from_bytes([0x60; 32]).expect("operation should succeed for valid inputs");
         let make_input = |trace: &str| ShadowAblationTranscriptInput {
             trace_id: trace.to_string(),
             decision_id: "d".to_string(),
@@ -3273,7 +3274,8 @@ mod tests {
 
     #[test]
     fn transcript_hash_sensitive_to_seed() {
-        let key = SigningKey::from_bytes([0x61; 32]).expect("operation should succeed for valid inputs");
+        let key =
+            SigningKey::from_bytes([0x61; 32]).expect("operation should succeed for valid inputs");
         let make_input = |seed: u64| ShadowAblationTranscriptInput {
             trace_id: "t".to_string(),
             decision_id: "d".to_string(),

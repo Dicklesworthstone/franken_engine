@@ -1315,8 +1315,7 @@ mod tests {
     #[test]
     fn required_bead_status_serde_snake_case_values() {
         assert_eq!(
-            serde_json::to_string(&RequiredBeadStatus::Open)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&RequiredBeadStatus::Open).expect("serialization should succeed"),
             "\"open\""
         );
         assert_eq!(
@@ -1520,7 +1519,9 @@ mod tests {
         let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("criterion_id"));
         assert!(obj.contains_key("bead_id"));
         assert!(obj.contains_key("required_status"));
@@ -1535,7 +1536,9 @@ mod tests {
         let json = serde_json::to_string(&c).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("contract_version"));
         assert!(obj.contains_key("packet_schema_version"));
         assert!(obj.contains_key("wave_id"));
@@ -1556,7 +1559,9 @@ mod tests {
         let json = serde_json::to_string(&a).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("criterion_id"));
         assert!(obj.contains_key("bead_id"));
         assert!(obj.contains_key("bead_status"));
@@ -1570,7 +1575,9 @@ mod tests {
         let json = serde_json::to_string(&pkg).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("packet_id"));
         assert!(obj.contains_key("wave_id"));
         assert!(obj.contains_key("producer_owner"));
@@ -1593,7 +1600,9 @@ mod tests {
         let json = serde_json::to_string(&f).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("code"));
         assert!(obj.contains_key("message"));
         assert_eq!(obj.len(), 2);
@@ -1616,7 +1625,9 @@ mod tests {
         let json = serde_json::to_string(&r).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("contract_version"));
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
@@ -1647,7 +1658,9 @@ mod tests {
         let json = serde_json::to_string(&e).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("schema_version"));
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
@@ -1934,8 +1947,7 @@ mod tests {
                 },
             ],
         };
-        let json =
-            serde_json::to_string_pretty(&report).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&report).expect("serialization should succeed");
         let back: HandoffValidationReport =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(report, back);

@@ -913,8 +913,8 @@ mod tests {
     #[test]
     fn laplacian_row_sums_to_zero() {
         let topo = make_complete_graph(4);
-        let laplacian =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let laplacian = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         for i in 0..4 {
             let row_sum: i64 = (0..4).map(|j| laplacian.get(i, j)).sum();
             assert_eq!(row_sum, 0, "row {i} should sum to zero");
@@ -924,8 +924,8 @@ mod tests {
     #[test]
     fn laplacian_is_symmetric() {
         let topo = make_cycle_graph(5);
-        let laplacian =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let laplacian = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         for i in 0..5 {
             for j in 0..5 {
                 assert_eq!(
@@ -940,8 +940,8 @@ mod tests {
     #[test]
     fn laplacian_diagonal_is_degree() {
         let topo = make_complete_graph(3);
-        let laplacian =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let laplacian = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         // In complete graph K3, each node has degree 2 (two edges of weight 1M).
         for i in 0..3 {
             assert_eq!(laplacian.get(i, i), 2 * MILLION);
@@ -951,10 +951,10 @@ mod tests {
     #[test]
     fn laplacian_content_hash_deterministic() {
         let topo = make_complete_graph(3);
-        let l1 =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
-        let l2 =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let l1 = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
+        let l2 = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(l1.content_hash(), l2.content_hash());
     }
 
@@ -1133,8 +1133,8 @@ mod tests {
 
     #[test]
     fn single_node_graph() {
-        let topo =
-            GossipTopology::new(vec!["solo".into()]).expect("operation should succeed for valid inputs");
+        let topo = GossipTopology::new(vec!["solo".into()])
+            .expect("operation should succeed for valid inputs");
         assert!(topo.is_connected());
         // Spectral analysis on 1-node graph: no edges, but connected.
         // Laplacian is [0], which has spectral gap issues.
@@ -1366,8 +1366,8 @@ mod tests {
     #[test]
     fn laplacian_matrix_serde_roundtrip() {
         let topo = make_complete_graph(3);
-        let lap =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let lap = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&lap).expect("serialize derived Serialize");
         let back: LaplacianMatrix =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1864,8 +1864,8 @@ mod tests {
     #[test]
     fn laplacian_matrix_clone_independence() {
         let topo = make_complete_graph(3);
-        let l =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let l = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         let l2 = l.clone();
         assert_eq!(l, l2);
     }
@@ -1873,8 +1873,8 @@ mod tests {
     #[test]
     fn laplacian_matrix_serde_roundtrip_enriched() {
         let topo = make_complete_graph(3);
-        let l =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let l = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&l).expect("serialize derived Serialize");
         let back: LaplacianMatrix =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
@@ -1884,8 +1884,8 @@ mod tests {
     #[test]
     fn laplacian_content_hash_deterministic_enriched() {
         let topo = make_complete_graph(3);
-        let l =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let l = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         let h1 = l.content_hash();
         let h2 = l.content_hash();
         assert_eq!(h1, h2);
@@ -1906,8 +1906,8 @@ mod tests {
     #[test]
     fn debug_nonempty_laplacian_matrix() {
         let topo = make_complete_graph(2);
-        let l =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let l = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         assert!(!format!("{l:?}").is_empty());
     }
 
@@ -2106,8 +2106,8 @@ mod tests {
             .expect("operation should succeed for valid inputs");
         topo.add_edge(0, 1, 500_000)
             .expect("operation should succeed for valid inputs");
-        let l =
-            LaplacianMatrix::from_topology(&topo).expect("operation should succeed for valid inputs");
+        let l = LaplacianMatrix::from_topology(&topo)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(l.get(0, 0), 500_000);
         assert_eq!(l.get(1, 1), 500_000);
         assert_eq!(l.get(0, 1), -500_000);

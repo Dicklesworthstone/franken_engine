@@ -1089,8 +1089,8 @@ mod tests {
         let env = default_envelope(ExecutionStage::GcPause);
         let obs = violating_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "v", 0, vec![]);
-        let report =
-            generate_violation_report(&cert, "rpt").expect("operation should succeed for valid inputs");
+        let report = generate_violation_report(&cert, "rpt")
+            .expect("operation should succeed for valid inputs");
         let summary = render_violation_summary(&report);
         assert!(summary.contains("stage: gc_pause"));
         assert!(summary.contains("severity:"));
@@ -1460,8 +1460,8 @@ mod tests {
         let env = default_envelope(ExecutionStage::GcPause);
         let obs = violating_observation(ExecutionStage::GcPause);
         let cert = issue_stage_certificate(&env, &obs, "v-cert", 0, vec![]);
-        let report =
-            generate_violation_report(&cert, "rpt").expect("operation should succeed for valid inputs");
+        let report = generate_violation_report(&cert, "rpt")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(report.schema_version, VIOLATION_REPORT_SCHEMA_VERSION);
         assert_eq!(report.bead_id, STAGE_ENVELOPE_BEAD_ID);
     }

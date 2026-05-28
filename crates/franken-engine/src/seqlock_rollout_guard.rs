@@ -547,8 +547,8 @@ fn write_bundle(
     }))
     .expect("serialization should succeed");
 
-    let trace_ids_json = serde_json::to_string_pretty(&evaluated.trace_ids)
-        .expect("serialization should succeed");
+    let trace_ids_json =
+        serde_json::to_string_pretty(&evaluated.trace_ids).expect("serialization should succeed");
     let events_jsonl = evaluated
         .logs
         .iter()
@@ -1332,8 +1332,7 @@ mod tests {
             decision_id: "dec-1".to_string(),
             policy_id: "pol-1".to_string(),
         };
-        let json =
-            serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
         let back: super::TraceIdsArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
@@ -1934,8 +1933,7 @@ mod tests {
             report_hash: "abc".to_string(),
             rows: Vec::new(),
         };
-        let json =
-            serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
         let back: super::StarvationMicrobenchReportArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
@@ -1952,8 +1950,7 @@ mod tests {
             report_hash: "def".to_string(),
             rows: Vec::new(),
         };
-        let json =
-            serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
         let back: super::LoomScheduleCoverageReportArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
@@ -1970,8 +1967,7 @@ mod tests {
             safety_case_hash: "hash123".to_string(),
             rows: Vec::new(),
         };
-        let json =
-            serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
         let back: super::SeqlockSafetyCaseArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
@@ -1989,8 +1985,7 @@ mod tests {
             all_candidates_disabled: true,
             rows: Vec::new(),
         };
-        let json =
-            serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&artifact).expect("serialization should succeed");
         let back: super::SeqlockRolloutGuardArtifact =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(artifact, back);
@@ -1999,8 +1994,7 @@ mod tests {
     #[test]
     fn docs_contract_fixture_serde_roundtrip() {
         let fixture = build_docs_contract_fixture();
-        let json =
-            serde_json::to_string_pretty(&fixture).expect("serialization should succeed");
+        let json = serde_json::to_string_pretty(&fixture).expect("serialization should succeed");
         let back: super::DocsContractFixture =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(fixture.schema_version, back.schema_version);

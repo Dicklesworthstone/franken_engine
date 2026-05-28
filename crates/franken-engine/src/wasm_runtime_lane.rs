@@ -746,14 +746,22 @@ mod tests {
     fn bounded_queue_push_pop() {
         let mut q = BoundedQueue::new(3);
         // SAFETY: Queue capacity is 3, pushing 1 element cannot exceed capacity.
-        q.push(1).expect("operation should succeed for valid inputs");
+        q.push(1)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing 2nd element cannot exceed capacity.
-        q.push(2).expect("operation should succeed for valid inputs");
+        q.push(2)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(q.len(), 2);
         // SAFETY: Queue has 2 elements, pop cannot fail.
-        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 1);
+        assert_eq!(
+            q.pop().expect("operation should succeed for valid inputs"),
+            1
+        );
         // SAFETY: Queue has 1 element remaining, pop cannot fail.
-        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 2);
+        assert_eq!(
+            q.pop().expect("operation should succeed for valid inputs"),
+            2
+        );
         assert!(q.is_empty());
     }
 
@@ -761,9 +769,11 @@ mod tests {
     fn bounded_queue_full() {
         let mut q = BoundedQueue::new(2);
         // SAFETY: Queue capacity is 2, pushing 1st element cannot exceed capacity
-        q.push(1).expect("operation should succeed for valid inputs");
+        q.push(1)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 2, pushing 2nd element cannot exceed capacity
-        q.push(2).expect("operation should succeed for valid inputs");
+        q.push(2)
+            .expect("operation should succeed for valid inputs");
         assert!(q.is_full());
         assert!(matches!(q.push(3), Err(QueueError::Full { capacity: 2 })));
     }
@@ -778,11 +788,14 @@ mod tests {
     fn bounded_queue_drain_all() {
         let mut q = BoundedQueue::new(5);
         // SAFETY: Queue capacity is 5, pushing 1st element cannot exceed capacity
-        q.push(10).expect("operation should succeed for valid inputs");
+        q.push(10)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 5, pushing 2nd element cannot exceed capacity
-        q.push(20).expect("operation should succeed for valid inputs");
+        q.push(20)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 5, pushing 3rd element cannot exceed capacity
-        q.push(30).expect("operation should succeed for valid inputs");
+        q.push(30)
+            .expect("operation should succeed for valid inputs");
         let all = q.drain_all();
         assert_eq!(all, vec![10, 20, 30]);
         assert!(q.is_empty());
@@ -792,9 +805,11 @@ mod tests {
     fn bounded_queue_clear_batch2() {
         let mut q = BoundedQueue::new(5);
         // SAFETY: Queue capacity is 5, pushing 1st element cannot exceed capacity
-        q.push(1).expect("operation should succeed for valid inputs");
+        q.push(1)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 5, pushing 2nd element cannot exceed capacity
-        q.push(2).expect("operation should succeed for valid inputs");
+        q.push(2)
+            .expect("operation should succeed for valid inputs");
         q.clear();
         assert!(q.is_empty());
     }
@@ -954,7 +969,8 @@ mod tests {
         g.register(d, WasmSignalKind::Derived, deps)
             .expect("operation should succeed for valid inputs");
         // SAFETY: dispose cannot fail for registered ID
-        g.dispose(d).expect("operation should succeed for valid inputs");
+        g.dispose(d)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(g.active_count(), 1);
     }
 
@@ -1729,7 +1745,8 @@ mod tests {
         let s = g.next_id();
         g.register(s, WasmSignalKind::Source, BTreeSet::new())
             .expect("operation should succeed for valid inputs");
-        g.dispose(s).expect("operation should succeed for valid inputs");
+        g.dispose(s)
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             g.propagate_dirty(s),
             Err(WasmGraphError::Disposed(_))
@@ -1790,9 +1807,11 @@ mod tests {
         let mut q = BoundedQueue::<u32>::new(2);
         assert!(!q.is_full());
         // SAFETY: Queue capacity is 2, pushing first element cannot exceed capacity
-        q.push(10).expect("operation should succeed for valid inputs");
+        q.push(10)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 2, pushing second element cannot exceed capacity
-        q.push(20).expect("operation should succeed for valid inputs");
+        q.push(20)
+            .expect("operation should succeed for valid inputs");
         assert!(q.is_full());
         let err = q.push(30).unwrap_err();
         assert_eq!(err, QueueError::Full { capacity: 2 });
@@ -1802,17 +1821,29 @@ mod tests {
     fn bounded_queue_pop_fifo_order() {
         let mut q = BoundedQueue::new(3);
         // SAFETY: Queue capacity is 3, pushing first element cannot exceed capacity
-        q.push(1u32).expect("operation should succeed for valid inputs");
+        q.push(1u32)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing second element cannot exceed capacity
-        q.push(2).expect("operation should succeed for valid inputs");
+        q.push(2)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing third element cannot exceed capacity
-        q.push(3).expect("operation should succeed for valid inputs");
+        q.push(3)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue has 3 elements, pop cannot fail
-        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 1);
+        assert_eq!(
+            q.pop().expect("operation should succeed for valid inputs"),
+            1
+        );
         // SAFETY: Queue has 2 elements remaining, pop cannot fail
-        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 2);
+        assert_eq!(
+            q.pop().expect("operation should succeed for valid inputs"),
+            2
+        );
         // SAFETY: Queue has 1 element remaining, pop cannot fail
-        assert_eq!(q.pop().expect("operation should succeed for valid inputs"), 3);
+        assert_eq!(
+            q.pop().expect("operation should succeed for valid inputs"),
+            3
+        );
         assert_eq!(q.pop().unwrap_err(), QueueError::Empty);
     }
 
@@ -1820,9 +1851,11 @@ mod tests {
     fn bounded_queue_drain_all_empties() {
         let mut q = BoundedQueue::new(3);
         // SAFETY: Queue capacity is 3, pushing first element cannot exceed capacity
-        q.push(1u32).expect("operation should succeed for valid inputs");
+        q.push(1u32)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing second element cannot exceed capacity
-        q.push(2).expect("operation should succeed for valid inputs");
+        q.push(2)
+            .expect("operation should succeed for valid inputs");
         let drained = q.drain_all();
         assert_eq!(drained.len(), 2);
         assert!(q.is_empty());
@@ -1832,9 +1865,11 @@ mod tests {
     fn bounded_queue_clear() {
         let mut q = BoundedQueue::new(3);
         // SAFETY: Queue capacity is 3, pushing first element cannot exceed capacity
-        q.push(1u32).expect("operation should succeed for valid inputs");
+        q.push(1u32)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: Queue capacity is 3, pushing second element cannot exceed capacity
-        q.push(2).expect("operation should succeed for valid inputs");
+        q.push(2)
+            .expect("operation should succeed for valid inputs");
         q.clear();
         assert!(q.is_empty());
         assert!(!q.is_full());
@@ -1878,7 +1913,9 @@ mod tests {
             .dispose(id)
             .expect("operation should succeed for valid inputs");
         // SAFETY: get cannot fail for ID we just registered and disposed
-        let node = graph.get(id).expect("operation should succeed for valid inputs");
+        let node = graph
+            .get(id)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(node.status, WasmSignalStatus::Disposed);
     }
 

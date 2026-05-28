@@ -2653,12 +2653,14 @@ mod tests {
         for path in &paths {
             // SAFETY: causal paths are non-empty by construction; first() returns Some
             assert_eq!(
-                path.first().expect("operation should succeed for valid inputs"),
+                path.first()
+                    .expect("operation should succeed for valid inputs"),
                 "lane_choice"
             );
             // SAFETY: causal paths are non-empty by construction; last() returns Some
             assert_eq!(
-                path.last().expect("operation should succeed for valid inputs"),
+                path.last()
+                    .expect("operation should succeed for valid inputs"),
                 "latency_outcome"
             );
         }

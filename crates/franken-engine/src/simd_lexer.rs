@@ -1735,8 +1735,8 @@ mod tests {
 
     #[test]
     fn scalar_empty_input() {
-        let result =
-            ScalarLexer::lex(b"", &default_config()).expect("operation should succeed for valid inputs");
+        let result = ScalarLexer::lex(b"", &default_config())
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result.token_count, 0);
         assert!(result.tokens.is_empty());
     }
@@ -1846,8 +1846,8 @@ mod tests {
             max_tokens: 3,
             ..default_config()
         };
-        let result =
-            ScalarLexer::lex(b"a b c d e", &config).expect("operation should succeed for valid inputs");
+        let result = ScalarLexer::lex(b"a b c d e", &config)
+            .expect("operation should succeed for valid inputs");
         assert!(result.budget_exceeded);
         assert_eq!(result.token_count, 3);
     }
@@ -2028,8 +2028,8 @@ mod tests {
             swar_min_input_bytes: 0,
             ..default_config()
         };
-        let result =
-            DifferentialLexer::lex(b"", &config).expect("operation should succeed for valid inputs");
+        let result = DifferentialLexer::lex(b"", &config)
+            .expect("operation should succeed for valid inputs");
         assert!(result.parity_ok);
         assert_eq!(result.swar_output.token_count, 0);
     }
@@ -2069,8 +2069,8 @@ mod tests {
 
     #[test]
     fn lex_with_scalar_mode() {
-        let output =
-            lex("hello world", &scalar_config()).expect("operation should succeed for valid inputs");
+        let output = lex("hello world", &scalar_config())
+            .expect("operation should succeed for valid inputs");
         assert_eq!(output.token_count, 2);
         assert_eq!(output.actual_mode, LexerMode::Scalar);
         assert_eq!(
@@ -2086,7 +2086,8 @@ mod tests {
             swar_min_input_bytes: 0,
             ..Default::default()
         };
-        let output = lex("hello world", &config).expect("operation should succeed for valid inputs");
+        let output =
+            lex("hello world", &config).expect("operation should succeed for valid inputs");
         assert_eq!(output.token_count, 2);
         assert_eq!(output.actual_mode, LexerMode::Swar);
     }
@@ -2108,9 +2109,10 @@ mod tests {
     #[test]
     fn count_tokens_matches_scalar() {
         let input = "var x = foo(1, 2, 3); if (a == b) { return; }";
-        let count =
-            count_tokens(input, &scalar_config()).expect("operation should succeed for valid inputs");
-        let output = lex(input, &scalar_config()).expect("operation should succeed for valid inputs");
+        let count = count_tokens(input, &scalar_config())
+            .expect("operation should succeed for valid inputs");
+        let output =
+            lex(input, &scalar_config()).expect("operation should succeed for valid inputs");
         assert_eq!(count, output.token_count);
     }
 
@@ -2267,8 +2269,8 @@ mod tests {
 
     #[test]
     fn lexer_output_serde_round_trip() {
-        let output =
-            lex("var x = 42;", &scalar_config()).expect("operation should succeed for valid inputs");
+        let output = lex("var x = 42;", &scalar_config())
+            .expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&output).expect("serialize derived Serialize");
         let back: LexerOutput = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(output, back);
@@ -2549,7 +2551,8 @@ mod tests {
 
     #[test]
     fn lexer_artifact_serde_round_trip() {
-        let output = lex("x + y", &scalar_config()).expect("operation should succeed for valid inputs");
+        let output =
+            lex("x + y", &scalar_config()).expect("operation should succeed for valid inputs");
         let artifact = LexerArtifact {
             artifact_id: crate::engine_object_id::derive_id(
                 crate::engine_object_id::ObjectDomain::EvidenceRecord,

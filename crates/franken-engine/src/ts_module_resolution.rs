@@ -2762,8 +2762,8 @@ mod tests {
 
     #[test]
     fn parse_package_specifier_scoped() {
-        let (name, key) =
-            parse_package_specifier("@scope/pkg").expect("operation should succeed for valid inputs");
+        let (name, key) = parse_package_specifier("@scope/pkg")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(name, "@scope/pkg");
         assert_eq!(key, ".");
     }

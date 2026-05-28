@@ -1048,8 +1048,10 @@ mod tests {
 
     #[test]
     fn matrix_infinity_is_additive_identity() {
-        let inf = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
-        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let inf =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
         let sum = m
@@ -1061,7 +1063,8 @@ mod tests {
     #[test]
     fn floyd_warshall_simple_chain() {
         // 0 --5--> 1 --3--> 2
-        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
 
@@ -1078,7 +1081,8 @@ mod tests {
     fn floyd_warshall_diamond() {
         // 0 --2--> 1 --3--> 3
         // 0 --5--> 2 --1--> 3
-        let mut m = TropicalMatrix::new_infinity(4).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(4).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(2));
         m.set(0, 2, TropicalWeight::finite(5));
         m.set(1, 3, TropicalWeight::finite(3));
@@ -1092,7 +1096,8 @@ mod tests {
 
     #[test]
     fn floyd_warshall_negative_cycle_detection() {
-        let mut m = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(-3));
         m.set(1, 0, TropicalWeight::finite(-3));
 
@@ -1407,7 +1412,8 @@ mod tests {
     #[test]
     fn dead_code_elimination_identifies_unreachable() {
         // 0 → 1, 2 is isolated, output = {1}
-        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(1));
         let apsp = m
             .floyd_warshall()
@@ -1427,7 +1433,8 @@ mod tests {
     #[test]
     fn dead_code_all_live() {
         // 0 → 1 → 2, output = {2}
-        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(1));
         m.set(1, 2, TropicalWeight::finite(1));
         let apsp = m
@@ -1492,7 +1499,8 @@ mod tests {
 
     #[test]
     fn tropical_matrix_serde_roundtrip() {
-        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(5));
         m.set(1, 2, TropicalWeight::finite(3));
         let json = serde_json::to_string(&m).expect("serialize derived Serialize");
@@ -1548,7 +1556,8 @@ mod tests {
 
     #[test]
     fn matrix_content_hash_deterministic() {
-        let mut m = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(5));
         let h1 = m.content_hash();
         let h2 = m.content_hash();
@@ -1557,9 +1566,11 @@ mod tests {
 
     #[test]
     fn different_matrices_different_hashes() {
-        let mut m1 = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
+        let mut m1 =
+            TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
         m1.set(0, 1, TropicalWeight::finite(1));
-        let mut m2 = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
+        let mut m2 =
+            TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
         m2.set(0, 1, TropicalWeight::finite(2));
         assert_ne!(m1.content_hash(), m2.content_hash());
     }
@@ -1675,7 +1686,8 @@ mod tests {
     #[test]
     fn floyd_warshall_larger_graph() {
         let n = 50;
-        let mut m = TropicalMatrix::new_infinity(n).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(n).expect("operation should succeed for valid inputs");
         // Build a chain 0→1→...→(n-1)
         for i in 0..n - 1 {
             m.set(i, i + 1, TropicalWeight::finite(1));
@@ -1798,7 +1810,8 @@ mod tests {
 
     #[test]
     fn matrix_1x1() {
-        let mut m = TropicalMatrix::new_infinity(1).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(1).expect("operation should succeed for valid inputs");
         m.set(0, 0, TropicalWeight::ZERO);
         let apsp = m
             .floyd_warshall()
@@ -1994,8 +2007,10 @@ mod tests {
 
     #[test]
     fn matrix_content_hash_sensitive_to_dimension() {
-        let m2 = TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
-        let m3 = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let m2 =
+            TropicalMatrix::new_infinity(2).expect("operation should succeed for valid inputs");
+        let m3 =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         assert_ne!(m2.content_hash(), m3.content_hash());
     }
 
@@ -2045,7 +2060,8 @@ mod tests {
 
     #[test]
     fn dead_code_zero_total_nodes() {
-        let apsp = TropicalMatrix::new_infinity(1).expect("operation should succeed for valid inputs");
+        let apsp =
+            TropicalMatrix::new_infinity(1).expect("operation should succeed for valid inputs");
         let elim = DeadCodeEliminator {
             output_nodes: vec![],
         };
@@ -2159,7 +2175,8 @@ mod tests {
     #[test]
     fn floyd_warshall_triangle_inequality() {
         // For any APSP result: dist[i][j] <= dist[i][k] + dist[k][j]
-        let mut m = TropicalMatrix::new_infinity(4).expect("operation should succeed for valid inputs");
+        let mut m =
+            TropicalMatrix::new_infinity(4).expect("operation should succeed for valid inputs");
         m.set(0, 1, TropicalWeight::finite(3));
         m.set(1, 2, TropicalWeight::finite(4));
         m.set(0, 2, TropicalWeight::finite(10)); // direct but longer
@@ -2207,9 +2224,12 @@ mod tests {
     #[test]
     fn matrix_mul_associativity() {
         // (A ⊗ B) ⊗ C == A ⊗ (B ⊗ C) — semiring property
-        let mut a = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
-        let mut b = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
-        let mut c = TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut a =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut b =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
+        let mut c =
+            TropicalMatrix::new_infinity(3).expect("operation should succeed for valid inputs");
         a.set(0, 1, TropicalWeight::finite(2));
         a.set(1, 2, TropicalWeight::finite(3));
         b.set(0, 1, TropicalWeight::finite(1));

@@ -1372,8 +1372,7 @@ mod tests {
 
     #[test]
     fn test_cell_verdict_serde() {
-        let json = serde_json::to_string(&CellVerdict::Fail)
-            .expect("serialization should succeed");
+        let json = serde_json::to_string(&CellVerdict::Fail).expect("serialization should succeed");
         let back: CellVerdict = serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(back, CellVerdict::Fail);
     }

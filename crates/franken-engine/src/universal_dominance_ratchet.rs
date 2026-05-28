@@ -1328,7 +1328,8 @@ mod tests {
         let mut log = RatchetEventLog::new();
         let gap1 = make_gap("gap-dup", CellDomain::Memory, GapKind::PartiallyExplored);
         let gap2 = make_gap("gap-dup", CellDomain::Memory, GapKind::Unknown);
-        register_gap(&mut ledger, &mut log, gap1).expect("operation should succeed for valid inputs");
+        register_gap(&mut ledger, &mut log, gap1)
+            .expect("operation should succeed for valid inputs");
         let err = register_gap(&mut ledger, &mut log, gap2).unwrap_err();
         assert!(matches!(err, RatchetError::DuplicateGap { .. }));
     }
@@ -1353,7 +1354,8 @@ mod tests {
         let mut ledger = FrontierGapLedger::new();
         let mut log = RatchetEventLog::new();
         let gap = make_gap("gap-2", CellDomain::Throughput, GapKind::KnownDeficient);
-        register_gap(&mut ledger, &mut log, gap).expect("operation should succeed for valid inputs");
+        register_gap(&mut ledger, &mut log, gap)
+            .expect("operation should succeed for valid inputs");
         close_gap(
             &mut ledger,
             &mut log,
@@ -1385,9 +1387,12 @@ mod tests {
         let mut gap_mid = make_gap("mid", CellDomain::Throughput, GapKind::PartiallyExplored);
         gap_mid.priority_millionths = 500_000;
 
-        register_gap(&mut ledger, &mut log, gap_lo).expect("operation should succeed for valid inputs");
-        register_gap(&mut ledger, &mut log, gap_hi).expect("operation should succeed for valid inputs");
-        register_gap(&mut ledger, &mut log, gap_mid).expect("operation should succeed for valid inputs");
+        register_gap(&mut ledger, &mut log, gap_lo)
+            .expect("operation should succeed for valid inputs");
+        register_gap(&mut ledger, &mut log, gap_hi)
+            .expect("operation should succeed for valid inputs");
+        register_gap(&mut ledger, &mut log, gap_mid)
+            .expect("operation should succeed for valid inputs");
 
         let sorted = ledger.open_gaps_by_priority();
         assert_eq!(sorted[0].gap_id, "hi");
@@ -1496,7 +1501,8 @@ mod tests {
             (CellDomain::TailLatency, ComparisonTarget::Jsc, "tl-1"),
         ] {
             let cell = make_cell(domain, target, dim);
-            add_cell(&mut board, &mut log, cell).expect("operation should succeed for valid inputs");
+            add_cell(&mut board, &mut log, cell)
+                .expect("operation should succeed for valid inputs");
         }
 
         // Prove 2 of 4
@@ -1753,7 +1759,8 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("seq-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).expect("operation should succeed for valid inputs");
+            add_cell(&mut board, &mut log, cell)
+                .expect("operation should succeed for valid inputs");
         }
 
         for (idx, event) in log.events.iter().enumerate() {
@@ -1774,7 +1781,8 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("frac-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).expect("operation should succeed for valid inputs");
+            add_cell(&mut board, &mut log, cell)
+                .expect("operation should succeed for valid inputs");
         }
         let id0 = make_cell_id(CellDomain::ColdStart, ComparisonTarget::V8Node, "frac-0");
         advance_cell(
@@ -1804,7 +1812,8 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("cnt-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).expect("operation should succeed for valid inputs");
+            add_cell(&mut board, &mut log, cell)
+                .expect("operation should succeed for valid inputs");
         }
 
         let id0 = make_cell_id(CellDomain::ColdStart, ComparisonTarget::V8Node, "cnt-0");
@@ -2167,7 +2176,8 @@ mod tests {
         {
             let cell = make_cell(CellDomain::ColdStart, *target, &format!("full-{i}"));
             let cell_id = cell.cell_id.clone();
-            add_cell(&mut board, &mut log, cell).expect("operation should succeed for valid inputs");
+            add_cell(&mut board, &mut log, cell)
+                .expect("operation should succeed for valid inputs");
             advance_cell(
                 &mut board,
                 &mut log,
@@ -2193,7 +2203,8 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("frac5-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).expect("operation should succeed for valid inputs");
+            add_cell(&mut board, &mut log, cell)
+                .expect("operation should succeed for valid inputs");
         }
 
         for i in 0..2 {
@@ -2754,7 +2765,8 @@ mod tests {
             for target in &targets {
                 let dim = format!("{domain}-{target}");
                 let cell = make_cell(*domain, *target, &dim);
-                add_cell(&mut board, &mut log, cell).expect("operation should succeed for valid inputs");
+                add_cell(&mut board, &mut log, cell)
+                    .expect("operation should succeed for valid inputs");
             }
         }
         assert_eq!(board.cell_count(), 9);
@@ -3014,7 +3026,8 @@ mod tests {
                 ComparisonTarget::V8Node,
                 &format!("seq-nr-{i}"),
             );
-            add_cell(&mut board, &mut log, cell).expect("operation should succeed for valid inputs");
+            add_cell(&mut board, &mut log, cell)
+                .expect("operation should succeed for valid inputs");
         }
         advance_epoch(&mut board, &mut log, 1).expect("operation should succeed for valid inputs");
         register_gap(

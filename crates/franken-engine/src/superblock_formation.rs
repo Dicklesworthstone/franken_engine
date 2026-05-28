@@ -191,8 +191,7 @@ impl SideExit {
         let mut hasher = Sha256::new();
         hasher.update(resume_offset.to_le_bytes());
         hasher.update(guard_position.to_le_bytes());
-        let reason_bytes =
-            serde_json::to_vec(reason).expect("serialization should succeed");
+        let reason_bytes = serde_json::to_vec(reason).expect("serialization should succeed");
         hasher.update(&reason_bytes);
         let digest = hasher.finalize();
         format!("exit-{}", &hex::encode(digest)[..16])
@@ -1749,7 +1748,9 @@ mod tests {
         assert_eq!(record.outcome, FormationOutcome::Formed);
         assert!(record.block.is_some());
 
-        let block = record.block.expect("operation should succeed for valid inputs");
+        let block = record
+            .block
+            .expect("operation should succeed for valid inputs");
         assert!(block.instruction_count() >= 2);
         assert!(block.block_id.starts_with("sb-"));
     }
@@ -1803,7 +1804,9 @@ mod tests {
         };
 
         let record = form_superblock(&profile, 0, &policy, 1);
-        let block = record.block.expect("operation should succeed for valid inputs");
+        let block = record
+            .block
+            .expect("operation should succeed for valid inputs");
         // Each monomorphic instruction should get a type guard
         assert!(block.guard_count() > 0);
     }

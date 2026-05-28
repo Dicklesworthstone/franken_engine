@@ -2161,10 +2161,10 @@ mod tests {
 
     #[test]
     fn test_manifest_verdict_serde_roundtrip() {
-        let pass_json = serde_json::to_string(&ManifestVerdict::Pass)
-            .expect("serialization should succeed");
-        let fail_json = serde_json::to_string(&ManifestVerdict::Fail)
-            .expect("serialization should succeed");
+        let pass_json =
+            serde_json::to_string(&ManifestVerdict::Pass).expect("serialization should succeed");
+        let fail_json =
+            serde_json::to_string(&ManifestVerdict::Fail).expect("serialization should succeed");
         let pass_rt: ManifestVerdict =
             serde_json::from_str(&pass_json).expect("deserialize known-valid JSON");
         let fail_rt: ManifestVerdict =

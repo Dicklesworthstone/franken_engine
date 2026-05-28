@@ -2126,10 +2126,10 @@ mod tests {
             diagnostic_code: Some("DET-001".to_string()),
         };
         let path = Path::new("/tmp/det.json");
-        let bytes1 =
-            canonical_json_bytes(&finding, path).expect("operation should succeed for valid inputs");
-        let bytes2 =
-            canonical_json_bytes(&finding, path).expect("operation should succeed for valid inputs");
+        let bytes1 = canonical_json_bytes(&finding, path)
+            .expect("operation should succeed for valid inputs");
+        let bytes2 = canonical_json_bytes(&finding, path)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bytes1, bytes2, "canonical JSON must be deterministic");
         let hash1 = sha256_hex(&bytes1);
         let hash2 = sha256_hex(&bytes2);
@@ -2296,7 +2296,8 @@ mod tests {
         let path = Path::new("/some/dir/artifact.json");
         let tmp = unique_temp_path(path);
         assert_eq!(
-            tmp.parent().expect("operation should succeed for valid inputs"),
+            tmp.parent()
+                .expect("operation should succeed for valid inputs"),
             Path::new("/some/dir")
         );
         let name = tmp
@@ -2320,7 +2321,8 @@ mod tests {
         let path = Path::new("standalone.bin");
         let tmp = unique_temp_path(path);
         assert_eq!(
-            tmp.parent().expect("operation should succeed for valid inputs"),
+            tmp.parent()
+                .expect("operation should succeed for valid inputs"),
             Path::new(".")
         );
     }

@@ -3014,8 +3014,8 @@ reason_code = "harness_gap"
     fn hwm_load_nonexistent_returns_none() {
         let path = std::env::temp_dir().join("franken_t262_hwm_nonexistent.json");
         let _ = fs::remove_file(&path);
-        let loaded =
-            Test262HighWaterMark::load_json(&path).expect("operation should succeed for valid inputs");
+        let loaded = Test262HighWaterMark::load_json(&path)
+            .expect("operation should succeed for valid inputs");
         assert!(loaded.is_none());
     }
 
@@ -3199,8 +3199,8 @@ reason_code = "harness_gap"
 
     #[test]
     fn parse_key_value_valid() {
-        let (k, v) =
-            parse_key_value(1, "name = \"value\"").expect("operation should succeed for valid inputs");
+        let (k, v) = parse_key_value(1, "name = \"value\"")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(k, "name");
         assert_eq!(v, "value");
     }

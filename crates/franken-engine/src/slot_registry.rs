@@ -1919,7 +1919,9 @@ mod tests {
             "2026-02-20T01:00:00Z".into(),
         )
         .expect("operation should succeed for valid inputs");
-        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
+        let entry = reg
+            .get(&id)
+            .expect("operation should succeed for valid inputs");
         assert!(matches!(
             entry.status,
             PromotionStatus::PromotionCandidate { .. }
@@ -1934,7 +1936,9 @@ mod tests {
             "2026-02-20T02:00:00Z".into(),
         )
         .expect("operation should succeed for valid inputs");
-        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
+        let entry = reg
+            .get(&id)
+            .expect("operation should succeed for valid inputs");
         assert!(entry.status.is_native());
         assert_eq!(entry.implementation_digest, "sha256:native-v1");
         assert_eq!(reg.native_count(), 1);
@@ -1947,7 +1951,9 @@ mod tests {
             "2026-02-20T03:00:00Z".into(),
         )
         .expect("operation should succeed for valid inputs");
-        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
+        let entry = reg
+            .get(&id)
+            .expect("operation should succeed for valid inputs");
         assert!(entry.status.is_delegate());
         assert_eq!(reg.native_count(), 0);
         assert_eq!(reg.delegate_count(), 1);
@@ -3153,7 +3159,9 @@ mod tests {
             "t0".into(),
         )
         .expect("operation should succeed for valid inputs");
-        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
+        let entry = reg
+            .get(&id)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.promotion_lineage.len(), 1);
         assert_eq!(
             entry.promotion_lineage[0].transition,
@@ -3163,7 +3171,9 @@ mod tests {
 
         reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
             .expect("operation should succeed for valid inputs");
-        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
+        let entry = reg
+            .get(&id)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.promotion_lineage.len(), 2);
         assert_eq!(
             entry.promotion_lineage[1].transition,
@@ -3231,7 +3241,9 @@ mod tests {
         reg.demote(&id, "regression".into(), "t3".into())
             .expect("operation should succeed for valid inputs");
 
-        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
+        let entry = reg
+            .get(&id)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.rollback_target.as_deref(), Some("sha256:d1"));
     }
 
@@ -3731,7 +3743,9 @@ mod tests {
         .expect("operation should succeed for valid inputs");
         reg.begin_candidacy(&id, "sha256:c1".into(), "t1".into())
             .expect("operation should succeed for valid inputs");
-        let entry = reg.get(&id).expect("operation should succeed for valid inputs");
+        let entry = reg
+            .get(&id)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.promotion_lineage.len(), 2);
         let json = serde_json::to_string(entry).expect("serialize derived Serialize");
         let back: SlotEntry = serde_json::from_str(&json).expect("deserialize known-valid JSON");

@@ -1404,7 +1404,10 @@ mod tests {
             candidate: candidate_snapshot_pass(),
         };
         let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
-        let last = d.logs.last().expect("operation should succeed for valid inputs");
+        let last = d
+            .logs
+            .last()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "benchmark_gate_decision");
         assert_eq!(last.outcome, "pass");
         assert!(last.error_code.is_none());
@@ -1423,7 +1426,10 @@ mod tests {
             candidate,
         };
         let d = evaluate_sibling_integration_benchmark(&input, &BenchmarkGateThresholds::default());
-        let last = d.logs.last().expect("operation should succeed for valid inputs");
+        let last = d
+            .logs
+            .last()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.outcome, "fail");
         assert_eq!(last.error_code.as_deref(), Some("benchmark_gate_failed"));
     }

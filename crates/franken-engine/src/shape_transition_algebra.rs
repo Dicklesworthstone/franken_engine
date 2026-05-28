@@ -580,11 +580,13 @@ pub fn emit_shape_lattice_bundle(
 
     fs::write(
         &shape_lattice_manifest_path,
-        serde_json::to_vec_pretty(&bundle.manifest).expect("operation should succeed for valid inputs"),
+        serde_json::to_vec_pretty(&bundle.manifest)
+            .expect("operation should succeed for valid inputs"),
     )?;
     fs::write(
         &run_manifest_path,
-        serde_json::to_vec_pretty(&run_manifest).expect("operation should succeed for valid inputs"),
+        serde_json::to_vec_pretty(&run_manifest)
+            .expect("operation should succeed for valid inputs"),
     )?;
     let event_lines = bundle
         .trace_events

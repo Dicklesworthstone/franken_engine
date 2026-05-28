@@ -5439,11 +5439,13 @@ mod tests {
             JsValue::Int(FP_SCALE),
         ];
         assert_eq!(
-            exec_math(BuiltinId::MathMax, &args).expect("operation should succeed for valid inputs"),
+            exec_math(BuiltinId::MathMax, &args)
+                .expect("operation should succeed for valid inputs"),
             JsValue::Int(7 * FP_SCALE)
         );
         assert_eq!(
-            exec_math(BuiltinId::MathMin, &args).expect("operation should succeed for valid inputs"),
+            exec_math(BuiltinId::MathMin, &args)
+                .expect("operation should succeed for valid inputs"),
             JsValue::Int(FP_SCALE)
         );
     }
@@ -5469,7 +5471,8 @@ mod tests {
     fn test_math_imul() {
         let args = vec![JsValue::Int(3 * FP_SCALE), JsValue::Int(4 * FP_SCALE)];
         assert_eq!(
-            exec_math(BuiltinId::MathImul, &args).expect("operation should succeed for valid inputs"),
+            exec_math(BuiltinId::MathImul, &args)
+                .expect("operation should succeed for valid inputs"),
             JsValue::Int(12 * FP_SCALE)
         );
     }
@@ -5878,7 +5881,8 @@ mod tests {
     #[test]
     fn test_json_parse_escape() {
         assert_eq!(
-            parse_json_value("\"hello\\nworld\"").expect("operation should succeed for valid inputs"),
+            parse_json_value("\"hello\\nworld\"")
+                .expect("operation should succeed for valid inputs"),
             JsValue::Str("hello\nworld".into())
         );
         assert_eq!(
@@ -5891,7 +5895,8 @@ mod tests {
     fn test_json_stringify_primitives() {
         let heap = ObjectHeap::new();
         assert_eq!(
-            json_stringify(&heap, &JsValue::Null).expect("operation should succeed for valid inputs"),
+            json_stringify(&heap, &JsValue::Null)
+                .expect("operation should succeed for valid inputs"),
             JsValue::Str("null".into())
         );
         assert_eq!(
@@ -6095,7 +6100,8 @@ mod tests {
             Some(env.prototypes.object_prototype)
         );
         assert_eq!(
-            read_array_elements(&heap, array_handle).expect("operation should succeed for valid inputs"),
+            read_array_elements(&heap, array_handle)
+                .expect("operation should succeed for valid inputs"),
             vec![
                 JsValue::Int(FP_SCALE),
                 JsValue::Str("two".into()),
@@ -6201,7 +6207,8 @@ mod tests {
     #[test]
     fn test_math_hypot_no_args() {
         assert_eq!(
-            exec_math(BuiltinId::MathHypot, &[]).expect("operation should succeed for valid inputs"),
+            exec_math(BuiltinId::MathHypot, &[])
+                .expect("operation should succeed for valid inputs"),
             JsValue::Int(0)
         );
     }

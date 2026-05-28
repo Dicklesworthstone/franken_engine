@@ -1156,7 +1156,10 @@ mod tests {
         let fetched = index
             .get_receipt(&rec.receipt_id, "t2")
             .expect("operation should succeed for valid inputs");
-        assert_eq!(fetched.expect("operation should succeed for valid inputs"), rec);
+        assert_eq!(
+            fetched.expect("operation should succeed for valid inputs"),
+            rec
+        );
     }
 
     #[test]

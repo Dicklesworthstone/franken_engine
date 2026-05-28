@@ -1578,8 +1578,8 @@ mod tests {
 
     #[test]
     fn enrichment_severity_json_string_representation() {
-        let json = serde_json::to_string(&Severity::SubtreeRestart)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&Severity::SubtreeRestart).expect("serialization should succeed");
         // Enum variants serialize as quoted strings
         assert!(json.contains("SubtreeRestart"));
     }

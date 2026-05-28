@@ -456,7 +456,7 @@ impl InterleavingExplorer {
                 let minimized = self.minimize_transcript(scenario, &transcript);
 
                 // Determine which race surfaces are related.
-                let related = self.identify_related_races(perm);
+                let related = self.identify_related_races(scenario, perm);
                 for r in &related {
                     covered_races.insert(r.clone(), true);
                 }
@@ -470,7 +470,7 @@ impl InterleavingExplorer {
             }
 
             // Track which race surfaces were exercised (even if no failure).
-            let exercised = self.identify_related_races(perm);
+            let exercised = self.identify_related_races(scenario, perm);
             for r in exercised {
                 covered_races.insert(r, true);
             }
@@ -654,22 +654,40 @@ impl InterleavingExplorer {
     }
 
     /// Identify which race surfaces are exercised by a given ordering.
-    fn identify_related_races(&self, ordering: &[usize]) -> Vec<String> {
-        // A race surface is "exercised" if the ordering contains indices
-        // that would correspond to both operations in the race.
-        // Since we track by position, any non-trivial ordering exercises
-        // the races. For a more precise implementation we'd need the
-        // scenario context, but for coverage tracking we count all surfaces
-        // from the catalog that have at least 2 matching operation types
-        // present in the ordering.
-        //
-        // For now, return all races in the catalog as "exercised" when the
-        // ordering is non-trivial (contains at least 2 actions).
-        if ordering.len() >= 2 {
-            self.catalog.surfaces.keys().cloned().collect()
-        } else {
-            Vec::new()
+    ///
+    /// A surface is counted as exercised only when **both** of its operation
+    /// types are realized by actions present in `ordering`. The scenario's
+    /// action -> operation-type mapping ([`scenario_action_to_op_type`]) is
+    /// threaded in so we no longer claim every catalog surface is exercised by
+    /// any non-trivial ordering: surfaces whose operations never appear in the
+    /// scenario (e.g. `CheckpointWrite`, `PolicyUpdate`, `ObligationCommit`)
+    /// are correctly excluded.
+    ///
+    /// This is a presence test over the actions actually scheduled in this
+    /// ordering, so it is still an upper bound on *true* interleaving
+    /// realization (both operations occur, but adjacency / a genuine racing
+    /// window is not asserted here) — it is a strict tightening of the prior
+    /// "return every catalog surface" behaviour, not an exact realization count.
+    fn identify_related_races(&self, scenario: &Scenario, ordering: &[usize]) -> Vec<String> {
+        // Operation types realized by the actions actually present in this
+        // ordering (ordering carries action positions; an out-of-range index
+        // is skipped, matching `execute_permutation`).
+        let mut present_ops: Vec<OperationType> = Vec::new();
+        for &idx in ordering {
+            if let Some(action) = scenario.actions.get(idx) {
+                let op = scenario_action_to_op_type(action);
+                if !present_ops.contains(&op) {
+                    present_ops.push(op);
+                }
+            }
         }
+
+        self.catalog
+            .surfaces
+            .iter()
+            .filter(|(_, surface)| surface.operations.iter().all(|op| present_ops.contains(op)))
+            .map(|(race_id, _)| race_id.clone())
+            .collect()
     }
 
     /// Find scenario action indices that correspond to the given operation types.
@@ -901,6 +919,49 @@ mod tests {
         let report = explorer.explore(&scenario, &strategy, "test-targeted");
         // At least identity ordering + swapped ordering.
         assert!(report.total_explored >= 1);
+    }
+
+    #[test]
+    fn identify_related_races_only_reports_surfaces_with_present_operations() {
+        // Regression for bd-1lw7r.10: identify_related_races used to return
+        // EVERY catalog surface for any non-trivial ordering, inflating race
+        // coverage. With precise op-type matching, a scenario containing only
+        // task + fault actions exercises ONLY race-completion-vs-fault
+        // (TaskCompletion + FaultInjection); surfaces whose operations
+        // (CheckpointWrite, PolicyUpdate, ObligationCommit, ...) are never
+        // produced by any ScenarioAction must be excluded.
+        let explorer = InterleavingExplorer::new(RaceSurfaceCatalog::default_catalog(), vec![]);
+        let scenario = Scenario {
+            task_count: 1,
+            actions: vec![
+                ScenarioAction::RunTask { task_index: 0 },
+                ScenarioAction::InjectFault {
+                    task_index: 0,
+                    fault: FaultKind::Panic,
+                },
+            ],
+            seed: 7,
+        };
+        let related = explorer.identify_related_races(&scenario, &[0, 1]);
+        assert_eq!(
+            related,
+            vec!["race-completion-vs-fault".to_string()],
+            "only the surface whose both operation types are present should be reported, \
+             not every catalog surface"
+        );
+
+        // An ordering whose actions cannot realize any surface's full operation
+        // pair exercises nothing (a lone TimeAdvance matches no catalog pair).
+        let scenario_none = Scenario {
+            task_count: 0,
+            actions: vec![ScenarioAction::AdvanceTime { ticks: 1 }],
+            seed: 7,
+        };
+        let related_none = explorer.identify_related_races(&scenario_none, &[0]);
+        assert!(
+            related_none.is_empty(),
+            "no surface should be reported when no operation pair is present, got {related_none:?}"
+        );
     }
 
     // -- Invariant checking --
@@ -2599,11 +2660,18 @@ mod tests {
     fn race_surfaces_covered_tracks_catalog() {
         let catalog = RaceSurfaceCatalog::default_catalog();
         let total = catalog.len();
+        // RunTask + InjectFault realizes exactly the TaskCompletion +
+        // FaultInjection pair (race-completion-vs-fault) and no other surface.
+        // Post bd-1lw7r.10, coverage reflects *which* surfaces were actually
+        // exercised, not the whole catalog.
         let scenario = Scenario {
-            task_count: 2,
+            task_count: 1,
             actions: vec![
                 ScenarioAction::RunTask { task_index: 0 },
-                ScenarioAction::RunTask { task_index: 1 },
+                ScenarioAction::InjectFault {
+                    task_index: 0,
+                    fault: FaultKind::Panic,
+                },
             ],
             seed: 1,
         };
@@ -2616,17 +2684,27 @@ mod tests {
             "coverage-track",
         );
         assert_eq!(report.race_surfaces_total, total);
-        assert_eq!(report.race_surfaces_covered, total);
+        assert_eq!(
+            report.race_surfaces_covered, 1,
+            "only race-completion-vs-fault is exercised by a task+fault scenario; \
+             surfaces whose operations never appear must not count toward coverage"
+        );
     }
 
     #[test]
     fn identify_related_races_single_action() {
         let catalog = RaceSurfaceCatalog::default_catalog();
         let explorer = InterleavingExplorer::new(catalog, vec![]);
-        let related = explorer.identify_related_races(&[0]);
+        let scenario = Scenario {
+            task_count: 1,
+            actions: vec![ScenarioAction::RunTask { task_index: 0 }],
+            seed: 1,
+        };
+        let related = explorer.identify_related_races(&scenario, &[0]);
         assert!(
             related.is_empty(),
-            "single action should not exercise races"
+            "a single action realizes only one operation type, so no surface's \
+             two-operation pair can be present"
         );
     }
 
@@ -2634,8 +2712,22 @@ mod tests {
     fn identify_related_races_empty_ordering() {
         let catalog = RaceSurfaceCatalog::default_catalog();
         let explorer = InterleavingExplorer::new(catalog, vec![]);
-        let related = explorer.identify_related_races(&[]);
-        assert!(related.is_empty());
+        let scenario = Scenario {
+            task_count: 1,
+            actions: vec![
+                ScenarioAction::RunTask { task_index: 0 },
+                ScenarioAction::InjectFault {
+                    task_index: 0,
+                    fault: FaultKind::Panic,
+                },
+            ],
+            seed: 1,
+        };
+        let related = explorer.identify_related_races(&scenario, &[]);
+        assert!(
+            related.is_empty(),
+            "an empty ordering schedules no actions, so no surface is exercised"
+        );
     }
 
     #[test]

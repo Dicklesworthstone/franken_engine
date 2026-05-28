@@ -28,7 +28,13 @@ The 0.67 score is well below the 0.95 promotion threshold codified in
 [`ECMA262_CONFORMANCE_TARGET.md`](../ECMA262_CONFORMANCE_TARGET.md#compliance-threshold);
 closing that gap is `bd-u2n6w` (FIND-3) and is **not** in scope for this
 matrix. This matrix documents the SHAPE of current coverage, not the
-target distribution.
+target distribution. The phased plan that names the work required to
+reach `≥ 0.95` lives in
+[`MUST_COVERAGE_REMEDIATION_ROADMAP.md`](./MUST_COVERAGE_REMEDIATION_ROADMAP.md)
+(also FIND-3 / `bd-u2n6w`) — it surfaces that the `0.67` figure itself
+is opaque-by-construction (no derivable formula from the column inputs)
+and that the dominant remediation surface is coverage (`+1608` new
+tagged MUST cases), not test pass rate.
 
 ## Per-harness matrix
 

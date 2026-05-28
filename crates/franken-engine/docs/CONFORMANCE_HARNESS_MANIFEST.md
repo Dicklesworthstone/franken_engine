@@ -79,6 +79,19 @@ Promotion threshold: all `MUST` clauses are tested, no unknown divergences
 remain, and aggregate `MUST` pass rate is at least 0.95. Anything below that
 threshold is documented as partial compatibility, not conformance.
 
+> **Note on the `Score` column.** The values above are hand-maintained
+> until the compliance-report generator lands (`bd-13rib` FIND-20). The
+> `0.67` figure for ECMAScript baseline builtins is not directly
+> derivable from the `Tested`/`Passing`/`Divergent`/`MUST clauses`
+> column inputs (see
+> [`docs/conformance/MUST_COVERAGE_REMEDIATION_ROADMAP.md`](../../../docs/conformance/MUST_COVERAGE_REMEDIATION_ROADMAP.md),
+> FIND-3 `bd-u2n6w`, for the phased plan that retires the opaque score
+> in favour of generator-computed columns). The promotion-threshold
+> contract above is the **joint** of two independent gates — coverage
+> (`tagged_must_tests / total_must_clauses ≥ 0.95`) and pass rate
+> (`passing / tagged_must_tests ≥ 0.95`) — and both must hold
+> simultaneously for the row to read `Conformance`.
+
 ## Replication Instructions
 
 - **Prerequisites**: Record exact `git rev`, runtime, OS image, and compiler versions.

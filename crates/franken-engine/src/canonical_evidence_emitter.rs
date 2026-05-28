@@ -1999,7 +1999,9 @@ mod tests {
         let json = serde_json::to_string(&ctx).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -2016,7 +2018,9 @@ mod tests {
         let json = serde_json::to_string(&policy).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("mandatory_actions"));
         assert!(obj.contains_key("max_witnesses"));
         assert!(obj.contains_key("max_candidates"));
@@ -2032,7 +2036,9 @@ mod tests {
         let json = serde_json::to_string(&receipt).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("entry_id"));
         assert!(obj.contains_key("artifact_hash"));
         assert!(obj.contains_key("decision_type"));
@@ -2055,7 +2061,9 @@ mod tests {
         let json = serde_json::to_string(&log).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("trace_id"));
         assert!(obj.contains_key("decision_id"));
         assert!(obj.contains_key("policy_id"));
@@ -2076,7 +2084,9 @@ mod tests {
         let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(
             obj.contains_key("MissingField"),
             "JSON should have MissingField key"
@@ -2089,7 +2099,9 @@ mod tests {
         let json = serde_json::to_string(&err).expect("serialize derived Serialize");
         let v: serde_json::Value =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(
             obj.contains_key("BufferFull"),
             "JSON should have BufferFull key"

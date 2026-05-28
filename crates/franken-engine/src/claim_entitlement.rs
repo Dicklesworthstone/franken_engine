@@ -1739,18 +1739,15 @@ mod tests {
             "\"shipped_surface\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::React)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ClaimDomain::React).expect("serialization should succeed"),
             "\"react\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::Supremacy)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ClaimDomain::Supremacy).expect("serialization should succeed"),
             "\"supremacy\""
         );
         assert_eq!(
-            serde_json::to_string(&ClaimDomain::Rollout)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ClaimDomain::Rollout).expect("serialization should succeed"),
             "\"rollout\""
         );
         assert_eq!(
@@ -1767,8 +1764,7 @@ mod tests {
     #[test]
     fn claim_tier_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&ClaimTier::ShippedFact)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&ClaimTier::ShippedFact).expect("serialization should succeed"),
             "\"shipped_fact\""
         );
         assert_eq!(
@@ -1791,8 +1787,7 @@ mod tests {
     #[test]
     fn morphism_effect_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&MorphismEffect::Supports)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&MorphismEffect::Supports).expect("serialization should succeed"),
             "\"supports\""
         );
         assert_eq!(
@@ -1834,13 +1829,11 @@ mod tests {
     #[test]
     fn evidence_state_serde_exact_snake_case_strings() {
         assert_eq!(
-            serde_json::to_string(&EvidenceState::Fresh)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&EvidenceState::Fresh).expect("serialization should succeed"),
             "\"fresh\""
         );
         assert_eq!(
-            serde_json::to_string(&EvidenceState::Stale)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&EvidenceState::Stale).expect("serialization should succeed"),
             "\"stale\""
         );
     }

@@ -1526,8 +1526,12 @@ mod tests {
         let mut s2 = BifurcationBoundaryScanner::new(ScannerConfig::default(), params, envelopes)
             .expect("operation should succeed for valid inputs");
 
-        let r1 = s1.scan().expect("operation should succeed for valid inputs");
-        let r2 = s2.scan().expect("operation should succeed for valid inputs");
+        let r1 = s1
+            .scan()
+            .expect("operation should succeed for valid inputs");
+        let r2 = s2
+            .scan()
+            .expect("operation should succeed for valid inputs");
 
         assert_eq!(r1.artifact_hash, r2.artifact_hash);
         assert_eq!(r1.stability_score_millionths, r2.stability_score_millionths);
@@ -2071,8 +2075,12 @@ mod tests {
                 .expect("operation should succeed for valid inputs");
         let mut sb = BifurcationBoundaryScanner::new(ScannerConfig::default(), params_b, envs)
             .expect("operation should succeed for valid inputs");
-        let ra = sa.scan().expect("operation should succeed for valid inputs");
-        let rb = sb.scan().expect("operation should succeed for valid inputs");
+        let ra = sa
+            .scan()
+            .expect("operation should succeed for valid inputs");
+        let rb = sb
+            .scan()
+            .expect("operation should succeed for valid inputs");
         // Different parameter states should produce different artifact hashes
         assert_ne!(ra.artifact_hash, rb.artifact_hash);
     }

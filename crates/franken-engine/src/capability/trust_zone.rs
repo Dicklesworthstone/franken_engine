@@ -1743,8 +1743,10 @@ mod tests {
 
     #[test]
     fn zone_id_deterministic_for_same_inputs() {
-        let h1 = ZoneHierarchy::standard("root", 1).expect("operation should succeed for valid inputs");
-        let h2 = ZoneHierarchy::standard("root", 1).expect("operation should succeed for valid inputs");
+        let h1 =
+            ZoneHierarchy::standard("root", 1).expect("operation should succeed for valid inputs");
+        let h2 =
+            ZoneHierarchy::standard("root", 1).expect("operation should succeed for valid inputs");
         assert_eq!(
             h1.zone("owner")
                 .expect("operation should succeed for valid inputs")
@@ -1765,8 +1767,10 @@ mod tests {
 
     #[test]
     fn zone_id_changes_with_policy_version() {
-        let h1 = ZoneHierarchy::standard("root", 1).expect("operation should succeed for valid inputs");
-        let h2 = ZoneHierarchy::standard("root", 2).expect("operation should succeed for valid inputs");
+        let h1 =
+            ZoneHierarchy::standard("root", 1).expect("operation should succeed for valid inputs");
+        let h2 =
+            ZoneHierarchy::standard("root", 2).expect("operation should succeed for valid inputs");
         assert_ne!(
             h1.zone("owner")
                 .expect("operation should succeed for valid inputs")
@@ -1963,7 +1967,8 @@ mod tests {
 
     #[test]
     fn zone_hierarchy_enrichment_serde_roundtrip() {
-        let h = ZoneHierarchy::standard("root", 1).expect("operation should succeed for valid inputs");
+        let h =
+            ZoneHierarchy::standard("root", 1).expect("operation should succeed for valid inputs");
         let json = serde_json::to_string(&h).expect("serialize derived Serialize");
         let back: ZoneHierarchy =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");

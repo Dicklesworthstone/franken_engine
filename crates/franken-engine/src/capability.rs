@@ -2076,7 +2076,10 @@ mod tests {
         assert_eq!(canonicalize_capability_tag("promise:reject"), None);
         assert_eq!(canonicalize_capability_tag("ifc.check_flow"), None);
         // Genuinely unknown tags fail closed.
-        assert_eq!(canonicalize_capability_tag("totally_unknown_capability"), None);
+        assert_eq!(
+            canonicalize_capability_tag("totally_unknown_capability"),
+            None
+        );
         assert_eq!(canonicalize_capability_tag(""), None);
     }
 }

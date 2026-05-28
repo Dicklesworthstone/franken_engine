@@ -1514,26 +1514,26 @@ mod tests {
 
     #[test]
     fn risk_state_json_field_names_stable() {
-        let json = serde_json::to_string(&RiskState::Benign)
-            .expect("serialization should succeed");
+        let json = serde_json::to_string(&RiskState::Benign).expect("serialization should succeed");
         assert_eq!(json, "\"Benign\"");
-        let json = serde_json::to_string(&RiskState::Anomalous)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&RiskState::Anomalous).expect("serialization should succeed");
         assert_eq!(json, "\"Anomalous\"");
-        let json = serde_json::to_string(&RiskState::Malicious)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&RiskState::Malicious).expect("serialization should succeed");
         assert_eq!(json, "\"Malicious\"");
-        let json = serde_json::to_string(&RiskState::Unknown)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&RiskState::Unknown).expect("serialization should succeed");
         assert_eq!(json, "\"Unknown\"");
     }
 
     #[test]
     fn posterior_json_field_names_stable() {
         let p = Posterior::default_prior();
-        let v: serde_json::Value =
-            serde_json::to_value(&p).expect("serialization should succeed");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let v: serde_json::Value = serde_json::to_value(&p).expect("serialization should succeed");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("p_benign"));
         assert!(obj.contains_key("p_anomalous"));
         assert!(obj.contains_key("p_malicious"));
@@ -1544,9 +1544,10 @@ mod tests {
     #[test]
     fn evidence_json_field_names_stable() {
         let ev = benign_evidence();
-        let v: serde_json::Value =
-            serde_json::to_value(&ev).expect("serialization should succeed");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let v: serde_json::Value = serde_json::to_value(&ev).expect("serialization should succeed");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("extension_id"));
         assert!(obj.contains_key("hostcall_rate_millionths"));
         assert!(obj.contains_key("distinct_capabilities"));
@@ -1560,9 +1561,10 @@ mod tests {
     #[test]
     fn likelihood_model_json_field_names_stable() {
         let m = LikelihoodModel::default();
-        let v: serde_json::Value =
-            serde_json::to_value(&m).expect("serialization should succeed");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let v: serde_json::Value = serde_json::to_value(&m).expect("serialization should succeed");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("benign_rate_ceiling"));
         assert!(obj.contains_key("anomalous_rate_floor"));
         assert!(obj.contains_key("benign_denial_ceiling"));
@@ -1578,7 +1580,9 @@ mod tests {
         let result = updater.update(&benign_evidence());
         let v: serde_json::Value =
             serde_json::to_value(&result).expect("serialization should succeed");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("posterior"));
         assert!(obj.contains_key("likelihoods"));
         assert!(obj.contains_key("cumulative_llr_millionths"));
@@ -1592,7 +1596,9 @@ mod tests {
         let cal = updater.calibration_check(RiskState::Benign);
         let v: serde_json::Value =
             serde_json::to_value(&cal).expect("serialization should succeed");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("ground_truth"));
         assert!(obj.contains_key("assigned_probability"));
         assert!(obj.contains_key("map_correct"));
@@ -1605,7 +1611,9 @@ mod tests {
         let det = ChangePointDetector::new(50_000, 10);
         let v: serde_json::Value =
             serde_json::to_value(&det).expect("serialization should succeed");
-        let obj = v.as_object().expect("operation should succeed for valid inputs");
+        let obj = v
+            .as_object()
+            .expect("operation should succeed for valid inputs");
         assert!(obj.contains_key("run_length_probs"));
         assert!(obj.contains_key("hazard_rate"));
         assert!(obj.contains_key("max_run_length"));

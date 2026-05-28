@@ -1017,8 +1017,8 @@ mod tests {
     fn gate_passing() {
         let input = test_gate_input();
         let ctx = test_context();
-        let decision =
-            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
+        let decision = evaluate_publication_gate(&input, &ctx)
+            .expect("operation should succeed for valid inputs");
         assert!(decision.publish_allowed);
         assert!(decision.score_vs_node >= SCORE_THRESHOLD);
         assert!(decision.score_vs_bun >= SCORE_THRESHOLD);
@@ -1837,11 +1837,11 @@ mod tests {
 
     #[test]
     fn baseline_engine_serde_snake_case_format() {
-        let json = serde_json::to_string(&BaselineEngine::Node)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&BaselineEngine::Node).expect("serialization should succeed");
         assert_eq!(json, "\"node\"");
-        let json = serde_json::to_string(&BaselineEngine::Bun)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&BaselineEngine::Bun).expect("serialization should succeed");
         assert_eq!(json, "\"bun\"");
     }
 
@@ -2045,10 +2045,10 @@ mod tests {
     fn gate_deterministic_replay() {
         let input = test_gate_input();
         let ctx = test_context();
-        let d1 =
-            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
-        let d2 =
-            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
+        let d1 = evaluate_publication_gate(&input, &ctx)
+            .expect("operation should succeed for valid inputs");
+        let d2 = evaluate_publication_gate(&input, &ctx)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(d1.score_vs_node, d2.score_vs_node);
         assert_eq!(d1.score_vs_bun, d2.score_vs_bun);
         assert_eq!(d1.publish_allowed, d2.publish_allowed);
@@ -2064,10 +2064,10 @@ mod tests {
         let mut input = test_gate_input();
         input.node_cases = vec![test_case("w1", 1500.0, 1000.0)]; // 1.5x
         let ctx = test_context();
-        let d1 =
-            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
-        let d2 =
-            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
+        let d1 = evaluate_publication_gate(&input, &ctx)
+            .expect("operation should succeed for valid inputs");
+        let d2 = evaluate_publication_gate(&input, &ctx)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(d1.publish_allowed, d2.publish_allowed);
         assert!(!d1.publish_allowed);
         assert_eq!(d1.score_vs_node, d2.score_vs_node);
@@ -2166,8 +2166,8 @@ mod tests {
     fn gate_events_carry_context_ids() {
         let ctx = PublicationContext::new("trace-ctx", "dec-ctx", "pol-ctx");
         let input = test_gate_input();
-        let decision =
-            evaluate_publication_gate(&input, &ctx).expect("operation should succeed for valid inputs");
+        let decision = evaluate_publication_gate(&input, &ctx)
+            .expect("operation should succeed for valid inputs");
         for event in &decision.events {
             assert_eq!(event.trace_id, "trace-ctx");
             assert_eq!(event.decision_id, "dec-ctx");

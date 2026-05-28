@@ -1342,7 +1342,9 @@ mod tests {
         let h = store.create_closure("add".into(), 2, true, captures, EnvironmentHandle(0));
         assert_eq!(store.len(), 1);
         // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
-        let closure = store.get(h).expect("operation should succeed for valid inputs");
+        let closure = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(closure.name, "add");
         assert_eq!(closure.arity, 2);
         assert!(closure.strict);
@@ -1369,7 +1371,9 @@ mod tests {
         ];
         let h = store.create_closure("f".into(), 0, false, captures, EnvironmentHandle(0));
         // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
-        let closure = store.get(h).expect("operation should succeed for valid inputs");
+        let closure = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(closure.max_capture_label, Label::Secret);
     }
 
@@ -1948,7 +1952,9 @@ mod tests {
             EnvironmentHandle(u32::MAX), // max handle value
         );
         // SAFETY: Test gets valid closure handle; get succeeds in controlled test environment.
-        let c = store.get(h).expect("operation should succeed for valid inputs");
+        let c = store
+            .get(h)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(c.name, "");
         assert_eq!(c.arity, 0);
         assert!(!c.strict);

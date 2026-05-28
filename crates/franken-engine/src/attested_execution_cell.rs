@@ -2196,7 +2196,9 @@ mod tests {
             .expect("operation should succeed for valid inputs");
 
         // SAFETY: Test-only unwrap, cell was just created and measured
-        let cell = reg.get(&cid).expect("operation should succeed for valid inputs");
+        let cell = reg
+            .get(&cid)
+            .expect("operation should succeed for valid inputs");
         // SAFETY: to_string cannot fail on derived Serialize struct
         let json = serde_json::to_string(cell).expect("serialize derived Serialize");
         // SAFETY: from_str cannot fail on valid JSON from to_string roundtrip

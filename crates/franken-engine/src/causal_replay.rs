@@ -1436,7 +1436,9 @@ mod tests {
         assert_eq!(seq, 0);
         assert_eq!(log.len(), 1);
 
-        let entry = log.get(0).expect("operation should succeed for valid inputs");
+        let entry = log
+            .get(0)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(entry.source, NondeterminismSource::RandomValue);
         assert_eq!(entry.value, vec![1, 2, 3]);
         assert_eq!(entry.tick, 100);

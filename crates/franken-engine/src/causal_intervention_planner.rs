@@ -541,7 +541,8 @@ impl CausalInterventionPlanner {
                         expected_effect_millionths: effect,
                         confidence_millionths: confidence,
                         identifiability: status,
-                        adjustment_set: adjustment.expect("operation should succeed for valid inputs"),
+                        adjustment_set: adjustment
+                            .expect("operation should succeed for valid inputs"),
                         risk_description: String::new(),
                         cost_description: String::new(),
                         tracking_bead: None,

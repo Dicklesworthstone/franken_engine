@@ -1317,8 +1317,8 @@ mod tests {
 
     #[test]
     fn test_boundary_kind_serde_fold() {
-        let json = serde_json::to_string(&BoundaryKind::Fold)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&BoundaryKind::Fold).expect("serialization should succeed");
         let deserialized: BoundaryKind =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, BoundaryKind::Fold);
@@ -1326,8 +1326,8 @@ mod tests {
 
     #[test]
     fn test_boundary_kind_serde_cusp() {
-        let json = serde_json::to_string(&BoundaryKind::Cusp)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&BoundaryKind::Cusp).expect("serialization should succeed");
         let deserialized: BoundaryKind =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(deserialized, BoundaryKind::Cusp);

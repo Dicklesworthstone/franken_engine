@@ -696,7 +696,10 @@ mod tests {
         let bytes = make_canonical_payload(&schema, &value);
         let result = guard.validate(ObjectDomain::PolicyObject, &bytes, "t-001");
         assert!(result.is_ok());
-        assert_eq!(result.expect("operation should succeed for valid inputs"), value);
+        assert_eq!(
+            result.expect("operation should succeed for valid inputs"),
+            value
+        );
         assert_eq!(guard.acceptance_count(), 1);
         assert_eq!(guard.rejection_count(), 0);
     }

@@ -4508,8 +4508,8 @@ mod tests {
         let result = run_benchmark_suite(&config);
         let dir = std::env::temp_dir().join("franken_bench_test_evidence");
         let _ = fs::remove_dir_all(&dir);
-        let artifacts =
-            write_evidence_artifacts(&result, &dir).expect("operation should succeed for valid inputs");
+        let artifacts = write_evidence_artifacts(&result, &dir)
+            .expect("operation should succeed for valid inputs");
         assert!(artifacts.run_manifest_path.exists());
         assert!(artifacts.evidence_path.exists());
         assert!(artifacts.events_path.exists());
@@ -4640,8 +4640,8 @@ mod tests {
 
         let dir = std::env::temp_dir().join("franken_bench_test_reg_evidence");
         let _ = fs::remove_dir_all(&dir);
-        let artifacts =
-            write_evidence_artifacts(&result, &dir).expect("operation should succeed for valid inputs");
+        let artifacts = write_evidence_artifacts(&result, &dir)
+            .expect("operation should succeed for valid inputs");
 
         let evidence = fs::read_to_string(&artifacts.evidence_path)
             .expect("operation should succeed for valid inputs");
@@ -4665,8 +4665,8 @@ mod tests {
         let result = run_benchmark_suite(&config);
         let dir = std::env::temp_dir().join("franken_bench_test_fam_summary");
         let _ = fs::remove_dir_all(&dir);
-        let artifacts =
-            write_evidence_artifacts(&result, &dir).expect("operation should succeed for valid inputs");
+        let artifacts = write_evidence_artifacts(&result, &dir)
+            .expect("operation should succeed for valid inputs");
 
         let summary: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(&artifacts.summary_path)

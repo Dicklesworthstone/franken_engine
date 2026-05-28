@@ -1778,13 +1778,11 @@ mod tests {
     #[test]
     fn subsystem_serde_rename_all_snake_case() {
         assert_eq!(
-            serde_json::to_string(&Subsystem::ControlPlane)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&Subsystem::ControlPlane).expect("serialization should succeed"),
             "\"control_plane\""
         );
         assert_eq!(
-            serde_json::to_string(&Subsystem::ExtensionHost)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&Subsystem::ExtensionHost).expect("serialization should succeed"),
             "\"extension_host\""
         );
         assert_eq!(
@@ -1797,8 +1795,7 @@ mod tests {
     #[test]
     fn loss_dimension_serde_rename_all_snake_case() {
         assert_eq!(
-            serde_json::to_string(&LossDimension::UserHarm)
-                .expect("serialization should succeed"),
+            serde_json::to_string(&LossDimension::UserHarm).expect("serialization should succeed"),
             "\"user_harm\""
         );
         assert_eq!(

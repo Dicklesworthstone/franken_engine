@@ -1362,7 +1362,9 @@ mod tests {
     fn seal_and_no_further_adds() {
         let mut bundle = populated_bundle();
         // SAFETY: populated_bundle creates a valid bundle that should seal successfully
-        bundle.seal().expect("operation should succeed for valid inputs");
+        bundle
+            .seal()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(bundle.status, BundleStatus::Sealed);
         let result = bundle.add_provenance(test_prov("w2", WorkloadCategory::Application));
         assert!(matches!(result, Err(BundleError::BundleSealed { .. })));
@@ -1374,7 +1376,9 @@ mod tests {
         let result = bundle.publish();
         assert!(matches!(result, Err(BundleError::InvalidTransition { .. })));
         // SAFETY: populated_bundle creates a valid bundle that should seal successfully
-        bundle.seal().expect("operation should succeed for valid inputs");
+        bundle
+            .seal()
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.publish().is_ok());
         assert_eq!(bundle.status, BundleStatus::Published);
     }
@@ -1383,7 +1387,9 @@ mod tests {
     fn reject_requires_sealed() {
         let mut bundle = populated_bundle();
         // SAFETY: populated_bundle creates a valid bundle that should seal successfully
-        bundle.seal().expect("operation should succeed for valid inputs");
+        bundle
+            .seal()
+            .expect("operation should succeed for valid inputs");
         assert!(bundle.reject().is_ok());
         assert_eq!(bundle.status, BundleStatus::Rejected);
     }
@@ -1858,7 +1864,8 @@ mod tests {
     #[test]
     fn export_bundle_toml_roundtrip() {
         let bundle = populated_bundle();
-        let toml_str = export_bundle_toml(&bundle).expect("operation should succeed for valid inputs");
+        let toml_str =
+            export_bundle_toml(&bundle).expect("operation should succeed for valid inputs");
         let parsed: EvidenceBundle = toml::from_str(&toml_str).expect("parse valid string");
         assert_eq!(bundle.bundle_id, parsed.bundle_id);
         assert_eq!(bundle.runs.len(), parsed.runs.len());
@@ -1885,7 +1892,8 @@ mod tests {
         let bundle = populated_bundle();
         let config = default_config();
         let report = generate_report(&bundle, &config);
-        let toml_str = export_report_toml(&report).expect("operation should succeed for valid inputs");
+        let toml_str =
+            export_report_toml(&report).expect("operation should succeed for valid inputs");
         let parsed: toml::Value = toml::from_str(&toml_str).expect("parse valid string");
 
         assert!(parsed.get("bundle_id").is_some());

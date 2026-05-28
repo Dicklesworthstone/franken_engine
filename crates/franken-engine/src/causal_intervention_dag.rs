@@ -1134,8 +1134,7 @@ pub fn run_causal_dag_evidence() -> CausalDagEvidenceManifest {
     let id_count = certificates.iter().filter(|c| c.is_identifiable).count() as u32;
     let unid_count = certificates.iter().filter(|c| !c.is_identifiable).count() as u32;
 
-    let hash_data =
-        serde_json::to_vec(&certificates).expect("serialization should succeed");
+    let hash_data = serde_json::to_vec(&certificates).expect("serialization should succeed");
 
     CausalDagEvidenceManifest {
         schema_version: CAUSAL_DAG_SCHEMA_VERSION.to_string(),
@@ -1554,21 +1553,24 @@ mod tests {
 
     #[test]
     fn test_frankenengine_dag_builds() {
-        let dag = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let dag =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
         assert!(dag.variable_count() >= 10);
         assert!(dag.edge_count() >= 10);
     }
 
     #[test]
     fn test_frankenengine_dag_has_treatments() {
-        let dag = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let dag =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
         let treatments = dag.variables_by_domain(VariableDomain::Treatment);
         assert!(treatments.len() >= 3);
     }
 
     #[test]
     fn test_frankenengine_dag_has_outcomes() {
-        let dag = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let dag =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
         let outcomes = dag.variables_by_domain(VariableDomain::Outcome);
         assert!(outcomes.len() >= 3);
     }
@@ -1581,8 +1583,10 @@ mod tests {
 
     #[test]
     fn test_frankenengine_dag_hash_deterministic() {
-        let d1 = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
-        let d2 = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let d1 =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let d2 =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
         assert_eq!(d1.structure_hash, d2.structure_hash);
     }
 
@@ -2626,7 +2630,8 @@ mod tests {
 
     #[test]
     fn test_frankenengine_dag_has_instrument() {
-        let dag = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let dag =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
         let instruments = dag.variables_by_domain(VariableDomain::Instrument);
         assert!(!instruments.is_empty());
         assert!(instruments.contains(&40));
@@ -2634,14 +2639,16 @@ mod tests {
 
     #[test]
     fn test_frankenengine_dag_has_mediators() {
-        let dag = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let dag =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
         let mediators = dag.variables_by_domain(VariableDomain::Mediator);
         assert!(mediators.len() >= 2);
     }
 
     #[test]
     fn test_frankenengine_dag_confounders_affect_treatments() {
-        let dag = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let dag =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
         // workload_type (10) should be an ancestor of tiering_level (1)
         let ancestors_of_tier = dag.ancestors(1);
         assert!(ancestors_of_tier.contains(&10)); // workload_type
@@ -2656,7 +2663,8 @@ mod tests {
 
     #[test]
     fn test_different_treatment_outcome_pairs_different_certs() {
-        let dag = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let dag =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
         let cert1 = dag.identify_effect(1, 30); // tiering -> p99
         let cert2 = dag.identify_effect(2, 31); // cache -> throughput
         assert_ne!(cert1.certificate_hash, cert2.certificate_hash);
@@ -2707,7 +2715,8 @@ mod tests {
 
     #[test]
     fn test_evidence_manifest_covers_all_treatment_outcome_pairs() {
-        let dag = frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
+        let dag =
+            frankenengine_optimization_dag().expect("operation should succeed for valid inputs");
         let treatments = dag.variables_by_domain(VariableDomain::Treatment);
         let outcomes = dag.variables_by_domain(VariableDomain::Outcome);
         let manifest = run_causal_dag_evidence();

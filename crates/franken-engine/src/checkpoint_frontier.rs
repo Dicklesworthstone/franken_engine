@@ -1094,8 +1094,8 @@ mod tests {
     #[test]
     fn quorum_failure_rejects_acceptance() {
         let sk = make_sk(1);
-        let wrong_vk =
-            VerificationKey::from_bytes([0xFF; 32]).expect("operation should succeed for valid inputs");
+        let wrong_vk = VerificationKey::from_bytes([0xFF; 32])
+            .expect("operation should succeed for valid inputs");
         let genesis = build_genesis(&[sk], "zone-a");
 
         let mut mgr = CheckpointFrontierManager::new(InMemoryBackend::new());

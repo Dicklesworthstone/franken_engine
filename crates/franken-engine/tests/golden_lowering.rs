@@ -1,12 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::fs;
 use std::path::Path;
 
 use frankenengine_engine::ast::ParseGoal;
 use frankenengine_engine::ir_contract::{Ir0Module, Ir3Instruction};
 use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
 use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
+
+// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
+// so cargo does not compile it as a standalone integration-test binary.
+#[path = "_support/golden_diag.rs"]
+mod golden_diag;
 
 struct LoweringGoldenCase {
     name: &'static str,
@@ -82,49 +86,17 @@ fn render_instruction(instruction: &Ir3Instruction) -> String {
         .expect("Ir3Instruction derives Serialize, JSON encoding cannot fail")
 }
 
+/// Assert IR3 lowering output matches golden file.
+/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
+/// golden_diag::GoldenDiag (bd-ub6x8.3).
 fn assert_lowering_golden(case: &LoweringGoldenCase) {
     let golden_path = Path::new("tests/golden/lowering").join(format!("{}.txt", case.name));
     let actual = render_lowered_ir3(case);
-
-    if std::env::var_os(UPDATE_GOLDENS_ENV).is_some() {
-        fs::create_dir_all(
-            golden_path
-                .parent()
-                .expect("golden path should have a parent"),
-        )
-        .expect("golden directory should be creatable");
-        fs::write(&golden_path, &actual).expect("golden file should be writable");
-        eprintln!("[GOLDEN] Updated {}", golden_path.display());
-        return;
+    golden_diag::GoldenDiag {
+        framework_name: "Lowering IR3 golden",
+        regen_env_var: UPDATE_GOLDENS_ENV,
     }
-
-    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
-        panic!(
-            "Golden file missing: {}\n\
-             Set {UPDATE_GOLDENS_ENV}=1 and rerun:\n\
-             cargo test -p frankenengine-engine --test golden_lowering\n\
-             Then review and commit: git diff tests/golden/lowering/\n\n\
-             Current output:\n{actual}",
-            golden_path.display()
-        )
-    });
-
-    if actual != expected {
-        let actual_path = golden_path.with_extension("actual");
-        fs::write(&actual_path, &actual).expect("actual golden output should be writable");
-        panic!(
-            "GOLDEN MISMATCH: {}\n\
-             Expected: {}\n\
-             Actual:   {}\n\
-             Update with {UPDATE_GOLDENS_ENV}=1 only after reviewing the IR3 diff.",
-            case.name,
-            golden_path.display(),
-            actual_path.display()
-        );
-    }
-
-    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
-    let _ = fs::remove_file(golden_path.with_extension("actual"));
+    .assert_golden_match(&actual, &golden_path, case.name, None);
 }
 
 #[test]

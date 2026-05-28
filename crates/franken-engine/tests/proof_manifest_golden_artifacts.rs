@@ -9,8 +9,12 @@
 //! `concat!()` literal in this file.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
+
+// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
+// so cargo does not compile it as a standalone integration-test binary.
+#[path = "_support/golden_diag.rs"]
+mod golden_diag;
 
 use chrono::{TimeZone, Utc};
 use frankenengine_engine::proof_artifact::{
@@ -24,40 +28,15 @@ fn golden_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_RELATIVE_PATH)
 }
 
-/// Compare `actual` against the on-disk golden fixture, honoring the
-/// project-wide `UPDATE_GOLDENS=1` regen convention (see
-/// `tests/golden/PROVENANCE.md`).
+/// Compare `actual` against the on-disk golden fixture via the shared
+/// `golden_diag::GoldenDiag` helper, honoring the project-wide
+/// `UPDATE_GOLDENS=1` regen convention (see `tests/golden/PROVENANCE.md`).
 fn assert_matches_golden(actual: &str, test_name: &str) {
-    let path = golden_path();
-    if std::env::var_os("UPDATE_GOLDENS").is_some() {
-        fs::write(&path, actual).expect("golden fixture should be writable");
-        return;
+    golden_diag::GoldenDiag {
+        framework_name: "ProofManifest canonical JSON golden",
+        regen_env_var: "UPDATE_GOLDENS",
     }
-
-    let expected = fs::read_to_string(&path).unwrap_or_else(|err| {
-        panic!(
-            "{test_name}: golden fixture missing or unreadable at {}: {err}\n\
-             Run with UPDATE_GOLDENS=1 to (re)generate it.",
-            path.display()
-        )
-    });
-
-    if actual != expected {
-        let actual_path = path.with_extension("actual");
-        let _ = fs::write(&actual_path, actual);
-        panic!(
-            "{test_name}: ProofManifest canonical JSON drifted from golden.\n\
-             Expected: {}\n\
-             Actual:   {}\n\
-             To update: UPDATE_GOLDENS=1 cargo test -p frankenengine-engine \
-             --test proof_manifest_golden_artifacts -- {test_name}",
-            path.display(),
-            actual_path.display(),
-        );
-    }
-
-    // Sweep stale .actual sibling once we're green (bd-ub6x8.7).
-    let _ = fs::remove_file(path.with_extension("actual"));
+    .assert_golden_match(actual, &golden_path(), test_name, None);
 }
 
 #[test]

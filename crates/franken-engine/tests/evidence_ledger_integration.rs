@@ -1693,9 +1693,13 @@ fn evidence_ledger_cli_writes_real_artifacts_and_structured_logs() {
 // ---------------------------------------------------------------------------
 
 use regex::Regex;
-use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
+
+// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
+// so cargo does not compile it as a standalone integration-test binary.
+#[path = "_support/golden_diag.rs"]
+mod golden_diag;
 
 // Hoisted scrub patterns (bd-ub6x8.13).
 static SCRUB_UUID: LazyLock<Regex> = LazyLock::new(|| {
@@ -1708,51 +1712,18 @@ static SCRUB_ENTRY_ID: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r#""entry_id": "[^"]+""#).unwrap());
 
 /// Assert evidence entry matches golden file with scrubbed dynamic values.
+/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
+/// golden_diag::GoldenDiag (bd-ub6x8.3).
 fn assert_evidence_golden(test_name: &str, entry: &EvidenceEntry) {
     let golden_path = Path::new("tests/golden/evidence_ledger").join(format!("{test_name}.golden"));
-
     let actual =
         serde_json::to_string_pretty(entry).expect("EvidenceEntry should serialize to JSON");
-
     let scrubbed_actual = scrub_evidence_dynamic_fields(&actual);
-
-    // UPDATE MODE: overwrite golden with scrubbed actual output
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
-        fs::write(&golden_path, &scrubbed_actual).unwrap();
-        eprintln!("[GOLDEN] Updated: {}", golden_path.display());
-        return;
+    golden_diag::GoldenDiag {
+        framework_name: "Evidence ledger golden",
+        regen_env_var: "UPDATE_GOLDENS",
     }
-
-    // COMPARE MODE: diff scrubbed actual vs golden
-    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
-        panic!(
-            "Golden file missing: {}\n\
-             Run with UPDATE_GOLDENS=1 to create it\n\
-             Then review and commit: git diff tests/golden/evidence_ledger/",
-            golden_path.display()
-        )
-    });
-
-    if scrubbed_actual != expected {
-        let actual_path = golden_path.with_extension("actual");
-        fs::write(&actual_path, &scrubbed_actual).unwrap();
-
-        panic!(
-            "GOLDEN MISMATCH: {test_name}\n\n\
-             Expected: {}\n\
-             Actual: {}\n\n\
-             To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
-             To review: diff {} {}",
-            expected,
-            scrubbed_actual,
-            golden_path.display(),
-            actual_path.display(),
-        );
-    }
-
-    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
-    let _ = fs::remove_file(golden_path.with_extension("actual"));
+    .assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
 }
 
 /// Scrub dynamic values from evidence entry JSON for stable golden comparison.

@@ -23,8 +23,12 @@
 )]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::PathBuf;
+
+// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
+// so cargo does not compile it as a standalone integration-test binary.
+#[path = "_support/golden_diag.rs"]
+mod golden_diag;
 
 use frankenengine_engine::policy_theorem_compiler::{
     AuthorityGrant, Capability, CompilationResult, CompilerError, Constraint, Counterexample,
@@ -115,10 +119,6 @@ fn policy_compiler_golden_path(test_name: &str) -> PathBuf {
     path
 }
 
-fn should_update_policy_goldens() -> bool {
-    std::env::var("UPDATE_GOLDENS").is_ok()
-}
-
 fn canonical_policy_result_json(result: &CompilationResult) -> String {
     let mut json =
         serde_json::to_string_pretty(result).expect("policy theorem result should serialize");
@@ -126,39 +126,17 @@ fn canonical_policy_result_json(result: &CompilationResult) -> String {
     json
 }
 
+/// Assert policy compilation result matches golden file.
+/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
+/// golden_diag::GoldenDiag (bd-ub6x8.3).
 fn assert_policy_compiler_golden(result: &CompilationResult, test_name: &str) {
     let golden_file = policy_compiler_golden_path(test_name);
     let actual_json = canonical_policy_result_json(result);
-
-    if should_update_policy_goldens() {
-        if let Some(parent) = golden_file.parent() {
-            fs::create_dir_all(parent).expect("policy theorem golden directory should exist");
-        }
-        fs::write(&golden_file, &actual_json).expect("policy theorem golden should be writable");
-        return;
+    golden_diag::GoldenDiag {
+        framework_name: "Policy theorem compiler golden",
+        regen_env_var: "UPDATE_GOLDENS",
     }
-
-    let expected_json = fs::read_to_string(&golden_file).unwrap_or_else(|_| {
-        panic!(
-            "Policy theorem compiler golden missing: {}\n\
-             Run with UPDATE_GOLDENS=1 to create it, then review and commit the fixture.",
-            golden_file.display()
-        )
-    });
-
-    if actual_json != expected_json {
-        let actual_path = golden_file.with_extension("actual.json");
-        fs::write(&actual_path, &actual_json)
-            .expect("policy theorem actual output should be writable");
-        panic!(
-            "POLICY THEOREM GOLDEN MISMATCH: {test_name}\nExpected: {}\nActual:   {}",
-            golden_file.display(),
-            actual_path.display()
-        );
-    }
-
-    // Sweep any stale .actual.json sibling left by a prior failing run (bd-ub6x8.7).
-    let _ = fs::remove_file(golden_file.with_extension("actual.json"));
+    .assert_golden_match(&actual_json, &golden_file, test_name, None);
 }
 
 fn complex_policy_with_constraints() -> PolicyIr {

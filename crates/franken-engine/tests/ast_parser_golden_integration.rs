@@ -7,11 +7,15 @@
 //! compilation pipeline. Tests cover basic expressions, complex statements,
 //! declarations, module syntax, JSX/TSX, error recovery, and diagnostic output.
 
-use std::fs;
 use std::path::Path;
 use std::sync::LazyLock;
 
 use regex::Regex;
+
+// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
+// so cargo does not compile it as a standalone integration-test binary.
+#[path = "_support/golden_diag.rs"]
+mod golden_diag;
 
 // Hoisted scrub patterns (bd-ub6x8.13). The canonical_hash regex is fixed;
 // the span-field regex is shared across the 6 span fields by anchoring the
@@ -74,99 +78,31 @@ fn scrub_ast_dynamic_fields(json: &str) -> String {
     scrubbed
 }
 
+/// Shared GoldenDiag instance for AST/parse-error golden assertions.
+/// Delegates UPDATE_GOLDENS gating, read-or-panic, and .actual sweep to
+/// golden_diag::GoldenDiag (bd-ub6x8.3).
+fn ast_golden_diag() -> golden_diag::GoldenDiag {
+    golden_diag::GoldenDiag {
+        framework_name: "AST parser golden",
+        regen_env_var: "UPDATE_GOLDENS",
+    }
+}
+
 /// Assert AST structure matches golden file with scrubbed dynamic values.
 fn assert_ast_golden(test_name: &str, tree: &SyntaxTree) {
     let golden_path = Path::new("tests/golden/ast_parser").join(format!("{test_name}.golden"));
-
     let actual = serde_json::to_string_pretty(tree).expect("SyntaxTree should serialize to JSON");
-
     let scrubbed_actual = scrub_ast_dynamic_fields(&actual);
-
-    // UPDATE MODE: overwrite golden with scrubbed actual output
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
-        fs::write(&golden_path, &scrubbed_actual).unwrap();
-        eprintln!("[GOLDEN] Updated: {}", golden_path.display());
-        return;
-    }
-
-    // COMPARE MODE: diff scrubbed actual vs golden
-    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
-        panic!(
-            "Golden file missing: {}\n\
-             Run with UPDATE_GOLDENS=1 to create it\n\
-             Then review and commit: git diff tests/golden/ast_parser/",
-            golden_path.display()
-        )
-    });
-
-    if scrubbed_actual != expected {
-        let actual_path = golden_path.with_extension("actual");
-        fs::write(&actual_path, &scrubbed_actual).unwrap();
-
-        panic!(
-            "GOLDEN MISMATCH: {test_name}\n\n\
-             Expected: {}\n\
-             Actual: {}\n\n\
-             To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
-             To review: diff {} {}",
-            expected,
-            scrubbed_actual,
-            golden_path.display(),
-            actual_path.display(),
-        );
-    }
-
-    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
-    let _ = fs::remove_file(golden_path.with_extension("actual"));
+    ast_golden_diag().assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
 }
 
 /// Assert parse error matches golden file with scrubbed dynamic values.
 fn assert_parse_error_golden(test_name: &str, error: &ParseError) {
     let golden_path =
         Path::new("tests/golden/ast_parser").join(format!("{test_name}_error.golden"));
-
     let actual = serde_json::to_string_pretty(error).expect("ParseError should serialize to JSON");
-
     let scrubbed_actual = scrub_ast_dynamic_fields(&actual);
-
-    // UPDATE MODE: overwrite golden with scrubbed actual output
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
-        fs::write(&golden_path, &scrubbed_actual).unwrap();
-        eprintln!("[GOLDEN] Updated: {}", golden_path.display());
-        return;
-    }
-
-    // COMPARE MODE: diff scrubbed actual vs golden
-    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
-        panic!(
-            "Golden file missing: {}\n\
-             Run with UPDATE_GOLDENS=1 to create it\n\
-             Then review and commit: git diff tests/golden/ast_parser/",
-            golden_path.display()
-        )
-    });
-
-    if scrubbed_actual != expected {
-        let actual_path = golden_path.with_extension("actual");
-        fs::write(&actual_path, &scrubbed_actual).unwrap();
-
-        panic!(
-            "GOLDEN MISMATCH: {test_name}\n\n\
-             Expected: {}\n\
-             Actual: {}\n\n\
-             To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
-             To review: diff {} {}",
-            expected,
-            scrubbed_actual,
-            golden_path.display(),
-            actual_path.display(),
-        );
-    }
-
-    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
-    let _ = fs::remove_file(golden_path.with_extension("actual"));
+    ast_golden_diag().assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
 }
 
 // ---------------------------------------------------------------------------

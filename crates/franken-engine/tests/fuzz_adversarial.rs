@@ -19,6 +19,11 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use std::sync::LazyLock;
 
+// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
+// so cargo does not compile it as a standalone integration-test binary.
+#[path = "_support/golden_diag.rs"]
+mod golden_diag;
+
 // Hoisted scrub patterns (bd-ub6x8.13).
 static SCRUB_SHA256: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"sha256:[a-f0-9]{64}").unwrap());
@@ -1305,53 +1310,18 @@ struct DeterminismCheckSummary {
     repeat_event_ir_hash_matches: bool,
 }
 
-/// Golden file testing infrastructure
+/// Golden file testing infrastructure.
+/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
+/// golden_diag::GoldenDiag (bd-ub6x8.3).
 fn assert_golden_parser_boundary(test_name: &str, output: &ParserBoundaryOutput) {
     let golden_path = Path::new("tests/golden/parser_boundary").join(format!("{test_name}.json"));
-
-    // Serialize output with stable formatting
     let actual = serde_json::to_string_pretty(output).unwrap();
     let scrubbed_actual = scrub_parser_output(&actual);
-
-    // UPDATE MODE: overwrite golden with actual output
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(golden_path.parent().unwrap()).unwrap();
-        fs::write(&golden_path, &scrubbed_actual).unwrap();
-        eprintln!("[GOLDEN] Updated: {}", golden_path.display());
-        return;
+    golden_diag::GoldenDiag {
+        framework_name: "Parser boundary golden",
+        regen_env_var: "UPDATE_GOLDENS",
     }
-
-    // COMPARE MODE: diff actual vs golden
-    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
-        panic!(
-            "Golden file missing: {}\n\
-             Run with UPDATE_GOLDENS=1 to create it\n\
-             Then review and commit: git diff tests/golden/",
-            golden_path.display()
-        )
-    });
-
-    if scrubbed_actual != expected {
-        // Write actual for easy diffing
-        let actual_path = golden_path.with_extension("actual");
-        fs::write(&actual_path, &scrubbed_actual).unwrap();
-
-        panic!(
-            "GOLDEN MISMATCH: {test_name}\n\n\
-             Golden differs from actual output.\n\
-             Expected: {}\n\
-             Actual: {}\n\n\
-             To update: UPDATE_GOLDENS=1 cargo test -- {test_name}\n\
-             To review: diff {} {}",
-            golden_path.display(),
-            actual_path.display(),
-            golden_path.display(),
-            actual_path.display(),
-        );
-    }
-
-    // Sweep any stale .actual sibling left by a prior failing run (bd-ub6x8.7).
-    let _ = fs::remove_file(golden_path.with_extension("actual"));
+    .assert_golden_match(&scrubbed_actual, &golden_path, test_name, None);
 }
 
 /// Scrub non-deterministic values from parser output

@@ -74,7 +74,7 @@ pub enum IteratorTestCategory {
 
 /// Test result for individual conformance test case.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum IteratorConformanceResult {
+pub enum IteratorProtocolResult {
     /// Test passed - behavior matches ES2020 spec
     Pass,
     /// Test failed - behavior diverges from ES2020 spec
@@ -426,11 +426,11 @@ impl IteratorConformanceHarness {
 
             // Update statistics
             match result {
-                IteratorConformanceResult::Pass => statistics.passed += 1,
-                IteratorConformanceResult::Fail { .. } => statistics.failed += 1,
-                IteratorConformanceResult::Error { .. } => statistics.errored += 1,
-                IteratorConformanceResult::Skip { .. } => statistics.skipped += 1,
-                IteratorConformanceResult::ExpectedFail { .. } => statistics.expected_failures += 1,
+                IteratorProtocolResult::Pass => statistics.passed += 1,
+                IteratorProtocolResult::Fail { .. } => statistics.failed += 1,
+                IteratorProtocolResult::Error { .. } => statistics.errored += 1,
+                IteratorProtocolResult::Skip { .. } => statistics.skipped += 1,
+                IteratorProtocolResult::ExpectedFail { .. } => statistics.expected_failures += 1,
             }
 
             statistics.total_tests += 1;
@@ -465,14 +465,14 @@ impl IteratorConformanceHarness {
         &self,
         test: &IteratorConformanceTest,
         _security_epoch: SecurityEpoch,
-    ) -> IteratorConformanceResult {
+    ) -> IteratorProtocolResult {
         let mut engine = HybridRouter::default();
 
         let execution =
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.eval(&test.source)));
 
         match execution {
-            Err(panic) => IteratorConformanceResult::Error {
+            Err(panic) => IteratorProtocolResult::Error {
                 error: Self::panic_message(panic),
             },
             Ok(eval_result) => {
@@ -486,15 +486,15 @@ impl IteratorConformanceHarness {
         eval_result: EvalResult<EvalOutcome>,
         expected: &ExpectedResult,
         test_id: &str,
-    ) -> IteratorConformanceResult {
+    ) -> IteratorProtocolResult {
         match eval_result {
             Ok(outcome) => match expected {
                 ExpectedResult::Success { expected_output } => {
                     // FIX: Actually compare output instead of ignoring it
                     if outcome.value.trim() == expected_output.trim() {
-                        IteratorConformanceResult::Pass
+                        IteratorProtocolResult::Pass
                     } else {
-                        IteratorConformanceResult::Fail {
+                        IteratorProtocolResult::Fail {
                             reason: format!(
                                 "Output mismatch in {}: expected '{}', got '{}'",
                                 test_id, expected_output, outcome.value
@@ -502,13 +502,13 @@ impl IteratorConformanceHarness {
                         }
                     }
                 }
-                ExpectedResult::ThrowError { error_type } => IteratorConformanceResult::Fail {
+                ExpectedResult::ThrowError { error_type } => IteratorProtocolResult::Fail {
                     reason: format!(
                         "Expected error '{}' but execution succeeded in {}",
                         error_type, test_id
                     ),
                 },
-                ExpectedResult::IteratorSequence { values } => IteratorConformanceResult::Fail {
+                ExpectedResult::IteratorSequence { values } => IteratorProtocolResult::Fail {
                     reason: format!(
                         "Expected iterator sequence {:?} but got success in {}",
                         values, test_id
@@ -518,9 +518,9 @@ impl IteratorConformanceHarness {
             Err(error) => match expected {
                 ExpectedResult::ThrowError { error_type } => {
                     if matches_expected_error_type(&error, error_type) {
-                        IteratorConformanceResult::Pass
+                        IteratorProtocolResult::Pass
                     } else {
-                        IteratorConformanceResult::Fail {
+                        IteratorProtocolResult::Fail {
                             reason: format!(
                                 "Expected error '{}' but got '{}' in {}",
                                 error_type, error, test_id
@@ -528,13 +528,13 @@ impl IteratorConformanceHarness {
                         }
                     }
                 }
-                ExpectedResult::Success { expected_output } => IteratorConformanceResult::Error {
+                ExpectedResult::Success { expected_output } => IteratorProtocolResult::Error {
                     error: format!(
                         "Expected success with output '{}' but got error '{}' in {}",
                         expected_output, error, test_id
                     ),
                 },
-                ExpectedResult::IteratorSequence { values } => IteratorConformanceResult::Error {
+                ExpectedResult::IteratorSequence { values } => IteratorProtocolResult::Error {
                     error: format!(
                         "Expected iterator sequence {:?} but got error '{}' in {}",
                         values, error, test_id
@@ -558,7 +558,7 @@ impl IteratorConformanceHarness {
     /// Calculate coverage statistics by test category.
     fn calculate_coverage_by_category(
         &self,
-        results: &BTreeMap<String, IteratorConformanceResult>,
+        results: &BTreeMap<String, IteratorProtocolResult>,
     ) -> BTreeMap<IteratorTestCategory, CategoryStats> {
         let mut coverage: BTreeMap<IteratorTestCategory, CategoryStats> = BTreeMap::new();
 
@@ -568,8 +568,8 @@ impl IteratorConformanceHarness {
 
             if let Some(result) = results.get(&test.id) {
                 match result {
-                    IteratorConformanceResult::Pass => category_stats.passed += 1,
-                    IteratorConformanceResult::ExpectedFail { .. } => {
+                    IteratorProtocolResult::Pass => category_stats.passed += 1,
+                    IteratorProtocolResult::ExpectedFail { .. } => {
                         category_stats.expected_failures += 1
                     }
                     _ => {}
@@ -600,8 +600,8 @@ impl IteratorConformanceHarness {
             .filter(|t| {
                 matches!(
                     self.execute_test(t, SecurityEpoch::from_raw(1)),
-                    IteratorConformanceResult::Pass
-                        | IteratorConformanceResult::ExpectedFail { .. }
+                    IteratorProtocolResult::Pass
+                        | IteratorProtocolResult::ExpectedFail { .. }
                 )
             })
             .count() as u64;
@@ -645,7 +645,7 @@ pub struct IteratorConformanceReport {
     pub component: String,
     pub security_epoch: SecurityEpoch,
     pub timestamp: String,
-    pub test_results: BTreeMap<String, IteratorConformanceResult>,
+    pub test_results: BTreeMap<String, IteratorProtocolResult>,
     pub statistics: ConformanceStatistics,
     pub coverage_by_category: BTreeMap<IteratorTestCategory, CategoryStats>,
     pub compliance_score: f64,
@@ -697,7 +697,7 @@ impl IteratorConformanceReport {
 
         summary.push_str("\n## Failing Tests\n\n");
         for (test_id, result) in &self.test_results {
-            if let IteratorConformanceResult::Fail { reason } = result {
+            if let IteratorProtocolResult::Fail { reason } = result {
                 summary.push_str(&format!("- **{}:** {}\n", test_id, reason));
             }
         }

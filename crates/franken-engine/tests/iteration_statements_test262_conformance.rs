@@ -735,19 +735,27 @@ fn iteration_statements_test262_conformance_integration() {
     // This replaces a `>= 95%` MUST pass-rate floor that this de-novo, partial-JS
     // engine cannot currently meet (and that masked per-case regressions and
     // could never account for negative "should-throw" cases an is_ok harness
-    // cannot express). Instead, pin the EXACT set of cases the engine executes
-    // without error. Any drift — an engine fix that greens a frontier case, OR a
-    // regression that breaks a passing one — trips this test and forces a
-    // conscious update of EXPECTED_PASS rather than silently passing/failing.
+    // cannot express). Instead, the harness partitions every static case into
+    // exactly one of two named buckets:
     //
-    // Known frontier gaps behind the 14 currently-non-passing cases (do NOT
-    // silently expand): the parser rejects `//` line comments (several
-    // multi-line sources ParseError on the comment alone); arrow functions +
-    // array methods (.push/.length); custom `Symbol.iterator` protocol;
-    // destructuring patterns in for-of bindings (nested/defaults/rest); labeled
-    // break/continue; iterator `return()`/throw cleanup; let-TDZ enforcement;
-    // bare break/continue outside a loop. When an engine repair lands, move the
-    // case id into EXPECTED_PASS.
+    // * `EXPECTED_PASS`        — cases the engine currently executes cleanly.
+    // * `KNOWN_FAILING_CASES`  — cases held out as frontier gaps, each carrying
+    //                            an explicit bead + DISC-NNN reference so the
+    //                            gap is grep-able from CI output and
+    //                            machine-readable in compliance reports
+    //                            (bd-xkbrm FIND-5; cross-ref DISC-001..010 in
+    //                            `tests/ECMA262_DISCREPANCIES.md`).
+    //
+    // The drift detector asserts:
+    //
+    //   1. Every static case appears in exactly one bucket — no silent omissions.
+    //   2. Every `EXPECTED_PASS` id passes (regression → fail).
+    //   3. Every `KNOWN_FAILING_CASES` id still fails (gap closed → fail, force
+    //      promotion to `EXPECTED_PASS` and a bead/DISC update).
+    //
+    // The known-gap list with its bead/DISC tags is also printed inline below so
+    // CI logs surface the frontier inventory without requiring the reader to
+    // chase the DISCREPANCIES.md cross-reference.
     use std::collections::BTreeSet;
 
     const EXPECTED_PASS: &[&str] = &[
@@ -774,7 +782,39 @@ fn iteration_statements_test262_conformance_integration() {
         "while-statement-empty-body",
     ];
 
+    /// 14 frontier iteration-statement cases the engine currently does NOT pass.
+    /// Each entry pairs the test id with the tracking bead and the
+    /// `ECMA262_DISCREPANCIES.md` row that documents the gap (bd-xkbrm FIND-5).
+    /// Keep alphabetised by test id. When the engine repairs a gap, move the id
+    /// into `EXPECTED_PASS`, drop the entry here, and flip the cited DISC row to
+    /// `Status: RESOLVED`.
+    const KNOWN_FAILING_CASES: &[(&str, &str, &str)] = &[
+        // (test_id, tracking_bead, discrepancies_row)
+        ("break-for-of-early-exit", "bd-bg9l1.27", "DISC-001 (// line comments)"),
+        ("continue-for-of-skip", "bd-bg9l1.27", "DISC-001 (// line comments)"),
+        ("for-of-custom-iterator-basic", "bd-bg9l1.27", "DISC-003 (Symbol.iterator)"),
+        ("for-of-destructuring-defaults", "bd-bg9l1.27", "DISC-004 (for-of binding destructuring)"),
+        ("for-of-destructuring-nested", "bd-bg9l1.27", "DISC-004 (for-of binding destructuring)"),
+        ("for-of-destructuring-rest", "bd-bg9l1.27", "DISC-004 (for-of binding destructuring)"),
+        ("for-of-iterator-return-method", "bd-bg9l1.27", "DISC-009 (IteratorClose return)"),
+        ("for-of-iterator-throw-handling", "bd-bg9l1.27", "DISC-009 (IteratorClose throw)"),
+        ("for-statement-block-scope-isolation", "bd-bg9l1.27", "DISC-010 (per-iteration env)"),
+        ("for-statement-let-tdz", "bd-bg9l1.27", "DISC-007 (let TDZ)"),
+        ("labeled-break-statement", "bd-bg9l1.27", "DISC-006 (labelled break/continue)"),
+        ("labeled-continue-statement", "bd-bg9l1.27", "DISC-006 (labelled break/continue)"),
+        ("unlabeled-break-error", "bd-bg9l1.27", "DISC-008 (bare break/continue outside loop)"),
+        ("unlabeled-continue-error", "bd-bg9l1.27", "DISC-008 (bare break/continue outside loop)"),
+    ];
+
+    // Surface the frontier inventory in CI output so reviewers don't have to
+    // grep tests/ECMA262_DISCREPANCIES.md to know what's still red.
+    println!("\nKnown failing cases (bd-xkbrm — see tests/ECMA262_DISCREPANCIES.md):");
+    for (id, bead, disc) in KNOWN_FAILING_CASES {
+        println!("  {id}  [{bead}]  {disc}");
+    }
+
     let expected_pass: BTreeSet<&str> = EXPECTED_PASS.iter().copied().collect();
+    let expected_fail: BTreeSet<&str> = KNOWN_FAILING_CASES.iter().map(|(id, _, _)| *id).collect();
     let actual_pass: BTreeSet<&str> = IterationStatementConformanceHarness::STATIC_TEST_CASES
         .iter()
         .filter(|test_case| {
@@ -785,17 +825,54 @@ fn iteration_statements_test262_conformance_integration() {
         })
         .map(|test_case| test_case.id)
         .collect();
+    let all_ids: BTreeSet<&str> = IterationStatementConformanceHarness::STATIC_TEST_CASES
+        .iter()
+        .map(|test_case| test_case.id)
+        .collect();
 
+    let classified: BTreeSet<&str> =
+        expected_pass.union(&expected_fail).copied().collect();
+
+    // Invariant 1: every static case is in exactly one bucket.
+    let overlap: Vec<&str> = expected_pass.intersection(&expected_fail).copied().collect();
+    assert!(
+        overlap.is_empty(),
+        "bd-xkbrm: cases listed in BOTH EXPECTED_PASS and KNOWN_FAILING_CASES (must be one or the other): {overlap:?}"
+    );
+    let unclassified: Vec<&str> = all_ids.difference(&classified).copied().collect();
+    assert!(
+        unclassified.is_empty(),
+        "bd-xkbrm: static cases missing from BOTH EXPECTED_PASS and KNOWN_FAILING_CASES (silent omission is the bug this gate was added to prevent): {unclassified:?}"
+    );
+    let stale: Vec<&str> = classified.difference(&all_ids).copied().collect();
+    assert!(
+        stale.is_empty(),
+        "bd-xkbrm: EXPECTED_PASS / KNOWN_FAILING_CASES reference test ids that no longer exist in STATIC_TEST_CASES — prune them: {stale:?}"
+    );
+
+    // Invariant 2: every EXPECTED_PASS id still passes.
     let newly_failing: Vec<&str> = expected_pass.difference(&actual_pass).copied().collect();
-    let newly_passing: Vec<&str> = actual_pass.difference(&expected_pass).copied().collect();
-
     assert!(
         newly_failing.is_empty(),
         "REGRESSION: iteration cases that used to execute cleanly now fail: {newly_failing:?}"
     );
+
+    // Invariant 3: every KNOWN_FAILING_CASES id still fails — if one started
+    // passing, promote it to EXPECTED_PASS and update the cited DISC row.
+    let gap_closed: Vec<&str> = expected_fail.intersection(&actual_pass).copied().collect();
     assert!(
-        newly_passing.is_empty(),
-        "PROGRESS: frontier iteration cases now pass: {newly_passing:?}. Move them into \
-         EXPECTED_PASS to lock in the gain (and update the engine-gap tracking)."
+        gap_closed.is_empty(),
+        "PROGRESS (bd-xkbrm): KNOWN_FAILING_CASES entries now pass — promote them to EXPECTED_PASS \
+         and flip the cited DISC row in tests/ECMA262_DISCREPANCIES.md to RESOLVED: {gap_closed:?}"
+    );
+
+    // Invariant 2b: any case outside both EXPECTED_PASS and KNOWN_FAILING_CASES
+    // that now passes is a brand-new uncatalogued case the harness forgot to
+    // classify. Should fail loudly so the partition stays exhaustive.
+    let uncatalogued_pass: Vec<&str> =
+        actual_pass.difference(&classified).copied().collect();
+    assert!(
+        uncatalogued_pass.is_empty(),
+        "bd-xkbrm: uncatalogued cases pass — add them to EXPECTED_PASS or KNOWN_FAILING_CASES: {uncatalogued_pass:?}"
     );
 }

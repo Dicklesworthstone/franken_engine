@@ -1361,6 +1361,19 @@ impl EvidenceLog {
     }
 
     /// Add a new decision receipt to the chain.
+    ///
+    /// `timestamp` is a caller-supplied deterministic clock value (typically
+    /// the interpreter's `instructions_executed` counter). The previous
+    /// implementation read `SystemTime::now().as_secs()` here, which made
+    /// the receipt-chain HMAC preimage wall-clock-dependent — a replay at
+    /// a different real-time produced a different signature even for
+    /// byte-identical extension input, breaking the replay-determinism
+    /// contract from `AGENTS.md` and rendering receipt chains unverifiable
+    /// across replays (bd-jn3uv.1, sibling of bd-jn3uv which fixed the
+    /// guardplane-side). Callers from non-deterministic surfaces (e.g.
+    /// the `frankenctl evidence export` path that wants wall-clock
+    /// stamping) MUST adapt to inject their own clock value; the engine no
+    /// longer reaches for `SystemTime` here.
     pub fn add_receipt(
         &mut self,
         extension_id: ExtensionId,
@@ -1369,12 +1382,8 @@ impl EvidenceLog {
         action_taken: String,
         instruction_pointer: usize,
         register_state: &[Value],
+        timestamp: u64,
     ) -> &DecisionReceipt {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-
         let register_state_hash = self.compute_register_hash(register_state);
         let previous_receipt_hash = self.receipts.last().map(|r| r.signature.clone());
 
@@ -4663,7 +4672,9 @@ impl InterpreterCore {
             ),
         };
 
-        // Add decision receipt to the evidence chain
+        // Add decision receipt to the evidence chain. The timestamp is the
+        // interpreter's deterministic instruction counter (bd-jn3uv.1) so
+        // the receipt-chain HMAC preimage round-trips across replays.
         self.decision_receipts.add_receipt(
             self.config
                 .extension_id
@@ -4674,6 +4685,7 @@ impl InterpreterCore {
             action_taken,
             self.ip,
             &self.registers,
+            self.instructions_executed,
         );
 
         // Create witness event with current structure
@@ -28849,6 +28861,7 @@ mod tests {
                 "sandbox".to_string(),
                 0,
                 &[Value::Int(1)],
+                42, // deterministic timestamp (bd-jn3uv.1)
             );
 
             assert!(log.verify_chain());

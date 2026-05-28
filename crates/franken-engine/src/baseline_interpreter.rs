@@ -20175,19 +20175,6 @@ impl InterpreterCore {
         Ok(id)
     }
 
-    /// Allocate a new object on the heap and return its ID.
-    ///
-    /// This method has been removed to prevent panics on memory exhaustion.
-    /// Use `alloc_object_with_prototype(None)?` instead for fallible allocation.
-    #[deprecated(
-        since = "0.1.0",
-        note = "Use alloc_object_with_prototype(None)? instead to avoid panics on memory exhaustion"
-    )]
-    pub fn alloc_object(&mut self) -> ObjectId {
-        self.alloc_object_with_prototype(None)
-            .expect("heap object allocation failed")
-    }
-
     fn alloc_iterator(&mut self, iterator: RuntimeIteratorState) -> Result<u32, InterpreterError> {
         let handle =
             u32::try_from(self.iterators.len()).map_err(|_| InterpreterError::TypeError {

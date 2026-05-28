@@ -3536,7 +3536,20 @@ impl InterpreterCore {
             })?;
             &canonical_root_storage
         } else {
-            return Ok(canonical);
+            // bd-zpn3w: fail-closed when no module root is configured. The
+            // previous code returned `Ok(canonical)` here, silently skipping
+            // the escape check — a caller who forgot to set `module_root`
+            // believed the boundary was enforced but it wasn't, exposing a
+            // filesystem-read pivot to any extension that issues a relative
+            // `require()`. Refusing without a configured root preserves
+            // Axiom-1 fail-closed defaults from `bd-ooaka`.
+            return Err(InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(
+                    "module root not configured — refusing to resolve without an escape boundary"
+                        .to_string(),
+                ),
+            });
         };
 
         if !canonical.starts_with(canonical_root) {
@@ -3544,6 +3557,30 @@ impl InterpreterCore {
                 specifier: specifier.to_string(),
                 reason: ModuleResolutionFailureReason::Other(
                     "module specifier escapes module root".to_string(),
+                ),
+            });
+        }
+
+        // bd-zpn3w: post-canonical `metadata().is_file()` check closes the
+        // TOCTOU window between the `resolve_module_candidate` `is_file()`
+        // probe (which does not follow symlinks) and this `canonicalize()`
+        // (which does). Between the two `stat` calls an attacker on a shared
+        // filesystem can swap a regular file for a symlink to a directory,
+        // device, or socket — the previous code would have returned that
+        // canonical path as if it were the requested module.
+        let canonical_metadata = std::fs::metadata(&canonical).map_err(|error| {
+            InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(format!(
+                    "failed to read canonical module metadata: {error}"
+                )),
+            }
+        })?;
+        if !canonical_metadata.is_file() {
+            return Err(InterpreterError::ModuleResolutionFailed {
+                specifier: specifier.to_string(),
+                reason: ModuleResolutionFailureReason::Other(
+                    "canonical module path is not a regular file".to_string(),
                 ),
             });
         }
@@ -21998,6 +22035,13 @@ mod module_resolution_security_tests {
         core
     }
 
+    fn core_no_root(entry: &Path) -> InterpreterCore {
+        let config = InterpreterConfig::quickjs_defaults();
+        let mut core = InterpreterCore::new(config, "module-resolution-security-test");
+        core.current_module_specifier = Some(entry.display().to_string());
+        core
+    }
+
     #[test]
     fn module_resolution_keeps_extension_probe_inside_root()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -22065,6 +22109,87 @@ mod module_resolution_security_tests {
                 ..
             } if reason.contains("absolute paths not allowed")
         ));
+        Ok(())
+    }
+
+    /// bd-zpn3w: when neither `canonical_module_root` nor `module_root` is set,
+    /// the resolver must NOT silently bypass the escape-boundary check. The
+    /// previous fail-open path returned the canonical path unconditionally,
+    /// which let an extension with a relative specifier read files anywhere
+    /// the host process could reach. The fix returns
+    /// `ModuleResolutionFailed` with a descriptive reason instead.
+    #[test]
+    fn module_resolution_fails_closed_without_configured_root()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let entry = temp.path().join("entry.js");
+        let neighbour = temp.path().join("neighbour.js");
+        fs::write(&entry, "import './neighbour';")?;
+        fs::write(&neighbour, "export const value = 1;")?;
+
+        let core = core_no_root(&entry);
+        let err = core
+            .resolve_module_specifier("./neighbour")
+            .expect_err("relative resolution without a module root must fail closed");
+
+        assert!(
+            matches!(
+                &err,
+                InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::Other(reason),
+                    ..
+                } if reason.contains("module root not configured")
+            ),
+            "expected 'module root not configured' fail-closed error, got: {err:?}"
+        );
+        Ok(())
+    }
+
+    /// bd-zpn3w: the post-canonical `metadata().is_file()` check rejects a
+    /// canonical path that is a directory. The standard library's
+    /// `Path::is_file()` already follows symlinks, so the
+    /// `resolve_module_candidate` probe agrees with the post-canonical
+    /// metadata for any *steady-state* setup; the post-canonical check is
+    /// real defense-in-depth for a TOCTOU race where the file is swapped
+    /// between the probe and `canonicalize()`. Race-based assertions are
+    /// inherently non-deterministic for a unit test, so this test exercises
+    /// the failure-shape contract directly: a deliberately-constructed
+    /// candidate that bypasses the probe (via the index.{mjs,js}
+    /// "directory has matching index" code path with a directory only
+    /// containing a same-named subdirectory) confirms the post-canonical
+    /// rejection still fires.
+    #[test]
+    fn module_resolution_rejects_canonical_non_regular_file()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path().join("app");
+        fs::create_dir_all(&root)?;
+        let entry = root.join("entry.js");
+        fs::write(&entry, "import './dep';")?;
+        // `./dep/` is a directory with no `index.{mjs,js}` and no
+        // `dep.{mjs,js}` next to it, so `resolve_module_candidate` returns
+        // `None` and the resolver short-circuits with `ModuleNotFound`. To
+        // assert the post-canonical metadata path, we invoke
+        // `canonicalize_module_candidate` directly with the directory
+        // candidate and confirm it rejects.
+        let dep_dir = root.join("dep");
+        fs::create_dir_all(&dep_dir)?;
+
+        let core = core_with_root(&root, &entry);
+        let err = core
+            .canonicalize_module_candidate("./dep", &dep_dir)
+            .expect_err("canonical path that is a directory must be rejected post-canonicalize");
+
+        assert!(
+            matches!(
+                &err,
+                InterpreterError::ModuleResolutionFailed {
+                    reason: ModuleResolutionFailureReason::Other(reason),
+                    ..
+                } if reason.contains("canonical module path is not a regular file")
+            ),
+            "expected post-canonical non-regular-file rejection, got: {err:?}"
+        );
         Ok(())
     }
 }

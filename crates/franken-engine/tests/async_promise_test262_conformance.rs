@@ -371,6 +371,70 @@ impl AsyncPromiseHarness {
                     output: "nested\nthenable\n".to_string(),
                 },
             },
+            // ─── Rejection-path coverage (bd-hjfj1 FIND-21) ───────────────────
+            // FIND-21 in the bd-85qfs audit flagged that this harness only
+            // exercised happy-path rejection (Promise.reject → .catch → Success)
+            // and had no fixtures asserting how *unrecovered* rejections,
+            // chained rejections, or aggregate rejections propagate. The four
+            // cases below add that coverage while staying within the engine's
+            // current Promise / async support surface.
+            AsyncPromiseTest {
+                id: "ES2020-25.6.5.1-catch-after-deep-then-chain-receives-original-reason"
+                    .to_string(),
+                description:
+                    "Rejection propagates through pass-through .then handlers until the next \
+                     .catch — the catch receives the original reason, not a wrapped exception."
+                        .to_string(),
+                es_section: "25.6.5.1".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::RejectCatch,
+                source: "Promise.reject('original').then(v => v + '-a').then(v => v + '-b').catch(r => console.log(r));".to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "original\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-25.6.4.1-promise-all-rejects-on-first-failure".to_string(),
+                description:
+                    "Promise.all([resolve, reject, resolve]) settles as rejected with the \
+                     single rejection reason (short-circuit semantics)."
+                        .to_string(),
+                es_section: "25.6.4.1".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::PromiseAll,
+                source: "Promise.all([Promise.resolve(1), Promise.reject('boom'), Promise.resolve(3)]).catch(r => console.log(r));".to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "boom\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-25.6.5.1-rejection-in-handler-overrides-original-reason".to_string(),
+                description:
+                    "A .catch handler that itself throws produces a new rejected promise whose \
+                     reason is the thrown value (not the original)."
+                        .to_string(),
+                es_section: "25.6.5.1".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::RejectCatch,
+                source: "Promise.reject('first').catch(() => { throw 'second'; }).catch(r => console.log(r));".to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "second\n".to_string(),
+                },
+            },
+            AsyncPromiseTest {
+                id: "ES2020-15.8-async-function-throw-rejects-returned-promise".to_string(),
+                description:
+                    "An async function whose body throws synchronously returns a rejected \
+                     promise; the rejection is observable via .catch on the call site."
+                        .to_string(),
+                es_section: "15.8".to_string(),
+                requirement_level: RequirementLevel::Must,
+                category: AsyncPromiseCategory::AsyncFunctionFulfillment,
+                source: "async function bad() { throw 'from-async'; } bad().catch(r => console.log(r));".to_string(),
+                expected_result: ExpectedResult::Success {
+                    output: "from-async\n".to_string(),
+                },
+            },
         ]
     }
 

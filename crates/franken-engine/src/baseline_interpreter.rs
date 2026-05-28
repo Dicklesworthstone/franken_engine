@@ -171,6 +171,13 @@ const DEFAULT_V8_MAX_CONSOLE_ENTRIES: usize = 10_000;
 /// Default scope-chain depth budget for all interpreter profiles.
 const DEFAULT_MAX_SCOPE_DEPTH: u32 = 512;
 
+/// Domain-separation tag for the HMAC preimage of a [`DecisionReceipt`]
+/// (bd-gn3mt). Mirrors the
+/// [`crate::tee_attestation_policy`] `QUOTE_SIGNATURE_DOMAIN` pattern so a
+/// signature minted for an attestation quote can never collide with one minted
+/// for a decision receipt under the same HMAC key.
+const RECEIPT_SIGNATURE_DOMAIN: &[u8] = b"FrankenEngine.DecisionReceipt.Signature.v1";
+
 /// Maximum call-stack depth.
 const MAX_CALL_DEPTH: usize = 256;
 /// Deterministic bound for baseline prototype-chain walks.
@@ -1482,27 +1489,65 @@ impl EvidenceLog {
             .into()
     }
 
-    /// Create the message to be signed for a receipt.
-    fn receipt_signing_message(&self, receipt: &DecisionReceipt) -> String {
-        format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}",
-            receipt.extension_id,
-            receipt.operation_type,
-            receipt.risk_score,
-            receipt.action_taken,
-            receipt.timestamp,
-            receipt.instruction_pointer,
-            receipt.register_state_hash,
-            receipt.previous_receipt_hash.as_deref().unwrap_or("")
-        )
+    /// Build the binary signing preimage for a receipt (bd-gn3mt).
+    ///
+    /// The previous implementation joined fields with `|` characters:
+    ///
+    /// ```text
+    /// "{extension_id}|{operation_type}|{risk_score}|{action_taken}|…"
+    /// ```
+    ///
+    /// That preimage was vulnerable to field-boundary smuggling — an attacker
+    /// who could place a `|` byte inside any variable-length field
+    /// (`extension_id`, `operation_type`, `action_taken`, `register_state_hash`,
+    /// `previous_receipt_hash`) could shift the semantic field boundaries so
+    /// a downstream verifier that split on `|` saw an entirely different
+    /// receipt (e.g. action_taken="GRANT_ADMIN" smuggled through extension_id).
+    ///
+    /// The replacement mirrors the established
+    /// [`crate::tee_attestation_policy::AttestationQuote::signing_preimage`]
+    /// pattern: a fixed leading domain-separation tag (so the same HMAC key
+    /// cannot collide with any other receipt class), a `0xff` sentinel between
+    /// the tag and the first field, and a 64-bit big-endian length prefix in
+    /// front of every variable-length string field. Numeric fields are
+    /// serialised as fixed-width big-endian byte sequences so they cannot
+    /// shrink into a neighbour. The `previous_receipt_hash` `Option<String>`
+    /// is encoded as a one-byte present/absent tag followed by an optional
+    /// length-prefixed payload.
+    fn receipt_signing_message(&self, receipt: &DecisionReceipt) -> Vec<u8> {
+        fn push_len_prefixed(buf: &mut Vec<u8>, bytes: &[u8]) {
+            buf.extend_from_slice(&(bytes.len() as u64).to_be_bytes());
+            buf.extend_from_slice(bytes);
+        }
+
+        let mut preimage = Vec::with_capacity(256);
+        preimage.extend_from_slice(RECEIPT_SIGNATURE_DOMAIN);
+        preimage.push(0xff);
+        push_len_prefixed(&mut preimage, receipt.extension_id.as_bytes());
+        push_len_prefixed(&mut preimage, receipt.operation_type.as_bytes());
+        preimage.extend_from_slice(&receipt.risk_score.to_be_bytes());
+        push_len_prefixed(&mut preimage, receipt.action_taken.as_bytes());
+        preimage.extend_from_slice(&receipt.timestamp.to_be_bytes());
+        preimage.extend_from_slice(&(receipt.instruction_pointer as u64).to_be_bytes());
+        push_len_prefixed(&mut preimage, receipt.register_state_hash.as_bytes());
+        match receipt.previous_receipt_hash.as_deref() {
+            Some(prev) => {
+                preimage.push(1);
+                push_len_prefixed(&mut preimage, prev.as_bytes());
+            }
+            None => {
+                preimage.push(0);
+            }
+        }
+        preimage
     }
 
-    /// Compute HMAC-SHA256 of a message.
-    fn compute_hmac(&self, message: &str) -> String {
+    /// Compute HMAC-SHA256 of a binary message.
+    fn compute_hmac(&self, message: &[u8]) -> String {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.signing_key).unwrap_or_else(|_| {
             panic!("32-byte signing key should always be valid for HMAC-SHA256")
         });
-        mac.update(message.as_bytes());
+        mac.update(message);
         format!("hmac-sha256-{}", hex::encode(mac.finalize().into_bytes()))
     }
 
@@ -1594,6 +1639,123 @@ mod evidence_log_signing_key_tests {
         assert!(
             key.iter().any(|&b| b != key[0]),
             "key must contain at least two distinct byte values",
+        );
+    }
+
+    /// bd-gn3mt regression guard: a `|` character inserted inside any
+    /// variable-length string field MUST NOT yield a preimage that equals the
+    /// preimage of some *legitimate* receipt with different semantic field
+    /// values. The pre-fix construction used `format!("{}|{}|{}…", …)` which
+    /// allowed an attacker who controlled `extension_id` to embed `|read|0|`
+    /// and shift the field boundary so a downstream `|`-splitting verifier
+    /// saw a different receipt. The new construction prefixes every variable
+    /// field with its `u64::to_be_bytes()` length, so the boundaries are
+    /// pinned by the prefix, not by an in-band delimiter.
+    #[test]
+    fn receipt_signing_preimage_resists_pipe_smuggling() {
+        let key = [0x42u8; 32];
+        let log = EvidenceLog::with_key(key);
+
+        let legitimate = DecisionReceipt {
+            extension_id: "legitimate-ext".to_string(),
+            operation_type: "read".to_string(),
+            risk_score: 0,
+            action_taken: "ALLOW".to_string(),
+            timestamp: 1000,
+            instruction_pointer: 42,
+            register_state_hash: "abc".to_string(),
+            previous_receipt_hash: Some("xyz".to_string()),
+            signature: String::new(),
+        };
+
+        let smuggled = DecisionReceipt {
+            extension_id: "legitimate-ext|read|0|ALLOW".to_string(),
+            operation_type: String::new(),
+            risk_score: 0,
+            action_taken: String::new(),
+            timestamp: 1000,
+            instruction_pointer: 42,
+            register_state_hash: "abc".to_string(),
+            previous_receipt_hash: Some("xyz".to_string()),
+            signature: String::new(),
+        };
+
+        let pre_legit = log.receipt_signing_message(&legitimate);
+        let pre_smug = log.receipt_signing_message(&smuggled);
+
+        assert_ne!(
+            pre_legit, pre_smug,
+            "bd-gn3mt: pipe-bearing extension_id must NOT collide with the canonical preimage",
+        );
+        // And the HMACs must differ, which is what the verifier actually checks.
+        assert_ne!(
+            log.sign_receipt(&legitimate),
+            log.sign_receipt(&smuggled),
+            "bd-gn3mt: HMAC of pipe-bearing extension_id must differ from canonical HMAC",
+        );
+    }
+
+    /// bd-gn3mt regression guard: the preimage MUST start with the
+    /// domain-separation tag. Without it, an HMAC signed for an attestation
+    /// quote (which uses `FrankenEngine.AttestationQuote.Signature.v1`)
+    /// or any other future signed-message type could collide with a receipt
+    /// HMAC under the same key.
+    #[test]
+    fn receipt_signing_preimage_starts_with_domain_tag() {
+        let log = EvidenceLog::with_key([0x33u8; 32]);
+        let receipt = DecisionReceipt {
+            extension_id: "ext".to_string(),
+            operation_type: "op".to_string(),
+            risk_score: 0,
+            action_taken: "ALLOW".to_string(),
+            timestamp: 0,
+            instruction_pointer: 0,
+            register_state_hash: String::new(),
+            previous_receipt_hash: None,
+            signature: String::new(),
+        };
+        let preimage = log.receipt_signing_message(&receipt);
+        assert!(
+            preimage.starts_with(RECEIPT_SIGNATURE_DOMAIN),
+            "preimage must start with the domain-separation tag",
+        );
+        // The domain tag must end with the 0xff separator so the first
+        // length-prefixed field's leading length byte cannot be misread as
+        // tag text.
+        assert_eq!(
+            preimage[RECEIPT_SIGNATURE_DOMAIN.len()],
+            0xff,
+            "0xff separator must immediately follow the domain tag",
+        );
+    }
+
+    /// bd-gn3mt regression guard: the preimage encodes Option<String>
+    /// (previous_receipt_hash) with an explicit 1-byte present/absent tag, so
+    /// `Some("")` and `None` MUST produce different preimages — otherwise an
+    /// attacker could elide the chain link on a first receipt and re-sign a
+    /// non-first receipt with the same preimage.
+    #[test]
+    fn receipt_signing_preimage_distinguishes_none_from_empty_prev_hash() {
+        let log = EvidenceLog::with_key([0x55u8; 32]);
+        let base = DecisionReceipt {
+            extension_id: "ext".to_string(),
+            operation_type: "op".to_string(),
+            risk_score: 1,
+            action_taken: "ALLOW".to_string(),
+            timestamp: 1,
+            instruction_pointer: 1,
+            register_state_hash: "h".to_string(),
+            previous_receipt_hash: None,
+            signature: String::new(),
+        };
+        let with_empty = DecisionReceipt {
+            previous_receipt_hash: Some(String::new()),
+            ..base.clone()
+        };
+        assert_ne!(
+            log.receipt_signing_message(&base),
+            log.receipt_signing_message(&with_empty),
+            "None and Some(\"\") for previous_receipt_hash must yield distinct preimages",
         );
     }
 
@@ -28666,7 +28828,8 @@ mod tests {
             let signature = log.sign_receipt(&receipt);
             let mut expected_mac =
                 Hmac::<Sha256>::new_from_slice(&key).expect("operation should succeed for valid inputs");
-            expected_mac.update(log.receipt_signing_message(&receipt).as_bytes());
+            // bd-gn3mt: receipt_signing_message now returns Vec<u8> directly.
+            expected_mac.update(&log.receipt_signing_message(&receipt));
             let expected = format!(
                 "hmac-sha256-{}",
                 hex::encode(expected_mac.finalize().into_bytes())

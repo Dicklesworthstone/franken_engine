@@ -39,13 +39,23 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-001: Parser rejects `//` line comments in multi-line test sources
 
-- **Status:** WILL-FIX
+- **Status:** RESOLVED (2026-05-28, bd-bg9l1.27.1)
 - **ES2020 ref:** §11.4 (Comments)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
 - **Affected tests:** `for-statement-let-tdz`, `break-for-of-early-exit`, `continue-for-of-skip`, `unlabeled-break-continue-error`, `for-of-iterator-throw-handling`
 - **Symptom:** The parser's `merge_logical_lines` chokepoint pushes the entire line text into the logical-line buffer *before* the `//` token is detected by the scan loop, so the inline comment survives into `parse_source` and triggers `ParseErrorCode::UnexpectedToken`.
-- **Test verdict expression:** Currently invisible — the affected cases are absent from `EXPECTED_PASS` in `tests/iteration_statements_test262_conformance.rs:744`, which means they are silently failing. Cross-reference DISC-005 (the exact-gap drift detector hides this).
-- **Tracking bead:** bd-bg9l1.27
+- **Resolution:** bd-bg9l1.27.1 adds a `strip_comments_to_whitespace` pre-pass in
+  `parse_source` (runs before `merge_logical_lines`) that blanks `//` line and
+  `/* */` block comment bytes to spaces while preserving newlines and byte
+  offsets (so spans stay aligned) and leaving strings / template literals /
+  regex literals intact (mirrors the `merge_logical_lines_slash_starts_regex`
+  heuristic). The comment text no longer reaches `split_statement_segments`.
+  `continue-for-of-skip` now passes and is promoted to `EXPECTED_PASS`. The other
+  cases that *also* carried trailing comments still fail, but now for their own
+  deeper reasons tracked by separate rows: `for-statement-let-tdz` → DISC-007,
+  `unlabeled-break-continue-error` → DISC-008, `for-of-iterator-throw-handling`
+  → DISC-009, `break-for-of-early-exit` → DISC-012 (Array methods).
+- **Tracking bead:** bd-bg9l1.27.1 (closed)
 - **Reviewed:** 2026-05-28
 - **Next review:** 2026-06-28
 
@@ -73,12 +83,23 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-004: for-of binding destructuring (nested patterns, defaults, rest) not supported
 
-- **Status:** WILL-FIX
+- **Status:** RESOLVED (2026-05-28, bd-bg9l1.27.1)
 - **ES2020 ref:** §13.7.5.13 (Runtime Semantics: BindingInitialization), §13.3.3 (Destructuring Binding Patterns)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`, `tests/destructuring_binding_test262_conformance.rs`
 - **Affected tests:** the for-of-binding subset where the binding is `[a, b]`, `{x, y}`, `[a = 1, b]`, or `[...rest]`.
 - **Symptom:** Parser accepts the syntax, but lowering does not emit destructuring instructions in the for-of head context.
-- **Tracking bead:** bd-bg9l1.27
+- **Resolution:** The original symptom was mis-attributed. Lowering *does* emit
+  for-of destructuring instructions; the three `iteration_statements`
+  destructuring cases (`for-of-destructuring-defaults`, `-nested`, `-rest`)
+  were failing only because their sources carried `//` trailing comments that
+  `parse_source` rejected (DISC-001). With the bd-bg9l1.27.1 comment-strip
+  pre-pass in place, all three now pass and are promoted to `EXPECTED_PASS`.
+  bd-bg9l1.27.2 independently added
+  `tests/for_of_destructuring_lowering_conformance.rs` proving the for-of
+  destructuring lowering path is correct (commit a0e01b2a).
+  (If that harness later surfaces a genuine for-of destructuring lowering gap,
+  open a fresh row rather than reopening this one.)
+- **Tracking bead:** bd-bg9l1.27.1 (closed); see also bd-bg9l1.27.2
 - **Reviewed:** 2026-05-28
 - **Next review:** 2026-06-28
 
@@ -161,9 +182,27 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Reviewed:** 2026-05-28
 - **Next review:** 2026-08-26
 
+### DISC-012: `Array.prototype.push` / `Array.prototype.length` not supported in for-of bodies
+
+- **Status:** WILL-FIX
+- **ES2020 ref:** §22.1.3.18 (Array.prototype.push), §22.1.3.x (length own property)
+- **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
+- **Affected tests:** `break-for-of-early-exit`
+- **Symptom:** `break-for-of-early-exit` builds an array via `seen.push(value)` and
+  reads `seen.length` to assert the loop body ran the expected number of times.
+  Once the `//` comment leak (DISC-001) was fixed the case parses cleanly, but it
+  still fails: the interpreter does not evaluate `Array.prototype.push` /
+  `.length` against an array literal binding. This is the remaining blocker on
+  this case (the `break`-in-for-of control flow itself is fine — see the passing
+  `continue-for-of-skip`, which uses only `sum +=`).
+- **Tracking bead:** bd-bg9l1.27 (was mis-filed under DISC-001 / comment leak)
+- **Reviewed:** 2026-05-28
+- **Next review:** 2026-06-28
+
 ## Resolved divergences
 
-*(none yet — first divergences land in this file in the same commit that creates it)*
+- **DISC-001** — `//` comment leak in `merge_logical_lines` — RESOLVED 2026-05-28 (bd-bg9l1.27.1).
+- **DISC-004** — for-of binding destructuring — RESOLVED 2026-05-28 (bd-bg9l1.27.1; symptom was the DISC-001 comment leak, not a lowering gap).
 
 ## Out-of-spec features (intentional non-divergences)
 

@@ -760,6 +760,7 @@ fn iteration_statements_test262_conformance_integration() {
 
     const EXPECTED_PASS: &[&str] = &[
         "break-statement-for-loop",
+        "continue-for-of-skip",
         "continue-statement-while-loop",
         "do-while-statement-basic",
         "do-while-statement-single-iteration",
@@ -768,6 +769,9 @@ fn iteration_statements_test262_conformance_integration() {
         "for-in-statement-var-declaration",
         "for-of-array-iterator-simple",
         "for-of-destructuring-basic",
+        "for-of-destructuring-defaults",
+        "for-of-destructuring-nested",
+        "for-of-destructuring-rest",
         "for-of-statement-array",
         "for-of-statement-basic",
         "for-of-statement-const-declaration",
@@ -782,7 +786,10 @@ fn iteration_statements_test262_conformance_integration() {
         "while-statement-empty-body",
     ];
 
-    /// 14 frontier iteration-statement cases the engine currently does NOT pass.
+    /// 10 frontier iteration-statement cases the engine currently does NOT pass.
+    /// (Was 14; bd-bg9l1.27.1 resolved the `//` comment-leak — DISC-001 — which
+    /// unblocked `continue-for-of-skip` and the three `for-of-destructuring-*`
+    /// cases, all now promoted to `EXPECTED_PASS`.)
     /// Each entry pairs the test id with the tracking bead and the
     /// `ECMA262_DISCREPANCIES.md` row that documents the gap (bd-xkbrm FIND-5).
     /// Keep alphabetised by test id. When the engine repairs a gap, move the id
@@ -790,12 +797,8 @@ fn iteration_statements_test262_conformance_integration() {
     /// `Status: RESOLVED`.
     const KNOWN_FAILING_CASES: &[(&str, &str, &str)] = &[
         // (test_id, tracking_bead, discrepancies_row)
-        ("break-for-of-early-exit", "bd-bg9l1.27", "DISC-001 (// line comments)"),
-        ("continue-for-of-skip", "bd-bg9l1.27", "DISC-001 (// line comments)"),
+        ("break-for-of-early-exit", "bd-bg9l1.27", "DISC-012 (Array.prototype.push/.length)"),
         ("for-of-custom-iterator-basic", "bd-bg9l1.27", "DISC-003 (Symbol.iterator)"),
-        ("for-of-destructuring-defaults", "bd-bg9l1.27", "DISC-004 (for-of binding destructuring)"),
-        ("for-of-destructuring-nested", "bd-bg9l1.27", "DISC-004 (for-of binding destructuring)"),
-        ("for-of-destructuring-rest", "bd-bg9l1.27", "DISC-004 (for-of binding destructuring)"),
         ("for-of-iterator-return-method", "bd-bg9l1.27", "DISC-009 (IteratorClose return)"),
         ("for-of-iterator-throw-handling", "bd-bg9l1.27", "DISC-009 (IteratorClose throw)"),
         ("for-statement-block-scope-isolation", "bd-bg9l1.27", "DISC-010 (per-iteration env)"),

@@ -91,7 +91,9 @@ where
             &request(*domain, 7, context("extension-alpha", "session-1"), 32),
         );
         assert_eq!(key.domain, *domain);
-        by_domain.insert(key.key_bytes);
+        // Clone — `DerivedKey` now `Drop`s and zeroizes `key_bytes`
+        // (bd-i6vjn), so the field can't be moved out (E0509).
+        by_domain.insert(key.key_bytes.clone());
     }
     assert_eq!(
         by_domain.len(),

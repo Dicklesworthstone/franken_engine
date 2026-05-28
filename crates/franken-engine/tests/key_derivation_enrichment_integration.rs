@@ -205,7 +205,9 @@ fn integ_different_domains_different_keys() {
     let mut key_set = BTreeSet::new();
     for d in KeyDomain::ALL {
         let key = derive_key(*d, ep(1), &ctx);
-        key_set.insert(key.key_bytes);
+        // Clone — DerivedKey Drop zeroizes key_bytes (bd-i6vjn), so the
+        // field can't be moved out.
+        key_set.insert(key.key_bytes.clone());
     }
     assert_eq!(key_set.len(), 5);
 }
@@ -522,7 +524,9 @@ fn integ_cache_all_five_domains_unique_keys() {
     let mut key_set = BTreeSet::new();
     for d in KeyDomain::ALL {
         let key = cache.get_or_derive(*d, &ctx, "t").unwrap().clone();
-        key_set.insert(key.key_bytes);
+        // Clone — DerivedKey Drop zeroizes key_bytes (bd-i6vjn), so the
+        // field can't be moved out.
+        key_set.insert(key.key_bytes.clone());
     }
     assert_eq!(key_set.len(), 5);
 }

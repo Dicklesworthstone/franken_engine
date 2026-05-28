@@ -327,7 +327,9 @@ fn derive_different_contexts_produce_different_keys() {
             output_len: 32,
         };
         let key = deriver.derive(&request).unwrap();
-        keys.insert(key.key_bytes);
+        // Clone — DerivedKey Drop zeroizes key_bytes (bd-i6vjn), so the
+        // field can't be moved out.
+        keys.insert(key.key_bytes.clone());
     }
     assert_eq!(keys.len(), 3, "expected 3 distinct keys for 3 contexts");
 }
@@ -801,7 +803,9 @@ fn cache_multiple_epoch_advances() {
             .unwrap()
             .clone();
         assert_eq!(key.epoch, SecurityEpoch::from_raw(epoch));
-        keys.push(key.key_bytes);
+        // Clone — DerivedKey Drop zeroizes key_bytes (bd-i6vjn), so the
+        // field can't be moved out.
+        keys.push(key.key_bytes.clone());
     }
 
     // All keys should be unique

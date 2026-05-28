@@ -147,13 +147,13 @@ either uses a non-enum encoding or is absent.
 
 ⚠ The two `§27.2.4.5` cases carry an **`ES2022-…`** test-id prefix
 (not `ES2020-`), meaning they assert `Promise.any` — a feature
-introduced in **ES2021**, not in the pinned ES2020 profile. Per the
-spec-pin doc, post-ES2020 features are out of scope; these cases
-should either be: (a) moved into a sibling `*_post_es2020_conformance`
-harness, or (b) recorded as a documented divergence in
-`crates/franken-engine/tests/ECMA262_DISCREPANCIES.md` (FIND-4
-`bd-w50mz`). Filed as a follow-up note on this matrix until a sibling
-bead opens.
+introduced in **ES2021**, not in the pinned ES2020 profile. Recorded
+as **`DISC-011`** in
+[`crates/franken-engine/tests/ECMA262_DISCREPANCIES.md`](../../crates/franken-engine/tests/ECMA262_DISCREPANCIES.md)
+(Status `ACCEPTED`, bd-w50mz.1). The cleaner refactor (extract into a
+sibling `post_es2020_async_promise_test262_conformance.rs`) is
+deferred until the engine opens an ES2021/ES2022 profile per
+[`ECMA262_CONFORMANCE_TARGETS.md`](../../crates/franken-engine/ECMA262_CONFORMANCE_TARGETS.md).
 
 ## Inverse map (harness → §-sections owned)
 

@@ -148,6 +148,19 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Reviewed:** 2026-05-28
 - **Next review:** 2026-06-28
 
+### DISC-011: `Promise.any` (§27.2.4.5) MUST-tier cases live inside the ES2020 async-promise harness
+
+- **Status:** ACCEPTED
+- **ES2020 ref:** N/A — `Promise.any` was introduced in **ES2021** (§27.2.4.5 in the ES2022 spec text), and the FrankenEngine conformance profile is pinned at ES2020 (see [`ECMA262_CONFORMANCE_TARGETS.md`](../ECMA262_CONFORMANCE_TARGETS.md) §3 *Out of scope — Post-ES2020 proposals*).
+- **Affected harnesses:** `tests/async_promise_test262_conformance.rs`
+- **Affected tests:** `ES2022-27.2.4.5-promise-any-fulfills-with-first-fulfillment`, `ES2022-27.2.4.5-promise-any-all-rejected-aggregate-errors`
+- **Symptom:** Two MUST-tier cases under spec §27.2.4.5 carry an `ES2022-…` id prefix and live alongside the ES2020 cases. They feed the same `AsyncPromiseHarness` report and contribute to the MUST-tier no-regression gate (`must_tier_has_no_unexpected_regressions`), so a failure on either case fails the ES2020 conformance gate even though the case asserts a post-ES2020 feature.
+- **Test verdict expression:** Both cases run inside the standard `AsyncPromiseHarness` and report `AsyncPromiseResult::Pass | Fail | Error | Skip` like any other case; the `ES2022-` prefix is the only signal that they are out-of-profile. The harness's coverage assertion (`harness_covers_all_initial_categories`) deliberately requires `AsyncPromiseCategory::PromiseAny`, and the id-prefix assertion at `harness_has_minimum_initial_coverage` permits `ES2020-` *or* `ES2022-` precisely so these cases can coexist with ES2020 cases — those tests are the codified record of this accepted divergence.
+- **Rationale for ACCEPTED rather than moved:** the harness scaffolding (`AsyncPromiseHarness`, `AsyncPromiseCategory`, the `_support::test262_common` comparator) is non-trivial and would have to be duplicated or refactored into a sharable parent for option 1 (extract into a sibling `post_es2020_async_promise_test262_conformance.rs`). The MUST-tier gate as currently written treats failures on the two `ES2022-…` cases as ES2020 regressions, which is wrong but inert today because both pass — Promise.any is correctly implemented end-to-end. When the engine adds an ES2021/ES2022 profile per `ECMA262_CONFORMANCE_TARGETS.md`, the cleaner refactor (option 1) becomes the next step.
+- **Tracking bead:** bd-w50mz.1
+- **Reviewed:** 2026-05-28
+- **Next review:** 2026-08-26
+
 ## Resolved divergences
 
 *(none yet — first divergences land in this file in the same commit that creates it)*

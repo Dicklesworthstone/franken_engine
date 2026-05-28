@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 mod _support;
+use _support::test262_common::RequirementLevel;
 
 const SCHEMA_VERSION: &str = "franken-engine.iteration-statements-test262-conformance.v1";
 const BEAD_ID: &str = "bd-ai64f";
@@ -47,7 +48,7 @@ pub struct IterationStatementTestCase {
     pub description: String,
     pub source_code: String,
     pub es_spec_section: String,
-    pub requirement_level: String, // "MUST", "SHOULD", "MAY"
+    pub requirement_level: RequirementLevel,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +58,7 @@ pub struct StaticIterationStatementTestCase {
     pub description: &'static str,
     pub source_code: &'static str,
     pub es_spec_section: &'static str,
-    pub requirement_level: &'static str,
+    pub requirement_level: RequirementLevel,
 }
 
 impl From<&StaticIterationStatementTestCase> for IterationStatementTestCase {
@@ -68,7 +69,7 @@ impl From<&StaticIterationStatementTestCase> for IterationStatementTestCase {
             description: static_case.description.to_string(),
             source_code: static_case.source_code.to_string(),
             es_spec_section: static_case.es_spec_section.to_string(),
-            requirement_level: static_case.requirement_level.to_string(),
+            requirement_level: static_case.requirement_level,
         }
     }
 }
@@ -108,7 +109,7 @@ impl IterationStatementConformanceHarness {
             description: "Basic for loop with initialization, condition, update",
             source_code: "let total = 0; for (let i = 0; i < 10; i = i + 1) { total = total + i; } total;",
             es_spec_section: "13.2.4",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-statement-empty-parts",
@@ -116,7 +117,7 @@ impl IterationStatementConformanceHarness {
             description: "For loop with empty initialization and update",
             source_code: "let condition = false; for (; condition; ) { condition = false; } condition;",
             es_spec_section: "13.2.4",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-statement-var-declaration",
@@ -124,7 +125,7 @@ impl IterationStatementConformanceHarness {
             description: "For loop with var declaration in header",
             source_code: "var seen = 0; for (var x = 0; x < 5; x = x + 1) { seen = x; } seen;",
             es_spec_section: "13.2.4",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-statement-let-declaration",
@@ -132,7 +133,7 @@ impl IterationStatementConformanceHarness {
             description: "For loop with let declaration in header",
             source_code: "let seen = 0; for (let y = 0; y < 3; y = y + 1) { seen = y; } seen;",
             es_spec_section: "13.2.4",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-statement-const-declaration",
@@ -140,7 +141,7 @@ impl IterationStatementConformanceHarness {
             description: "For loop with const declaration in header",
             source_code: "let seen = 0; for (const z of [1, 2, 3]) { seen = z; } seen;",
             es_spec_section: "13.2.4",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-statement-let-tdz",
@@ -148,7 +149,7 @@ impl IterationStatementConformanceHarness {
             description: "For loop let declaration temporal dead zone in condition",
             source_code: "for (let x = (x = 1); x < 2; x++) { } // Should throw ReferenceError",
             es_spec_section: "13.2.4",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-statement-block-scope-isolation",
@@ -162,7 +163,7 @@ impl IterationStatementConformanceHarness {
                 closures[0]() + closures[1]() + closures[2](); // Should be 0+1+2=3
             "#,
             es_spec_section: "13.2.4",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         // For-in statement tests (13.2.5)
         StaticIterationStatementTestCase {
@@ -171,7 +172,7 @@ impl IterationStatementConformanceHarness {
             description: "Basic for-in loop over object properties",
             source_code: "let obj = { a: 1 }; let seen = ''; for (let key in obj) { seen = key; } seen;",
             es_spec_section: "13.2.5",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-in-statement-var-declaration",
@@ -179,7 +180,7 @@ impl IterationStatementConformanceHarness {
             description: "For-in loop with var declaration",
             source_code: "let object = { a: 1 }; let seen = ''; for (var prop in object) { seen = prop; } seen;",
             es_spec_section: "13.2.5",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-in-statement-let-declaration",
@@ -187,7 +188,7 @@ impl IterationStatementConformanceHarness {
             description: "For-in loop with let declaration",
             source_code: "let target = { a: 1 }; let seen = ''; for (let property in target) { seen = property; } seen;",
             es_spec_section: "13.2.5",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         // For-of statement tests (13.2.6)
         StaticIterationStatementTestCase {
@@ -196,7 +197,7 @@ impl IterationStatementConformanceHarness {
             description: "Basic for-of loop over iterable",
             source_code: "let iterable = [1, 2, 3]; let seen = 0; for (let value of iterable) { seen = value; } seen;",
             es_spec_section: "13.2.6",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-of-statement-array",
@@ -204,7 +205,7 @@ impl IterationStatementConformanceHarness {
             description: "For-of loop over array literal",
             source_code: "let seen = 0; for (let item of [1, 2, 3]) { seen = item; } seen;",
             es_spec_section: "13.2.6",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-of-statement-const-declaration",
@@ -212,7 +213,7 @@ impl IterationStatementConformanceHarness {
             description: "For-of loop with const declaration",
             source_code: "let seen = 0; let collection = [1, 2, 3]; for (const element of collection) { seen = element; } seen;",
             es_spec_section: "13.2.6",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         // While statement tests (13.2.3)
         StaticIterationStatementTestCase {
@@ -221,7 +222,7 @@ impl IterationStatementConformanceHarness {
             description: "Basic while loop with condition",
             source_code: "let condition = false; while (condition) { condition = false; } condition;",
             es_spec_section: "13.2.3",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "while-statement-complex-condition",
@@ -229,7 +230,7 @@ impl IterationStatementConformanceHarness {
             description: "While loop with complex boolean condition",
             source_code: "let x = 0; let y = 0; let done = false; while (x > 0 && y < 10 && !done) { x = x - 1; } x;",
             es_spec_section: "13.2.3",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         // Do-while statement tests (13.2.2)
         StaticIterationStatementTestCase {
@@ -238,7 +239,7 @@ impl IterationStatementConformanceHarness {
             description: "Basic do-while loop",
             source_code: "let condition = false; let seen = 0; do { seen = 1; } while (condition); seen;",
             es_spec_section: "13.2.2",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "do-while-statement-single-iteration",
@@ -246,7 +247,7 @@ impl IterationStatementConformanceHarness {
             description: "Do-while loop that executes exactly once",
             source_code: "let seen = 0; do { seen = seen + 1; } while (false); seen;",
             es_spec_section: "13.2.2",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         // Break and continue tests
         StaticIterationStatementTestCase {
@@ -255,7 +256,7 @@ impl IterationStatementConformanceHarness {
             description: "Break statement in for loop",
             source_code: "for (let i = 0; i < 10; i = i + 1) { if (i === 5) break; }",
             es_spec_section: "13.12",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "continue-statement-while-loop",
@@ -263,7 +264,7 @@ impl IterationStatementConformanceHarness {
             description: "Continue statement in while loop",
             source_code: "let condition = false; let skip = false; while (condition) { if (skip) continue; condition = false; } condition;",
             es_spec_section: "13.13",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "labeled-break-statement",
@@ -271,7 +272,7 @@ impl IterationStatementConformanceHarness {
             description: "Labeled break statement with nested loops",
             source_code: "outer: for (;;) { inner: for (;;) { break outer; } }",
             es_spec_section: "13.12",
-            requirement_level: "SHOULD",
+            requirement_level: RequirementLevel::Should,
         },
         StaticIterationStatementTestCase {
             id: "labeled-continue-statement",
@@ -279,7 +280,7 @@ impl IterationStatementConformanceHarness {
             description: "Labeled continue statement with nested loops",
             source_code: "let done = false; loop: while (!done) { done = true; for (;;) { continue loop; } } done;",
             es_spec_section: "13.13",
-            requirement_level: "SHOULD",
+            requirement_level: RequirementLevel::Should,
         },
         StaticIterationStatementTestCase {
             id: "break-for-of-early-exit",
@@ -294,7 +295,7 @@ impl IterationStatementConformanceHarness {
                 seen.length; // Should be 3
             "#,
             es_spec_section: "13.12",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "continue-for-of-skip",
@@ -309,7 +310,7 @@ impl IterationStatementConformanceHarness {
                 sum; // Should be 1+3+5=9
             "#,
             es_spec_section: "13.13",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "unlabeled-break-error",
@@ -317,7 +318,7 @@ impl IterationStatementConformanceHarness {
             description: "Unlabeled break outside loop should be syntax error",
             source_code: "break; // Should be SyntaxError",
             es_spec_section: "13.12",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "unlabeled-continue-error",
@@ -325,7 +326,7 @@ impl IterationStatementConformanceHarness {
             description: "Unlabeled continue outside loop should be syntax error",
             source_code: "continue; // Should be SyntaxError",
             es_spec_section: "13.13",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         // Iterator protocol integration - REAL iterator protocol tests
         StaticIterationStatementTestCase {
@@ -353,7 +354,7 @@ impl IterationStatementConformanceHarness {
                 seen;
             "#,
             es_spec_section: "13.2.6",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-of-iterator-return-method",
@@ -381,7 +382,7 @@ impl IterationStatementConformanceHarness {
                 cleanupCalled;
             "#,
             es_spec_section: "13.2.6",
-            requirement_level: "SHOULD",
+            requirement_level: RequirementLevel::Should,
         },
         StaticIterationStatementTestCase {
             id: "for-of-iterator-throw-handling",
@@ -412,7 +413,7 @@ impl IterationStatementConformanceHarness {
                 }
             "#,
             es_spec_section: "13.2.6",
-            requirement_level: "SHOULD",
+            requirement_level: RequirementLevel::Should,
         },
         StaticIterationStatementTestCase {
             id: "for-of-array-iterator-simple",
@@ -420,7 +421,7 @@ impl IterationStatementConformanceHarness {
             description: "For-of with built-in Array iterator (baseline)",
             source_code: "let customIterable = [1, 2, 3]; let seen = 0; for (let value of customIterable) { seen = value; } seen;",
             es_spec_section: "13.2.6",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         // Edge cases
         StaticIterationStatementTestCase {
@@ -429,7 +430,7 @@ impl IterationStatementConformanceHarness {
             description: "For loop with empty body",
             source_code: "for (let i = 0; i < 10; i = i + 1) { }",
             es_spec_section: "13.2.4",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "while-statement-empty-body",
@@ -437,7 +438,7 @@ impl IterationStatementConformanceHarness {
             description: "While loop with empty body",
             source_code: "let condition = false; while (condition) { } condition;",
             es_spec_section: "13.2.3",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-of-destructuring-basic",
@@ -445,7 +446,7 @@ impl IterationStatementConformanceHarness {
             description: "For-of loop with basic array destructuring",
             source_code: "let seen = 0; let entries = [[1, 2]]; for (const [key, value] of entries) { seen = key + value; } seen;",
             es_spec_section: "13.2.6",
-            requirement_level: "MUST",
+            requirement_level: RequirementLevel::Must,
         },
         StaticIterationStatementTestCase {
             id: "for-of-destructuring-nested",
@@ -460,7 +461,7 @@ impl IterationStatementConformanceHarness {
                 result; // Should be 10
             "#,
             es_spec_section: "13.2.6",
-            requirement_level: "SHOULD",
+            requirement_level: RequirementLevel::Should,
         },
         StaticIterationStatementTestCase {
             id: "for-of-destructuring-defaults",
@@ -475,7 +476,7 @@ impl IterationStatementConformanceHarness {
                 result; // Should be 1+10 + 5+2 + 5+10 = 33
             "#,
             es_spec_section: "13.2.6",
-            requirement_level: "SHOULD",
+            requirement_level: RequirementLevel::Should,
         },
         StaticIterationStatementTestCase {
             id: "for-of-destructuring-rest",
@@ -490,7 +491,7 @@ impl IterationStatementConformanceHarness {
                 result; // Should be 1+3 + 5+1 = 10
             "#,
             es_spec_section: "13.2.6",
-            requirement_level: "SHOULD",
+            requirement_level: RequirementLevel::Should,
         },
     ];
 

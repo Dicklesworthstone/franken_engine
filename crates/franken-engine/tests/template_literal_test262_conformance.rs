@@ -13,6 +13,9 @@ use frankenengine_engine::HybridRouter;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod _support;
+use _support::test262_common::RequirementLevel;
+
 const SCHEMA_VERSION: &str = "franken-engine.template-literal-test262-conformance.v1";
 const BEAD_ID: &str = "IndigoRidge-template-literal-conformance";
 
@@ -44,7 +47,7 @@ pub struct TemplateLiteralTestCase {
     pub description: String,
     pub source_code: String,
     pub es_spec_section: String,
-    pub requirement_level: String, // "MUST", "SHOULD", "MAY"
+    pub requirement_level: RequirementLevel,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,7 +86,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Empty template literal".to_string(),
                 source_code: "``".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             TemplateLiteralTestCase {
                 id: "template-literal-basic-string".to_string(),
@@ -91,7 +94,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with static string".to_string(),
                 source_code: "`hello world`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             TemplateLiteralTestCase {
                 id: "template-literal-basic-single-substitution".to_string(),
@@ -99,7 +102,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with single expression substitution".to_string(),
                 source_code: "`hello ${name}`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             TemplateLiteralTestCase {
                 id: "template-literal-multiple-substitutions".to_string(),
@@ -107,7 +110,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with multiple expression substitutions".to_string(),
                 source_code: "`${greeting} ${name}, you have ${count} messages`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             TemplateLiteralTestCase {
                 id: "template-literal-expression-arithmetic".to_string(),
@@ -115,7 +118,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with arithmetic expression".to_string(),
                 source_code: "`Result: ${a + b * 2}`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             // Tagged template tests
             TemplateLiteralTestCase {
@@ -124,7 +127,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Basic tagged template call".to_string(),
                 source_code: "const name = \"name\"; const tag = function(rendered) { return rendered; }; tag`hello ${name}`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             TemplateLiteralTestCase {
                 id: "tagged-template-member-expression".to_string(),
@@ -132,7 +135,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Tagged template with member expression".to_string(),
                 source_code: "const value = \"value\"; const obj = { method: function(rendered) { return rendered; } }; obj.method`template ${value}`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             // Multi-line tests
             TemplateLiteralTestCase {
@@ -141,7 +144,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Multi-line template literal".to_string(),
                 source_code: "`line 1\nline 2\nline 3`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             TemplateLiteralTestCase {
                 id: "template-literal-multiline-with-substitution".to_string(),
@@ -149,7 +152,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Multi-line template literal with expression substitution".to_string(),
                 source_code: "`First line\nSecond line: ${value}\nThird line`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             // Escape sequence tests
             TemplateLiteralTestCase {
@@ -158,7 +161,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with escaped backslash".to_string(),
                 source_code: r#"`Path: C:\\Users\\${user}`"#.to_string(),
                 es_spec_section: "11.8.6".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             TemplateLiteralTestCase {
                 id: "template-literal-escape-backtick".to_string(),
@@ -166,7 +169,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with escaped backtick".to_string(),
                 source_code: r#"`Use \`backticks\` for templates`"#.to_string(),
                 es_spec_section: "11.8.6".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             TemplateLiteralTestCase {
                 id: "template-literal-escape-dollar-brace".to_string(),
@@ -174,7 +177,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with escaped dollar brace".to_string(),
                 source_code: r#"`Price: \${amount} USD`"#.to_string(),
                 es_spec_section: "11.8.6".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             // Nested templates
             TemplateLiteralTestCase {
@@ -183,7 +186,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Nested template literals".to_string(),
                 source_code: "`outer ${`inner ${value}`}`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "SHOULD".to_string(),
+                requirement_level: RequirementLevel::Should,
             },
             // Edge cases
             TemplateLiteralTestCase {
@@ -192,7 +195,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with explicit undefined substitution".to_string(),
                 source_code: "`prefix ${undefined} suffix`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
             TemplateLiteralTestCase {
                 id: "template-literal-unicode-escape".to_string(),
@@ -200,7 +203,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with unicode escape sequence".to_string(),
                 source_code: r#"`Unicode: \u{1F600} emoji`"#.to_string(),
                 es_spec_section: "11.8.6".to_string(),
-                requirement_level: "SHOULD".to_string(),
+                requirement_level: RequirementLevel::Should,
             },
             TemplateLiteralTestCase {
                 id: "template-literal-complex-expression".to_string(),
@@ -208,7 +211,7 @@ impl TemplateLiteralConformanceHarness {
                 description: "Template literal with complex expression".to_string(),
                 source_code: "`Result: ${[\"zero\", \"one\"][1]}`".to_string(),
                 es_spec_section: "12.2.9".to_string(),
-                requirement_level: "MUST".to_string(),
+                requirement_level: RequirementLevel::Must,
             },
         ]
     }

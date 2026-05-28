@@ -745,8 +745,9 @@ impl CertifiedRewriteOptimizer {
                 break; // No more optimizations possible
             }
 
-            // Select the best rule (for now, just take the first one)
-            let rule_id = applicable_rules[0].clone();
+            // Select the highest-precedence applicable rule (see
+            // `select_best_applicable_rule` for the precedence contract).
+            let rule_id = Self::select_best_applicable_rule(&applicable_rules).clone();
             let optimized_program = self.apply_rewrite_rule(&current_program, &rule_id)?;
 
             if optimized_program == current_program {
@@ -858,6 +859,30 @@ impl CertifiedRewriteOptimizer {
     }
 
     /// Finds applicable rewrite rules for the given program.
+    /// Select the best (highest-precedence) rule from a non-empty, already
+    /// precedence-ordered list of applicable rules.
+    ///
+    /// [`find_applicable_rules`] returns rules in descending precedence:
+    /// trusted builtin rules in their curated [`BUILTIN_RULE_ORDER`] first, then
+    /// extension-pack rules sorted by descending `priority_millionths` (with
+    /// `rule_id` as a deterministic tie-break). Builtins therefore always
+    /// outrank pack rules — an extension pack cannot preempt a trusted builtin
+    /// rewrite regardless of the priority it declares — and the highest-priority
+    /// pack rule wins among packs. The best rule is consequently the first
+    /// element.
+    ///
+    /// This helper makes that contract explicit (replacing an inline
+    /// `applicable_rules[0]` that read as an unfinished placeholder) and is the
+    /// single chokepoint a future cost-model-driven selector would replace
+    /// without disturbing the certified, deterministic optimization sequence.
+    ///
+    /// # Panics
+    /// Panics if `applicable` is empty; callers must break their loop when no
+    /// rules apply (as `optimize` does).
+    fn select_best_applicable_rule(applicable: &[RewriteRuleId]) -> &RewriteRuleId {
+        &applicable[0]
+    }
+
     fn find_applicable_rules(
         &self,
         program: &str,
@@ -1439,6 +1464,35 @@ mod tests {
         let result = optimizer.generate_certificate(&"unsupported_rule".to_string(), "x + 0", "x");
 
         assert!(result.is_err());
+    }
+
+    // bd-u6rql: rule selection precedence is an explicit, tested contract.
+
+    #[test]
+    fn select_best_applicable_rule_prefers_canonical_builtin_order() {
+        let optimizer = CertifiedRewriteOptimizer::new(SecurityEpoch::from_raw(1));
+        // "x+0" matches RULE_CONST_FOLD (whose builtin rewrite delegates to the
+        // add-zero identity) AND RULE_IDENTITY_ADD_ZERO, so more than one rule
+        // applies — exercising selection rather than a degenerate single match.
+        let applicable = optimizer
+            .find_applicable_rules("x+0")
+            .expect("find_applicable_rules should succeed");
+        assert!(
+            applicable.len() >= 2,
+            "expected x+0 to match both const_fold and identity_add_zero, got {applicable:?}"
+        );
+        // RULE_CONST_FOLD is first in BUILTIN_RULE_ORDER, so it is the
+        // highest-precedence (best) applicable rule.
+        assert_eq!(
+            CertifiedRewriteOptimizer::select_best_applicable_rule(&applicable),
+            &RULE_CONST_FOLD.to_string(),
+            "best rule must be the canonical-first matching builtin"
+        );
+        // The helper must agree with the head of the precedence-ordered list.
+        assert_eq!(
+            CertifiedRewriteOptimizer::select_best_applicable_rule(&applicable),
+            &applicable[0]
+        );
     }
 
     #[test]

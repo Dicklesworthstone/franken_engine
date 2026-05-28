@@ -2009,8 +2009,7 @@ mod tests {
             DecisionVerdict::Deny,
             DecisionVerdict::Timeout,
         ] {
-            let json =
-                serde_json::to_string(&variant).expect("serialization should succeed");
+            let json = serde_json::to_string(&variant).expect("serialization should succeed");
             let back: DecisionVerdict = serde_json::from_str(&json).expect("parse valid string");
             assert_eq!(variant, back);
         }
@@ -2247,8 +2246,10 @@ mod tests {
     #[test]
     fn mock_budget_tracks_cumulative_consumption() {
         let mut b = MockBudget::new(100);
-        b.consume(30).expect("operation should succeed for valid inputs");
-        b.consume(20).expect("operation should succeed for valid inputs");
+        b.consume(30)
+            .expect("operation should succeed for valid inputs");
+        b.consume(20)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(b.remaining_ms(), 50);
         assert_eq!(b.consumed_ms(), 50);
     }
@@ -2557,12 +2558,12 @@ mod tests {
 
     #[test]
     fn decision_verdict_json_values_are_quoted_strings() {
-        let allow_json = serde_json::to_string(&DecisionVerdict::Allow)
-            .expect("serialization should succeed");
-        let deny_json = serde_json::to_string(&DecisionVerdict::Deny)
-            .expect("serialization should succeed");
-        let timeout_json = serde_json::to_string(&DecisionVerdict::Timeout)
-            .expect("serialization should succeed");
+        let allow_json =
+            serde_json::to_string(&DecisionVerdict::Allow).expect("serialization should succeed");
+        let deny_json =
+            serde_json::to_string(&DecisionVerdict::Deny).expect("serialization should succeed");
+        let timeout_json =
+            serde_json::to_string(&DecisionVerdict::Timeout).expect("serialization should succeed");
         assert!(allow_json.contains("Allow"));
         assert!(deny_json.contains("Deny"));
         assert!(timeout_json.contains("Timeout"));
@@ -2920,24 +2921,24 @@ mod tests {
     #[test]
     fn decision_verdict_json_consistent_allow() {
         // Serializing the same variant twice must produce identical JSON.
-        let j1 = serde_json::to_string(&DecisionVerdict::Allow)
-            .expect("serialization should succeed");
-        let j2 = serde_json::to_string(&DecisionVerdict::Allow)
-            .expect("serialization should succeed");
+        let j1 =
+            serde_json::to_string(&DecisionVerdict::Allow).expect("serialization should succeed");
+        let j2 =
+            serde_json::to_string(&DecisionVerdict::Allow).expect("serialization should succeed");
         assert_eq!(j1, j2);
     }
 
     #[test]
     fn decision_verdict_json_consistent_deny_and_timeout() {
-        let j_deny_1 = serde_json::to_string(&DecisionVerdict::Deny)
-            .expect("serialization should succeed");
-        let j_deny_2 = serde_json::to_string(&DecisionVerdict::Deny)
-            .expect("serialization should succeed");
+        let j_deny_1 =
+            serde_json::to_string(&DecisionVerdict::Deny).expect("serialization should succeed");
+        let j_deny_2 =
+            serde_json::to_string(&DecisionVerdict::Deny).expect("serialization should succeed");
         assert_eq!(j_deny_1, j_deny_2);
-        let j_t1 = serde_json::to_string(&DecisionVerdict::Timeout)
-            .expect("serialization should succeed");
-        let j_t2 = serde_json::to_string(&DecisionVerdict::Timeout)
-            .expect("serialization should succeed");
+        let j_t1 =
+            serde_json::to_string(&DecisionVerdict::Timeout).expect("serialization should succeed");
+        let j_t2 =
+            serde_json::to_string(&DecisionVerdict::Timeout).expect("serialization should succeed");
         assert_eq!(j_t1, j_t2);
     }
 

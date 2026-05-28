@@ -3146,8 +3146,8 @@ expiry_date = "2030-01-01"
 
     #[test]
     fn parse_props_fields_deduplicates() {
-        let result =
-            parse_props_fields("props: a, b, a").expect("operation should succeed for valid inputs");
+        let result = parse_props_fields("props: a, b, a")
+            .expect("operation should succeed for valid inputs");
         assert_eq!(result, vec!["a", "b"]);
     }
 
@@ -3159,7 +3159,8 @@ expiry_date = "2030-01-01"
     #[test]
     fn parse_props_fields_multiline_finds_first() {
         let payload = "line1\nprops: x, y\nline3";
-        let result = parse_props_fields(payload).expect("operation should succeed for valid inputs");
+        let result =
+            parse_props_fields(payload).expect("operation should succeed for valid inputs");
         assert_eq!(result, vec!["x", "y"]);
     }
 
@@ -3168,7 +3169,8 @@ expiry_date = "2030-01-01"
     #[test]
     fn extract_error_signature_found() {
         let payload = "line1\nTypeError|undefined is not a function\nline3";
-        let sig = extract_error_signature(payload).expect("operation should succeed for valid inputs");
+        let sig =
+            extract_error_signature(payload).expect("operation should succeed for valid inputs");
         assert!(sig.contains("Error|"));
     }
 
@@ -4715,7 +4717,8 @@ expiry_date = "2030-01-01"
     #[test]
     fn canonical_json_bytes_round_trip() {
         let value = serde_json::json!({"key": "value"});
-        let bytes = canonical_json_bytes(&value).expect("operation should succeed for valid inputs");
+        let bytes =
+            canonical_json_bytes(&value).expect("operation should succeed for valid inputs");
         let back: serde_json::Value =
             serde_json::from_slice(&bytes).expect("deserialize known-valid JSON");
         assert_eq!(back, value);
@@ -5351,7 +5354,8 @@ expiry_date = "2030-01-01"
         let fixture_path = temp_dir.path().join("fixture.bin");
         let expected_path = temp_dir.path().join("expected.bin");
 
-        fs::write(&fixture_path, fixture_content).expect("operation should succeed for valid inputs");
+        fs::write(&fixture_path, fixture_content)
+            .expect("operation should succeed for valid inputs");
         fs::write(&expected_path, b"expected output")
             .expect("operation should succeed for valid inputs");
 
@@ -5415,8 +5419,10 @@ expiry_date = "2030-01-01"
         let fixture_path = temp_dir.path().join("fixture.bin");
         let expected_path = temp_dir.path().join("expected.bin");
 
-        fs::write(&fixture_path, fixture_content).expect("operation should succeed for valid inputs");
-        fs::write(&expected_path, expected_content).expect("operation should succeed for valid inputs");
+        fs::write(&fixture_path, fixture_content)
+            .expect("operation should succeed for valid inputs");
+        fs::write(&expected_path, expected_content)
+            .expect("operation should succeed for valid inputs");
 
         // Calculate correct hashes
         let actual_fixture_hash = sha256_hex(fixture_content);

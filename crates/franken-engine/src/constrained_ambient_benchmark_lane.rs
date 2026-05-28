@@ -980,7 +980,8 @@ mod tests {
         // improvement_millionths(baseline=1000, optimized=500) means
         // 500 is better than 1000 for latency → positive improvement
         // SAFETY: Test with valid positive numbers where baseline != 0; calculation cannot fail
-        let i = improvement_millionths(1000, 500).expect("operation should succeed for valid inputs");
+        let i =
+            improvement_millionths(1000, 500).expect("operation should succeed for valid inputs");
         assert_eq!(i, 500_000); // 50%
     }
 

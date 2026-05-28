@@ -2568,7 +2568,10 @@ mod tests {
             &input(previous_snapshot(), candidate_snapshot()),
             &BenchmarkSplitThresholds::default(),
         );
-        let last = d.logs.last().expect("operation should succeed for valid inputs");
+        let last = d
+            .logs
+            .last()
+            .expect("operation should succeed for valid inputs");
         assert_eq!(last.event, "benchmark_split_decision");
         assert_eq!(last.outcome, "pass");
         assert!(last.error_code.is_none());

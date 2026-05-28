@@ -623,8 +623,8 @@ fn coupling_score_millionths(
 }
 
 fn graph_id_from_edges(controller_names: &[String], edges: &[ControllerInteractionEdge]) -> String {
-    let json = serde_json::to_vec(&(controller_names, edges))
-        .expect("serialization should succeed");
+    let json =
+        serde_json::to_vec(&(controller_names, edges)).expect("serialization should succeed");
     format!("graph-{}", to_hex(&hash_bytes(&json)[..12]))
 }
 

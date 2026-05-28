@@ -1029,8 +1029,7 @@ mod tests {
                 UpdateKind::Snapshot,
                 payload,
             );
-            let json =
-                serde_json::to_value(&envelope).expect("serialization should succeed");
+            let json = serde_json::to_value(&envelope).expect("serialization should succeed");
             assert!(json["payload"].is_object(), "payload must be an object");
         }
     }
@@ -1047,7 +1046,8 @@ mod tests {
         for (status, expected_str) in statuses.iter().zip(expected.iter()) {
             let json = serde_json::to_value(status).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("operation should succeed for valid inputs"),
+                json.as_str()
+                    .expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -1078,7 +1078,8 @@ mod tests {
         for (stream, expected_str) in streams.iter().zip(expected.iter()) {
             let json = serde_json::to_value(stream).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("operation should succeed for valid inputs"),
+                json.as_str()
+                    .expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -1095,7 +1096,8 @@ mod tests {
         for (kind, expected_str) in kinds.iter().zip(expected.iter()) {
             let json = serde_json::to_value(kind).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("operation should succeed for valid inputs"),
+                json.as_str()
+                    .expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -1175,7 +1177,8 @@ mod tests {
         for (kind, expected_json) in &kinds {
             let json = serde_json::to_value(kind).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("operation should succeed for valid inputs"),
+                json.as_str()
+                    .expect("operation should succeed for valid inputs"),
                 *expected_json
             );
         }
@@ -1416,7 +1419,8 @@ mod tests {
         for (action, expected_str) in actions.iter().zip(expected.iter()) {
             let json = serde_json::to_value(action).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("operation should succeed for valid inputs"),
+                json.as_str()
+                    .expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -1433,7 +1437,8 @@ mod tests {
         for (cmd, expected_str) in commands.iter().zip(expected.iter()) {
             let json = serde_json::to_value(cmd).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("operation should succeed for valid inputs"),
+                json.as_str()
+                    .expect("operation should succeed for valid inputs"),
                 *expected_str
             );
         }
@@ -2358,7 +2363,8 @@ mod tests {
         for (variant, expected_name) in &pairs {
             let json = serde_json::to_value(variant).expect("serialization should succeed");
             assert_eq!(
-                json.as_str().expect("operation should succeed for valid inputs"),
+                json.as_str()
+                    .expect("operation should succeed for valid inputs"),
                 *expected_name
             );
         }
@@ -2409,7 +2415,8 @@ mod tests {
         // Verify every module-defined type round-trips deterministically.
         verify_deterministic_serde(&RegressionClass::Observability)
             .expect("operation should succeed for valid inputs");
-        verify_deterministic_serde(&FieldType::Bool).expect("operation should succeed for valid inputs");
+        verify_deterministic_serde(&FieldType::Bool)
+            .expect("operation should succeed for valid inputs");
         verify_deterministic_serde(&ContractViolation {
             boundary: "b".to_string(),
             contract_name: "c".to_string(),

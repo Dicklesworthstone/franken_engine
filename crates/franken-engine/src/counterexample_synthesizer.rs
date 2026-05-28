@@ -1777,8 +1777,8 @@ mod tests {
             .synthesize(&result, 1000)
             .expect("operation should succeed for valid inputs");
 
-        let json = serde_json::to_string(&counterexamples[0])
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&counterexamples[0]).expect("serialization should succeed");
         let restored: SynthesizedCounterexample =
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
         assert_eq!(counterexamples[0].conflict_id, restored.conflict_id);

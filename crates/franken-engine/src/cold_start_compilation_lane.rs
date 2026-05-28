@@ -1468,7 +1468,8 @@ mod tests {
         let artifact = FileArtifact::markdown("test.md", "# Hello".to_string());
         assert_eq!(artifact.relative_path, "test.md");
         assert_eq!(
-            std::str::from_utf8(&artifact.contents).expect("operation should succeed for valid inputs"),
+            std::str::from_utf8(&artifact.contents)
+                .expect("operation should succeed for valid inputs"),
             "# Hello"
         );
     }
@@ -1479,11 +1480,11 @@ mod tests {
             total_graphs: 5,
             usable_graphs: 3,
         };
-        let artifact =
-            FileArtifact::json("test.json", &data).expect("operation should succeed for valid inputs");
+        let artifact = FileArtifact::json("test.json", &data)
+            .expect("operation should succeed for valid inputs");
         assert_eq!(artifact.relative_path, "test.json");
-        let decoded: EntryKindSummary = serde_json::from_slice(&artifact.contents)
-            .expect("deserialization should succeed");
+        let decoded: EntryKindSummary =
+            serde_json::from_slice(&artifact.contents).expect("deserialization should succeed");
         assert_eq!(decoded.total_graphs, 5);
     }
 

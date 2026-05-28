@@ -1876,15 +1876,15 @@ mod tests {
     #[test]
     fn enrichment_vector_category_json_quoted_strings() {
         // Verify serde serialises as quoted strings (not integers).
-        let json = serde_json::to_string(&VectorCategory::Positive)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&VectorCategory::Positive).expect("serialization should succeed");
         assert!(
             json.starts_with('"'),
             "expected quoted string, got: {}",
             json
         );
-        let json = serde_json::to_string(&VectorCategory::Fault)
-            .expect("serialization should succeed");
+        let json =
+            serde_json::to_string(&VectorCategory::Fault).expect("serialization should succeed");
         assert!(json.starts_with('"'));
     }
 

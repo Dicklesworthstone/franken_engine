@@ -988,7 +988,8 @@ mod tests {
             make_pass_with_prereqs("b", 200_000, 20_000, 0, vec!["a"]),
             make_pass_with_prereqs("c", 300_000, 30_000, 0, vec!["b"]),
         ];
-        let order = validate_pass_ordering(&passes).expect("operation should succeed for valid inputs");
+        let order =
+            validate_pass_ordering(&passes).expect("operation should succeed for valid inputs");
         let pos_a = order
             .iter()
             .position(|x| x == "a")
@@ -1028,7 +1029,8 @@ mod tests {
             make_pass("y", 200_000, 20_000, 0),
             make_pass("z", 300_000, 30_000, 0),
         ];
-        let order = validate_pass_ordering(&passes).expect("operation should succeed for valid inputs");
+        let order =
+            validate_pass_ordering(&passes).expect("operation should succeed for valid inputs");
         assert_eq!(order.len(), 3);
     }
 
@@ -1059,7 +1061,8 @@ mod tests {
     #[test]
     fn plan_wave_aggregates_correct() {
         let passes = sample_passes();
-        let wave = plan_wave(passes, MILLIONTHS).expect("operation should succeed for valid inputs");
+        let wave =
+            plan_wave(passes, MILLIONTHS).expect("operation should succeed for valid inputs");
         let sum_uplift: u64 = wave
             .passes
             .iter()
@@ -1088,7 +1091,8 @@ mod tests {
             make_pass("base", 200_000, 30_000, 10_000),
             make_pass_with_prereqs("derived", 200_000, 50_000, 20_000, vec!["base"]),
         ];
-        let wave = plan_wave(passes, MILLIONTHS).expect("operation should succeed for valid inputs");
+        let wave =
+            plan_wave(passes, MILLIONTHS).expect("operation should succeed for valid inputs");
         let pos_base = wave
             .priority_order
             .iter()
@@ -1269,8 +1273,8 @@ mod tests {
             total_risk_millionths: 50_000,
             priority_order: vec!["a".to_string()],
         };
-        let decision =
-            select_best_wave(vec![w], MILLIONTHS).expect("operation should succeed for valid inputs");
+        let decision = select_best_wave(vec![w], MILLIONTHS)
+            .expect("operation should succeed for valid inputs");
         assert_ne!(decision.content_hash, ContentHash::compute(b""));
     }
 

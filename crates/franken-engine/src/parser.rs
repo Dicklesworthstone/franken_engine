@@ -4395,6 +4395,29 @@ fn parse_template_literal(
     context: &mut ParseExecutionContext<'_>,
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
+    // ES2020 §11.8.6 TemplateCharacter — the entire template literal MUST
+    // be terminated by a backtick. The tokeniser at `scan_template_literal`
+    // happily exits on EOF without closing the literal, so previously the
+    // parser would silently strip a non-backtick trailing character via
+    // `expression[1..expression.len() - 1]`. With the early check below,
+    // an unterminated template literal (case 1 of bd-no788), an
+    // unterminated `${` substitution that never closes (case 2 — caught
+    // here because the outer template never sees its closing backtick
+    // either), and a substitution-closed-but-no-trailing-backtick
+    // (case 3) all raise `UnsupportedSyntax` instead of producing a
+    // silently-truncated AST node.
+    if expression.len() < 2
+        || !expression.starts_with('`')
+        || !expression.ends_with('`')
+    {
+        return Err(ParseError::new(
+            ParseErrorCode::UnsupportedSyntax,
+            "unterminated template literal: missing closing backtick before end of input"
+                .to_string(),
+            context.source_label.to_string(),
+            Some(span.clone()),
+        ));
+    }
     // Strip outer backticks.
     let inner = &expression[1..expression.len() - 1];
     let bytes = inner.as_bytes();
@@ -12948,6 +12971,43 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         let err = parser
             .parse("const s = `value: ${name`", ParseGoal::Script)
             .expect_err("unbalanced interpolation should fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    // ── bd-no788: unterminated template-literal rejection ───────────────
+
+    #[test]
+    fn unterminated_template_literal_no_closing_backtick_is_rejected() {
+        // Case 1 from bd-no788: an opening backtick that runs to EOF
+        // without a closing backtick should fail-closed at parse time
+        // (ES2020 §11.8.6 TemplateCharacter — termination is mandatory).
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("const s = `hello world", ParseGoal::Script)
+            .expect_err("unterminated template literal should fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn unterminated_template_literal_substitution_only_is_rejected() {
+        // Case 2: `${value` — opening backtick + opening ${ + no closing
+        // } or backtick. The outer template never sees its closing
+        // backtick, so the parser rejects via the same path as Case 1.
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("const s = `prefix ${value", ParseGoal::Script)
+            .expect_err("unterminated substitution should fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn unterminated_template_literal_after_substitution_is_rejected() {
+        // Case 3: `${1 + 2} suffix — substitution closes cleanly with `}`
+        // but the literal never sees its closing backtick.
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse("const s = `prefix ${1 + 2} suffix", ParseGoal::Script)
+            .expect_err("missing trailing backtick should fail");
         assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
     }
 

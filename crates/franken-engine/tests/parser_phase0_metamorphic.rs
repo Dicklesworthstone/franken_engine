@@ -63,6 +63,12 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
             Statement::ForOf(_) => "for_of".to_string(),
             Statement::With(_) => "with".to_string(),
             Statement::ClassDeclaration(_) => "class_decl".to_string(),
+            // bd-ttcq1: Statement::Labeled landed via bd-bg9l1.27.x
+            // (labeled break/continue support) but this metamorphic
+            // semantic_signature match wasn't updated, breaking the test
+            // binary with E0004. Use the same "<variant_name>" rendering
+            // convention as the surrounding arms.
+            Statement::Labeled(_) => "labeled".to_string(),
         })
         .collect()
 }

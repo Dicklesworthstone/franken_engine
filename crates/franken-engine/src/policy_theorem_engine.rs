@@ -686,26 +686,8 @@ impl PolicyTheoremEngine {
 
         let mut emitted = Vec::new();
         for (claim_id, theorems) in by_claim {
-            let proof_path = bundle_dir.join(format!("{claim_id}.proof.json"));
             let bundle = build_proof_bundle_body(claim_id, &theorems);
-            let mut value = serde_json::to_value(&bundle)
-                .map_err(|e| format!("serialize {claim_id} body: {e}"))?;
-            let content_hash = canonical_body_hash(&value)?;
-            if let serde_json::Value::Object(ref mut map) = value {
-                map.insert(
-                    "content_hash".to_string(),
-                    serde_json::Value::String(content_hash),
-                );
-            }
-            let json = serde_json::to_string_pretty(&value)
-                .map_err(|e| format!("serialize {claim_id} bundle: {e}"))?;
-            std::fs::write(&proof_path, format!("{json}\n"))
-                .map_err(|e| format!("write {}: {e}", proof_path.display()))?;
-            emitted.push(EmittedProofBundle {
-                claim_id: claim_id.to_string(),
-                path: proof_path,
-                theorem_count: bundle.theorem_ids.len(),
-            });
+            emitted.push(write_proof_bundle(&bundle, bundle_dir)?);
         }
         Ok(emitted)
     }
@@ -884,12 +866,50 @@ pub fn claim_id_for_property(property: &PolicyProperty) -> Option<&'static str> 
     }
 }
 
-/// Returned by [`PolicyTheoremEngine::emit_proof_bundles`].
+/// Returned by [`PolicyTheoremEngine::emit_proof_bundles`] and
+/// [`write_proof_bundle`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EmittedProofBundle {
     pub claim_id: String,
     pub path: PathBuf,
     pub theorem_count: usize,
+}
+
+/// Write a single [`ProofBundleBody`] to `bundle_dir/<claim_id>.proof.json`,
+/// computing and embedding `content_hash` under the same canonical-body scheme
+/// the gate script recomputes (`sha256(json.dumps(body, sort_keys=True,
+/// separators=(',', ':')))`).
+///
+/// Callers outside of the theorem-engine path (e.g. the translation-validation
+/// proof carrier emitting an FE-CLAIM-017 witness, bd-cixqu.7.17.4) use this
+/// helper so the on-disk encoding stays byte-identical to the theorem-engine
+/// emissions.
+pub fn write_proof_bundle(
+    body: &ProofBundleBody,
+    bundle_dir: &Path,
+) -> Result<EmittedProofBundle, String> {
+    std::fs::create_dir_all(bundle_dir)
+        .map_err(|e| format!("create_dir_all({}): {e}", bundle_dir.display()))?;
+
+    let proof_path = bundle_dir.join(format!("{}.proof.json", body.claim_id));
+    let mut value = serde_json::to_value(body)
+        .map_err(|e| format!("serialize {} body: {e}", body.claim_id))?;
+    let content_hash = canonical_body_hash(&value)?;
+    if let serde_json::Value::Object(ref mut map) = value {
+        map.insert(
+            "content_hash".to_string(),
+            serde_json::Value::String(content_hash),
+        );
+    }
+    let json = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("serialize {} bundle: {e}", body.claim_id))?;
+    std::fs::write(&proof_path, format!("{json}\n"))
+        .map_err(|e| format!("write {}: {e}", proof_path.display()))?;
+    Ok(EmittedProofBundle {
+        claim_id: body.claim_id.clone(),
+        path: proof_path,
+        theorem_count: body.theorem_ids.len(),
+    })
 }
 
 /// Body of `<claim_id>.proof.json` — the schema consumed by
@@ -973,7 +993,12 @@ fn civil_from_days(days: i64) -> (i32, u32, u32) {
 
 /// Canonical hash of the proof body, matching the gate script's recompute:
 /// `sha256(json.dumps(body, sort_keys=True, separators=(',', ':')))`.
-fn canonical_body_hash(value: &serde_json::Value) -> Result<String, String> {
+///
+/// Exposed so callers in sibling modules (e.g. the translation-validation
+/// proof carrier emitting an FE-CLAIM-017 witness, bd-cixqu.7.17.4) can verify
+/// in tests that a serialized bundle they emit re-hashes to the embedded
+/// `content_hash` — the same check the gate script performs.
+pub fn canonical_body_hash(value: &serde_json::Value) -> Result<String, String> {
     let mut without_hash = value.clone();
     if let serde_json::Value::Object(ref mut map) = without_hash {
         map.remove("content_hash");

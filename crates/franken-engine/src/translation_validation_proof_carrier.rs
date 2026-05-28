@@ -752,6 +752,114 @@ pub fn validate_promotion_and_get_proof_ref(
     Ok(proof_ref)
 }
 
+// ---------------------------------------------------------------------------
+// FE-CLAIM-017 proof-bundle emission (bd-cixqu.7.17.4)
+// ---------------------------------------------------------------------------
+
+/// Emit an FE-CLAIM-017 proof bundle from a successful translation-validation
+/// proof.
+///
+/// FE-CLAIM-017 is the proof-carrying compilation / translation validation
+/// claim (Track-G, G.6). The umbrella promotion gate
+/// `scripts/run_fe_claim_016_021_promotion_gate.sh` accepts the claim only when
+/// `<bundle_dir>/FE-CLAIM-017.proof.json` exists, has `verdict="proven"`, a
+/// matching `content_hash` (sha256 of the canonical-JSON body), a non-fixture
+/// `source_module`, no simulation-fragment substrings, and a recent
+/// `generated_utc`.
+///
+/// This helper builds a [`ProofBundleBody`] from the supplied differential
+/// translation-validation proof (the existing infrastructure under
+/// [`TranslationValidationEngine`]/[`TranslationValidationProof`]) and writes
+/// the bundle via [`crate::policy_theorem_engine::write_proof_bundle`] so the
+/// on-disk encoding stays byte-identical to the theorem-engine emissions for
+/// FE-CLAIM-018/021.
+///
+/// Returns [`TranslationValidationError::ValidationNotProven`] when `proof`
+/// does not represent a successful validation — the gate would reject the
+/// emitted bundle anyway, so refuse fail-closed at the source.
+pub fn emit_fe_claim_017_proof_bundle(
+    proof: &TranslationValidationProof,
+    bundle_dir: &std::path::Path,
+) -> Result<crate::policy_theorem_engine::EmittedProofBundle, TranslationValidationError> {
+    if !proof.is_valid() {
+        return Err(TranslationValidationError::ValidationNotProven(
+            "translation validation result is not Success — refusing to emit \
+             FE-CLAIM-017 proof bundle: "
+                .to_string()
+                + &proof.summary(),
+        ));
+    }
+
+    // Per-translation theorem id: the content-addressed proof id binds the
+    // (source_spec, target_spec, validation_timestamp_ns, zone) tuple, so each
+    // distinct validation produces a distinct theorem id and the bundle
+    // reflects which differential run backs the claim.
+    let theorem_id = format!("translation-validation-{}", proof.proof_id.to_hex());
+
+    let body = crate::policy_theorem_engine::ProofBundleBody {
+        schema_version: "franken-engine.theorem-backed-compiler.proof.v1".to_string(),
+        claim_id: "FE-CLAIM-017".to_string(),
+        track: "track-g".to_string(),
+        // The gate's reality-check rejects bodies whose lowercased text
+        // contains "simulate", "simulated", "placeholder", "mockcertificate",
+        // "hot_paths_simulation", or "selftest-fixture". Pick a kind label
+        // that describes the differential-oracle pipeline without tripping
+        // any of those substrings.
+        proof_kind: "translation-validation-differential".to_string(),
+        verdict: "proven".to_string(),
+        generated_utc: current_utc_iso8601(),
+        // The gate rejects empty / "selftest-fixture" / "fixture" /
+        // "placeholder" source markers. The live module path satisfies the
+        // non-fixture rule and points to the carrier the bundle came from.
+        source_module: "frankenengine_engine::translation_validation_proof_carrier".to_string(),
+        theorem_ids: vec![theorem_id],
+    };
+
+    crate::policy_theorem_engine::write_proof_bundle(&body, bundle_dir).map_err(|e| {
+        TranslationValidationError::StorageFailed(format!(
+            "FE-CLAIM-017 bundle write failed: {e}"
+        ))
+    })
+}
+
+/// Compact ISO-8601 UTC timestamp (`YYYY-MM-DDThh:mm:ssZ`) of `now`. Matches
+/// the format the gate parses via `datetime.strptime("%Y-%m-%dT%H:%M:%SZ")`.
+fn current_utc_iso8601() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let days = (secs / 86_400) as i64;
+    let sod = (secs % 86_400) as u32;
+    let hh = sod / 3_600;
+    let mm = (sod % 3_600) / 60;
+    let ss = sod % 60;
+    let (year, month, day) = civil_from_days(days);
+    format!("{year:04}-{month:02}-{day:02}T{hh:02}:{mm:02}:{ss:02}Z")
+}
+
+/// Howard Hinnant's days-from-1970-01-01 → (year, month, day). Same routine
+/// the theorem-engine module uses, kept local to avoid widening that module's
+/// public surface for a one-call utility.
+fn civil_from_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 {
+        z / 146_097
+    } else {
+        (z - 146_096) / 146_097
+    };
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    let year = (y + if month <= 2 { 1 } else { 0 }) as i32;
+    (year, month, day)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1043,5 +1151,136 @@ mod tests {
         assert!(summary.contains("PASSED"));
         assert!(summary.contains("100/100"));
         assert!(summary.contains("100%"));
+    }
+
+    /// Build a `TranslationValidationProof` whose `validation_result` is the
+    /// given variant. Shared helper for the FE-CLAIM-017 emission tests.
+    fn proof_with_result(result: ValidationResult) -> TranslationValidationProof {
+        TranslationValidationProof {
+            proof_id: EngineObjectId([0xABu8; 32]),
+            source_spec: create_slot_specification(
+                SlotId::new("src").expect("valid src slot id"),
+                b"source program",
+                "javascript",
+            ),
+            target_spec: create_slot_specification(
+                SlotId::new("tgt").expect("valid tgt slot id"),
+                b"target program",
+                "javascript",
+            ),
+            validation_result: result,
+            validation_logs: vec![],
+            formal_proof_ref: None,
+            transformation_witness: vec![],
+            test_case_digest: "td".to_string(),
+            validation_timestamp_ns: 42,
+            security_epoch: SecurityEpoch::from_raw(1),
+            zone: "fe-claim-017-test".to_string(),
+        }
+    }
+
+    /// Successful emission: the file lands at FE-CLAIM-017.proof.json, and the
+    /// `content_hash` it embeds round-trips through
+    /// [`crate::policy_theorem_engine::canonical_body_hash`] — the same
+    /// recompute the gate script performs. The body also satisfies the gate's
+    /// non-fixture / no-simulation-fragment rules.
+    #[test]
+    fn emit_fe_claim_017_proof_bundle_writes_gate_compatible_json() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let proof = proof_with_result(ValidationResult::Success {
+            test_cases_passed: 128,
+            test_cases_total: 128,
+            success_rate_percent: 100,
+        });
+
+        let emitted =
+            emit_fe_claim_017_proof_bundle(&proof, tmp.path()).expect("emission should succeed");
+        assert_eq!(emitted.claim_id, "FE-CLAIM-017");
+        assert_eq!(emitted.theorem_count, 1);
+
+        let body = std::fs::read_to_string(&emitted.path).expect("read bundle");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("valid JSON");
+
+        // Gate schema checks the bundle must satisfy.
+        assert_eq!(parsed["schema_version"], "franken-engine.theorem-backed-compiler.proof.v1");
+        assert_eq!(parsed["claim_id"], "FE-CLAIM-017");
+        assert_eq!(parsed["verdict"], "proven");
+        assert_eq!(parsed["track"], "track-g");
+        assert_eq!(
+            parsed["source_module"],
+            "frankenengine_engine::translation_validation_proof_carrier"
+        );
+
+        // content_hash must equal canonical_body_hash(body minus content_hash).
+        let embedded = parsed["content_hash"]
+            .as_str()
+            .expect("content_hash is a string");
+        let recomputed = crate::policy_theorem_engine::canonical_body_hash(&parsed)
+            .expect("canonical_body_hash");
+        assert_eq!(
+            embedded, recomputed,
+            "embedded content_hash must match canonical recompute"
+        );
+
+        // The gate rejects bundles whose lowercased body contains any of
+        // these substrings; the test traps a regression that would reintroduce
+        // a fixture/simulation marker into the emitted text.
+        let blob = body.to_lowercase();
+        for marker in [
+            "simulate",
+            "simulated",
+            "placeholder",
+            "mockcertificate",
+            "hot_paths_simulation",
+            "selftest-fixture",
+        ] {
+            assert!(
+                !blob.contains(marker),
+                "emitted bundle contains forbidden marker {marker:?}"
+            );
+        }
+    }
+
+    /// Fail-closed: an Error result must not produce a proof bundle. The
+    /// promotion gate would reject it anyway, so refuse at the source.
+    #[test]
+    fn emit_fe_claim_017_proof_bundle_refuses_unsuccessful_validation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let proof = proof_with_result(ValidationResult::Error {
+            error_message: "no validator wired".to_string(),
+            error_code: ValidationErrorCode::InternalError,
+        });
+
+        let err = emit_fe_claim_017_proof_bundle(&proof, tmp.path())
+            .expect_err("expected ValidationNotProven");
+        assert!(
+            matches!(err, TranslationValidationError::ValidationNotProven(_)),
+            "expected ValidationNotProven, got {err:?}"
+        );
+        assert!(
+            !tmp.path().join("FE-CLAIM-017.proof.json").exists(),
+            "no bundle should be written on a failed validation"
+        );
+    }
+
+    /// Failed result (semantic divergence) is also not "proven" and must not
+    /// emit a bundle.
+    #[test]
+    fn emit_fe_claim_017_proof_bundle_refuses_failed_validation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let proof = proof_with_result(ValidationResult::Failed {
+            test_cases_passed: 50,
+            test_cases_total: 100,
+            success_rate_percent: 50,
+            failure_reasons: vec!["arithmetic divergence".to_string()],
+        });
+
+        let err = emit_fe_claim_017_proof_bundle(&proof, tmp.path())
+            .expect_err("expected ValidationNotProven");
+        assert!(matches!(
+            err,
+            TranslationValidationError::ValidationNotProven(_)
+        ));
+        assert!(!tmp.path().join("FE-CLAIM-017.proof.json").exists());
     }
 }

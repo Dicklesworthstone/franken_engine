@@ -37,9 +37,7 @@ fn make_core(trace_id: &str) -> InterpreterCore {
     config
         .granted_capabilities
         .insert(RuntimeCapability::Console);
-    config
-        .granted_capabilities
-        .insert(RuntimeCapability::Timer);
+    config.granted_capabilities.insert(RuntimeCapability::Timer);
     InterpreterCore::new(config, trace_id)
 }
 
@@ -77,10 +75,7 @@ fn console_log_drives_recorder_with_console_record() {
     assert!(
         !console_records.is_empty(),
         "at least one record must carry hostcall_type=Console, got: {:?}",
-        records
-            .iter()
-            .map(|r| r.hostcall_type)
-            .collect::<Vec<_>>()
+        records.iter().map(|r| r.hostcall_type).collect::<Vec<_>>()
     );
     let rec = console_records[0];
     assert_eq!(
@@ -215,7 +210,9 @@ fn incident_trace_with_telemetry_log_carries_real_records() {
     );
     let live_records: Vec<_> = core.hostcall_telemetry().records().to_vec();
     assert!(
-        live_records.iter().any(|r| matches!(r.hostcall_type, HostcallType::Console)),
+        live_records
+            .iter()
+            .any(|r| matches!(r.hostcall_type, HostcallType::Console)),
         "live recorder must contain at least one Console record before bridging"
     );
 
@@ -236,8 +233,7 @@ fn incident_trace_with_telemetry_log_carries_real_records() {
         evidence_log: Vec::new(),
         containment_log: Vec::new(),
         loss_matrix: frankenengine_engine::expected_loss_selector::LossMatrix::balanced(),
-        likelihood_model:
-            frankenengine_engine::bayesian_posterior::LikelihoodModel::default(),
+        likelihood_model: frankenengine_engine::bayesian_posterior::LikelihoodModel::default(),
     };
 
     let trace_pre = trace.clone();

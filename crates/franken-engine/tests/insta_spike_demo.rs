@@ -108,10 +108,7 @@ fn demo_assert_snapshot_with_scrubbing_filters() {
     // complexity — `Settings::add_filter` makes it declarative.
     let mut settings = Settings::clone_current();
     settings.add_filter(r"trace-[0-9a-f]{8,}", "trace-[ID]");
-    settings.add_filter(
-        r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\b",
-        "[TIMESTAMP]",
-    );
+    settings.add_filter(r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z\b", "[TIMESTAMP]");
 
     settings.bind(|| {
         let payload = "received trace-abcdef1234567890 at 2026-05-28T00:30:00Z";

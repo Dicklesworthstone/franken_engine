@@ -67,7 +67,11 @@ fn dropping_any_yield_state_is_caught_for_every_program() {
         }
         let broken = apply_mutation(&sm, &LoweringMutation::DropState(0));
         let w = validate_lowering(&src, &broken).unwrap();
-        assert!(!w.equivalent, "dropping a state in {} must be caught", src.program_id);
+        assert!(
+            !w.equivalent,
+            "dropping a state in {} must be caught",
+            src.program_id
+        );
         assert!(w.divergence.is_some());
     }
 }
@@ -93,7 +97,10 @@ fn async_await_yield_interleaving_is_order_significant() {
     let broken = apply_mutation(&sm, &LoweringMutation::SwapEffects(0, 1));
     let w = validate_lowering(&src, &broken).unwrap();
     assert!(!w.equivalent);
-    assert_eq!(w.divergence, Some(TraceDivergence::EffectMismatch { index: 0 }));
+    assert_eq!(
+        w.divergence,
+        Some(TraceDivergence::EffectMismatch { index: 0 })
+    );
 }
 
 #[test]

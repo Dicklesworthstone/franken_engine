@@ -603,8 +603,7 @@ impl IteratorConformanceHarness {
             .filter(|t| {
                 matches!(
                     self.execute_test(t, SecurityEpoch::from_raw(1)),
-                    IteratorProtocolResult::Pass
-                        | IteratorProtocolResult::ExpectedFail { .. }
+                    IteratorProtocolResult::Pass | IteratorProtocolResult::ExpectedFail { .. }
                 )
             })
             .count() as u64;

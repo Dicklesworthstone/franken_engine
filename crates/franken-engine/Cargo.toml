@@ -288,5 +288,6 @@ tracing = "0.1"
 # rendering helper to show how the project's hand-rolled golden helpers
 # (~13 inline `assert_golden` copies, bd-ub6x8.3) would migrate. The
 # `yaml` feature is opt-out by default; we keep the default features so
-# `cargo insta review` works out of the box.
-insta = "1.39"
+# `cargo insta review` works out of the box. The `filters` feature is
+# required for `Settings::add_filter` — gated since insta 1.41 (bd-drdxa).
+insta = { version = "1.39", features = ["filters"] }

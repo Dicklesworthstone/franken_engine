@@ -8,16 +8,17 @@
 //! Pattern: Exact Golden (Pattern 1) with scrubbing for non-deterministic values.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use frankenengine_engine::deterministic_serde::{
     CanonicalValue, SchemaRegistry, decode_value, encode_value, serialize_with_schema,
 };
 
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so we don't waste a per-crate test-binary compile on the helper alone.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
+// bd-ub6x8.21 (sub: bd-drdxa): migrated from the shared GoldenDiag helper
+// (which read/wrote tests/golden/<name>.golden via UPDATE_GOLDENS=1) to
+// `insta::assert_snapshot!`. Fixtures now live under
+// tests/snapshots/decode_golden_artifacts__<name>.snap, reviewed via
+// `cargo insta review` (or regenerated via `INSTA_UPDATE=always cargo test
+// --test decode_golden_artifacts`).
 
 // Render a `CanonicalValue` via its `Serialize` impl (a stable contract), not
 // Rust's `Debug` (which is not a stability contract). bd-ub6x8.9.1.
@@ -38,18 +39,6 @@ fn render_bytes(bytes: &[u8]) -> String {
     }
     out.push(']');
     out
-}
-
-// Inline assert_golden + summarize_golden_diff replaced by the shared
-// GoldenDiag helper (bd-ub6x8.3 sweep).
-fn assert_golden(test_name: &str, actual: &str) {
-    let fixture_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/golden/{test_name}.golden"));
-    golden_diag::GoldenDiag {
-        framework_name: "Decode artifacts golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(actual, &fixture_path, test_name, None);
 }
 
 /// Generate deterministic synthetic value from seed
@@ -133,7 +122,7 @@ fn test_decode_encode_roundtrip_golden() {
         output.push('\n');
     }
 
-    assert_golden("decode_encode_roundtrip", &output);
+    insta::assert_snapshot!("decode_encode_roundtrip", output);
 }
 
 #[test]
@@ -164,7 +153,7 @@ fn test_malformed_input_behavior_golden() {
         output.push('\n');
     }
 
-    assert_golden("malformed_input_behavior", &output);
+    insta::assert_snapshot!("malformed_input_behavior", output);
 }
 
 #[test]
@@ -195,5 +184,5 @@ fn test_schema_hash_determinism_golden() {
         output.push('\n');
     }
 
-    assert_golden("schema_hash_determinism", &output);
+    insta::assert_snapshot!("schema_hash_determinism", output);
 }

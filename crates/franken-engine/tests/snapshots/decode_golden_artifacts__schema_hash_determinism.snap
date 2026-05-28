@@ -1,3 +1,7 @@
+---
+source: tests/decode_golden_artifacts.rs
+expression: output
+---
 === Schema: simple ===
 Schema bytes: [0x73, 0x69, 0x6d, 0x70, 0x6c, 0x65, 0x2e, 0x76, 0x31]
 Schema hash: e78983cbda5fd45b714da9de2d258fcfa4b8ecdf6c3f0ede0c2667e97d8d3a06
@@ -17,4 +21,3 @@ Schema hash: 149319264fa9c127e51c8e4e95d9aaceda377a8e6d91d9b811b62d7f0b6c8272
 === Schema: empty ===
 Schema bytes: []
 Schema hash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-

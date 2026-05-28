@@ -1,3 +1,7 @@
+---
+source: tests/decode_golden_artifacts.rs
+expression: output
+---
 === Seed 0 ===
 Original: {"U64":0}
 Encoded bytes: 9 bytes
@@ -42,4 +46,3 @@ Roundtrip OK: true
 Schema encoded: 41 bytes
 Schema decoded: {"U64":255}
 Schema roundtrip OK: true
-

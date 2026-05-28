@@ -4045,6 +4045,23 @@ fn parse_primary_expression(
         return result;
     }
 
+    // Unterminated template literal (bd-no788 cases 1-3). A *complete* template
+    // (`` `x` ``) is consumed by the both-backticks gate above; a tagged
+    // template or a template with a trailing member/call (``tag`x` `` /
+    // `` `x`.length ``) is consumed by `try_parse_postfix`. A leading backtick
+    // that survives both is one whose closing backtick is missing — ES2020
+    // §11.8.6 requires every TemplateCharacter sequence to be terminated, so
+    // fail-closed instead of falling through to `Expression::Raw`. feb61b0e
+    // added the equivalent check at `parse_template_literal`'s entry, but the
+    // routing gate above meant an unterminated literal never reached it.
+    if expression.starts_with('`') {
+        return Err(unsupported_expression_syntax_error(
+            "unterminated template literal: missing closing backtick before end of input",
+            span,
+            context,
+        ));
+    }
+
     if is_identifier(expression) {
         return Ok(Expression::Identifier(expression.to_string()));
     }
@@ -4406,10 +4423,7 @@ fn parse_template_literal(
     // either), and a substitution-closed-but-no-trailing-backtick
     // (case 3) all raise `UnsupportedSyntax` instead of producing a
     // silently-truncated AST node.
-    if expression.len() < 2
-        || !expression.starts_with('`')
-        || !expression.ends_with('`')
-    {
+    if expression.len() < 2 || !expression.starts_with('`') || !expression.ends_with('`') {
         return Err(ParseError::new(
             ParseErrorCode::UnsupportedSyntax,
             "unterminated template literal: missing closing backtick before end of input"
@@ -4430,6 +4444,19 @@ fn parse_template_literal(
 
     while i < bytes.len() {
         if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            // ES2020 §11.8.6 / §11.8.4.1: an (untagged) template literal
+            // rejects `NotEscapeSequence` shapes — legacy octal escapes,
+            // non-octal decimal escapes, and malformed hex/unicode escapes.
+            // The lexer was previously fail-open on all of these (bd-no788
+            // cases 4 and 5).
+            if let Err(message) = validate_template_escape_sequence(bytes, i) {
+                return Err(ParseError::new(
+                    ParseErrorCode::UnsupportedSyntax,
+                    message,
+                    context.source_label.to_string(),
+                    Some(span.clone()),
+                ));
+            }
             // Escaped character — include literally. Advance past the
             // full UTF-8 codepoint that follows the backslash so we
             // don't split multi-byte characters.
@@ -4533,6 +4560,96 @@ fn parse_template_literal(
         quasis,
         expressions,
     })
+}
+
+/// Validate a single escape sequence inside a (non-tagged) template literal
+/// against ES2020 §11.8.6 (TemplateCharacter) and §11.8.4.1 (EscapeSequence).
+///
+/// `bytes` is the inner quasi text and `backslash` indexes the leading `\`;
+/// the caller guarantees `backslash + 1 < bytes.len()`. Returns `Ok(())` for a
+/// well-formed `EscapeSequence` / `LineContinuation` / `CharacterEscapeSequence`
+/// and an error message for a `NotEscapeSequence` shape. Tagged-template
+/// leniency (where a `NotEscapeSequence` cooks to `undefined` rather than being
+/// a SyntaxError) is intentionally not modelled — `parse_template_literal`
+/// produces a single `TemplateLiteral` node without tag context, so all
+/// template literals are held to the untagged (strict) grammar here.
+fn validate_template_escape_sequence(bytes: &[u8], backslash: usize) -> Result<(), String> {
+    match bytes[backslash + 1] {
+        // `\1`..`\9` — LegacyOctalEscapeSequence / NonOctalDecimalEscapeSequence.
+        // The Annex B web-compatibility carve-out applies to string literals
+        // only, never to template literals.
+        b'1'..=b'9' => Err("legacy octal escape forbidden in template literal".to_string()),
+        // `\0` is the NullEscapeSequence, permitted ONLY when not followed by a
+        // DecimalDigit; `\01` is a legacy octal escape and is forbidden.
+        b'0' => {
+            if matches!(bytes.get(backslash + 2), Some(d) if d.is_ascii_digit()) {
+                Err("legacy octal escape forbidden in template literal".to_string())
+            } else {
+                Ok(())
+            }
+        }
+        // `\xNN` HexEscapeSequence requires exactly two hex digits.
+        b'x' => {
+            let well_formed = matches!(bytes.get(backslash + 2), Some(d) if d.is_ascii_hexdigit())
+                && matches!(bytes.get(backslash + 3), Some(d) if d.is_ascii_hexdigit());
+            if well_formed {
+                Ok(())
+            } else {
+                Err("malformed \\xNN hex escape: non-hex content".to_string())
+            }
+        }
+        // `\u` UnicodeEscapeSequence — either `\u{ CodePoint }` or `\u Hex4Digits`.
+        b'u' => validate_template_unicode_escape(bytes, backslash + 2),
+        // Any other character is a SingleEscapeCharacter, a NonEscapeCharacter
+        // (CharacterEscapeSequence), or a LineContinuation — all permitted.
+        _ => Ok(()),
+    }
+}
+
+/// Validate a `\u…` UnicodeEscapeSequence (ES2020 §11.8.4.1). `start` indexes
+/// the byte immediately after the `u`. Accepts `\u{ HexDigits }` with 1+ hex
+/// digits encoding a code point in `[0, 0x10FFFF]`, or `\u` followed by exactly
+/// four hex digits; everything else is a `NotEscapeSequence`.
+fn validate_template_unicode_escape(bytes: &[u8], start: usize) -> Result<(), String> {
+    if matches!(bytes.get(start), Some(b'{')) {
+        let mut j = start + 1;
+        let mut digits = 0u32;
+        let mut value: u32 = 0;
+        while let Some(&d) = bytes.get(j) {
+            if d == b'}' {
+                break;
+            }
+            match (d as char).to_digit(16) {
+                Some(v) => {
+                    value = value.saturating_mul(16).saturating_add(v);
+                    digits += 1;
+                }
+                None => {
+                    return Err(
+                        "malformed \\u{...} unicode escape: non-hex content".to_string()
+                    );
+                }
+            }
+            j += 1;
+        }
+        if bytes.get(j) != Some(&b'}') {
+            return Err("malformed \\u{...} unicode escape: missing closing brace".to_string());
+        }
+        if digits == 0 {
+            return Err("malformed \\u{...} unicode escape: empty code point".to_string());
+        }
+        if value > 0x10_FFFF {
+            return Err("malformed \\u{...} unicode escape: code point out of range".to_string());
+        }
+        Ok(())
+    } else {
+        for offset in 0..4 {
+            if !matches!(bytes.get(start + offset), Some(d) if d.is_ascii_hexdigit()) {
+                return Err("malformed \\uXXXX unicode escape: non-hex content".to_string());
+            }
+        }
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -13009,6 +13126,97 @@ process.exit(attackSucceeded ? 0 : 1);"#,
             .parse("const s = `prefix ${1 + 2} suffix", ParseGoal::Script)
             .expect_err("missing trailing backtick should fail");
         assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    // ── bd-no788.1: legacy octal escapes forbidden in template literals ──
+
+    #[test]
+    fn template_literal_legacy_octal_escape_is_rejected() {
+        // Case 4 from bd-no788: ES2020 §11.8.6 forbids legacy octal escapes
+        // (`\01`) inside template literals — the Annex B carve-out is for
+        // string literals only.
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse(r"const s = `octal \01 escape`", ParseGoal::Script)
+            .expect_err("legacy octal escape should fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn template_literal_non_octal_decimal_escape_is_rejected() {
+        // `\9` is a NonOctalDecimalEscapeSequence — equally forbidden in
+        // template literals.
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse(r"const s = `bad \9 escape`", ParseGoal::Script)
+            .expect_err("non-octal decimal escape should fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn template_literal_null_escape_is_accepted() {
+        // `\0` not followed by a DecimalDigit is the NullEscapeSequence and
+        // remains valid (the boundary case the octal check must not over-reject).
+        let tree = parse_script(r"const s = `null\0ok`");
+        match &tree.body[0] {
+            Statement::VariableDeclaration(decl) => {
+                let init = decl.declarations[0]
+                    .initializer
+                    .as_ref()
+                    .expect("initializer should be present");
+                assert!(matches!(init, Expression::TemplateLiteral { .. }));
+            }
+            other => panic!("expected VariableDeclaration, got {other:?}"),
+        }
+    }
+
+    // ── bd-no788.2: malformed hex / unicode escapes forbidden ───────────
+
+    #[test]
+    fn template_literal_bad_unicode_escape_is_rejected() {
+        // Case 5 from bd-no788: `\u{XYZ}` has non-HexDigit content
+        // (ES2020 §11.8.4.1) and must be rejected at parse time.
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse(r"const s = `bad unicode \u{XYZ}`", ParseGoal::Script)
+            .expect_err("non-hex \\u{...} escape should fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn template_literal_out_of_range_unicode_escape_is_rejected() {
+        // `\u{110000}` is well-formed hex but exceeds 0x10FFFF.
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse(r"const s = `over \u{110000} max`", ParseGoal::Script)
+            .expect_err("out-of-range code point should fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn template_literal_bad_hex_escape_is_rejected() {
+        // `\xZZ` is a HexEscapeSequence with non-hex digits (§11.8.4.1).
+        let parser = CanonicalEs2020Parser;
+        let err = parser
+            .parse(r"const s = `bad hex \xZZ here`", ParseGoal::Script)
+            .expect_err("non-hex \\xNN escape should fail");
+        assert_eq!(err.code, ParseErrorCode::UnsupportedSyntax);
+    }
+
+    #[test]
+    fn template_literal_valid_unicode_and_hex_escapes_are_accepted() {
+        // Well-formed `\u{1F600}` and `\xFF` escapes must still parse.
+        let tree = parse_script(r"const s = `emoji \u{1F600} byte \xFF end`");
+        match &tree.body[0] {
+            Statement::VariableDeclaration(decl) => {
+                let init = decl.declarations[0]
+                    .initializer
+                    .as_ref()
+                    .expect("initializer should be present");
+                assert!(matches!(init, Expression::TemplateLiteral { .. }));
+            }
+            other => panic!("expected VariableDeclaration, got {other:?}"),
+        }
     }
 
     // -----------------------------------------------------------------------

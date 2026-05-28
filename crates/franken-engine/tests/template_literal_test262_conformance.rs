@@ -472,21 +472,25 @@ mod tests {
         assert_report_json_round_trips(&report, SCHEMA_VERSION, &report.schema_version);
     }
 
-    /// 5 currently-uncaught negative-path cases — every one is a genuine
-    /// ES2020 parser gap (the engine returns `Ok` from `eval` on each
-    /// malformed source). Tracked under bd-no788 (the engine repair). The
-    /// exact-gap drift detector below treats this list as the WAIVER set:
-    /// an entry that closes (engine starts rejecting) forces promotion (the
-    /// test fails with PROGRESS); a new uncaught case (engine regresses on
-    /// a different ErrorPaths id) fails as REGRESSION. Either edge prevents
+    /// Negative-path WAIVER set for the exact-gap drift detector below: an
+    /// entry that closes (engine starts rejecting) forces promotion (the test
+    /// fails with PROGRESS); a new uncaught case (engine regresses on a
+    /// different ErrorPaths id) fails as REGRESSION. Either edge prevents
     /// silent drift.
+    ///
+    /// As of bd-no788's full closure this set is EMPTY — every ErrorPaths case
+    /// is now rejected by the engine:
+    /// - the legacy-octal (`\01`, bd-no788.1) and malformed `\u{...}`
+    ///   (`\u{XYZ}`, bd-no788.2) escapes by the `validate_template_escape_sequence`
+    ///   pass in parser.rs;
+    /// - the three unterminated shapes (bd-no788 cases 1-3) by the fail-closed
+    ///   leading-backtick check at the tail of `parse_primary_expression`.
+    ///   feb61b0e added the equivalent check to `parse_template_literal`, but
+    ///   the both-backticks routing gate meant an unterminated literal never
+    ///   reached it — the survivor now fails closed before the `Expression::Raw`
+    ///   fallback.
     const KNOWN_FAILING_ERROR_REJECTS: &[(&str, &str)] = &[
-        // (test_id, tracking_bead)
-        ("template-literal-error-bad-unicode-escape", "bd-no788"),
-        ("template-literal-error-octal-escape", "bd-no788"),
-        ("template-literal-error-unterminated-after-substitution", "bd-no788"),
-        ("template-literal-error-unterminated-string", "bd-no788"),
-        ("template-literal-error-unterminated-substitution", "bd-no788"),
+        // (test_id, tracking_bead) — empty: bd-no788 fully closed.
     ];
 
     /// bd-t2cgg (FIND-8): every `ErrorPaths` case MUST be rejected by the
@@ -614,28 +618,64 @@ fn template_literal_test262_conformance_integration() {
         }
     }
 
-    // Conformance gate: Fail if pass rate drops below 95%
-    let pass_rate_percent = report.statistics.pass_rate_millionths as f64 / 10_000.0;
+    // Conformance gate: fail if the positive-path pass rate drops below 95%.
+    // ErrorPaths cases are negative tests whose conformant outcome is a
+    // *rejection* (non-Pass) — folding them into the pass rate would conflate a
+    // correct rejection with a conformance failure. Their behaviour is enforced
+    // separately and exactly by `template_literal_error_cases_must_not_pass`.
+    let (mut positive_total, mut positive_passed) = (0u64, 0u64);
+    for test_case in TemplateLiteralConformanceHarness::test_cases() {
+        if matches!(test_case.category, TemplateLiteralTestCategory::ErrorPaths) {
+            continue;
+        }
+        positive_total += 1;
+        if matches!(
+            report.test_results.get(&test_case.id),
+            Some(TemplateLiteralResult::Pass)
+        ) {
+            positive_passed += 1;
+        }
+    }
+    let pass_rate_percent = positive_passed
+        .saturating_mul(10_000)
+        .checked_div(positive_total)
+        .unwrap_or(0) as f64
+        / 100.0;
     assert!(
         pass_rate_percent >= 95.0,
-        "Template literal ES2015+ conformance below threshold: {:.2}% (required: ≥95%)",
+        "Template literal ES2015+ positive-path conformance below threshold: {:.2}% (required: ≥95%)",
         pass_rate_percent
     );
 }
 
-/// template-literal test262 case ids the engine is currently allowed to diverge
-/// on (bd-bg9l1.13). Empty = every catalogued case must pass (the engine
-/// currently passes all of them). This exact-set drift detector complements the
-/// coarse ≥95% pass-rate floor above: that floor silently tolerates a small
-/// fraction of failures, whereas this gate names every permitted gap and fails
-/// fast on any drift in either direction.
+/// Positive-path template-literal test262 case ids the engine is currently
+/// allowed to diverge on (bd-bg9l1.13). Empty = every catalogued positive case
+/// must pass (the engine currently passes all of them). This exact-set drift
+/// detector complements the coarse ≥95% pass-rate floor above: that floor
+/// silently tolerates a small fraction of failures, whereas this gate names
+/// every permitted gap and fails fast on any drift in either direction.
+///
+/// ErrorPaths cases are excluded — they are negative tests whose conformant
+/// outcome is a rejection (non-Pass), enforced exactly by
+/// `template_literal_error_cases_must_not_pass`.
 const KNOWN_TEMPLATE_LITERAL_GAPS: &[&str] = &[];
 
 #[test]
 fn template_literal_full_matrix_matches_known_gap_set() {
     let report = TemplateLiteralConformanceHarness::run_conformance_tests();
+    let error_path_ids: std::collections::BTreeSet<String> =
+        TemplateLiteralConformanceHarness::test_cases()
+            .iter()
+            .filter(|tc| matches!(tc.category, TemplateLiteralTestCategory::ErrorPaths))
+            .map(|tc| tc.id.clone())
+            .collect();
     let mut observed_detail: Vec<(String, String)> = Vec::new();
     for (id, result) in &report.test_results {
+        // A non-Pass result on an ErrorPaths case is the correct, conformant
+        // outcome (the engine rejected malformed input) — not a positive-path gap.
+        if error_path_ids.contains(id) {
+            continue;
+        }
         match result {
             TemplateLiteralResult::Pass => {}
             other => observed_detail.push((id.clone(), format!("{other:?}"))),

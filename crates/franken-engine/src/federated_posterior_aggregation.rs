@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::bayesian_posterior::{Evidence, Posterior, RiskState};
+use crate::bayesian_posterior::{BayesianPosteriorUpdater, Evidence, Posterior, RiskState};
 use crate::fleet_immune_protocol::{EvidencePacket, NodeId, ProtocolVersion};
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::security_epoch::SecurityEpoch;
@@ -345,16 +345,30 @@ impl LocalPosteriorProvider {
         Ok(())
     }
 
-    /// Placeholder for posterior update computation - would integrate with existing
-    /// bayesian_posterior module.
+    /// Compute the updated local posterior from a prior and new evidence using
+    /// the engine's existing Bayesian machinery.
+    ///
+    /// Runs one Bayes update step (`posterior ∝ likelihood(evidence) × prior`)
+    /// via [`BayesianPosteriorUpdater`], which applies the shared
+    /// [`crate::bayesian_posterior::LikelihoodModel`]. This previously returned
+    /// `Posterior::default_prior()`, discarding both the prior and the evidence
+    /// so federated deltas carried no real learning signal.
+    ///
+    /// The update is deterministic (fixed-point millionths arithmetic, no
+    /// wall-clock or RNG), preserving replay-safety.
     fn compute_posterior_update(
         &self,
-        _prior: &Posterior,
-        _evidence: &Evidence,
+        prior: &Posterior,
+        evidence: &Evidence,
     ) -> Result<Posterior, FederatedAggregationError> {
-        // TODO: Integrate with existing LikelihoodModel and Bayesian update logic
-        // from bayesian_posterior.rs
-        Ok(Posterior::default_prior())
+        let mut updater =
+            BayesianPosteriorUpdater::new(prior.clone(), evidence.extension_id.clone());
+        updater.update(evidence);
+        let posterior = updater.posterior().clone();
+        if !posterior.is_valid() {
+            return Err(FederatedAggregationError::InvalidPosterior);
+        }
+        Ok(posterior)
     }
 }
 
@@ -704,5 +718,43 @@ mod tests {
         assert!(delta.is_valid());
         assert_eq!(delta.extension_id, "test_ext");
         assert_eq!(delta.confidence_weight_millionths, 800_000);
+    }
+
+    // bd-1lw7r.5: compute_posterior_update must run a real Bayesian update, not
+    // return the prior verbatim (the prior stub returned default_prior()).
+    #[test]
+    fn compute_posterior_update_applies_real_bayesian_update() {
+        let provider =
+            LocalPosteriorProvider::new(NodeId::new("test_node"), SecurityEpoch::from_raw(1));
+        let prior = Posterior::default_prior();
+        // Strongly anomalous evidence: high hostcall rate, max distinct
+        // capabilities, elevated resource/timing/denial signals.
+        let evidence = Evidence {
+            extension_id: "ext".to_string(),
+            hostcall_rate_millionths: 50_000_000,
+            distinct_capabilities: 16,
+            resource_score_millionths: 5_000_000,
+            timing_anomaly_millionths: 4_000_000,
+            denial_rate_millionths: 3_000_000,
+            epoch: SecurityEpoch::from_raw(1),
+        };
+
+        let updated = provider
+            .compute_posterior_update(&prior, &evidence)
+            .expect("posterior update should succeed");
+
+        assert!(updated.is_valid(), "updated posterior must be a valid distribution");
+        // The stub returned the prior verbatim; a real update must move it.
+        assert_ne!(
+            updated, prior,
+            "anomalous evidence must shift the posterior off the prior"
+        );
+        // Under strongly anomalous evidence, benign mass must not increase.
+        assert!(
+            updated.p_benign <= prior.p_benign,
+            "benign probability should not rise under anomalous evidence (prior={}, updated={})",
+            prior.p_benign,
+            updated.p_benign
+        );
     }
 }

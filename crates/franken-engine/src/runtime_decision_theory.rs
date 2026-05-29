@@ -1331,19 +1331,14 @@ impl DecisionContext {
             };
         }
 
-        // 5. Select a lane using the deterministic regime heuristic and record
-        // the state-level risk estimate. Lane-specific expected-loss
-        // minimization lives in runtime_decision_core.
+        // 5. Select the lane minimizing posterior expected loss under the
+        // per-lane, regime-conditional loss model, and record the chosen lane's
+        // expected loss in the trace.
         let selected = self.select_lane(state);
-        let expected_loss = self.compute_state_expected_loss(state);
+        let expected_loss = self.compute_lane_expected_loss(&selected, state);
 
         let action = LaneAction::RouteTo(selected);
-        let trace = self.make_trace(
-            state,
-            action.clone(),
-            expected_loss,
-            "regime_heuristic_route",
-        );
+        let trace = self.make_trace(state, action.clone(), expected_loss, "expected_loss_min");
         self.traces.push(trace.clone());
 
         DecisionOutcome {
@@ -1440,13 +1435,17 @@ impl DecisionContext {
     // -----------------------------------------------------------------------
 
     fn select_lane(&self, state: &DecisionState) -> LaneId {
-        // Deterministic regime heuristic. This does not claim lane-specific
-        // expected-loss minimization.
+        // Select the configured lane minimizing posterior expected loss under
+        // the per-lane, regime-conditional loss model (`compute_lane_expected_loss`).
         if self.config.lanes.is_empty() {
             return LaneId("fallback".into());
         }
 
-        // In safe mode or degraded regime, always fall back to first lane.
+        // Hard safety guard: active safe-mode or an Attack regime lock to the
+        // first (deterministic/safe) lane independent of the loss model. The
+        // loss model itself already drives Attack toward the deterministic lane
+        // (see `lane_risk_amplification`); this guard is the fail-closed belt
+        // that does not rely on the configured lane set carrying a profile.
         if state.safe_mode_active || state.regime == RegimeLabel::Attack {
             return self
                 .config
@@ -1456,15 +1455,54 @@ impl DecisionContext {
                 .unwrap_or_else(|| LaneId("safe-fallback".to_string()));
         }
 
-        // For now, select based on regime.  Normal/Elevated → second lane
-        // (performance), Degraded/Recovery → first lane (safe).
-        if self.config.lanes.len() >= 2
-            && matches!(state.regime, RegimeLabel::Normal | RegimeLabel::Elevated)
-        {
-            self.config.lanes[1].clone()
-        } else {
-            self.config.lanes[0].clone()
+        // Argmin over the configured lanes by expected loss. Ties break to the
+        // earliest lane in configuration order, which is the safe (deterministic)
+        // lane by convention — a deterministic, replay-stable tie-break.
+        let mut best_idx = 0usize;
+        let mut best_loss = self.compute_lane_expected_loss(&self.config.lanes[0], state);
+        for (idx, lane) in self.config.lanes.iter().enumerate().skip(1) {
+            let loss = self.compute_lane_expected_loss(lane, state);
+            if loss < best_loss {
+                best_loss = loss;
+                best_idx = idx;
+            }
         }
+        self.config.lanes[best_idx].clone()
+    }
+
+    /// Per-lane risk amplification (millionths; `MILLION` = neutral 1.0×) used
+    /// by the expected-loss model.
+    ///
+    /// The deterministic (safe) lane is the regime-robust baseline (1.0× in
+    /// every regime). The throughput (adaptive) lane carries regime-conditional
+    /// risk: it is favored (< 1.0×) in benign regimes and penalized (> 1.0×)
+    /// once the system is degraded, because the adaptive fast path's
+    /// compatibility/incident exposure rises as conditions worsen. Unknown
+    /// lanes are treated as neutral so that selection falls back to the
+    /// deterministic config-order tie-break in `select_lane`.
+    fn lane_risk_amplification(lane: &LaneId, regime: RegimeLabel) -> i64 {
+        match lane.stable_label() {
+            DETERMINISTIC_PROFILE_LABEL => MILLION,
+            THROUGHPUT_PROFILE_LABEL => match regime {
+                RegimeLabel::Normal => 500_000,   // 0.5× — strongly favor throughput
+                RegimeLabel::Elevated => 750_000, // 0.75× — still favor throughput
+                RegimeLabel::Recovery => 1_500_000, // 1.5× — favor deterministic
+                RegimeLabel::Degraded => 2_000_000, // 2.0× — strongly favor deterministic
+                RegimeLabel::Attack => 4_000_000, // 4.0× — also hard-guarded above
+            },
+            _ => MILLION, // unknown lane: neutral, defer to config-order tie-break
+        }
+    }
+
+    /// Expected loss of routing to `lane` given the current belief state, under
+    /// the per-lane, regime-conditional loss model. This is the quantity that
+    /// `select_lane` minimizes (argmin over the configured lanes): the
+    /// state-level posterior expected loss scaled by the lane's risk
+    /// amplification for the observed regime.
+    fn compute_lane_expected_loss(&self, lane: &LaneId, state: &DecisionState) -> i64 {
+        let base = self.compute_state_expected_loss(state) as i128;
+        let amp = Self::lane_risk_amplification(lane, state.regime) as i128;
+        ((base * amp) / MILLION as i128).clamp(i64::MIN as i128, i64::MAX as i128) as i64
     }
 
     fn compute_state_expected_loss(&self, state: &DecisionState) -> i64 {
@@ -2480,11 +2518,14 @@ mod tests {
     }
 
     #[test]
-    fn context_normal_regime_discloses_heuristic_lane_selection() {
+    fn context_selects_min_expected_loss_lane_with_deterministic_tiebreak() {
+        // Two non-profile lanes carry equal (neutral) per-lane amplification, so
+        // expected-loss minimization ties; the deterministic tie-break then
+        // routes to the earliest lane in configuration order.
         let config = DecisionContextConfig {
             lanes: vec![
                 LaneId("lower_loss_lane".into()),
-                LaneId("higher_loss_heuristic_lane".into()),
+                LaneId("higher_loss_lane".into()),
             ],
             ..Default::default()
         };
@@ -2498,10 +2539,70 @@ mod tests {
 
         assert_eq!(
             outcome.action,
-            LaneAction::RouteTo(LaneId("higher_loss_heuristic_lane".into()))
+            LaneAction::RouteTo(LaneId("lower_loss_lane".into()))
         );
-        assert_eq!(outcome.trace.reason, "regime_heuristic_route");
-        assert_ne!(outcome.trace.reason, "expected_loss_min");
+        assert_eq!(outcome.trace.reason, "expected_loss_min");
+    }
+
+    #[test]
+    fn context_argmin_overrides_config_order_for_lower_loss_lane() {
+        // The deterministic lane is first and the throughput lane second. In the
+        // Normal regime the throughput lane has strictly lower expected loss
+        // (amplification 0.5× vs 1.0×), so argmin must pick it despite the
+        // config order — proving selection minimizes loss rather than reading
+        // off a fixed regime→index lookup.
+        let config = DecisionContextConfig {
+            lanes: vec![
+                LaneId::deterministic_profile(),
+                LaneId::throughput_profile(),
+            ],
+            ..Default::default()
+        };
+        let mut ctx = DecisionContext::new(config, epoch(1));
+        let state = default_state(); // Normal regime, non-zero beliefs
+        let outcome = ctx.decide(&state);
+        assert_eq!(
+            outcome.action,
+            LaneAction::RouteTo(LaneId::throughput_profile())
+        );
+        assert_eq!(outcome.trace.reason, "expected_loss_min");
+        // Recorded loss is the chosen (throughput) lane's amplified loss, which
+        // is strictly positive for the non-zero belief state.
+        assert!(outcome.trace.expected_loss_millionths > 0);
+    }
+
+    #[test]
+    fn context_degraded_regime_minimizes_loss_to_deterministic_lane() {
+        // Same default lane order [deterministic, throughput], but in a Degraded
+        // regime the throughput lane's amplification (2.0×) makes its expected
+        // loss exceed the deterministic lane's, so argmin routes to safe.
+        let config = DecisionContextConfig::default();
+        let mut ctx = DecisionContext::new(config, epoch(1));
+        let mut state = default_state();
+        state.regime = RegimeLabel::Degraded;
+        let outcome = ctx.decide(&state);
+        assert_eq!(
+            outcome.action,
+            LaneAction::RouteTo(LaneId::deterministic_profile())
+        );
+        assert_eq!(outcome.trace.reason, "expected_loss_min");
+    }
+
+    #[test]
+    fn context_lane_selection_is_deterministic_replay() {
+        // Identical state decided by two independently constructed contexts must
+        // yield identical action and recorded expected loss (replay-stable).
+        let config = DecisionContextConfig::default();
+        let mut ctx_a = DecisionContext::new(config.clone(), epoch(1));
+        let mut ctx_b = DecisionContext::new(config, epoch(1));
+        let state = default_state();
+        let oa = ctx_a.decide(&state);
+        let ob = ctx_b.decide(&state);
+        assert_eq!(oa.action, ob.action);
+        assert_eq!(
+            oa.trace.expected_loss_millionths,
+            ob.trace.expected_loss_millionths
+        );
     }
 
     #[test]

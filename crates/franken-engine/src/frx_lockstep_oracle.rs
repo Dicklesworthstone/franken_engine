@@ -1365,7 +1365,7 @@ pub fn create_divergence_evidence(
     let evidence_id = format!("divergence-evidence-{}", uuid_v4_like());
     let classification = classify_divergence(divergence);
 
-    SignedDivergenceEvidence {
+    let mut evidence = SignedDivergenceEvidence {
         schema_version: DIVERGENCE_EVIDENCE_SCHEMA_VERSION.to_string(),
         evidence_id,
         generated_at_utc: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
@@ -1378,24 +1378,33 @@ pub fn create_divergence_evidence(
             identifier: "lockstep-oracle-differential-analysis".to_string(),
             description: "Automated lockstep oracle divergence detection".to_string(),
         }],
-        // FIXME (bd-1lw7r.4): emitted UNSIGNED — no evidence-signing facility
-        // is wired here yet; see `divergence_evidence_signing_wired()`.
         signature: None,
-    }
+    };
+
+    // bd-k2bz7: sign the unsigned evidence view (signature == None) with the
+    // engine's default Ed25519 evidence signer so this `Signed`DivergenceEvidence
+    // is actually authenticated. The detached signature is hex-encoded; a
+    // verifier re-serializes with `signature` cleared and checks it against
+    // `evidence_ledger::shared_evidence_verification_key()`.
+    let preimage = serde_json::to_vec(&evidence)
+        .expect("SignedDivergenceEvidence serializes (derives Serialize, no non-string map keys)");
+    evidence.signature = Some(hex::encode(
+        crate::evidence_ledger::sign_evidence_preimage(&preimage).to_bytes(),
+    ));
+    evidence
 }
 
 /// Whether an evidence-signing facility is wired into divergence-evidence
 /// creation.
 ///
-/// Returns `false` today: [`create_divergence_evidence`] returns a
-/// [`SignedDivergenceEvidence`] whose `signature` is always `None`
-/// (bd-1lw7r.4), so — despite the `Signed` in the type name — emitted
-/// divergence evidence is UNAUTHENTICATED. A future change that wires a signer
-/// (key management + sign API, cf. the `tee_attestation` / `signature_preimage`
-/// modules) must flip this to `true` and populate `signature`; the unit test
-/// pinning the current state will then force this to be revisited.
+/// Returns `true` (bd-k2bz7): [`create_divergence_evidence`] populates
+/// `signature` with an Ed25519 signature over the unsigned evidence view,
+/// produced by the engine's default evidence signer
+/// (`evidence_ledger::sign_evidence_preimage`). Emitted divergence evidence is
+/// therefore authenticated and verifiable with
+/// `evidence_ledger::shared_evidence_verification_key()`.
 pub const fn divergence_evidence_signing_wired() -> bool {
-    false
+    true
 }
 
 /// Classify a divergence into the appropriate evidence atom category.
@@ -2964,11 +2973,13 @@ mod tests {
     }
 
     #[test]
-    fn divergence_evidence_signing_is_not_yet_wired_bd_1lw7r_4() {
-        // bd-1lw7r.4: divergence evidence is emitted UNSIGNED until an
-        // evidence-signing facility is wired. Pin both the helper and the real
-        // emission path so future wiring is forced to update this test.
-        assert!(!divergence_evidence_signing_wired());
+    fn divergence_evidence_is_signed_and_verifies_bd_k2bz7() {
+        use crate::signature_preimage::{SIGNATURE_LEN, Signature, verify_signature};
+
+        // bd-k2bz7: divergence evidence is now signed by the engine's default
+        // evidence signer. Verify both the helper flag and that the emitted
+        // signature verifies against the unsigned evidence view.
+        assert!(divergence_evidence_signing_wired());
 
         let divergence = FrxDivergenceDetail {
             class: FrxDivergenceClass::SchemaViolation,
@@ -2979,9 +2990,28 @@ mod tests {
         };
         let evidence =
             create_divergence_evidence(&divergence, "case-1", ClassificationConfidence::Automated);
+        let sig_hex = evidence
+            .signature
+            .clone()
+            .expect("divergence evidence must be signed (bd-k2bz7)");
+        let sig_bytes: Vec<u8> = hex::decode(&sig_hex).expect("signature is valid hex");
+        let signature = Signature::from_bytes(
+            <[u8; SIGNATURE_LEN]>::try_from(sig_bytes.as_slice())
+                .expect("64-byte Ed25519 signature"),
+        );
+
+        // Re-derive the unsigned preimage (signature cleared) and verify.
+        let mut unsigned = evidence.clone();
+        unsigned.signature = None;
+        let preimage = serde_json::to_vec(&unsigned).expect("serializable");
         assert!(
-            evidence.signature.is_none(),
-            "divergence evidence must be unsigned until a signer is wired (bd-1lw7r.4)"
+            verify_signature(
+                &crate::evidence_ledger::shared_evidence_verification_key(),
+                &preimage,
+                &signature,
+            )
+            .is_ok(),
+            "emitted divergence-evidence signature must verify against the shared evidence key"
         );
     }
 

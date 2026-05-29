@@ -383,15 +383,14 @@ impl ChangePointVerdict {
     /// Whether an evidence-signing facility is wired into change-point
     /// detection.
     ///
-    /// Returns `false` today: [`ChangePointVerdict::ChangeDetected`] computes
-    /// an `evidence_hash` but its `signed_evidence` field is always `None`
-    /// (bd-1lw7r.4), so emitted detections are auditable-but-UNAUTHENTICATED.
-    /// A future change that wires a signer (key management + sign API, cf. the
-    /// `tee_attestation` / `signature_preimage` modules) must flip this to
-    /// `true` and populate `signed_evidence`; the unit test pinning the
-    /// current state will then force this to be revisited.
+    /// Returns `true` (bd-k2bz7): [`ChangePointVerdict::ChangeDetected`]
+    /// populates `signed_evidence` with an Ed25519 signature over its
+    /// `evidence_hash`, produced by the engine's default evidence signer
+    /// (`evidence_ledger::sign_evidence_preimage`). Emitted detections are
+    /// therefore authenticated, auditable decision artifacts verifiable with
+    /// `evidence_ledger::shared_evidence_verification_key()`.
     pub const fn evidence_signing_wired() -> bool {
-        false
+        true
     }
 
     /// Whether this verdict indicates a change was detected.
@@ -533,6 +532,17 @@ impl ChangePointDetector {
             let evidence_data = self.compute_evidence_data(detection_time, estimated_change_point);
             let evidence_hash = ContentHash::compute(&evidence_data);
 
+            // bd-k2bz7: sign the evidence hash with the engine's default
+            // Ed25519 evidence signer so this detection is an authenticated,
+            // auditable decision artifact (not merely hash-addressed). The
+            // detached 64-byte signature verifies against
+            // `evidence_ledger::shared_evidence_verification_key()`.
+            let signed_evidence = Some(
+                crate::evidence_ledger::sign_evidence_preimage(evidence_hash.as_bytes())
+                    .to_bytes()
+                    .to_vec(),
+            );
+
             Ok(ChangePointVerdict::ChangeDetected {
                 detection_time,
                 estimated_change_point,
@@ -540,11 +550,7 @@ impl ChangePointDetector {
                 post_change_parameters,
                 cusum_statistic_millionths: self.cusum_statistic_millionths,
                 evidence_hash,
-                // FIXME (bd-1lw7r.4): emitted UNSIGNED. `evidence_hash` is
-                // computed above but never signed, because no evidence-signing
-                // facility is wired here yet; see
-                // `ChangePointVerdict::evidence_signing_wired()`.
-                signed_evidence: None,
+                signed_evidence,
             })
         } else {
             Ok(ChangePointVerdict::Continue)
@@ -1074,37 +1080,90 @@ mod tests {
         assert!(!continue_verdict.is_change_detected());
         assert!(continue_verdict.detection_time().is_none());
 
+        let evidence_hash = ContentHash::compute(b"test");
+        let signed_evidence = Some(
+            crate::evidence_ledger::sign_evidence_preimage(evidence_hash.as_bytes())
+                .to_bytes()
+                .to_vec(),
+        );
         let change_verdict = ChangePointVerdict::ChangeDetected {
             detection_time: 42,
             estimated_change_point: 37,
             pre_change_parameters: BTreeMap::new(),
             post_change_parameters: BTreeMap::new(),
             cusum_statistic_millionths: 5_000_000,
-            evidence_hash: ContentHash::compute(b"test"),
-            signed_evidence: None,
+            evidence_hash,
+            signed_evidence,
         };
 
         assert!(change_verdict.is_change_detected());
         assert_eq!(change_verdict.detection_time(), Some(42));
-        // bd-1lw7r.4: emitted change-point evidence is currently UNSIGNED.
+        // bd-k2bz7: change-point evidence now carries a detached signature.
         assert!(matches!(
             change_verdict,
             ChangePointVerdict::ChangeDetected {
-                signed_evidence: None,
+                signed_evidence: Some(_),
                 ..
             }
         ));
     }
 
     #[test]
-    fn evidence_signing_is_not_yet_wired_bd_1lw7r_4() {
-        // bd-1lw7r.4: change-point evidence is emitted UNSIGNED until an
-        // evidence-signing facility is wired. Pin the current state so the
-        // future wiring is forced to flip the helper and populate
-        // `signed_evidence` (this assertion will then fail and demand update).
+    fn evidence_signing_is_wired_bd_k2bz7() {
+        // bd-k2bz7: the evidence-signing facility is now wired — the helper
+        // reports true and emitted detections populate `signed_evidence`.
         assert!(
-            !ChangePointVerdict::evidence_signing_wired(),
-            "evidence_signing_wired() must report false until a signer is wired (bd-1lw7r.4)"
+            ChangePointVerdict::evidence_signing_wired(),
+            "evidence_signing_wired() must report true now that the signer is wired (bd-k2bz7)"
+        );
+    }
+
+    #[test]
+    fn change_detection_evidence_is_signed_and_verifies_bd_k2bz7() {
+        use crate::signature_preimage::{SIGNATURE_LEN, Signature, verify_signature};
+
+        // Drive the detector to a detection (low threshold + large signal,
+        // mirroring `already_detected_error`), then verify the emitted
+        // signature against the engine's shared evidence verification key.
+        let mut detector = ChangePointDetector::new(
+            "k2bz7-test",
+            sample_normal_alternative(),
+            500_000, // low threshold for quick detection
+            SecurityEpoch::from_raw(1),
+        );
+        let mut detected: Option<ChangePointVerdict> = None;
+        for i in 1..=10u64 {
+            let verdict = detector
+                .process_observation(2_000_000, i * 1_000_000)
+                .expect("process_observation");
+            if verdict.is_change_detected() {
+                detected = Some(verdict);
+                break;
+            }
+        }
+
+        let verdict = detected.expect("a change point should be detected under a sustained shift");
+        let ChangePointVerdict::ChangeDetected {
+            evidence_hash,
+            signed_evidence,
+            ..
+        } = verdict
+        else {
+            panic!("expected ChangeDetected");
+        };
+        let sig_bytes = signed_evidence.expect("signed_evidence must be populated (bd-k2bz7)");
+        let signature = Signature::from_bytes(
+            <[u8; SIGNATURE_LEN]>::try_from(sig_bytes.as_slice())
+                .expect("64-byte Ed25519 signature"),
+        );
+        assert!(
+            verify_signature(
+                &crate::evidence_ledger::shared_evidence_verification_key(),
+                evidence_hash.as_bytes(),
+                &signature,
+            )
+            .is_ok(),
+            "emitted change-point evidence signature must verify against the shared evidence key"
         );
     }
 

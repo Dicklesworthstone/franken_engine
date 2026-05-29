@@ -77,6 +77,25 @@ fn default_evidence_verification_key() -> VerificationKey {
     DEFAULT_EVIDENCE_VERIFICATION_KEY.clone()
 }
 
+/// Sign an evidence preimage with the engine's default Ed25519 evidence
+/// signing key, returning the detached signature.
+///
+/// Shared signer for subsystems that emit auditable, authenticated evidence
+/// atoms outside the ledger itself — the change-point detector and the
+/// lockstep divergence oracle — so all engine evidence is signed under one
+/// deterministic, replay-stable key (bd-k2bz7). The default key bytes are a
+/// non-zero const, so signing never fails.
+pub(crate) fn sign_evidence_preimage(preimage: &[u8]) -> Signature {
+    sign_preimage(&DEFAULT_EVIDENCE_SIGNING_KEY, preimage)
+        .expect("default evidence signing key is a valid non-zero Ed25519 key (const)")
+}
+
+/// The Ed25519 verification key paired with [`sign_evidence_preimage`], for
+/// asymmetric verification of evidence signed by the engine's default signer.
+pub(crate) fn shared_evidence_verification_key() -> VerificationKey {
+    DEFAULT_EVIDENCE_VERIFICATION_KEY.clone()
+}
+
 // ---------------------------------------------------------------------------
 // DecisionType — categorizes the decision
 // ---------------------------------------------------------------------------

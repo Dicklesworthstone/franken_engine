@@ -482,8 +482,16 @@ impl BudgetAccountant {
     /// - Basic: straightforward addition (epsilon + delta add linearly).
     /// - Advanced: uses sqrt(2 * k * ln(1/delta)) * eps for k queries.
     ///   Approximated as eps * sqrt(k+1) / sqrt(k) for incremental.
-    /// - Renyi: adds alpha-Renyi divergence; simplified as eps * 0.8.
-    /// - ZeroCdp: adds rho = eps^2 / 2; simplified as eps * 0.7.
+    /// - Renyi / ZeroCdp: a sound tighter-than-basic bound requires accumulating
+    ///   in the method's native space (an order-indexed RDP curve for Rényi; a
+    ///   running rho with `eps = rho + 2*sqrt(rho*ln(1/delta))` for zCDP), which
+    ///   this accountant does not yet track. Until that infrastructure exists
+    ///   (bd-a83kd) these FALL BACK TO BASIC (linear) composition — a conservative
+    ///   upper bound that never under-charges. (They previously applied arbitrary
+    ///   `eps * 0.8` / `eps * 0.7` multipliers, which UNDER-charged epsilon with no
+    ///   mathematical justification — unsound for a privacy budget, since it would
+    ///   report more remaining budget than is actually safe and permit more
+    ///   queries than the privacy guarantee allows.)
     fn apply_composition(&self, epsilon: i64, delta: i64) -> (i64, i64) {
         let k = self.current_budget.operations_count;
         match self.composition_method {
@@ -501,17 +509,15 @@ impl BudgetAccountant {
                 let composed_eps = epsilon * scale / 1_000_000;
                 (composed_eps.max(1), delta)
             }
-            CompositionMethod::Renyi => {
-                // Renyi composition: tighter than basic.
-                // Simplified: 80% of basic cost.
-                let composed_eps = epsilon * 800_000 / 1_000_000;
-                (composed_eps.max(1), delta)
-            }
-            CompositionMethod::ZeroCdp => {
-                // zCDP: tightest common composition bound.
-                // Simplified: 70% of basic cost.
-                let composed_eps = epsilon * 700_000 / 1_000_000;
-                (composed_eps.max(1), delta)
+            CompositionMethod::Renyi | CompositionMethod::ZeroCdp => {
+                // Fail-closed to BASIC (linear) composition: a sound RDP/zCDP
+                // bound needs native-space accumulation (RDP order curve / running
+                // rho + ln(1/delta) conversion) that this accountant does not yet
+                // track. Charging basic is always a valid upper bound and never
+                // under-accounts privacy loss; the real tighter-but-sound bound is
+                // tracked in bd-a83kd. (Replaces the prior unsound eps*0.8 / eps*0.7
+                // multipliers, which silently under-charged epsilon.)
+                (epsilon, delta)
             }
         }
     }
@@ -888,8 +894,13 @@ mod tests {
         assert!(r2.composed_epsilon_millionths < 100_000); // k=1, scale < 1.0
     }
 
+    // bd-a83kd: Renyi/zCDP previously applied unsound eps*0.8 / eps*0.7
+    // multipliers (under-charging epsilon with no mathematical basis). Until a
+    // sound RDP/zCDP accounting model exists, both fall back to BASIC (linear)
+    // composition — a conservative bound that never under-charges. These tests
+    // pin the conservative behaviour and the no-under-charge security invariant.
     #[test]
-    fn renyi_composition_reduces_cost() {
+    fn renyi_composition_is_conservative_basic_until_rdp_curve() {
         let mut acc = BudgetAccountant::new(AccountantConfig {
             composition_method: CompositionMethod::Renyi,
             now_ns: 0,
@@ -899,11 +910,16 @@ mod tests {
         let r = acc
             .consume(100_000, 10_000, "op", 1_000_000_000)
             .expect("operation should succeed for valid inputs");
-        assert_eq!(r.composed_epsilon_millionths, 80_000); // 80% of 100K
+        // Charges the full epsilon (basic), NOT the old unsound 0.8 discount.
+        assert_eq!(r.composed_epsilon_millionths, 100_000);
+        assert!(
+            r.composed_epsilon_millionths >= 100_000,
+            "bd-a83kd: Renyi must not under-charge below basic composition"
+        );
     }
 
     #[test]
-    fn zcdp_composition_reduces_cost() {
+    fn zcdp_composition_is_conservative_basic_until_rho_accounting() {
         let mut acc = BudgetAccountant::new(AccountantConfig {
             composition_method: CompositionMethod::ZeroCdp,
             now_ns: 0,
@@ -913,7 +929,12 @@ mod tests {
         let r = acc
             .consume(100_000, 10_000, "op", 1_000_000_000)
             .expect("operation should succeed for valid inputs");
-        assert_eq!(r.composed_epsilon_millionths, 70_000); // 70% of 100K
+        // Charges the full epsilon (basic), NOT the old unsound 0.7 discount.
+        assert_eq!(r.composed_epsilon_millionths, 100_000);
+        assert!(
+            r.composed_epsilon_millionths >= 100_000,
+            "bd-a83kd: zCDP must not under-charge below basic composition"
+        );
     }
 
     #[test]

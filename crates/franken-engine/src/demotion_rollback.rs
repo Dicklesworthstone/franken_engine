@@ -1216,8 +1216,8 @@ mod tests {
             summary: "all tests passed".to_string(),
         }];
 
-        let old_slot_id = SlotId::new("slot_old").expect("valid slot id");
-        let new_slot_id = SlotId::new("slot_new").expect("valid slot id");
+        let old_slot_id = SlotId::new("slot-old").expect("valid slot id");
+        let new_slot_id = SlotId::new("slot-new").expect("valid slot id");
 
         ReplacementReceipt::create_unsigned(CreateReceiptInput {
             slot_id: &test_slot(),

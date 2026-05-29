@@ -1198,6 +1198,29 @@ fn analyze_variable_declaration(
             );
         }
 
+        // TDZ self-reference: a let/const binding is uninitialized while its own
+        // initializer evaluates, so directly reading or writing it there is a
+        // temporal-dead-zone access -> ReferenceError (ES2020 §13.3.1.4). This
+        // is the for-head case `for (let x = (x = 1); …)` (DISC-007 /
+        // bd-bg9l1.27.5) and the general `let x = x` form. References deferred
+        // inside nested closures (`let f = () => f`) are not violations.
+        if is_lexical
+            && let Some(ref init_expr) = declarator.initializer
+        {
+            let targets: BTreeSet<&str> = names.iter().copied().collect();
+            if let Some(hit) = initializer_self_reference(init_expr, &targets) {
+                state.push_error(
+                    StaticErrorKind::TemporalDeadZone,
+                    format!(
+                        "cannot access '{hit}' before initialization (temporal dead zone): \
+                         a '{}' binding may not be referenced in its own initializer",
+                        decl.kind.as_str()
+                    ),
+                    declarator.span,
+                );
+            }
+        }
+
         for name in &names {
             if is_lexical {
                 // Check duplicate lexical binding
@@ -1537,6 +1560,94 @@ fn walk_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSp
 /// Backward-compat alias used by existing call sites.
 fn check_await_in_expression(state: &mut AnalyzerState, expr: &Expression, span: &SourceSpan) {
     walk_expression(state, expr, span);
+}
+
+/// First binding name in `targets` that is *directly* referenced (read or
+/// written) by `expr`, or `None`.
+///
+/// "Directly" deliberately excludes references nested inside a function or
+/// arrow body: those are deferred and only run after the binding is
+/// initialized, so they are not temporal-dead-zone violations (e.g.
+/// `let x = () => x` and `let f = () => f()` are legal). This is used to flag a
+/// `let`/`const` binding that references itself within its own initializer
+/// (ES2020 §13.3.1.4 / §13.7.4) — a `ReferenceError` — covering the for-head
+/// form `for (let x = (x = 1); …)` (DISC-007 / bd-bg9l1.27.5).
+///
+/// Coverage is conservative: expression shapes that cannot lexically contain a
+/// bare binding reference (and any not enumerated) return `None`. A missed
+/// case is at worst a false negative (an undetected violation) — never a false
+/// positive that would reject valid code.
+fn initializer_self_reference(expr: &Expression, targets: &BTreeSet<&str>) -> Option<String> {
+    match expr {
+        Expression::Identifier(name) => {
+            targets.contains(name.as_str()).then(|| name.clone())
+        }
+        Expression::Await(inner) | Expression::SpreadElement(inner) => {
+            initializer_self_reference(inner, targets)
+        }
+        Expression::Unary { argument, .. } => initializer_self_reference(argument, targets),
+        Expression::Yield { argument, .. } => argument
+            .as_deref()
+            .and_then(|a| initializer_self_reference(a, targets)),
+        Expression::Binary { left, right, .. } | Expression::Assignment { left, right, .. } => {
+            initializer_self_reference(left, targets)
+                .or_else(|| initializer_self_reference(right, targets))
+        }
+        Expression::Conditional {
+            test,
+            consequent,
+            alternate,
+        } => initializer_self_reference(test, targets)
+            .or_else(|| initializer_self_reference(consequent, targets))
+            .or_else(|| initializer_self_reference(alternate, targets)),
+        Expression::Call { callee, arguments }
+        | Expression::OptionalCall { callee, arguments }
+        | Expression::New { callee, arguments } => initializer_self_reference(callee, targets)
+            .or_else(|| {
+                arguments
+                    .iter()
+                    .find_map(|a| initializer_self_reference(a, targets))
+            }),
+        Expression::Member {
+            object,
+            property,
+            computed,
+        }
+        | Expression::OptionalMember {
+            object,
+            property,
+            computed,
+        } => initializer_self_reference(object, targets).or_else(|| {
+            // Only a computed member (`obj[x]`) references the variable `x`;
+            // a static member (`obj.x`) names a property, not a binding.
+            if *computed {
+                initializer_self_reference(property, targets)
+            } else {
+                None
+            }
+        }),
+        Expression::ArrayLiteral(elements) => elements
+            .iter()
+            .flatten()
+            .find_map(|e| initializer_self_reference(e, targets)),
+        Expression::ObjectLiteral(props) => props.iter().find_map(|prop| {
+            initializer_self_reference(&prop.value, targets).or_else(|| {
+                if prop.computed {
+                    initializer_self_reference(&prop.key, targets)
+                } else {
+                    None
+                }
+            })
+        }),
+        Expression::TemplateLiteral { expressions, .. } => expressions
+            .iter()
+            .find_map(|e| initializer_self_reference(e, targets)),
+        // Deferred: a reference inside a nested function/arrow body executes
+        // only after initialization, so it is not a TDZ violation.
+        Expression::ArrowFunction { .. } | Expression::Function { .. } => None,
+        // Literals, `this`, `super`, raw, regex, class — no bare binding ref.
+        _ => None,
+    }
 }
 
 /// Detect TDZ violations: identifier references that appear before `let`/`const`
@@ -2394,6 +2505,129 @@ mod tests {
                 .errors
                 .iter()
                 .any(|e| e.kind == StaticErrorKind::TemporalDeadZone)
+        );
+    }
+
+    /// `x = 1` assignment expression helper for the self-reference TDZ tests.
+    fn assign(name: &str, value: Expression) -> Expression {
+        Expression::Assignment {
+            operator: crate::ast::AssignmentOperator::Assign,
+            left: Box::new(Expression::Identifier(name.to_string())),
+            right: Box::new(value),
+        }
+    }
+
+    fn has_tdz(result: &StaticAnalysisResult) -> bool {
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == StaticErrorKind::TemporalDeadZone)
+    }
+
+    #[test]
+    fn tdz_self_reference_write_in_initializer() {
+        // `let x = (x = 1);` — writing x while it is in its own TDZ.
+        let tree = make_tree(
+            ParseGoal::Script,
+            vec![var_decl(
+                VariableDeclarationKind::Let,
+                "x",
+                Some(assign("x", Expression::NumericLiteral(1))),
+                1,
+            )],
+        );
+        let result = analyze(&tree);
+        assert!(!result.passed());
+        assert!(has_tdz(&result), "self-write in initializer must be a TDZ violation");
+    }
+
+    #[test]
+    fn tdz_self_reference_read_in_initializer() {
+        // `const x = x;` — reading x while it is in its own TDZ.
+        let tree = make_tree(
+            ParseGoal::Script,
+            vec![var_decl(
+                VariableDeclarationKind::Const,
+                "x",
+                Some(Expression::Identifier("x".to_string())),
+                1,
+            )],
+        );
+        assert!(has_tdz(&analyze(&tree)), "self-read in initializer must be a TDZ violation");
+    }
+
+    #[test]
+    fn tdz_for_head_let_self_reference() {
+        // DISC-007 / bd-bg9l1.27.5: `for (let x = (x = 1); x < 2; x++) { }`.
+        use crate::ast::{BlockStatement, ForStatement};
+        let tree = make_tree(
+            ParseGoal::Script,
+            vec![Statement::For(ForStatement {
+                init: Some(Box::new(var_decl(
+                    VariableDeclarationKind::Let,
+                    "x",
+                    Some(assign("x", Expression::NumericLiteral(1))),
+                    1,
+                ))),
+                condition: Some(Expression::Binary {
+                    operator: crate::ast::BinaryOperator::LessThan,
+                    left: Box::new(Expression::Identifier("x".to_string())),
+                    right: Box::new(Expression::NumericLiteral(2)),
+                }),
+                update: None,
+                body: Box::new(Statement::Block(BlockStatement {
+                    body: vec![],
+                    span: span(1),
+                })),
+                span: span(1),
+            })],
+        );
+        assert!(
+            has_tdz(&analyze(&tree)),
+            "let TDZ self-reference in a for-statement head must be detected"
+        );
+    }
+
+    #[test]
+    fn no_tdz_for_deferred_closure_self_reference() {
+        // `let f = () => f;` is LEGAL — the reference is deferred until the
+        // closure runs, after f is initialized. Must NOT be flagged.
+        let tree = make_tree(
+            ParseGoal::Script,
+            vec![var_decl(
+                VariableDeclarationKind::Let,
+                "f",
+                Some(Expression::ArrowFunction {
+                    params: vec![],
+                    body: crate::ast::ArrowBody::Expression(Box::new(Expression::Identifier(
+                        "f".to_string(),
+                    ))),
+                    is_async: false,
+                }),
+                1,
+            )],
+        );
+        assert!(
+            !has_tdz(&analyze(&tree)),
+            "deferred self-reference inside a closure body is not a TDZ violation"
+        );
+    }
+
+    #[test]
+    fn no_tdz_for_non_self_initializer() {
+        // `let x = y;` references a different binding — not a self-TDZ.
+        let tree = make_tree(
+            ParseGoal::Script,
+            vec![var_decl(
+                VariableDeclarationKind::Let,
+                "x",
+                Some(Expression::Identifier("y".to_string())),
+                1,
+            )],
+        );
+        assert!(
+            !has_tdz(&analyze(&tree)),
+            "referencing a different binding in the initializer is not a self-TDZ"
         );
     }
 

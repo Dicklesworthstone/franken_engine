@@ -1280,7 +1280,15 @@ mod tests {
 
     #[test]
     fn check_token_acceptance_observed_records_revoked_on_denial() {
-        let mut enforcer = make_enforcer();
+        // `make_enforcer()` builds a chain with no authorized signers, so
+        // `revoke_target`'s append would be rejected ("head signer not
+        // authorized"); authorize the revocation key locally so this test owns
+        // a usable chain (the shared `make_enforcer` helper does not authorize).
+        let signer_vk = revocation_key().verification_key();
+        let chain = RevocationChain::new(TEST_ZONE)
+            .with_authorized_head_key(signer_vk.clone())
+            .with_authorized_revocation_key(signer_vk);
+        let mut enforcer = RevocationEnforcer::new(chain, 5000);
         let mut obs = RuntimeSecurityObservability::new();
         let token = EngineObjectId([7; 32]);
         revoke_target(&mut enforcer, RevocationTargetType::Token, *token.as_bytes());

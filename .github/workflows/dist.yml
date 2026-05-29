@@ -1,0 +1,114 @@
+name: dist
+
+# Release pipeline for the `frankenctl` control-plane CLI.
+#
+# Produces the canonical fleet artifacts consumed by install.sh and by dsr:
+#   frankenctl-<target-triple>.tar.xz
+#   frankenctl-<target-triple>.tar.xz.sha256        (shasum -a 256 format)
+#   frankenctl-<target-triple>.tar.xz.sigstore.json (cosign, keyless)
+#
+# Linux ships the gnu target (frankenctl links C deps — zstd-sys, mimalloc —
+# so a musl static build is intentionally avoided). frankenctl builds in
+# Standalone Mode (no sibling repos required).
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: macos-14
+            target: aarch64-apple-darwin
+
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build frankenctl (Standalone Mode)
+        env:
+          RCH_CARGO_WRAPPER_BYPASS: "1"
+        run: cargo build --release -p frankenengine-engine --bin frankenctl --target ${{ matrix.target }}
+
+      - name: Create tarball
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          TARBALL="frankenctl-${{ matrix.target }}.tar.xz"
+          binary="target/${{ matrix.target }}/release/frankenctl"
+          [ -f "$binary" ] || { echo "::error::expected binary not found at $binary"; exit 1; }
+          tar -cJf "dist/$TARBALL" -C "target/${{ matrix.target }}/release" frankenctl
+          (cd dist && shasum -a 256 "$TARBALL" > "$TARBALL.sha256")
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -laR dist
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Sign release artifacts (sigstore bundle)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          cd dist
+          for f in frankenctl-*.tar.xz; do
+            cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
+          done
+
+      - name: Copy + checksum install script
+        run: |
+          set -euo pipefail
+          cp install.sh dist/ 2>/dev/null || echo "no install.sh"
+          if [ -f dist/install.sh ]; then
+            (cd dist && shasum -a 256 install.sh > install.sh.sha256)
+            cosign sign-blob --yes --bundle dist/install.sh.sigstore.json dist/install.sh
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

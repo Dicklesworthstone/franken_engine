@@ -734,7 +734,14 @@ mod tests {
     }
 
     fn golden_revocation_chain() -> RevocationChain {
+        // `append` requires the head signer to be an authorized head key
+        // (revocation_chain.rs, since 27d34c23 stopped self-onboarding head
+        // signers). Tests append with `golden_head_signing_key()`, so authorize
+        // it as a head key — otherwise every append fails "head signer not
+        // authorized". The revocation key is separately authorized for
+        // signature verification.
         RevocationChain::new("golden-zone")
+            .with_authorized_head_key(golden_head_signing_key().verification_key())
             .with_authorized_revocation_key(golden_revocation_signing_key().verification_key())
     }
 

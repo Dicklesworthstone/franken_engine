@@ -14,6 +14,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
+use crate::runtime_observability::{
+    ReplayDropReason as ObservedReplayDropReason, RuntimeSecurityObservability, SecurityEventContext,
+};
 use crate::signature_preimage::{
     Signature, SignatureError, SigningKey, VerificationKey, sign_preimage, verify_signature,
 };
@@ -759,6 +762,93 @@ impl SessionHostcallChannel {
     }
 
     /// Receive and verify the next queued envelope for a session.
+    /// [`receive`](Self::receive) plus deterministic security observability:
+    /// records `replay_drop_total` into `obs` when a message is dropped because
+    /// its sequence is a replay or duplicate. Behaviour is identical to
+    /// [`receive`](Self::receive) — only the counter / structured-log side
+    /// effect is additive (bd-x92qq; wiring `record_replay_drop`, following the
+    /// `*_observed` pattern used for `verify_observed` /
+    /// `validate_cross_zone_reference_observed`).
+    ///
+    /// Mapping (per the bd-x92qq analysis): a duplicate sequence
+    /// (`seq == last_received`) is [`ObservedReplayDropReason::DuplicateSeq`];
+    /// a stale replay (`seq < last_received`) is
+    /// [`ObservedReplayDropReason::StaleSeq`]. A future-gap sequence is an
+    /// *ordering* violation (surfaced as `OutOfOrderDetected`), not an
+    /// anti-replay drop, so it is deliberately not counted here; `CrossSession`
+    /// drops are rejected earlier as binding mismatches and never reach this
+    /// path. A replay-rate-limit escalation (`SessionExpired` with reason
+    /// `replay_drop_threshold_exceeded`) is the triggering replay drop and is
+    /// classified the same way.
+    pub fn receive_observed(
+        &mut self,
+        handle: &SessionHandle,
+        trace_id: &str,
+        timestamp_ticks: u64,
+        decision_id: Option<&str>,
+        policy_id: Option<&str>,
+        obs: &mut RuntimeSecurityObservability,
+    ) -> Result<ChannelPayload, SessionChannelError> {
+        // Snapshot the classification inputs BEFORE delegating: `receive` pops
+        // the inbound envelope and advances `last_received_sequence`, so the
+        // pre-state is needed to distinguish DuplicateSeq from StaleSeq.
+        let pre = self.sessions.get(&handle.session_id).and_then(|session| {
+            session.inbound.front().map(|envelope| {
+                (
+                    session.last_received_sequence,
+                    envelope.sequence,
+                    session.extension_id.clone(),
+                )
+            })
+        });
+
+        let result = self.receive(handle, trace_id, timestamp_ticks, decision_id, policy_id);
+
+        if let Err(ref err) = result
+            && let Some((last_received, received_seq, principal)) = pre
+        {
+            let is_replay_drop = matches!(err, SessionChannelError::ReplayDetected { .. })
+                || matches!(
+                    err,
+                    SessionChannelError::SessionExpired { reason, .. }
+                        if reason.as_str() == "replay_drop_threshold_exceeded"
+                );
+            if is_replay_drop {
+                // Reclassify from the snapshot, not the error: `ReplayDetected`
+                // collapses Duplicate and Replay into one variant.
+                let reason = if received_seq == last_received {
+                    Some(ObservedReplayDropReason::DuplicateSeq)
+                } else if received_seq < last_received {
+                    Some(ObservedReplayDropReason::StaleSeq)
+                } else {
+                    // Future gap (out-of-order) — an ordering violation, not an
+                    // anti-replay drop; not counted.
+                    None
+                };
+                if let Some(reason) = reason {
+                    let context = SecurityEventContext {
+                        timestamp_ns: timestamp_ticks,
+                        trace_id: trace_id.to_string(),
+                        principal_id: principal,
+                        decision_id: decision_id.unwrap_or_default().to_string(),
+                        policy_id: policy_id.unwrap_or_default().to_string(),
+                        zone_id: String::new(),
+                        component: "session_hostcall_channel".to_string(),
+                    };
+                    obs.record_replay_drop(
+                        context,
+                        reason,
+                        received_seq,
+                        last_received.saturating_add(1),
+                        &handle.session_id,
+                    );
+                }
+            }
+        }
+
+        result
+    }
+
     pub fn receive(
         &mut self,
         handle: &SessionHandle,
@@ -1731,6 +1821,123 @@ mod tests {
         assert_eq!(dropped.received_seq, Some(1));
         assert_eq!(dropped.drop_reason.as_deref(), Some("duplicate"));
         assert_eq!(dropped.source_principal.as_deref(), Some("extension-a"));
+    }
+
+    #[test]
+    fn receive_observed_records_duplicate_seq_replay_drop() {
+        use crate::runtime_observability::ReplayDropReason;
+        let mut channel = SessionHostcallChannel::new();
+        let handle = create_basic_session(&mut channel, "sess-obs-dup");
+        channel
+            .send(&handle, b"first".to_vec(), "trace-send", 101, None, None)
+            .expect("send");
+        // Capture the envelope so it can be re-delivered as a duplicate.
+        let replay = {
+            let session = channel.sessions.get(&handle.session_id).expect("session");
+            session.inbound.front().cloned().expect("envelope")
+        };
+        channel
+            .receive(&handle, "trace-recv-1", 102, None, None)
+            .expect("first receive");
+        // Re-deliver the consumed envelope: its sequence now equals
+        // last_received_sequence -> Duplicate.
+        channel
+            .sessions
+            .get_mut(&handle.session_id)
+            .expect("session")
+            .inbound
+            .push_back(replay);
+
+        let mut obs = RuntimeSecurityObservability::new();
+        let err = channel
+            .receive_observed(&handle, "trace-recv-2", 103, None, None, &mut obs)
+            .unwrap_err();
+        assert!(matches!(err, SessionChannelError::ReplayDetected { .. }));
+        assert_eq!(
+            obs.metrics.replay_drop_total
+                .get(&ReplayDropReason::DuplicateSeq)
+                .copied(),
+            Some(1),
+            "duplicate-sequence drop must increment replay_drop_total[DuplicateSeq]"
+        );
+        assert_eq!(
+            obs.metrics.replay_drop_total.get(&ReplayDropReason::StaleSeq).copied(),
+            Some(0),
+            "a duplicate must not be miscounted as a stale replay"
+        );
+    }
+
+    #[test]
+    fn receive_observed_records_stale_seq_replay_drop() {
+        use crate::runtime_observability::ReplayDropReason;
+        let mut channel = SessionHostcallChannel::new();
+        let handle = create_basic_session(&mut channel, "sess-obs-stale");
+        channel
+            .send(&handle, b"m1".to_vec(), "trace-send", 101, None, None)
+            .expect("send1");
+        channel
+            .send(&handle, b"m2".to_vec(), "trace-send", 102, None, None)
+            .expect("send2");
+        // Capture the first envelope (seq 1) before consuming either.
+        let first = {
+            let session = channel.sessions.get(&handle.session_id).expect("session");
+            session.inbound.front().cloned().expect("env1")
+        };
+        channel
+            .receive(&handle, "trace-recv-1", 103, None, None)
+            .expect("recv1");
+        channel
+            .receive(&handle, "trace-recv-2", 104, None, None)
+            .expect("recv2");
+        // Re-deliver seq-1 after last_received advanced to 2: 1 < 2 -> stale replay.
+        channel
+            .sessions
+            .get_mut(&handle.session_id)
+            .expect("session")
+            .inbound
+            .push_back(first);
+
+        let mut obs = RuntimeSecurityObservability::new();
+        let err = channel
+            .receive_observed(&handle, "trace-recv-3", 105, None, None, &mut obs)
+            .unwrap_err();
+        assert!(matches!(err, SessionChannelError::ReplayDetected { .. }));
+        assert_eq!(
+            obs.metrics.replay_drop_total.get(&ReplayDropReason::StaleSeq).copied(),
+            Some(1),
+            "stale replay (seq < last_received) must increment replay_drop_total[StaleSeq]"
+        );
+        assert_eq!(
+            obs.metrics.replay_drop_total
+                .get(&ReplayDropReason::DuplicateSeq)
+                .copied(),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn receive_observed_does_not_count_successful_receive() {
+        use crate::runtime_observability::ReplayDropReason;
+        let mut channel = SessionHostcallChannel::new();
+        let handle = create_basic_session(&mut channel, "sess-obs-ok");
+        channel
+            .send(&handle, b"hello".to_vec(), "trace-send", 101, None, None)
+            .expect("send");
+        let mut obs = RuntimeSecurityObservability::new();
+        channel
+            .receive_observed(&handle, "trace-recv", 102, None, None, &mut obs)
+            .expect("receive should succeed");
+        assert_eq!(
+            obs.metrics.replay_drop_total
+                .get(&ReplayDropReason::DuplicateSeq)
+                .copied(),
+            Some(0),
+            "a successful receive must not increment any replay-drop counter"
+        );
+        assert_eq!(
+            obs.metrics.replay_drop_total.get(&ReplayDropReason::StaleSeq).copied(),
+            Some(0)
+        );
     }
 
     #[test]

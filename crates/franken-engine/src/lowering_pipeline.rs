@@ -6756,6 +6756,47 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            if let Some(capability) = timer_builtin_call_capability(callee, binding_lookup) {
+                // Bare global timer builtins (`setTimeout`/`setInterval`/
+                // `clearTimeout`/`clearInterval`) are dispatched as host calls
+                // (bd-1lw7r.13). Their handlers read the meaningful arguments
+                // starting at `args.start + 1` (slot 0 is the function-call
+                // receiver slot), matching the string-builtin convention, so we
+                // push an `undefined` receiver placeholder ahead of the real
+                // arguments and size the call as `arguments.len() + 1`.
+                let arg_count = arguments.len().saturating_add(1);
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                lower_expression_to_ir1(
+                    &Expression::UndefinedLiteral,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Some(capability) = string_literal_builtin_call_capability(callee) {
                 let arg_count = arguments.len().saturating_add(1);
                 if arg_count > u32::MAX as usize {
@@ -7967,6 +8008,32 @@ fn math_object_property_name<'a>(
             Some(name.as_str())
         }
         (true, Expression::StringLiteral(name)) => Some(name.as_str()),
+        _ => None,
+    }
+}
+
+/// Capability for a bare global timer-builtin call (`setTimeout(fn, ms)` etc.).
+///
+/// Unlike the `Math.*`/string/array builtins, these are invoked as bare
+/// identifiers rather than member access, so they are not recognized by the
+/// member-callee capability helpers. Returns `None` when the identifier is
+/// shadowed by a user binding in scope (e.g. `let setTimeout = …`), so a
+/// local `setTimeout` is never reinterpreted as the host builtin (bd-1lw7r.13).
+fn timer_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "setTimeout" => Some("builtin:SetTimeout"),
+        "setInterval" => Some("builtin:SetInterval"),
+        "clearTimeout" => Some("builtin:ClearTimeout"),
+        "clearInterval" => Some("builtin:ClearInterval"),
         _ => None,
     }
 }

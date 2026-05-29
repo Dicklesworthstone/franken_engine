@@ -9794,7 +9794,7 @@ impl InterpreterCore {
             let turn_result = self.event_loop.turn();
             if let Some(macrotask) = turn_result.macrotask {
                 // Execute the macrotask's handler closure
-                if let Err(err) = self.execute_macrotask_callback(&macrotask) {
+                if let Err(err) = self.execute_macrotask_callback(&macrotask, module) {
                     // Log the error but continue the event loop
                     // TODO: Consider more sophisticated error handling in the future
                     eprintln!("Timer callback execution failed: {err:?}");
@@ -9949,22 +9949,23 @@ impl InterpreterCore {
     fn execute_macrotask_callback(
         &mut self,
         macrotask: &crate::promise_model::Macrotask,
+        module: Option<&Ir3Module>,
     ) -> Result<(), InterpreterError> {
         match macrotask.source {
             crate::promise_model::MacrotaskSource::Timer => {
-                // Get the closure from the closure store
-                let closure = self
-                    .closures
-                    .get(macrotask.handler.0 as usize)
-                    .ok_or_else(|| InterpreterError::TypeError {
+                let closure_id = macrotask.handler.0;
+                // Validate the handler refers to a live closure before running
+                // (preserves the clear diagnostic; the invocation path would
+                // otherwise surface a less specific error).
+                if self.closures.get(closure_id as usize).is_none() {
+                    return Err(InterpreterError::TypeError {
                         expected: "valid closure".to_string(),
-                        got: format!("closure#{} not found", macrotask.handler.0),
-                    })?
-                    .clone(); // Clone to avoid borrow conflicts
+                        got: format!("closure#{closure_id} not found"),
+                    });
+                }
 
-                // Execute the timer callback with no arguments
-                // We simulate a simple function call with empty arguments
-                let result = self.execute_timer_closure(&closure);
+                // Execute the timer callback body (no arguments, undefined this).
+                let result = self.execute_timer_closure(closure_id, module);
 
                 // Handle setInterval re-scheduling
                 if let Err(ref err) = result {
@@ -9984,24 +9985,42 @@ impl InterpreterCore {
     /// Execute a timer closure callback.
     ///
     /// This creates a minimal execution context to run the timer callback function.
-    fn execute_timer_closure(&mut self, closure: &ClosureValue) -> Result<Value, InterpreterError> {
-        // For now, implement a simplified timer execution that just emits a witness event.
-        // This is sufficient for the basic timer infrastructure to work without full closure execution.
-        // Full closure execution (with proper call frames and IR3 execution) can be implemented
-        // as a follow-up enhancement.
-
-        // Emit a witness event to track timer execution for deterministic replay
+    fn execute_timer_closure(
+        &mut self,
+        closure_id: u32,
+        module: Option<&Ir3Module>,
+    ) -> Result<Value, InterpreterError> {
         use crate::ir_contract::WitnessEventKind;
+
+        // Witness marker for deterministic replay: this timer macrotask fired.
         self.emit_witness(
             WitnessEventKind::ExecutionCompleted,
-            Some(&format!(
-                "timer_closure_{}_simplified",
-                closure.function_index
-            )),
+            Some(&format!("timer_closure_{closure_id}")),
         );
 
-        // Timer callbacks return undefined by convention
-        Ok(Value::Undefined)
+        // Run the callback body for real (bd-zqb1x): `setTimeout(() => { ... })`
+        // must execute its closure, not merely emit a witness. Timer callbacks
+        // receive no arguments and an undefined `this`. Reuse the audited
+        // synchronous closure-invocation path (the same one Array.prototype
+        // callbacks use), which snapshots/restores execution state around the
+        // call and runs the closure's IR3 body to completion against its
+        // captured environment.
+        match module {
+            Some(module) => self.invoke_inline_method_call(
+                Some(module),
+                Value::Closure(closure_id),
+                Value::Undefined,
+                Vec::new(),
+            ),
+            None => {
+                // No module context is available only on the test-only
+                // `run_event_loop_until_idle()` path (the production eval flow
+                // always threads `Some(module)`). Without the module the
+                // closure body cannot be run; preserve the prior witness-only
+                // behaviour rather than fail the drain.
+                Ok(Value::Undefined)
+            }
+        }
     }
 
     fn property_key(value: &Value) -> String {
@@ -23905,6 +23924,93 @@ mod event_loop_timer_microtask_tests {
             captured_env: Vec::new(),
         });
         ClosureHandle(id)
+    }
+
+    /// Build a one-function module whose function 0 body executes a single
+    /// `Call` whose callee register (r0) is `undefined` in a fresh 0-arg frame.
+    /// Running that body therefore fails with a "expected function" type error.
+    /// This is the observable used to prove the timer closure body *executed*:
+    /// the former stub never ran the body and returned `Ok(undefined)`, so the
+    /// error only appears once the body is actually run.
+    fn module_with_failing_call_function() -> Ir3Module {
+        use crate::ir_contract::{Ir3FunctionDesc, IrHeader, IrLevel, IrSchemaVersion};
+        Ir3Module {
+            header: IrHeader {
+                schema_version: IrSchemaVersion::CURRENT,
+                level: IrLevel::Ir3,
+                source_hash: None,
+                source_label: "timer-callback-test".to_string(),
+            },
+            instructions: vec![
+                Ir3Instruction::Call {
+                    callee: 0,
+                    args: RegRange { start: 0, count: 0 },
+                    dst: 1,
+                },
+                Ir3Instruction::Return { value: 1 },
+            ],
+            constant_pool: Vec::new(),
+            function_table: vec![Ir3FunctionDesc {
+                entry: 0,
+                arity: 0,
+                frame_size: 8,
+                name: Some("timer_cb".to_string()),
+                is_generator: false,
+            }],
+            specialization: None,
+            required_capabilities: Vec::new(),
+        }
+    }
+
+    fn timer_macrotask(handle: ClosureHandle) -> crate::promise_model::Macrotask {
+        crate::promise_model::Macrotask {
+            source: crate::promise_model::MacrotaskSource::Timer,
+            handler: handle,
+            scheduled_at: 0,
+            registration_seq: 0,
+            label: Label::Public,
+        }
+    }
+
+    #[test]
+    fn timer_callback_body_executes_when_module_present() {
+        // bd-zqb1x regression: a fired timer must RUN its callback body, not
+        // merely emit a witness event. The body here performs a `Call` on an
+        // undefined callee, so *running* it surfaces a "expected function" type
+        // error. The former stub returned Ok(undefined) without running the
+        // body, so this error is proof the body actually executed.
+        let mut core = test_core("timer-body-exec");
+        let module = module_with_failing_call_function();
+        let handle = push_empty_closure(&mut core, 0);
+
+        let result = core.execute_macrotask_callback(&timer_macrotask(handle), Some(&module));
+
+        let err = result.expect_err(
+            "the timer callback body must execute (and its Call-on-undefined must \
+             fault); the stub would have returned Ok without running the body",
+        );
+        assert!(
+            format!("{err}").contains("function"),
+            "the fault must come from executing the body's Call on a non-function \
+             callee, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn timer_callback_without_module_is_witness_only() {
+        // The test-only no-module path cannot lower/run the closure body, so it
+        // falls back to the prior witness-only behaviour: no body execution, no
+        // error (the Call-on-undefined fault from the body must NOT occur).
+        let mut core = test_core("timer-body-no-module");
+        let handle = push_empty_closure(&mut core, 0);
+
+        let result = core.execute_macrotask_callback(&timer_macrotask(handle), None);
+
+        assert!(
+            result.is_ok(),
+            "no-module drain must not execute the callback body, so the \
+             body's fault must not surface; got {result:?}"
+        );
     }
 
     #[test]

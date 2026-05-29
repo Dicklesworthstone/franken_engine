@@ -22,6 +22,9 @@ use crate::engine_object_id::EngineObjectId;
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::policy_checkpoint::DeterministicTimestamp;
 use crate::revocation_chain::{RevocationChain, RevocationTargetType};
+use crate::runtime_observability::{
+    RevocationCheckOutcome, RuntimeSecurityObservability, SecurityEventContext,
+};
 use crate::signature_preimage::VerificationKey;
 
 pub const REVOCATION_AUDIT_POLICY_PREFIX: &str = "revocation-enforcement-policy";
@@ -667,6 +670,101 @@ impl RevocationEnforcer {
     }
 
     // -------------------------------------------------------------------
+    // Observability-aware enforcement (bd-x92qq)
+    // -------------------------------------------------------------------
+
+    /// Record the `revocation_check_total` runtime-security counter for an
+    /// enforcement outcome (bd-x92qq, follow-up to bd-unc29).
+    ///
+    /// Maps the binary [`EnforcementResult`] onto the revocation-check
+    /// taxonomy: `Cleared` → [`RevocationCheckOutcome::Pass`], `Denied` →
+    /// [`RevocationCheckOutcome::Revoked`]. This single-node enforcer has no
+    /// frontier-staleness model (revocation-freshness degradation across a
+    /// distributed frontier is enforced elsewhere), so it never emits
+    /// [`RevocationCheckOutcome::Stale`]: `expected_head_seq` equals the local
+    /// chain head (gap 0), `threshold` is 0, and `degraded_seconds` is `None`.
+    /// `timestamp_ns` comes from the enforcer's deterministic `current_tick`
+    /// so replays produce byte-identical events.
+    fn record_revocation_outcome(
+        &self,
+        result: &EnforcementResult,
+        observability: &mut RuntimeSecurityObservability,
+        trace_id: &str,
+    ) {
+        let (outcome, point, principal_id) = match result {
+            EnforcementResult::Cleared {
+                enforcement_point, ..
+            } => (RevocationCheckOutcome::Pass, *enforcement_point, None),
+            EnforcementResult::Denied(denial) => (
+                RevocationCheckOutcome::Revoked,
+                denial.enforcement_point,
+                Some(denial.target_id.to_string()),
+            ),
+        };
+        let head = self.chain.head_seq().unwrap_or(0);
+        let context = SecurityEventContext {
+            timestamp_ns: self.current_tick,
+            trace_id: trace_id.to_string(),
+            principal_id: principal_id.unwrap_or_else(|| point.to_string()),
+            decision_id: format!("revocation-check:{trace_id}:{point}"),
+            policy_id: revocation_audit_policy_id(point),
+            zone_id: "revocation_enforcement".to_string(),
+            component: "revocation_enforcement".to_string(),
+        };
+        // expected == local (no staleness gap), threshold 0, no degradation:
+        // this site only ever reports Pass / Revoked.
+        observability.record_revocation_check(context, outcome, head, head, 0, None);
+    }
+
+    /// Observability-aware [`check_token_acceptance`](Self::check_token_acceptance)
+    /// that records the `revocation_check_total` counter (bd-x92qq). Delegates
+    /// unchanged, so the returned [`EnforcementResult`] and emitted audit
+    /// events are identical to the non-observed path.
+    pub fn check_token_acceptance_observed(
+        &mut self,
+        token_jti: &EngineObjectId,
+        issuer_key: &VerificationKey,
+        trace_id: &str,
+        observability: &mut RuntimeSecurityObservability,
+    ) -> EnforcementResult {
+        let result = self.check_token_acceptance(token_jti, issuer_key, trace_id);
+        self.record_revocation_outcome(&result, observability, trace_id);
+        result
+    }
+
+    /// Observability-aware
+    /// [`check_high_risk_operation`](Self::check_high_risk_operation) that
+    /// records the `revocation_check_total` counter (bd-x92qq).
+    pub fn check_high_risk_operation_observed(
+        &mut self,
+        attestation_id: &EngineObjectId,
+        principal_key: &VerificationKey,
+        category: HighRiskCategory,
+        trace_id: &str,
+        observability: &mut RuntimeSecurityObservability,
+    ) -> EnforcementResult {
+        let result =
+            self.check_high_risk_operation(attestation_id, principal_key, category, trace_id);
+        self.record_revocation_outcome(&result, observability, trace_id);
+        result
+    }
+
+    /// Observability-aware
+    /// [`check_extension_activation`](Self::check_extension_activation) that
+    /// records the `revocation_check_total` counter (bd-x92qq).
+    pub fn check_extension_activation_observed(
+        &mut self,
+        extension_id: &EngineObjectId,
+        signing_key: &VerificationKey,
+        trace_id: &str,
+        observability: &mut RuntimeSecurityObservability,
+    ) -> EnforcementResult {
+        let result = self.check_extension_activation(extension_id, signing_key, trace_id);
+        self.record_revocation_outcome(&result, observability, trace_id);
+        result
+    }
+
+    // -------------------------------------------------------------------
     // Batch enforcement
     // -------------------------------------------------------------------
 
@@ -1133,6 +1231,79 @@ mod tests {
         let result = EnforcementResult::Denied(denial.clone());
         let err = result.into_result().unwrap_err();
         assert_eq!(err, denial);
+    }
+
+    // ---------------------------------------------------------------
+    // Observability counter wiring (bd-x92qq)
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn check_token_acceptance_observed_records_pass_on_cleared() {
+        let mut enforcer = make_enforcer();
+        let mut obs = RuntimeSecurityObservability::new();
+
+        let result = enforcer.check_token_acceptance_observed(
+            &EngineObjectId([1; 32]),
+            &test_vk(2),
+            "t-obs-pass",
+            &mut obs,
+        );
+
+        // Behaviour preserved: a non-revoked token clears.
+        assert!(result.is_cleared());
+        assert_eq!(
+            obs.metrics()
+                .revocation_check_total
+                .get(&RevocationCheckOutcome::Pass)
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            obs.metrics()
+                .revocation_check_total
+                .get(&RevocationCheckOutcome::Revoked)
+                .copied(),
+            Some(0)
+        );
+        // Single-node enforcer never reports Stale.
+        assert_eq!(
+            obs.metrics()
+                .revocation_check_total
+                .get(&RevocationCheckOutcome::Stale)
+                .copied(),
+            Some(0)
+        );
+        let event = obs.logs().last().expect("security event");
+        assert_eq!(event.event_type, "revocation_check");
+        assert_eq!(event.outcome, "pass");
+    }
+
+    #[test]
+    fn check_token_acceptance_observed_records_revoked_on_denial() {
+        let mut enforcer = make_enforcer();
+        let mut obs = RuntimeSecurityObservability::new();
+        let token = EngineObjectId([7; 32]);
+        revoke_target(&mut enforcer, RevocationTargetType::Token, *token.as_bytes());
+
+        let result = enforcer.check_token_acceptance_observed(
+            &token,
+            &test_vk(2),
+            "t-obs-revoked",
+            &mut obs,
+        );
+
+        // Behaviour preserved: a revoked token is denied.
+        assert!(matches!(result, EnforcementResult::Denied(_)));
+        assert_eq!(
+            obs.metrics()
+                .revocation_check_total
+                .get(&RevocationCheckOutcome::Revoked)
+                .copied(),
+            Some(1)
+        );
+        let event = obs.logs().last().expect("security event");
+        assert_eq!(event.event_type, "revocation_check");
+        assert_eq!(event.outcome, "denied");
     }
 
     // ---------------------------------------------------------------

@@ -506,19 +506,40 @@ pub fn verify_scenario(scenario: &WorkloadScenario, decision: &DispatchDecision)
     result
 }
 
-/// Check whether a strategy honors the given mutation contract.
-pub fn check_mutation_contract(contract: MutationContract, _strategy: &DispatchStrategy) -> bool {
-    // All dispatch strategies honor the mutation contract as long as the
-    // callback classification is correct.  The dispatch layer enforces
-    // that read-only contracts are never paired with mutating strategies.
-    //
-    // This verification checks contract *consistency* (valid enum
-    // combinations) rather than deep side-effect model inspection.
-    match contract {
-        MutationContract::ReadOnly
-        | MutationContract::Accumulator
-        | MutationContract::SideEffectOnly => true,
-        MutationContract::MayMutate => true,
+/// Check whether a dispatch strategy honors the given mutation contract.
+///
+/// A contract that permits in-place mutation of the source collection
+/// ([`MutationContract::MayMutate`], e.g. a `sort` comparator that may write
+/// back into the array it is sorting) is only honored by a strategy that runs
+/// the *real* callback against the live collection with full safety:
+/// [`DispatchStrategy::InterpreterCallback`] (each element through the
+/// interpreter) or [`DispatchStrategy::FallbackSlow`] (full safety checks).
+///
+/// It is **not** honored by:
+/// - [`DispatchStrategy::InlinedCallback`] — inlining requires a pure or builtin
+///   callback (see [`crate::callback_stdlib_dispatch::CallbackKind::is_inlining_eligible`]);
+///   inlining a mutating callback into the iteration loop can corrupt iteration.
+/// - [`DispatchStrategy::SpecializedBuiltin`] — this bypasses the callback
+///   entirely, so a custom mutating callback's effect would be silently dropped.
+///
+/// Non-mutating contracts ([`ReadOnly`](MutationContract::ReadOnly),
+/// [`Accumulator`](MutationContract::Accumulator),
+/// [`SideEffectOnly`](MutationContract::SideEffectOnly)) do not modify the
+/// source collection, so every strategy honors them.
+///
+/// `select_strategy` already upholds this invariant (a `MutatingFunction`
+/// callback always dispatches to `InterpreterCallback`/`FallbackSlow`); this
+/// check is the verification harness's independent guard that catches a
+/// dispatch decision which violates it — without it, `verify_scenario` could
+/// never emit [`WorkloadOutcome::MutationViolation`].
+pub fn check_mutation_contract(contract: MutationContract, strategy: &DispatchStrategy) -> bool {
+    if contract.permits_in_place_mutation() {
+        matches!(
+            strategy,
+            DispatchStrategy::InterpreterCallback | DispatchStrategy::FallbackSlow
+        )
+    } else {
+        true
     }
 }
 
@@ -1241,6 +1262,108 @@ mod tests {
         assert!(MutationContract::MayMutate.permits_in_place_mutation());
         // Accumulator does not permit in-place mutation (it accumulates into a separate value)
         assert!(!MutationContract::Accumulator.permits_in_place_mutation());
+    }
+
+    // --- check_mutation_contract (bd-9uk27: was a dead always-true stub) ---
+
+    #[test]
+    fn check_mutation_contract_maymutate_honored_only_by_safe_strategies() {
+        // A mutating contract is honored only by strategies that run the real
+        // callback against the live collection.
+        assert!(check_mutation_contract(
+            MutationContract::MayMutate,
+            &DispatchStrategy::InterpreterCallback
+        ));
+        assert!(check_mutation_contract(
+            MutationContract::MayMutate,
+            &DispatchStrategy::FallbackSlow
+        ));
+        // Inlining requires a pure/builtin callback; specialization bypasses the
+        // callback entirely — neither honors a mutating contract.
+        assert!(!check_mutation_contract(
+            MutationContract::MayMutate,
+            &DispatchStrategy::InlinedCallback
+        ));
+        assert!(!check_mutation_contract(
+            MutationContract::MayMutate,
+            &DispatchStrategy::SpecializedBuiltin
+        ));
+    }
+
+    #[test]
+    fn check_mutation_contract_non_mutating_honored_by_every_strategy() {
+        for contract in [
+            MutationContract::ReadOnly,
+            MutationContract::Accumulator,
+            MutationContract::SideEffectOnly,
+        ] {
+            for strategy in [
+                DispatchStrategy::InterpreterCallback,
+                DispatchStrategy::InlinedCallback,
+                DispatchStrategy::SpecializedBuiltin,
+                DispatchStrategy::FallbackSlow,
+            ] {
+                assert!(
+                    check_mutation_contract(contract, &strategy),
+                    "{contract:?} must be honored by {strategy:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn verify_scenario_flags_mutation_violation_when_maymutate_inlined() {
+        // Regression: previously check_mutation_contract always returned true,
+        // so WorkloadOutcome::MutationViolation could never be emitted. A
+        // MayMutate scenario whose dispatch wrongly inlined the callback must
+        // now be flagged. expected_strategy == actual strategy isolates the
+        // mutation gate (no strategy mismatch).
+        let scenario = WorkloadScenario::new(
+            "sort:inlined-bug",
+            StdlibMethod::ArraySort,
+            CallbackKind::MutatingFunction,
+            MutationContract::MayMutate,
+            100,
+            DispatchStrategy::InlinedCallback,
+            "sort dispatched to inlined despite a mutating callback",
+        );
+        let decision = DispatchDecision {
+            method: StdlibMethod::ArraySort,
+            callback_kind: CallbackKind::MutatingFunction,
+            strategy: DispatchStrategy::InlinedCallback,
+            estimated_cost_millionths: 0,
+            deopt_risk_millionths: 0,
+            content_hash: ContentHash::compute(b""),
+        };
+        let result = verify_scenario(&scenario, &decision);
+        assert_eq!(result.outcome, WorkloadOutcome::MutationViolation);
+        assert!(!result.mutation_honored);
+    }
+
+    #[test]
+    fn verify_scenario_passes_maymutate_with_interpreter_strategy() {
+        // The correct dispatch for a mutating callback (InterpreterCallback)
+        // honors the contract and passes.
+        let scenario = WorkloadScenario::new(
+            "sort:ok",
+            StdlibMethod::ArraySort,
+            CallbackKind::MutatingFunction,
+            MutationContract::MayMutate,
+            100,
+            DispatchStrategy::InterpreterCallback,
+            "sort with a mutating callback via the interpreter",
+        );
+        let decision = DispatchDecision {
+            method: StdlibMethod::ArraySort,
+            callback_kind: CallbackKind::MutatingFunction,
+            strategy: DispatchStrategy::InterpreterCallback,
+            estimated_cost_millionths: 0,
+            deopt_risk_millionths: 0,
+            content_hash: ContentHash::compute(b""),
+        };
+        let result = verify_scenario(&scenario, &decision);
+        assert_eq!(result.outcome, WorkloadOutcome::Pass);
+        assert!(result.mutation_honored);
     }
 
     // ── enrichment: workload outcome properties ───────────────────

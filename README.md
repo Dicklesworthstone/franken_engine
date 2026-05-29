@@ -35,7 +35,7 @@ The rules compose. A containment action is replay-anchored *and* signed, so a co
 
 This is research-grade infrastructure, not a packaged product.
 
-- **First release: `v0.1.0`.** A prebuilt `frankenctl` binary (Linux x86_64) ships via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); other platforms fall back to a standalone (`--no-default-features`) source build. The single workspace version is `0.1.0`. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
+- **First release: `v0.1.0`.** Prebuilt `frankenctl` binaries (Linux x86_64 and macOS Apple Silicon) ship via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); other platforms fall back to a standalone (`--no-default-features`) source build. The single workspace version is `0.1.0`. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
 - **Every README claim is gated.** Any wording change runs through [`./scripts/run_claim_to_proof_matrix_gate.sh ci`](./scripts/run_claim_to_proof_matrix_gate.sh) against [`docs/claim_to_proof_matrix_v1.json`](./docs/claim_to_proof_matrix_v1.json). Claims classified `hypothesis` or `target` must say so explicitly; absolute-superiority language without artifacts is rejected.
 - **Automation surfaces ship in advisory-only mode.** The shadow daemon and related automations cannot execute live mutations or production deployments until adoption gates are explicitly verified green. See [`docs/SHADOW_DAEMON_PROOF_STATE.md`](./docs/SHADOW_DAEMON_PROOF_STATE.md).
 
@@ -1392,7 +1392,7 @@ The five other runtimes are excellent at the workloads they were built for; Fran
 curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.sh | bash
 ```
 
-The installer downloads the latest `frankenctl` release asset for your platform, verifies it against its `SHA256` sidecar (and a cosign signature when present), and installs to `~/.local/bin`. A prebuilt binary currently ships for **Linux x86_64**; on other platforms the installer falls back to a standalone source build (`--no-default-features`, no sibling repos required). Run with `--help` for options (`--prefix`, `--dest`, `--method`, `--offline`, `--easy-mode`).
+The installer downloads the latest `frankenctl` release asset for your platform, verifies it against its `SHA256` sidecar (and a cosign signature when present), and installs to `~/.local/bin`. Prebuilt binaries currently ship for **Linux x86_64** and **macOS Apple Silicon (arm64)**; on other platforms the installer falls back to a standalone source build (`--no-default-features`, no sibling repos required). Run with `--help` for options (`--prefix`, `--dest`, `--method`, `--offline`, `--easy-mode`).
 
 ### Build from source
 
@@ -2159,7 +2159,7 @@ Operational target is at or below 250ms median from high-risk threshold crossing
 
 ### 9. How do I install `frankenctl`?
 
-As of `v0.1.0` the project ships a checksum-verified `curl | bash` installer and a prebuilt `frankenctl` binary for **Linux x86_64** via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases):
+As of `v0.1.0` the project ships a checksum-verified `curl | bash` installer and prebuilt `frankenctl` binaries for **Linux x86_64** and **macOS Apple Silicon** via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.sh | bash

@@ -2762,6 +2762,27 @@ fn line_count(source: &str) -> u64 {
     count
 }
 
+/// Strip one or more leading `label:` prefixes from a statement segment,
+/// returning the inner statement text. A label is a non-reserved identifier
+/// followed by a top-level `:`. Used so the segment splitter recognises a
+/// labelled compound statement (`label: for (..) {..}`) as block-terminated.
+/// Leaves the input unchanged when there is no leading label (e.g. a ternary
+/// `a ? b : c`, whose pre-colon text is not a bare identifier).
+fn strip_leading_labels(segment: &str) -> &str {
+    let mut seg = segment.trim_start();
+    loop {
+        let Some(colon_idx) = find_top_level_colon(seg) else {
+            return seg;
+        };
+        let label = seg[..colon_idx].trim();
+        if is_identifier(label) && !is_unconditional_reserved_keyword(label) {
+            seg = seg[colon_idx + 1..].trim_start();
+        } else {
+            return seg;
+        }
+    }
+}
+
 fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
     let mut out = Vec::with_capacity(4);
     let mut segment_start = 0usize;
@@ -2805,15 +2826,22 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                 // embedded in larger expressions.
                 if was_positive && brace_depth == 0 && paren_depth == 0 && bracket_depth == 0 {
                     let seg = line[segment_start..].trim_start();
-                    let starts_with_block = starts_with_keyword(seg, "function")
-                        || starts_with_keyword(seg, "if")
-                        || starts_with_keyword(seg, "for")
-                        || starts_with_keyword(seg, "while")
-                        || starts_with_keyword(seg, "do")
-                        || starts_with_keyword(seg, "try")
-                        || starts_with_keyword(seg, "switch")
-                        || starts_with_keyword(seg, "class")
-                        || starts_with_export_block_statement(seg);
+                    // A labelled statement (`label: for (..) {..}`) is still a
+                    // block-terminated statement, so look past any leading
+                    // `label:` prefixes before testing for the block keyword.
+                    // Without this, `outer: for(;;){..} rest;` is never split at
+                    // the closing brace and the labelled body greedily absorbs
+                    // `rest` (bd-t7txt / bd-bg9l1.27.4).
+                    let seg_body = strip_leading_labels(seg);
+                    let starts_with_block = starts_with_keyword(seg_body, "function")
+                        || starts_with_keyword(seg_body, "if")
+                        || starts_with_keyword(seg_body, "for")
+                        || starts_with_keyword(seg_body, "while")
+                        || starts_with_keyword(seg_body, "do")
+                        || starts_with_keyword(seg_body, "try")
+                        || starts_with_keyword(seg_body, "switch")
+                        || starts_with_keyword(seg_body, "class")
+                        || starts_with_export_block_statement(seg_body);
                     if starts_with_block {
                         let after = index.saturating_add(1);
                         let rest = line[after..].trim_start();

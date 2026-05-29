@@ -623,17 +623,20 @@ mod tests {
     /// back-jump does not unwind the operand stack / intervening scopes. This
     /// test pins the current behaviour so the fix flips it to `Ok` loudly.
     #[test]
-    fn labeled_continue_cross_loop_is_known_failing() {
+    fn labeled_continue_cross_loop_now_works() {
+        // bd-t7txt RESOLVED: a labelled `continue` that re-enters an outer loop
+        // from inside a nested loop now evaluates cleanly (the statement
+        // splitter recognises labelled compound statements as block-terminated,
+        // so the labelled body no longer absorbs the trailing statement).
         let mut engine = HybridRouter::default();
         let result = engine.eval(
             "let done = false; loop: while (!done) { done = true; \
              for (;;) { continue loop; } } done;",
         );
         assert!(
-            result.is_err(),
-            "bd-t7txt: labelled continue across a loop boundary unexpectedly \
-             succeeded — promote labeled-continue-statement to EXPECTED_PASS \
-             and close bd-t7txt"
+            result.is_ok(),
+            "bd-t7txt: labelled continue across a loop boundary must eval cleanly; got {:?}",
+            result.err()
         );
     }
 
@@ -817,18 +820,19 @@ fn iteration_statements_test262_conformance_integration() {
         "for-statement-let-declaration",
         "for-statement-var-declaration",
         "labeled-break-statement",
+        "labeled-continue-statement",
         "while-statement-basic",
         "while-statement-complex-condition",
         "while-statement-empty-body",
     ];
 
-    /// 9 frontier iteration-statement cases the engine currently does NOT pass.
+    /// 8 frontier iteration-statement cases the engine currently does NOT pass.
     /// (Was 14; bd-bg9l1.27.1 resolved the `//` comment-leak — DISC-001 — which
     /// unblocked `continue-for-of-skip` and the three `for-of-destructuring-*`
-    /// cases; bd-bg9l1.27.4 added labelled `break` — DISC-006 — promoting
-    /// `labeled-break-statement`. `labeled-continue-statement` remains red: a
-    /// labelled `continue` that re-enters an outer loop faults on operand-stack/
-    /// scope unwinding — tracked as bd-t7txt / DISC-006b.)
+    /// cases; bd-bg9l1.27.4 + bd-t7txt added labelled `break`/`continue` —
+    /// DISC-006/006b — promoting `labeled-break-statement` and
+    /// `labeled-continue-statement` (the statement splitter now treats a
+    /// labelled compound statement as block-terminated).)
     /// Each entry pairs the test id with the tracking bead and the
     /// `ECMA262_DISCREPANCIES.md` row that documents the gap (bd-xkbrm FIND-5).
     /// Keep alphabetised by test id. When the engine repairs a gap, move the id
@@ -842,7 +846,6 @@ fn iteration_statements_test262_conformance_integration() {
         ("for-of-iterator-throw-handling", "bd-bg9l1.27", "DISC-009 (IteratorClose throw)"),
         ("for-statement-block-scope-isolation", "bd-bg9l1.27", "DISC-010 (per-iteration env)"),
         ("for-statement-let-tdz", "bd-bg9l1.27", "DISC-007 (let TDZ)"),
-        ("labeled-continue-statement", "bd-t7txt", "DISC-006b (continue cross-loop unwinding)"),
         ("unlabeled-break-error", "bd-bg9l1.27", "DISC-008 (bare break/continue outside loop)"),
         ("unlabeled-continue-error", "bd-bg9l1.27", "DISC-008 (bare break/continue outside loop)"),
     ];

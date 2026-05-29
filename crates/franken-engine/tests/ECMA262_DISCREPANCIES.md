@@ -116,26 +116,26 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-006: Labeled `break` / `continue` not supported
 
-- **Status:** PARTIAL — labelled `break` RESOLVED (bd-bg9l1.27.4, 2026-05-28); labelled `continue` across a loop boundary tracked as **DISC-006b / bd-t7txt**
+- **Status:** RESOLVED (labelled `break` bd-bg9l1.27.4; labelled `continue` bd-t7txt, 2026-05-29)
 - **ES2020 ref:** §13.13 (Labelled Statements), §13.8.2 (Runtime Semantics: Evaluation — ContinueStatement), §13.9.2 (Runtime Semantics: Evaluation — BreakStatement)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
-- **Affected tests:** `labeled-break-statement` (now `EXPECTED_PASS`), `labeled-continue-statement` (still `KNOWN_FAILING`, see DISC-006b)
+- **Affected tests:** `labeled-break-statement`, `labeled-continue-statement` (both now `EXPECTED_PASS`)
 - **Symptom (resolved):** Parser produced no `LabeledStatement` node and the lowering pipeline rejected any `break`/`continue` with a label operand as `UndefinedLabel`.
-- **Resolution:** Added `ast::LabeledStatement` + `Statement::Labeled`; parser parses `label: <stmt>`; the lowering pipeline threads a `LabelContext` binding each label to its statement's break/continue targets (iteration labels carry a continue target, others are break-only); `break`/`continue` resolve labels fail-closed. Labelled break verified passing through the engine.
-- **Tracking bead:** bd-bg9l1.27.4 (break); bd-t7txt (continue)
-- **Reviewed:** 2026-05-28
+- **Resolution:** Added `ast::LabeledStatement` + `Statement::Labeled`; parser parses `label: <stmt>`; the lowering pipeline threads a `LabelContext` binding each label to its statement's break/continue targets (iteration labels carry a continue target, others are break-only); `break`/`continue` resolve labels fail-closed. Final fix (bd-t7txt): the statement splitter now strips leading `label:` prefixes before its block-terminator check, so a labelled compound statement (`label: for(..){..} rest;`) is split at its closing brace instead of the labelled body greedily absorbing `rest` — see DISC-006b.
+- **Tracking bead:** bd-bg9l1.27.4 (break); bd-t7txt (continue + splitter fix)
+- **Reviewed:** 2026-05-29
 
 ### DISC-006b: Labeled `continue` across a loop boundary faults
 
-- **Status:** WILL-FIX
+- **Status:** RESOLVED (bd-t7txt, 2026-05-29)
 - **ES2020 ref:** §13.8.2 (Runtime Semantics: Evaluation — ContinueStatement)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
-- **Affected tests:** `labeled-continue-statement`
-- **Symptom:** A labelled `continue` that re-enters an enclosing loop from inside a nested loop faults at runtime (`RuntimeFault: type error: expected function, got string`). Label resolution is correct (labelled `break` works); the cross-loop back-jump does not unwind the operand stack / intervening loop+block scopes, so a stale operand is misinterpreted on re-entry.
-- **Fix direction:** Emit scope-pop + operand-stack restore (or reset IR3 stack height to the target label's recorded depth) when a labelled `break`/`continue` crosses enclosing iteration/block scopes.
+- **Affected tests:** `labeled-continue-statement` (now `EXPECTED_PASS`)
+- **Symptom (resolved):** A labelled `break`/`continue` followed by another statement faulted at runtime (`RuntimeFault: type error: expected function, got string`), and labelled `continue` directly in a `while` infinite-looped.
+- **Actual root cause (NOT operand-stack unwinding — the earlier hypothesis was disproven by an IR dump):** the statement splitter (`split_statement_segments`) only splits after a block-closing `}` when the raw segment starts with a block keyword (`for`/`while`/…). A labelled compound statement starts with `label:`, so `label: for(..){..} rest;` was never split — the labelled body greedily absorbed `rest`, and the inner block parsed as a `Raw` expression, producing garbage IR (string load + infinite jump).
+- **Resolution:** `strip_leading_labels()` now removes leading `label:` prefixes before the splitter's block-terminator check, so labelled compound statements split at their closing brace exactly like their unlabelled forms. Fixes labelled break+trailing (repairing DISC-006), labelled continue cross-loop, and labelled continue direct-in-`while`.
 - **Tracking bead:** bd-t7txt
-- **Reviewed:** 2026-05-28
-- **Next review:** 2026-06-28
+- **Reviewed:** 2026-05-29
 
 ### DISC-007: `let`-binding Temporal Dead Zone (TDZ) not enforced
 

@@ -2211,8 +2211,8 @@ mod tests {
         let obj = json
             .as_object()
             .expect("operation should succeed for valid inputs");
-        assert!(obj.contains_key("EValueUpdated"));
-        let inner = obj["EValueUpdated"]
+        assert!(obj.contains_key("MartingaleUpdated"));
+        let inner = obj["MartingaleUpdated"]
             .as_object()
             .expect("operation should succeed for valid inputs");
         assert!(inner.contains_key("guardrail_id"));
@@ -2239,8 +2239,8 @@ mod tests {
             .as_object()
             .expect("operation should succeed for valid inputs");
         assert!(inner.contains_key("guardrail_id"));
-        assert!(inner.contains_key("e_value"));
-        assert!(inner.contains_key("threshold"));
+        assert!(inner.contains_key("sequence"));
+        assert!(inner.contains_key("expected_losses"));
         assert!(inner.contains_key("blocked_actions"));
     }
 
@@ -2306,7 +2306,10 @@ mod tests {
             guardrail_id: "ov-g".into(),
             source: MartingaleError::LogAccumulatorOverflow,
         };
-        assert_eq!(e.to_string(), "e-value overflow for guardrail 'ov-g'");
+        assert_eq!(
+            e.to_string(),
+            "martingale error for guardrail 'ov-g': log(M_n) accumulator would overflow i64"
+        );
     }
 
     // -- Category 7: Hash consistency (SecurityEpoch derives Hash) --
@@ -2443,7 +2446,9 @@ mod tests {
             "no-blocks",
             "m",
             "test",
-            StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+            // Log-space stopping threshold: one LR=10 observation contributes
+            // ln(10)≈2.30 (2_302_585 millionths), which crosses log-threshold 2.0.
+            StoppingThreshold::try_from_log_millionths(2_000_000).unwrap(),
             ExpectedLossMatrix::new(BTreeMap::new(), 0),
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
@@ -2678,7 +2683,9 @@ mod tests {
             "lifecycle",
             "m",
             "test",
-            StoppingThreshold::try_from_log_millionths(5_000_000).unwrap(),
+            // Log-space stopping threshold: one LR=10 observation contributes
+            // ln(10)≈2.30 (2_302_585 millionths), which crosses log-threshold 2.0.
+            StoppingThreshold::try_from_log_millionths(2_000_000).unwrap(),
             ExpectedLossMatrix::new(action_losses, 500_000),
             SecurityEpoch::GENESIS,
             Box::new(ThresholdLikelihoodRatio {
@@ -2691,7 +2698,7 @@ mod tests {
         // Phase 1: trigger
         assert_eq!(gr.state(), GuardrailState::Active);
         gr.update(1_000_000)
-            .expect("operation should succeed for valid inputs"); // e = 10.0 >= 5.0
+            .expect("operation should succeed for valid inputs"); // log-LR ln(10)≈2.30 ≥ log-threshold 2.0
         assert_eq!(gr.state(), GuardrailState::Triggered);
         assert!(gr.blocks("deploy"));
 

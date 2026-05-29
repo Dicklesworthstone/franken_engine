@@ -282,11 +282,23 @@ pub enum LoweringPipelineError {
     #[error("Too many arguments for hostcall: {count} exceeds maximum {max}")]
     TooManyArguments { count: usize, max: usize },
     #[error(
-        "ambient authority violation: call requires effect '{required_effect}' but caller's profile '{caller_profile}' does not include it (source span: {span:?})"
+        "ambient authority violation: access to '{accessor}' requires effect '{required_effect}' but caller's profile '{caller_profile}' does not include it (source span: {span:?})"
     )]
     AmbientAuthorityViolation {
         required_effect: EffectKind,
         caller_profile: EffectSet,
+        /// The offending ambient-authority accessor as written in source — a
+        /// bare identifier (`eval`, `require`, `fetch`, `process`, `crypto`) or
+        /// a member access (`globalThis.process`). Lets the diagnostic name
+        /// *what* was rejected even though precise line/column spans are not
+        /// available at the lowering layer (the AST `Expression` carries no
+        /// span; see `span`).
+        accessor: String,
+        /// Source span of the offending access. Currently always `None`:
+        /// expression-level AST nodes (`Expression::Identifier`,
+        /// `Expression::Member`) do not carry spans, so there is no span to
+        /// surface here without threading span tracking through the parser/AST
+        /// and the recursive `lower_expression_to_ir1` (bd-1lw7r.3 follow-up).
         span: Option<SourceSpan>,
     },
 }
@@ -6068,7 +6080,9 @@ fn lower_expression_to_ir1(
                     return Err(LoweringPipelineError::AmbientAuthorityViolation {
                         required_effect,
                         caller_profile,
-                        span: None, // TODO: Pass actual source span
+                        accessor: name.clone(),
+                        // Bare-identifier access; AST identifiers carry no span.
+                        span: None,
                     });
                 }
             }
@@ -7151,7 +7165,9 @@ fn lower_expression_to_ir1(
                                 return Err(LoweringPipelineError::AmbientAuthorityViolation {
                                     required_effect,
                                     caller_profile,
-                                    span: None, // TODO: Pass actual source span
+                                    accessor: format!("{object_name}.{prop_name}"),
+                                    // Member access; AST member nodes carry no span.
+                                    span: None,
                                 });
                             }
                         }

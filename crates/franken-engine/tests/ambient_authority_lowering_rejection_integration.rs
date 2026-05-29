@@ -191,10 +191,24 @@ fn ambient_authority_error_includes_source_span() {
 
     let lowering_result = lower_ir0_to_ir1(&ir0);
 
-    if let Err(LoweringPipelineError::AmbientAuthorityViolation { span, .. }) = lowering_result {
-        // TODO: Once source spans are properly wired through, assert that span is Some
-        // For now, just verify the error structure
-        println!("AmbientAuthorityViolation error span: {span:?}");
+    if let Err(LoweringPipelineError::AmbientAuthorityViolation { span, accessor, .. }) =
+        lowering_result
+    {
+        // The diagnostic must name the offending accessor (bd-1lw7r.3). For
+        // `globalThis.process.env.PATH` the violation is raised on the
+        // `globalThis.process` member access.
+        assert_eq!(
+            accessor, "globalThis.process",
+            "diagnostic must name the offending ambient-authority accessor"
+        );
+        // `span` is intentionally `None`: expression-level AST nodes carry no
+        // source span, so precise line/column spans require parser/AST span
+        // tracking (a separate, larger effort — see the variant's `span` doc).
+        // Assert the documented current behaviour rather than leaving a stale TODO.
+        assert!(
+            span.is_none(),
+            "expression-layer AST has no spans; span is None until AST span tracking lands"
+        );
     } else {
         panic!("Expected AmbientAuthorityViolation error for globalThis.process access");
     }

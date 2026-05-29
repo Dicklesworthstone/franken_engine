@@ -6799,6 +6799,28 @@ fn lower_expression_to_ir1(
                 && name == "require"
                 && !binding_lookup.contains_key(name.as_str())
             {
+                // Ambient-authority gate (bd-1lw7r.12): `require` is an ambient
+                // filesystem-authority surface (FsRead). It must be rejected at
+                // lowering exactly like every other ambient identifier
+                // (eval / globalThis.process / fetch / crypto). Previously the
+                // require-hostcall special-case lowered only the arguments, so
+                // the callee never reached the `Expression::Identifier`
+                // ambient-authority arm and `require('fs')` slipped through. Run
+                // the same check here, before the special-case, so an unsanctioned
+                // caller is fail-closed-rejected instead of silently allowed.
+                if let Some(required_effect) = required_effect_for_ambient_authority(name, None) {
+                    if let Err(caller_profile) =
+                        check_ambient_authority_allowed(required_effect, root_scope_id)
+                    {
+                        return Err(LoweringPipelineError::AmbientAuthorityViolation {
+                            required_effect,
+                            caller_profile,
+                            accessor: name.clone(),
+                            // Bare-identifier callee; AST identifiers carry no span.
+                            span: None,
+                        });
+                    }
+                }
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {

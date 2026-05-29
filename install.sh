@@ -331,9 +331,12 @@ install_from_source() {
       || die "failed to fetch ${REPO}@${SOURCE_REF}"
   fi
   info "Building $BINARY_NAME from source (Standalone Mode — this can take a while)"
-  run_with_spinner "cargo build --release" \
+  # --no-default-features is what makes this build standalone: the default
+  # feature set pulls in sibling control-plane crates by absolute /dp path,
+  # which only exist in the upstream dev monorepo.
+  run_with_spinner "cargo build --release (standalone)" \
     env RCH_CARGO_WRAPPER_BYPASS=1 \
-    cargo build --release --manifest-path "$src/Cargo.toml" -p "$CARGO_PACKAGE" --bin "$BINARY_NAME"
+    cargo build --release --no-default-features --manifest-path "$src/Cargo.toml" -p "$CARGO_PACKAGE" --bin "$BINARY_NAME"
   local built="$src/target/release/$BINARY_NAME"
   [ -x "$built" ] || die "expected built binary at $built"
   install_binary "$built"

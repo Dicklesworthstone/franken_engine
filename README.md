@@ -35,7 +35,7 @@ The rules compose. A containment action is replay-anchored *and* signed, so a co
 
 This is research-grade infrastructure, not a packaged product.
 
-- **No GitHub Releases, no version tags, no installer.** Source-build only. Single workspace version is `0.1.0`; "versioning" happens per artifact bundle, not per release. See [`CHANGELOG.md`](./CHANGELOG.md) for the actual evidence trail.
+- **First release: `v0.1.0`.** A prebuilt `frankenctl` binary (Linux x86_64) ships via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases) with a checksum-verified `curl | bash` installer ([`install.sh`](./install.sh)); other platforms fall back to a standalone (`--no-default-features`) source build. The single workspace version is `0.1.0`. See [`CHANGELOG.md`](./CHANGELOG.md) for the evidence trail.
 - **Every README claim is gated.** Any wording change runs through [`./scripts/run_claim_to_proof_matrix_gate.sh ci`](./scripts/run_claim_to_proof_matrix_gate.sh) against [`docs/claim_to_proof_matrix_v1.json`](./docs/claim_to_proof_matrix_v1.json). Claims classified `hypothesis` or `target` must say so explicitly; absolute-superiority language without artifacts is rejected.
 - **Automation surfaces ship in advisory-only mode.** The shadow daemon and related automations cannot execute live mutations or production deployments until adoption gates are explicitly verified green. See [`docs/SHADOW_DAEMON_PROOF_STATE.md`](./docs/SHADOW_DAEMON_PROOF_STATE.md).
 
@@ -1386,7 +1386,17 @@ The five other runtimes are excellent at the workloads they were built for; Fran
 
 ## Installation
 
-There is no `install.sh`, prebuilt binary bundle, or separate `frankenengine-cli` Cargo package in this repository. The supported path is `cargo build` from source.
+### Prebuilt binary (recommended)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.sh | bash
+```
+
+The installer downloads the latest `frankenctl` release asset for your platform, verifies it against its `SHA256` sidecar (and a cosign signature when present), and installs to `~/.local/bin`. A prebuilt binary currently ships for **Linux x86_64**; on other platforms the installer falls back to a standalone source build (`--no-default-features`, no sibling repos required). Run with `--help` for options (`--prefix`, `--dest`, `--method`, `--offline`, `--easy-mode`).
+
+### Build from source
+
+The `frankenctl` binary also builds directly from source. Standalone mode requires no sibling repos.
 
 ### Standalone Mode (no sibling repos required)
 
@@ -2147,9 +2157,15 @@ Yes. The benchmark harness, manifests, and artifact bundles are designed for thi
 
 Operational target is at or below 250ms median from high-risk threshold crossing to containment action under defined load envelopes. Real signal-to-action latency artifacts back this surface (`FE-CLAIM-012`).
 
-### 9. Why is there no `install.sh` or prebuilt binary release?
+### 9. How do I install `frankenctl`?
 
-Because the project hasn't cut a release. There are no GitHub Releases or version tags; the workspace is at `0.1.0` and ships only source builds today. The supported install path is `cargo build --release -p frankenengine-engine --bin frankenctl` against either Standalone Mode (no sibling repos) or Full Integration Mode (with `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas` available). See *Installation* above for the exact commands. The shape of any future release (binary tarballs, package-manager publication, an installer script, or none of those) is not yet decided; it depends on the GA-exit evidence package completing first (see *Acceptance Ledger & GA Exit Evidence*).
+As of `v0.1.0` the project ships a checksum-verified `curl | bash` installer and a prebuilt `frankenctl` binary for **Linux x86_64** via [GitHub Releases](https://github.com/Dicklesworthstone/franken_engine/releases):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.sh | bash
+```
+
+On platforms without a prebuilt asset the installer falls back to a source build. You can still build directly with `cargo build --release -p frankenengine-engine --bin frankenctl` in either Standalone Mode (`--no-default-features`, no sibling repos) or Full Integration Mode (with `/dp/asupersync`, `/dp/frankentui`, `/dp/frankensqlite`, `/dp/sqlmodel_rust`, `/dp/fastapi_rust`, `/dp/frankenpandas` available). See *Installation* above. The release binary is built in Full Integration Mode and is self-contained; macOS/ARM prebuilt assets are not yet published.
 
 ### 10. How do I add a new claim to the README?
 

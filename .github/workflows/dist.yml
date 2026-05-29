@@ -43,7 +43,10 @@ jobs:
       - name: Build frankenctl (Standalone Mode)
         env:
           RCH_CARGO_WRAPPER_BYPASS: "1"
-        run: cargo build --release -p frankenengine-engine --bin frankenctl --target ${{ matrix.target }}
+        # --no-default-features keeps the build standalone; the default feature
+        # set depends on sibling control-plane crates by absolute /dp path that
+        # only exist in the upstream dev monorepo, not on a clean runner.
+        run: cargo build --release --no-default-features -p frankenengine-engine --bin frankenctl --target ${{ matrix.target }}
 
       - name: Create tarball
         run: |

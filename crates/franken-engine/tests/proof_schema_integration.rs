@@ -26,6 +26,7 @@ use frankenengine_engine::engine_object_id::{EngineObjectId, ObjectDomain, Schem
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::proof_schema::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 use frankenengine_engine::tee_attestation_policy::DecisionImpact;
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,25 @@ use frankenengine_engine::tee_attestation_policy::DecisionImpact;
 
 const TEST_KEY: &[u8] = b"integration-signing-key-material!";
 const WRONG_KEY: &[u8] = b"wrong-key-material-for-integ!!!!";
+
+// Ed25519 seeds (exactly 32 bytes) for the asymmetric RollbackToken issuer
+// signature (bd-9tvmt). Receipts above remain symmetric (engine self-signed).
+const TEST_TOKEN_SEED: [u8; 32] = *b"integration-rollback-ed25519-32b";
+const WRONG_TOKEN_SEED: [u8; 32] = *b"integration-wrong-issuer-ed25519";
+
+fn token_signing_key() -> SigningKey {
+    SigningKey::from_bytes(TEST_TOKEN_SEED).expect("valid Ed25519 seed")
+}
+
+fn token_verification_key() -> VerificationKey {
+    token_signing_key().verification_key()
+}
+
+fn wrong_token_verification_key() -> VerificationKey {
+    SigningKey::from_bytes(WRONG_TOKEN_SEED)
+        .expect("valid Ed25519 seed")
+        .verification_key()
+}
 
 fn epoch(n: u64) -> SecurityEpoch {
     SecurityEpoch::from_raw(n)
@@ -117,12 +137,12 @@ fn unsigned_rollback() -> RollbackToken {
         activation_stage: ActivationStage::Shadow,
         expiry_epoch: epoch(20),
         issuer_key_id: signer_key_id(),
-        issuer_signature: AuthenticityHash([0u8; 32]),
+        issuer_signature: Vec::new(),
     }
 }
 
 fn signed_rollback() -> RollbackToken {
-    unsigned_rollback().sign(TEST_KEY)
+    unsigned_rollback().sign(&token_signing_key())
 }
 
 // ===========================================================================
@@ -330,13 +350,13 @@ fn receipt_v1_0_preimage_ignores_attestation_fields() {
 #[test]
 fn rollback_sign_then_verify_succeeds() {
     let token = signed_rollback();
-    assert!(token.verify_signature(TEST_KEY));
+    assert!(token.verify_signature(&token_verification_key()));
 }
 
 #[test]
 fn rollback_wrong_key_fails_verification() {
     let token = signed_rollback();
-    assert!(!token.verify_signature(WRONG_KEY));
+    assert!(!token.verify_signature(&wrong_token_verification_key()));
 }
 
 #[test]
@@ -561,20 +581,30 @@ fn validate_receipt_nonce_replay_detected() {
 #[test]
 fn validate_rollback_token_valid_passes() {
     let token = signed_rollback();
-    assert!(validate_rollback_token(&token, TEST_KEY, epoch(5)).is_ok());
+    assert!(validate_rollback_token(&token, Some(&token_verification_key()), epoch(5)).is_ok());
 }
 
 #[test]
 fn validate_rollback_token_wrong_key_returns_invalid_signature() {
     let token = signed_rollback();
-    let err = validate_rollback_token(&token, WRONG_KEY, epoch(5)).unwrap_err();
+    let err = validate_rollback_token(&token, Some(&wrong_token_verification_key()), epoch(5))
+        .unwrap_err();
+    assert!(matches!(err, ProofSchemaError::InvalidSignature { .. }));
+}
+
+#[test]
+fn validate_rollback_token_no_issuer_key_fails_closed() {
+    // bd-9tvmt: absent a trusted issuer key, validation must reject the token.
+    let token = signed_rollback();
+    let err = validate_rollback_token(&token, None, epoch(5)).unwrap_err();
     assert!(matches!(err, ProofSchemaError::InvalidSignature { .. }));
 }
 
 #[test]
 fn validate_rollback_token_expired_returns_token_expired() {
     let token = signed_rollback();
-    let err = validate_rollback_token(&token, TEST_KEY, epoch(21)).unwrap_err();
+    let err =
+        validate_rollback_token(&token, Some(&token_verification_key()), epoch(21)).unwrap_err();
     assert!(matches!(err, ProofSchemaError::TokenExpired { .. }));
 }
 
@@ -582,8 +612,9 @@ fn validate_rollback_token_expired_returns_token_expired() {
 fn validate_rollback_token_incompatible_version_returns_error() {
     let mut token = unsigned_rollback();
     token.schema_version = SchemaVersion::new(99, 0, 0);
-    let token = token.sign(TEST_KEY);
-    let err = validate_rollback_token(&token, TEST_KEY, epoch(5)).unwrap_err();
+    let token = token.sign(&token_signing_key());
+    let err =
+        validate_rollback_token(&token, Some(&token_verification_key()), epoch(5)).unwrap_err();
     assert!(matches!(err, ProofSchemaError::IncompatibleVersion { .. }));
 }
 
@@ -591,8 +622,9 @@ fn validate_rollback_token_incompatible_version_returns_error() {
 fn validate_rollback_token_missing_token_id() {
     let mut token = unsigned_rollback();
     token.token_id = String::new();
-    let token = token.sign(TEST_KEY);
-    let err = validate_rollback_token(&token, TEST_KEY, epoch(5)).unwrap_err();
+    let token = token.sign(&token_signing_key());
+    let err =
+        validate_rollback_token(&token, Some(&token_verification_key()), epoch(5)).unwrap_err();
     match err {
         ProofSchemaError::MissingField { field } => assert_eq!(field, "token_id"),
         other => panic!("expected MissingField, got: {other:?}"),
@@ -603,8 +635,9 @@ fn validate_rollback_token_missing_token_id() {
 fn validate_rollback_token_missing_optimization_id() {
     let mut token = unsigned_rollback();
     token.optimization_id = String::new();
-    let token = token.sign(TEST_KEY);
-    let err = validate_rollback_token(&token, TEST_KEY, epoch(5)).unwrap_err();
+    let token = token.sign(&token_signing_key());
+    let err =
+        validate_rollback_token(&token, Some(&token_verification_key()), epoch(5)).unwrap_err();
     match err {
         ProofSchemaError::MissingField { field } => assert_eq!(field, "optimization_id"),
         other => panic!("expected MissingField, got: {other:?}"),
@@ -970,5 +1003,5 @@ fn validate_receipt_at_boundary_epoch_passes() {
 fn validate_rollback_token_at_boundary_epoch_passes() {
     // Token expiry_epoch = 20, current = 20 -> not expired (expiry is exclusive).
     let token = signed_rollback();
-    assert!(validate_rollback_token(&token, TEST_KEY, epoch(20)).is_ok());
+    assert!(validate_rollback_token(&token, Some(&token_verification_key()), epoch(20)).is_ok());
 }

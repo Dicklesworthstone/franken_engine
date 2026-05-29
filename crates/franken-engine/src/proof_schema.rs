@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use crate::engine_object_id::{EngineObjectId, ObjectDomain, SchemaId};
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::security_epoch::SecurityEpoch;
+use crate::signature_preimage::{
+    SIGNATURE_LEN, Signature, SigningKey, VerificationKey, sign_preimage, verify_signature,
+};
 use crate::tee_attestation_policy::DecisionImpact;
 
 pub use crate::control_plane::SchemaVersion;
@@ -518,8 +521,15 @@ pub struct RollbackToken {
     pub expiry_epoch: SecurityEpoch,
     /// Key used to sign this token.
     pub issuer_key_id: EngineObjectId,
-    /// Signature over the unsigned view.
-    pub issuer_signature: AuthenticityHash,
+    /// Asymmetric (Ed25519) issuer signature over the unsigned view.
+    ///
+    /// SECURITY: this is a cross-trust-boundary signature — the issuer signs
+    /// and *other* parties verify (see `issuer_key_id`). It therefore uses an
+    /// asymmetric Ed25519 signature (`signature_preimage`), not a symmetric
+    /// keyed-hash MAC: a verifier holds only the issuer's public key and cannot
+    /// forge tokens. Empty until signed; an empty/malformed signature fails
+    /// verification closed. (bd-9tvmt, mirroring bd-smcdu/14d03cc0.)
+    pub issuer_signature: Vec<u8>,
 }
 
 impl RollbackToken {
@@ -542,18 +552,29 @@ impl RollbackToken {
         preimage
     }
 
-    /// Sign this token with the given key material.
-    pub fn sign(mut self, key: &[u8]) -> Self {
+    /// Sign this token with the issuer's Ed25519 private key.
+    ///
+    /// Fail-closed: if signing fails (only possible for an all-zero key), the
+    /// signature is left empty, which `verify_signature` rejects.
+    pub fn sign(mut self, signing_key: &SigningKey) -> Self {
         let preimage = self.signing_preimage();
-        self.issuer_signature = AuthenticityHash::compute_keyed(key, &preimage);
+        self.issuer_signature = sign_preimage(signing_key, &preimage)
+            .map(|sig| sig.to_bytes().to_vec())
+            .unwrap_or_default();
         self
     }
 
-    /// Verify the token signature.
-    pub fn verify_signature(&self, key: &[u8]) -> bool {
+    /// Verify the token's issuer signature against the issuer's Ed25519 public
+    /// key. Fail-closed: a missing/malformed (wrong-length) signature or a
+    /// verification failure returns `false`.
+    pub fn verify_signature(&self, verification_key: &VerificationKey) -> bool {
         let preimage = self.signing_preimage();
-        let expected = AuthenticityHash::compute_keyed(key, &preimage);
-        self.issuer_signature.constant_time_eq(&expected)
+        let Ok(sig_bytes) = <[u8; SIGNATURE_LEN]>::try_from(self.issuer_signature.as_slice())
+        else {
+            return false;
+        };
+        let signature = Signature::from_bytes(sig_bytes);
+        verify_signature(verification_key, &preimage, &signature).is_ok()
     }
 
     /// Check if this token has expired relative to the given epoch.
@@ -786,7 +807,7 @@ pub fn validate_receipt_with_policy(
 /// Validate a `RollbackToken` against the given key and current epoch.
 pub fn validate_rollback_token(
     token: &RollbackToken,
-    signing_key: &[u8],
+    issuer_verification_key: Option<&VerificationKey>,
     current_epoch: SecurityEpoch,
 ) -> Result<(), ProofSchemaError> {
     // Version compatibility.
@@ -821,8 +842,14 @@ pub fn validate_rollback_token(
         });
     }
 
-    // Signature.
-    if !token.verify_signature(signing_key) {
+    // Signature (asymmetric Ed25519). Fail closed when no trusted issuer key
+    // is configured — an unauthenticated token must never validate.
+    let Some(issuer_key) = issuer_verification_key else {
+        return Err(ProofSchemaError::InvalidSignature {
+            artifact: "RollbackToken".to_string(),
+        });
+    };
+    if !token.verify_signature(issuer_key) {
         return Err(ProofSchemaError::InvalidSignature {
             artifact: "RollbackToken".to_string(),
         });
@@ -891,6 +918,20 @@ mod tests {
 
     const TEST_KEY: &[u8] = b"test-signing-key-material-32bytes!";
     const WRONG_KEY: &[u8] = b"wrong-signing-key-material-xxxxx";
+
+    // Ed25519 seeds (exactly 32 bytes) for the asymmetric RollbackToken issuer
+    // signature. `sign` uses the private seed; verification uses the matching
+    // public key. A distinct seed models an untrusted/forging issuer.
+    const TEST_TOKEN_SEED: [u8; 32] = *b"rollback-token-ed25519-seed-32by";
+    const WRONG_TOKEN_SEED: [u8; 32] = *b"wrong-issuer-ed25519-seed-32byte";
+
+    fn test_token_signing_key() -> SigningKey {
+        SigningKey::from_bytes(TEST_TOKEN_SEED).expect("valid Ed25519 seed")
+    }
+
+    fn test_token_verification_key() -> VerificationKey {
+        test_token_signing_key().verification_key()
+    }
 
     fn test_epoch() -> SecurityEpoch {
         SecurityEpoch::from_raw(1)
@@ -968,12 +1009,12 @@ mod tests {
             activation_stage: ActivationStage::Shadow,
             expiry_epoch: SecurityEpoch::from_raw(10),
             issuer_key_id: test_signer_key_id(),
-            issuer_signature: AuthenticityHash([0u8; 32]),
+            issuer_signature: Vec::new(),
         }
     }
 
     fn test_rollback() -> RollbackToken {
-        test_rollback_unsigned().sign(TEST_KEY)
+        test_rollback_unsigned().sign(&test_token_signing_key())
     }
 
     // -- Schema version --
@@ -1056,13 +1097,19 @@ mod tests {
     #[test]
     fn rollback_signing_round_trip() {
         let token = test_rollback();
-        assert!(token.verify_signature(TEST_KEY));
+        assert!(token.verify_signature(&test_token_verification_key()));
     }
 
     #[test]
     fn rollback_rejects_wrong_key() {
+        // A token signed by the trusted issuer must not verify against a
+        // different (untrusted) issuer's public key — the property a symmetric
+        // MAC could not provide (any holder of the shared key could forge).
         let token = test_rollback();
-        assert!(!token.verify_signature(WRONG_KEY));
+        let wrong_key = SigningKey::from_bytes(WRONG_TOKEN_SEED)
+            .expect("valid Ed25519 seed")
+            .verification_key();
+        assert!(!token.verify_signature(&wrong_key));
     }
 
     #[test]
@@ -1259,14 +1306,31 @@ mod tests {
     #[test]
     fn validate_token_success() {
         let token = test_rollback();
-        assert!(validate_rollback_token(&token, TEST_KEY, test_epoch()).is_ok());
+        assert!(
+            validate_rollback_token(&token, Some(&test_token_verification_key()), test_epoch())
+                .is_ok()
+        );
     }
 
     #[test]
     fn validate_token_wrong_key() {
         let token = test_rollback();
+        let wrong_key = SigningKey::from_bytes(WRONG_TOKEN_SEED)
+            .expect("valid Ed25519 seed")
+            .verification_key();
         assert!(matches!(
-            validate_rollback_token(&token, WRONG_KEY, test_epoch()),
+            validate_rollback_token(&token, Some(&wrong_key), test_epoch()),
+            Err(ProofSchemaError::InvalidSignature { .. })
+        ));
+    }
+
+    #[test]
+    fn validate_token_fails_closed_without_issuer_key() {
+        // No trusted issuer key configured -> the token must be rejected, never
+        // accepted by default. (Mirrors bd-smcdu's fail-closed proof check.)
+        let token = test_rollback();
+        assert!(matches!(
+            validate_rollback_token(&token, None, test_epoch()),
             Err(ProofSchemaError::InvalidSignature { .. })
         ));
     }
@@ -1275,7 +1339,11 @@ mod tests {
     fn validate_token_expired() {
         let token = test_rollback();
         assert!(matches!(
-            validate_rollback_token(&token, TEST_KEY, SecurityEpoch::from_raw(11)),
+            validate_rollback_token(
+                &token,
+                Some(&test_token_verification_key()),
+                SecurityEpoch::from_raw(11)
+            ),
             Err(ProofSchemaError::TokenExpired { .. })
         ));
     }
@@ -1284,9 +1352,9 @@ mod tests {
     fn validate_token_incompatible_version() {
         let mut token = test_rollback_unsigned();
         token.schema_version = SchemaVersion::new(99, 0, 0);
-        let token = token.sign(TEST_KEY);
+        let token = token.sign(&test_token_signing_key());
         assert!(matches!(
-            validate_rollback_token(&token, TEST_KEY, test_epoch()),
+            validate_rollback_token(&token, Some(&test_token_verification_key()), test_epoch()),
             Err(ProofSchemaError::IncompatibleVersion { .. })
         ));
     }
@@ -1295,9 +1363,9 @@ mod tests {
     fn validate_token_missing_token_id() {
         let mut token = test_rollback_unsigned();
         token.token_id = String::new();
-        let token = token.sign(TEST_KEY);
+        let token = token.sign(&test_token_signing_key());
         assert!(matches!(
-            validate_rollback_token(&token, TEST_KEY, test_epoch()),
+            validate_rollback_token(&token, Some(&test_token_verification_key()), test_epoch()),
             Err(ProofSchemaError::MissingField { .. })
         ));
     }

@@ -26,6 +26,7 @@ use frankenengine_engine::proof_schema::{
     ActivationStage, OptReceipt, OptimizationClass, RollbackToken, proof_schema_version_current,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 use frankenengine_engine::tee_attestation_policy::DecisionImpact;
 use frankenengine_engine::translation_validation::{
     QuarantineEntry, RollbackReceipt, StagePromotion, TranslationValidationGate, ValidationEvent,
@@ -35,6 +36,18 @@ use frankenengine_engine::translation_validation::{
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 const TEST_KEY: &[u8] = b"test-signing-key-32-bytes-long!!";
+
+// Ed25519 seed (32 bytes) for the asymmetric RollbackToken issuer signature
+// (bd-9tvmt). Receipts/promotions stay symmetric (engine self-signed).
+const TEST_TOKEN_SEED: [u8; 32] = *b"txn-integration-ed25519-seed-32b";
+
+fn token_signing_key() -> SigningKey {
+    SigningKey::from_bytes(TEST_TOKEN_SEED).expect("valid Ed25519 seed")
+}
+
+fn token_verification_key() -> VerificationKey {
+    token_signing_key().verification_key()
+}
 
 fn test_receipt(opt_id: &str) -> OptReceipt {
     let mut compat = BTreeMap::new();
@@ -86,9 +99,9 @@ fn test_token(opt_id: &str) -> RollbackToken {
         activation_stage: ActivationStage::Shadow,
         expiry_epoch: SecurityEpoch::from_raw(100),
         issuer_key_id,
-        issuer_signature: AuthenticityHash::compute_keyed(&[], &[]),
+        issuer_signature: Vec::new(),
     }
-    .sign(TEST_KEY)
+    .sign(&token_signing_key())
 }
 
 fn pass_verdict() -> ValidationVerdict {
@@ -382,7 +395,7 @@ fn gate_new_is_empty() {
 
 #[test]
 fn gate_submit_registers_in_shadow() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -394,7 +407,7 @@ fn gate_submit_registers_in_shadow() {
 
 #[test]
 fn gate_submit_rejects_duplicate() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -410,7 +423,7 @@ fn gate_submit_rejects_duplicate() {
 
 #[test]
 fn gate_submit_rejects_bad_receipt_signature() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     let bad_key = b"wrong-signing-key-is-32-byte-no";
@@ -425,7 +438,7 @@ fn gate_submit_rejects_bad_receipt_signature() {
 
 #[test]
 fn gate_submit_rejects_expired_token() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1"); // expiry_epoch = 100
     let err = gate
@@ -442,7 +455,7 @@ fn gate_submit_rejects_expired_token() {
 
 #[test]
 fn gate_submit_rejects_token_receipt_mismatch() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-2"); // different opt_id
     let err = gate
@@ -458,7 +471,7 @@ fn gate_submit_rejects_token_receipt_mismatch() {
 
 #[test]
 fn gate_record_pass_verdict_no_rollback() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -479,7 +492,7 @@ fn gate_record_pass_verdict_no_rollback() {
 
 #[test]
 fn gate_record_fail_verdict_triggers_rollback() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -507,7 +520,7 @@ fn gate_record_fail_verdict_triggers_rollback() {
 
 #[test]
 fn gate_record_inconclusive_verdict_triggers_rollback() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -528,7 +541,7 @@ fn gate_record_inconclusive_verdict_triggers_rollback() {
 
 #[test]
 fn gate_record_verdict_unknown_opt_error() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let err = gate
         .record_verdict(
             "nonexistent",
@@ -548,7 +561,7 @@ fn gate_record_verdict_unknown_opt_error() {
 
 #[test]
 fn gate_promote_shadow_to_canary() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -579,7 +592,7 @@ fn gate_promote_shadow_to_canary() {
 
 #[test]
 fn gate_promote_without_pass_denied() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -601,7 +614,7 @@ fn gate_promote_without_pass_denied() {
 
 #[test]
 fn gate_demote_canary_to_shadow() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -640,7 +653,7 @@ fn gate_demote_canary_to_shadow() {
 
 #[test]
 fn gate_demote_to_same_or_higher_stage_errors() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -666,7 +679,7 @@ fn gate_demote_to_same_or_higher_stage_errors() {
 
 #[test]
 fn gate_lift_quarantine_allows_resubmission() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -701,7 +714,7 @@ fn gate_lift_quarantine_allows_resubmission() {
 
 #[test]
 fn gate_lift_quarantine_nonexistent_errors() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let err = gate
         .lift_quarantine("nonexistent", "reason", SecurityEpoch::from_raw(1), 1000)
         .unwrap_err();
@@ -715,7 +728,7 @@ fn gate_lift_quarantine_nonexistent_errors() {
 
 #[test]
 fn gate_quarantined_ids() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -736,7 +749,7 @@ fn gate_quarantined_ids() {
 
 #[test]
 fn gate_get_quarantine_entry() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -757,7 +770,7 @@ fn gate_get_quarantine_entry() {
 
 #[test]
 fn gate_promotion_history() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -789,7 +802,7 @@ fn gate_promotion_history() {
 
 #[test]
 fn gate_serde_roundtrip() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-1");
     let token = test_token("opt-1");
     gate.submit(&receipt, &token, TEST_KEY, SecurityEpoch::from_raw(1), 1000)
@@ -813,7 +826,7 @@ fn gate_serde_roundtrip() {
 
 #[test]
 fn full_lifecycle_submit_validate_promote_to_default() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
 
     // Submit
@@ -898,7 +911,7 @@ fn full_lifecycle_submit_validate_promote_to_default() {
 
 #[test]
 fn full_lifecycle_fail_rollback_quarantine_lift_resubmit() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
 
     // Submit and fail
@@ -1481,7 +1494,7 @@ fn enrichment_validation_event_clone_equality() {
 
 #[test]
 fn enrichment_gate_submit_at_boundary_epoch() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-boundary");
     let token = test_token("opt-boundary"); // expiry_epoch = 100
     // Submit at exactly epoch 99 (just before expiry at 100)
@@ -1498,7 +1511,7 @@ fn enrichment_gate_submit_at_boundary_epoch() {
 
 #[test]
 fn enrichment_gate_submit_at_exact_expiry_epoch_rejected() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-exp");
     let token = test_token("opt-exp"); // expiry_epoch = 100
     let result = gate.submit(
@@ -1515,7 +1528,7 @@ fn enrichment_gate_submit_at_exact_expiry_epoch_rejected() {
 
 #[test]
 fn enrichment_gate_submit_multiple_independent_optimizations() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     for i in 0..10 {
         let id = format!("opt-batch-{i}");
@@ -1530,7 +1543,7 @@ fn enrichment_gate_submit_multiple_independent_optimizations() {
 
 #[test]
 fn enrichment_gate_submit_events_have_correct_timestamps() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let receipt = test_receipt("opt-ts");
     let token = test_token("opt-ts");
     gate.submit(
@@ -1551,7 +1564,7 @@ fn enrichment_gate_submit_events_have_correct_timestamps() {
 
 #[test]
 fn enrichment_gate_verdict_pass_preserves_tracked_state() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-keep");
     let token = test_token("opt-keep");
@@ -1571,7 +1584,7 @@ fn enrichment_gate_verdict_pass_preserves_tracked_state() {
 
 #[test]
 fn enrichment_gate_fail_verdict_records_counterexample_hash() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-cx");
     let token = test_token("opt-cx");
@@ -1589,7 +1602,7 @@ fn enrichment_gate_fail_verdict_records_counterexample_hash() {
 
 #[test]
 fn enrichment_gate_inconclusive_verdict_no_counterexample() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-inc");
     let token = test_token("opt-inc");
@@ -1606,7 +1619,7 @@ fn enrichment_gate_inconclusive_verdict_no_counterexample() {
 
 #[test]
 fn enrichment_gate_fail_verdict_at_canary_stage() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-can-fail");
     let token = test_token("opt-can-fail");
@@ -1638,7 +1651,7 @@ fn enrichment_gate_fail_verdict_at_canary_stage() {
 
 #[test]
 fn enrichment_gate_fail_verdict_at_ramp_stage() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-ramp-fail");
     let token = test_token("opt-ramp-fail");
@@ -1685,7 +1698,7 @@ fn enrichment_gate_fail_verdict_at_ramp_stage() {
 
 #[test]
 fn enrichment_gate_promote_requires_pass_at_each_stage() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-multi");
     let token = test_token("opt-multi");
@@ -1719,7 +1732,7 @@ fn enrichment_gate_promote_requires_pass_at_each_stage() {
 
 #[test]
 fn enrichment_gate_promote_unknown_optimization_error() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let err = gate
         .promote(
             "nonexistent",
@@ -1743,7 +1756,7 @@ fn enrichment_gate_promotion_history_empty_for_untracked() {
 
 #[test]
 fn enrichment_gate_promotion_records_signature() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-sig");
     let token = test_token("opt-sig");
@@ -1768,7 +1781,7 @@ fn enrichment_gate_promotion_records_signature() {
 
 #[test]
 fn enrichment_gate_demote_unknown_optimization_error() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let err = gate
         .demote(
             "nonexistent",
@@ -1787,7 +1800,7 @@ fn enrichment_gate_demote_unknown_optimization_error() {
 
 #[test]
 fn enrichment_gate_demote_to_higher_stage_error() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-dem");
     let token = test_token("opt-dem");
@@ -1822,7 +1835,7 @@ fn enrichment_gate_demote_to_higher_stage_error() {
 
 #[test]
 fn enrichment_gate_demote_ramp_to_shadow() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-r2s");
     let token = test_token("opt-r2s");
@@ -1861,7 +1874,7 @@ fn enrichment_gate_demote_ramp_to_shadow() {
 
 #[test]
 fn enrichment_gate_demote_default_to_canary() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-d2c");
     let token = test_token("opt-d2c");
@@ -1902,7 +1915,7 @@ fn enrichment_gate_demote_default_to_canary() {
 
 #[test]
 fn enrichment_gate_demotion_emits_signed_record() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-dsig");
     let token = test_token("opt-dsig");
@@ -1937,7 +1950,7 @@ fn enrichment_gate_demotion_emits_signed_record() {
 
 #[test]
 fn enrichment_gate_multiple_quarantine_entries() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
 
     for i in 0..5 {
@@ -1957,7 +1970,7 @@ fn enrichment_gate_multiple_quarantine_entries() {
 
 #[test]
 fn enrichment_gate_quarantine_entry_has_correct_fields() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(7);
     let receipt = test_receipt("opt-qf");
     let token = test_token("opt-qf");
@@ -1981,7 +1994,7 @@ fn enrichment_gate_quarantine_entry_none_for_unquarantined() {
 
 #[test]
 fn enrichment_gate_lift_quarantine_emits_event() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-lqe");
     let token = test_token("opt-lqe");
@@ -2002,7 +2015,7 @@ fn enrichment_gate_lift_quarantine_emits_event() {
 
 #[test]
 fn enrichment_gate_quarantine_blocks_submission_preserves_reason() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-qr");
     let token = test_token("opt-qr");
@@ -2026,7 +2039,8 @@ fn enrichment_gate_quarantine_blocks_submission_preserves_reason() {
 #[test]
 fn enrichment_gate_deterministic_serialization() {
     let build_gate = || {
-        let mut gate = TranslationValidationGate::new();
+        let mut gate =
+            TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
         let epoch = SecurityEpoch::from_raw(1);
         let receipt = test_receipt("opt-det");
         let token = test_token("opt-det");
@@ -2055,7 +2069,8 @@ fn enrichment_gate_deterministic_serialization() {
 #[test]
 fn enrichment_gate_deterministic_with_multiple_ops() {
     let build_gate = || {
-        let mut gate = TranslationValidationGate::new();
+        let mut gate =
+            TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
         let epoch = SecurityEpoch::from_raw(1);
 
         // Submit two, pass one, fail one
@@ -2090,7 +2105,7 @@ fn enrichment_gate_deterministic_with_multiple_ops() {
 
 #[test]
 fn enrichment_gate_events_monotonic_timestamps() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-mono");
     let token = test_token("opt-mono");
@@ -2117,7 +2132,7 @@ fn enrichment_gate_events_monotonic_timestamps() {
 
 #[test]
 fn enrichment_gate_events_all_reference_correct_opt_id() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-evid");
     let token = test_token("opt-evid");
@@ -2133,7 +2148,7 @@ fn enrichment_gate_events_all_reference_correct_opt_id() {
 
 #[test]
 fn enrichment_gate_rollback_receipts_accumulate_across_different_opts() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
 
     for i in 0..3 {
@@ -2159,7 +2174,7 @@ fn enrichment_gate_rollback_receipts_accumulate_across_different_opts() {
 
 #[test]
 fn enrichment_gate_serde_roundtrip_with_quarantine() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-sr");
     let token = test_token("opt-sr");
@@ -2179,7 +2194,7 @@ fn enrichment_gate_serde_roundtrip_with_quarantine() {
 
 #[test]
 fn enrichment_gate_serde_roundtrip_with_promotions() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-sp");
     let token = test_token("opt-sp");
@@ -2209,7 +2224,7 @@ fn enrichment_gate_default_equals_new() {
 
 #[test]
 fn enrichment_lifecycle_promote_demote_promote_again() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-pdp");
     let token = test_token("opt-pdp");
@@ -2261,7 +2276,7 @@ fn enrichment_lifecycle_promote_demote_promote_again() {
 
 #[test]
 fn enrichment_lifecycle_multiple_opts_interleaved() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
 
     // Submit opt-a and opt-b
@@ -2306,7 +2321,7 @@ fn enrichment_lifecycle_multiple_opts_interleaved() {
 
 #[test]
 fn enrichment_lifecycle_full_promotion_then_demote_to_shadow() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-full-dem");
     let token = test_token("opt-full-dem");
@@ -2349,7 +2364,7 @@ fn enrichment_lifecycle_full_promotion_then_demote_to_shadow() {
 
 #[test]
 fn enrichment_lifecycle_quarantine_lift_pass_full_promotion() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
 
     // Submit, fail, quarantine
@@ -2408,7 +2423,7 @@ fn enrichment_gate_current_stage_none_for_unknown() {
 
 #[test]
 fn enrichment_gate_is_quarantined_false_for_tracked() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-tr");
     let token = test_token("opt-tr");
@@ -2419,7 +2434,7 @@ fn enrichment_gate_is_quarantined_false_for_tracked() {
 
 #[test]
 fn enrichment_gate_quarantined_ids_deterministic_order() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
 
     // Submit and fail in reverse alphabetical order
@@ -2439,7 +2454,7 @@ fn enrichment_gate_quarantined_ids_deterministic_order() {
 
 #[test]
 fn enrichment_gate_rollback_receipt_verifiable() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-rv");
     let token = test_token("opt-rv");
@@ -2456,7 +2471,7 @@ fn enrichment_gate_rollback_receipt_verifiable() {
 
 #[test]
 fn enrichment_gate_rollback_receipt_contains_correct_token_id() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     let receipt = test_receipt("opt-tid");
     let token = test_token("opt-tid");
@@ -2474,7 +2489,7 @@ fn enrichment_gate_rollback_receipt_contains_correct_token_id() {
 
 #[test]
 fn enrichment_gate_submit_emits_submitted_event() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     gate.submit(
         &test_receipt("opt-se"),
@@ -2493,7 +2508,7 @@ fn enrichment_gate_submit_emits_submitted_event() {
 
 #[test]
 fn enrichment_gate_verdict_emits_validated_event() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     gate.submit(
         &test_receipt("opt-ve"),
@@ -2514,7 +2529,7 @@ fn enrichment_gate_verdict_emits_validated_event() {
 
 #[test]
 fn enrichment_gate_fail_verdict_emits_rollback_event() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     gate.submit(
         &test_receipt("opt-re"),
@@ -2537,7 +2552,7 @@ fn enrichment_gate_fail_verdict_emits_rollback_event() {
 
 #[test]
 fn enrichment_gate_promote_emits_stage_promoted_event() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     gate.submit(
         &test_receipt("opt-pe"),
@@ -2563,7 +2578,7 @@ fn enrichment_gate_promote_emits_stage_promoted_event() {
 
 #[test]
 fn enrichment_gate_demote_emits_stage_demoted_event() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     gate.submit(
         &test_receipt("opt-de"),
@@ -2661,7 +2676,7 @@ fn enrichment_error_debug_distinct_from_display() {
 
 #[test]
 fn enrichment_gate_event_count_matches_events_len() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     gate.submit(
         &test_receipt("opt-ec"),
@@ -2683,7 +2698,7 @@ fn enrichment_gate_event_count_matches_events_len() {
 
 #[test]
 fn enrichment_gate_serde_preserves_rollback_receipt_signatures() {
-    let mut gate = TranslationValidationGate::new();
+    let mut gate = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let epoch = SecurityEpoch::from_raw(1);
     gate.submit(
         &test_receipt("opt-srs"),

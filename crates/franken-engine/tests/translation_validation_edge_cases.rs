@@ -22,6 +22,7 @@ use frankenengine_engine::proof_schema::{
     ActivationStage, OptReceipt, OptimizationClass, RollbackToken, proof_schema_version_current,
 };
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 use frankenengine_engine::tee_attestation_policy::DecisionImpact;
 use frankenengine_engine::translation_validation::{
     QuarantineEntry, RollbackReceipt, StagePromotion, TranslationValidationGate, ValidationEvent,
@@ -31,6 +32,18 @@ use frankenengine_engine::translation_validation::{
 // ── helpers ──────────────────────────────────────────────────────────────
 
 const KEY: &[u8] = b"test-signing-key-32-bytes-long!!";
+
+// Ed25519 seed (32 bytes) for the asymmetric RollbackToken issuer signature
+// (bd-9tvmt). Receipts/promotions stay symmetric (engine self-signed).
+const TOKEN_SEED: [u8; 32] = *b"edgecases-ed25519-issuer-seed-32";
+
+fn token_signing_key() -> SigningKey {
+    SigningKey::from_bytes(TOKEN_SEED).expect("valid Ed25519 seed")
+}
+
+fn token_verification_key() -> VerificationKey {
+    token_signing_key().verification_key()
+}
 
 fn signer_key_id() -> frankenengine_engine::engine_object_id::EngineObjectId {
     engine_object_id::derive_id(
@@ -86,9 +99,9 @@ fn rollback_token(id: &str) -> RollbackToken {
         activation_stage: ActivationStage::Shadow,
         expiry_epoch: SecurityEpoch::from_raw(100),
         issuer_key_id: issuer_key_id(),
-        issuer_signature: AuthenticityHash::compute_keyed(&[], &[]),
+        issuer_signature: Vec::new(),
     }
-    .sign(KEY)
+    .sign(&token_signing_key())
 }
 
 fn pass_verdict() -> ValidationVerdict {
@@ -571,7 +584,7 @@ fn gate_new_is_empty() {
 
 #[test]
 fn gate_submit_wrong_key_rejected() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let result = g.submit(
         &opt_receipt("opt-1"),
         &rollback_token("opt-1"),
@@ -587,7 +600,7 @@ fn gate_submit_wrong_key_rejected() {
 
 #[test]
 fn gate_submit_expired_token() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let result = g.submit(
         &opt_receipt("opt-1"),
         &rollback_token("opt-1"),
@@ -603,7 +616,7 @@ fn gate_submit_expired_token() {
 
 #[test]
 fn gate_submit_mismatched_token() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let result = g.submit(
         &opt_receipt("opt-1"),
         &rollback_token("opt-2"), // different optimization_id
@@ -619,7 +632,7 @@ fn gate_submit_mismatched_token() {
 
 #[test]
 fn gate_submit_duplicate() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     let result = g.submit(
         &opt_receipt("opt-1"),
@@ -640,7 +653,7 @@ fn gate_submit_duplicate() {
 
 #[test]
 fn gate_pass_verdict_no_rollback() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     let result = g
         .record_verdict("opt-1", pass_verdict(), KEY, epoch(), 2000)
@@ -652,7 +665,7 @@ fn gate_pass_verdict_no_rollback() {
 
 #[test]
 fn gate_fail_verdict_triggers_rollback_and_quarantine() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     let result = g
         .record_verdict("opt-1", fail_verdict(), KEY, epoch(), 2000)
@@ -668,7 +681,7 @@ fn gate_fail_verdict_triggers_rollback_and_quarantine() {
 
 #[test]
 fn gate_inconclusive_verdict_triggers_rollback() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     let result = g
         .record_verdict("opt-1", inconclusive_verdict(), KEY, epoch(), 2000)
@@ -681,7 +694,7 @@ fn gate_inconclusive_verdict_triggers_rollback() {
 
 #[test]
 fn gate_verdict_for_unknown_fails() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let result = g.record_verdict("nonexistent", pass_verdict(), KEY, epoch(), 1000);
     assert!(matches!(
         result,
@@ -695,7 +708,7 @@ fn gate_verdict_for_unknown_fails() {
 
 #[test]
 fn gate_promote_shadow_to_canary() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     g.record_verdict("opt-1", pass_verdict(), KEY, epoch(), 2000)
         .unwrap();
@@ -710,7 +723,7 @@ fn gate_promote_shadow_to_canary() {
 
 #[test]
 fn gate_promote_without_pass_denied() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     let result = g.promote("opt-1", ContentHash::compute(b"ev"), KEY, epoch(), 2000);
     assert!(matches!(
@@ -721,7 +734,7 @@ fn gate_promote_without_pass_denied() {
 
 #[test]
 fn gate_promote_full_chain_to_default() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
 
     let expected = [
@@ -746,7 +759,7 @@ fn gate_promote_full_chain_to_default() {
 
 #[test]
 fn gate_promote_from_default_fails() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
 
     // Fast-forward to Default
@@ -772,7 +785,7 @@ fn gate_promote_from_default_fails() {
 
 #[test]
 fn gate_demote_canary_to_shadow() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     g.record_verdict("opt-1", pass_verdict(), KEY, epoch(), 2000)
         .unwrap();
@@ -797,7 +810,7 @@ fn gate_demote_canary_to_shadow() {
 
 #[test]
 fn gate_demote_to_same_stage_fails() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     let result = g.demote(
         "opt-1",
@@ -815,7 +828,7 @@ fn gate_demote_to_same_stage_fails() {
 
 #[test]
 fn gate_demote_then_re_promote() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
 
     // Promote to Canary
@@ -855,7 +868,7 @@ fn gate_demote_then_re_promote() {
 
 #[test]
 fn gate_quarantine_blocks_resubmission() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     g.record_verdict("opt-1", fail_verdict(), KEY, epoch(), 2000)
         .unwrap();
@@ -876,7 +889,7 @@ fn gate_quarantine_blocks_resubmission() {
 
 #[test]
 fn gate_lift_quarantine_allows_resubmission() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     g.record_verdict("opt-1", fail_verdict(), KEY, epoch(), 2000)
         .unwrap();
@@ -891,7 +904,7 @@ fn gate_lift_quarantine_allows_resubmission() {
 
 #[test]
 fn gate_lift_quarantine_for_unknown_fails() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     let result = g.lift_quarantine("nonexistent", "reason", epoch(), 1000);
     assert!(matches!(
         result,
@@ -901,7 +914,7 @@ fn gate_lift_quarantine_for_unknown_fails() {
 
 #[test]
 fn gate_quarantine_entry_accessible() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     g.record_verdict("opt-1", fail_verdict(), KEY, epoch(), 2000)
         .unwrap();
@@ -918,7 +931,7 @@ fn gate_quarantine_entry_accessible() {
 
 #[test]
 fn gate_events_track_full_lifecycle() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000); // Submitted
     g.record_verdict("opt-1", pass_verdict(), KEY, epoch(), 2000)
         .unwrap(); // Validated
@@ -943,7 +956,7 @@ fn gate_events_track_full_lifecycle() {
 
 #[test]
 fn gate_rollback_receipts_accumulated() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
 
     // First fail
     submit_opt(&mut g, "opt-1", 1000);
@@ -968,7 +981,7 @@ fn gate_rollback_receipts_accumulated() {
 
 #[test]
 fn gate_serde_roundtrip() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
     submit_opt(&mut g, "opt-1", 1000);
     g.record_verdict("opt-1", pass_verdict(), KEY, epoch(), 2000)
         .unwrap();
@@ -985,7 +998,8 @@ fn gate_serde_roundtrip() {
 #[test]
 fn gate_deterministic_identical_operations() {
     let build = || {
-        let mut g = TranslationValidationGate::new();
+        let mut g =
+            TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
         submit_opt(&mut g, "opt-1", 1000);
         g.record_verdict("opt-1", pass_verdict(), KEY, epoch(), 2000)
             .unwrap();
@@ -1005,7 +1019,7 @@ fn gate_deterministic_identical_operations() {
 
 #[test]
 fn integration_multiple_optimizations_independent() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
 
     // Submit two optimizations
     submit_opt(&mut g, "opt-1", 1000);
@@ -1027,7 +1041,7 @@ fn integration_multiple_optimizations_independent() {
 
 #[test]
 fn integration_fail_quarantine_lift_succeed() {
-    let mut g = TranslationValidationGate::new();
+    let mut g = TranslationValidationGate::new().with_token_issuer_key(token_verification_key());
 
     // Submit → fail → quarantine
     submit_opt(&mut g, "opt-1", 1000);

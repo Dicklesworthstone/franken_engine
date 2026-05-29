@@ -26,6 +26,7 @@ use frankenengine_engine::engine_object_id::{EngineObjectId, ObjectDomain, Schem
 use frankenengine_engine::hash_tiers::{AuthenticityHash, ContentHash};
 use frankenengine_engine::proof_schema::*;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::SigningKey;
 use frankenengine_engine::tee_attestation_policy::DecisionImpact;
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,14 @@ use frankenengine_engine::tee_attestation_policy::DecisionImpact;
 // ---------------------------------------------------------------------------
 
 const TEST_KEY: &[u8] = b"enrichment-signing-key-material!";
+
+// Ed25519 seed (32 bytes) for the asymmetric RollbackToken issuer signature
+// (bd-9tvmt). Receipts stay symmetric (engine self-signed).
+const TOKEN_SEED: [u8; 32] = *b"enrichment-ed25519-issuer-seed32";
+
+fn token_signing_key() -> SigningKey {
+    SigningKey::from_bytes(TOKEN_SEED).expect("valid Ed25519 seed")
+}
 
 fn epoch(n: u64) -> SecurityEpoch {
     SecurityEpoch::from_raw(n)
@@ -116,12 +125,12 @@ fn unsigned_rollback() -> RollbackToken {
         activation_stage: ActivationStage::Shadow,
         expiry_epoch: epoch(20),
         issuer_key_id: signer_key_id(),
-        issuer_signature: AuthenticityHash([0u8; 32]),
+        issuer_signature: Vec::new(),
     }
 }
 
 fn signed_rollback() -> RollbackToken {
-    unsigned_rollback().sign(TEST_KEY)
+    unsigned_rollback().sign(&token_signing_key())
 }
 
 // ===========================================================================
@@ -744,7 +753,7 @@ fn enrichment_receipt_sign_determinism_20_runs() {
 fn enrichment_rollback_sign_determinism_20_runs() {
     let mut sigs = BTreeSet::new();
     for _ in 0..20 {
-        let t = unsigned_rollback().sign(TEST_KEY);
+        let t = unsigned_rollback().sign(&token_signing_key());
         sigs.insert(format!("{:?}", t.issuer_signature));
     }
     assert_eq!(sigs.len(), 1, "signing must be deterministic");

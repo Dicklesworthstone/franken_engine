@@ -915,7 +915,15 @@ mod tests {
     }
 
     fn make_enforcer() -> RevocationEnforcer {
-        let chain = RevocationChain::new(TEST_ZONE);
+        // `RevocationChain::append` requires the head signer to be authorized
+        // (revocation_chain.rs). `revoke_target` appends signed by
+        // `revocation_key()`, so authorize that key as both head and revocation
+        // key; otherwise every revoke_target call fails "head signer not
+        // authorized" (bd-dqyny).
+        let vk = revocation_key().verification_key();
+        let chain = RevocationChain::new(TEST_ZONE)
+            .with_authorized_head_key(vk.clone())
+            .with_authorized_revocation_key(vk);
         RevocationEnforcer::new(chain, 5000)
     }
 
@@ -1280,15 +1288,7 @@ mod tests {
 
     #[test]
     fn check_token_acceptance_observed_records_revoked_on_denial() {
-        // `make_enforcer()` builds a chain with no authorized signers, so
-        // `revoke_target`'s append would be rejected ("head signer not
-        // authorized"); authorize the revocation key locally so this test owns
-        // a usable chain (the shared `make_enforcer` helper does not authorize).
-        let signer_vk = revocation_key().verification_key();
-        let chain = RevocationChain::new(TEST_ZONE)
-            .with_authorized_head_key(signer_vk.clone())
-            .with_authorized_revocation_key(signer_vk);
-        let mut enforcer = RevocationEnforcer::new(chain, 5000);
+        let mut enforcer = make_enforcer();
         let mut obs = RuntimeSecurityObservability::new();
         let token = EngineObjectId([7; 32]);
         revoke_target(&mut enforcer, RevocationTargetType::Token, *token.as_bytes());

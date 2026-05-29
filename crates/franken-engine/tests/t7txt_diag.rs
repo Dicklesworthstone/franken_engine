@@ -1,21 +1,21 @@
-//! Pending regression for bd-t7txt (labelled break/continue value_stack desync).
+//! Regression coverage for bd-t7txt (labelled break/continue across a loop
+//! boundary), kept live now that the fix has landed.
 //!
-//! ROOT CAUSE (pinned): the IR2->IR3 lowering threads a compile-time
-//! `value_stack` of register refs (lowering_pipeline.rs). `Ir1Op::Jump`
-//! (~:3822) emits the jump WITHOUT reconciling `value_stack`, and `Label`
-//! (~:3805) does not reset it to a canonical depth. A labelled `break`/
-//! `continue` jumps to an OUTER loop's label from a deeper `value_stack`
-//! state, so register allocation after that label desyncs and a later read
-//! hits the wrong register — surfacing at runtime as
-//! `RuntimeFault: expected function, got string`.
+//! ACTUAL ROOT CAUSE (fixed in 25ff606f): NOT the operand-stack/`value_stack`
+//! unwinding originally hypothesised, but a parser statement-splitter bug. The
+//! splitter only split after a block-closing `}` when the raw segment started
+//! with a block keyword (for/while/if/...). A labelled statement starts with
+//! `label:`, so `outer: for(;;){..} rest;` was never split — the labelled body
+//! greedily absorbed `rest`, the inner block parsed as a Raw expression, and
+//! lowering produced garbage IR (a string load + an infinite self-jump),
+//! faulting at runtime with `expected function, got string` (and an infinite
+//! loop for `label: while(){.. continue label;}`). `strip_leading_labels()`
+//! now removes leading `label:` prefixes before the block-terminator check, so
+//! labelled compound statements split exactly like their unlabelled forms. An
+//! IR dump disproved the original value_stack-desync hypothesis.
 //!
-//! This also affects labelled `break` (bd-bg9l1.27.4 / 0780a152): it passed
-//! its conformance case ONLY because that case had no statement after the
-//! labelled loop. Any trailing statement triggers the fault.
-//!
-//! These tests are `#[ignore]`d so they do not fail CI while the lowering fix
-//! is pending. Un-ignore them to verify the fix (they assert the
-//! ECMA-correct behaviour: each program evaluates without fault).
+//! These tests assert the ECMA-correct behaviour: each program evaluates
+//! without fault. They guard against regressions of the splitter fix.
 
 use frankenengine_engine::HybridRouter;
 
@@ -25,15 +25,13 @@ fn eval_ok(src: &str) -> Result<(), String> {
 }
 
 #[test]
-#[ignore = "bd-t7txt: labelled break/continue value_stack desync; un-ignore when fixed"]
 fn labelled_break_with_trailing_statement() {
-    // Currently faults ("expected function, got string"); should be Ok(0).
+    // Pre-fix this faulted ("expected function, got string"); must be Ok(0).
     eval_ok("outer: for (;;) { inner: for (;;) { break outer; } } 0;")
         .expect("labelled break followed by a statement must not fault");
 }
 
 #[test]
-#[ignore = "bd-t7txt: labelled break/continue value_stack desync; un-ignore when fixed"]
 fn labelled_continue_inner_for_to_outer_while() {
     eval_ok(
         "let done = false; loop: while (!done) { done = true; for (;;) { continue loop; } } done;",
@@ -42,9 +40,8 @@ fn labelled_continue_inner_for_to_outer_while() {
 }
 
 #[test]
-#[ignore = "bd-t7txt: labelled continue direct-in-while loops forever; un-ignore when fixed"]
 fn labelled_continue_direct_in_while_terminates() {
-    // Currently exhausts the instruction budget (infinite loop).
+    // Pre-fix this exhausted the instruction budget (infinite loop).
     eval_ok("let done = false; loop: while (!done) { done = true; continue loop; } done;")
         .expect("labelled continue directly in a while must re-check the condition and terminate");
 }

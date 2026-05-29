@@ -8,6 +8,7 @@
   "parity_verdicts": [],
   "reference_environment": null,
   "environment_drifts": [],
+  "reproducibility_pack": null,
   "bundle_hash": [
     46,
     28,

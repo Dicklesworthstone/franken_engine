@@ -2195,8 +2195,20 @@ mod tests {
     #[test]
     fn test_filter_all_accepted() {
         let constraint = default_constraint();
-        let c1 = make_candidate_with_novelty("c1", 500_000);
-        let c2 = make_candidate_with_novelty("c2", 600_000);
+        // The candidates must be semantically DISTINCT: `make_candidate_with_novelty`
+        // produces comment-only source, which canonicalizes to an empty program, so two
+        // such candidates collapse to the same SemanticFingerprint and the second is
+        // (correctly) denied as a DuplicateCandidate. Give them distinct statement
+        // structure (1 vs 2 statements — survives comment/whitespace/identifier/literal
+        // canonicalization) so the "all candidates pass -> all accepted" path is exercised.
+        let mut c1 = make_candidate_with_novelty("c1", 500_000);
+        c1.source_text = "const a = 1;".into();
+        c1.content_hash =
+            SynthesizedCandidate::compute_hash(&c1.candidate_id, c1.kind, c1.strategy, &c1.source_text);
+        let mut c2 = make_candidate_with_novelty("c2", 600_000);
+        c2.source_text = "const a = 1; const b = 2;".into();
+        c2.content_hash =
+            SynthesizedCandidate::compute_hash(&c2.candidate_id, c2.kind, c2.strategy, &c2.source_text);
         let (accepted, denied) = filter_candidates(vec![c1, c2], &constraint);
         assert_eq!(accepted.len(), 2);
         assert!(denied.is_empty());

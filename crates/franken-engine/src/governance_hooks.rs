@@ -1431,6 +1431,15 @@ fn generate_compliance_pdf(entries: &[&EvidenceEntry]) -> Result<Vec<u8>, Govern
     // 1. PDF header
     pdf.extend_from_slice(b"%PDF-1.4\n");
 
+    // Compliance-report format marker. A PDF comment line (leading `%`) is
+    // ignored by conformant PDF readers but is preserved in the byte stream,
+    // letting downstream tooling positively identify the artifact as a
+    // FrankenEngine compliance report — mirroring the schema/header markers the
+    // other export formats carry (CSV header row, per-entry JSON schema). All
+    // subsequent xref offsets are computed from `pdf.len()` after this point,
+    // so the marker does not disturb the object table.
+    pdf.extend_from_slice(b"%FRANKEN_COMPLIANCE_REPORT_V1\n");
+
     // Build content text from entries
     let content_text = entries
         .iter()

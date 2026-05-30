@@ -598,6 +598,21 @@ pub enum BuiltinFunctionKind {
     ConsoleInfo,
     StringCharAt,
     StringCharCodeAt,
+    /// `String.prototype.toUpperCase` — receiver-aware (bd-9a8cz).
+    StringToUpperCase,
+    /// `String.prototype.toLowerCase` — receiver-aware (bd-9a8cz).
+    StringToLowerCase,
+    /// `String.prototype.trim` — receiver-aware (bd-9a8cz).
+    StringTrim,
+    /// `String.prototype.split` — receiver-aware: returns an array of pieces;
+    /// `undefined` separator → `[whole string]`, `""` → per-character (bd-9a8cz).
+    StringSplit,
+    /// `String.prototype.includes` — receiver-aware substring test (bd-9a8cz).
+    StringIncludes,
+    /// `String.prototype.startsWith` — receiver-aware prefix test (bd-9a8cz).
+    StringStartsWith,
+    /// `String.prototype.endsWith` — receiver-aware suffix test (bd-9a8cz).
+    StringEndsWith,
     ProxyRevoke,
     /// `Array.prototype.push` — receiver-aware: appends its arguments to the
     /// `this` array and returns the new length. Resolved on array exotic
@@ -718,6 +733,69 @@ impl BuiltinFunction {
     fn string_char_code_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringCharCodeAt,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_to_upper_case() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringToUpperCase,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_to_lower_case() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringToLowerCase,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_trim() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringTrim,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_split() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringSplit,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_includes() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringIncludes,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_starts_with() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringStartsWith,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_ends_with() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringEndsWith,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -951,6 +1029,13 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ConsoleInfo => "info",
             BuiltinFunctionKind::StringCharAt => "charAt",
             BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
+            BuiltinFunctionKind::StringToUpperCase => "toUpperCase",
+            BuiltinFunctionKind::StringToLowerCase => "toLowerCase",
+            BuiltinFunctionKind::StringTrim => "trim",
+            BuiltinFunctionKind::StringSplit => "split",
+            BuiltinFunctionKind::StringIncludes => "includes",
+            BuiltinFunctionKind::StringStartsWith => "startsWith",
+            BuiltinFunctionKind::StringEndsWith => "endsWith",
             BuiltinFunctionKind::ProxyRevoke => "revoke",
             BuiltinFunctionKind::ArrayPush => "push",
             BuiltinFunctionKind::ArrayPop => "pop",
@@ -4340,6 +4425,84 @@ impl InterpreterCore {
                     None
                 };
                 Self::string_prototype_char_code_at_value(receiver, index)
+            }
+            BuiltinFunctionKind::StringToUpperCase => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                Ok(Value::str(value.to_uppercase()))
+            }
+            BuiltinFunctionKind::StringToLowerCase => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                Ok(Value::str(value.to_lowercase()))
+            }
+            BuiltinFunctionKind::StringTrim => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                Ok(Value::str(value.trim().to_string()))
+            }
+            BuiltinFunctionKind::StringIncludes => {
+                // ES2020 21.1.3.7: substring containment (position arg not yet
+                // honored — see bd-9a8cz follow-up).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let search = match self.builtin_arg(args, 0)? {
+                    Some(arg) => self.value_to_string(&arg),
+                    None => "undefined".to_string(),
+                };
+                Ok(Value::Bool(value.contains(&search)))
+            }
+            BuiltinFunctionKind::StringStartsWith => {
+                // ES2020 21.1.3.20 (position arg not yet honored — bd-9a8cz).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let search = match self.builtin_arg(args, 0)? {
+                    Some(arg) => self.value_to_string(&arg),
+                    None => "undefined".to_string(),
+                };
+                Ok(Value::Bool(value.starts_with(&search)))
+            }
+            BuiltinFunctionKind::StringEndsWith => {
+                // ES2020 21.1.3.6 (endPosition arg not yet honored — bd-9a8cz).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let search = match self.builtin_arg(args, 0)? {
+                    Some(arg) => self.value_to_string(&arg),
+                    None => "undefined".to_string(),
+                };
+                Ok(Value::Bool(value.ends_with(&search)))
+            }
+            BuiltinFunctionKind::StringSplit => {
+                // ES2020 21.1.3.19: split into an array of substrings. An
+                // `undefined` separator yields the whole string as one element;
+                // an empty separator splits per character. (limit arg not yet
+                // honored — see bd-9a8cz follow-up.)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let pieces: Vec<String> = match self.builtin_arg(args, 0)? {
+                    None | Some(Value::Undefined) => vec![value.clone()],
+                    Some(separator_value) => {
+                        let separator = self.value_to_string(&separator_value);
+                        if separator.is_empty() {
+                            value.chars().map(|ch| ch.to_string()).collect()
+                        } else {
+                            value
+                                .split(separator.as_str())
+                                .map(|piece| piece.to_string())
+                                .collect()
+                        }
+                    }
+                };
+                let result = self.alloc_array_with_prototype(None)?;
+                for (index, piece) in pieces.iter().enumerate() {
+                    self.set_object_property(result, index.to_string(), Value::str(piece.clone()))?;
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(pieces.len()).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayPush => {
                 // ES2020 23.1.3.20: append each argument to `this` at the
@@ -9194,6 +9357,13 @@ impl InterpreterCore {
             }
             "charAt" => Value::BuiltinFunction(BuiltinFunction::string_char_at()),
             "charCodeAt" => Value::BuiltinFunction(BuiltinFunction::string_char_code_at()),
+            "toUpperCase" => Value::BuiltinFunction(BuiltinFunction::string_to_upper_case()),
+            "toLowerCase" => Value::BuiltinFunction(BuiltinFunction::string_to_lower_case()),
+            "trim" => Value::BuiltinFunction(BuiltinFunction::string_trim()),
+            "split" => Value::BuiltinFunction(BuiltinFunction::string_split()),
+            "includes" => Value::BuiltinFunction(BuiltinFunction::string_includes()),
+            "startsWith" => Value::BuiltinFunction(BuiltinFunction::string_starts_with()),
+            "endsWith" => Value::BuiltinFunction(BuiltinFunction::string_ends_with()),
             _ => Value::Undefined,
         }
     }

@@ -4178,6 +4178,12 @@ mod tests {
 
         let signature = sign_preimage(signing_key, &unsigned).expect("sign witness after mutation");
         witness.synthesizer_signature = signature.to_bytes().to_vec();
+        // Re-sign the promotion quorum over the rebound synthesis preimage. The promotion
+        // signatures are verified over `synthesis_unsigned_bytes()` during active-acceptance,
+        // so they must track the same preimage as the synthesizer signature after the
+        // metadata/proof-obligation mutations applied above; otherwise a trust root that
+        // authorizes `signing_key` would reject the (stale) promotion signatures.
+        witness.promotion_signatures = vec![signature.to_bytes().to_vec()];
     }
 
     fn build_test_witness() -> CapabilityWitness {
@@ -4304,7 +4310,7 @@ mod tests {
             .transition_to(LifecycleState::Promoted)
             .expect("serde serialization should succeed");
         witness
-            .transition_to(LifecycleState::Active)
+            .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
             .expect("serde serialization should succeed");
         witness
             .transition_to(LifecycleState::Superseded)
@@ -4995,6 +5001,9 @@ mod tests {
     fn validate_for_security_decision_requires_trust_root() {
         let mut witness = build_test_witness();
         witness
+            .transition_to(LifecycleState::Validated)
+            .expect("validated transition should succeed");
+        witness
             .transition_to(LifecycleState::Promoted)
             .expect("promotion theorem metadata should permit promoted transition");
 
@@ -5011,6 +5020,9 @@ mod tests {
     #[test]
     fn validate_for_security_decision_accepts_trusted_promoted_witness() {
         let mut witness = build_test_witness();
+        witness
+            .transition_to(LifecycleState::Validated)
+            .expect("validated transition should succeed");
         witness
             .transition_to(LifecycleState::Promoted)
             .expect("promotion theorem metadata should permit promoted transition");
@@ -5038,6 +5050,9 @@ mod tests {
     fn validate_for_security_decision_rejects_missing_promotion_quorum() {
         let mut witness = build_test_witness();
         witness
+            .transition_to(LifecycleState::Validated)
+            .expect("validated transition should succeed");
+        witness
             .transition_to(LifecycleState::Promoted)
             .expect("promotion theorem metadata should permit promoted transition");
         witness.promotion_signatures.clear();
@@ -5056,6 +5071,9 @@ mod tests {
     #[test]
     fn validate_for_security_decision_rejects_denied_capability_without_record() {
         let mut witness = build_test_witness();
+        witness
+            .transition_to(LifecycleState::Validated)
+            .expect("validated transition should succeed");
         witness
             .transition_to(LifecycleState::Promoted)
             .expect("promotion theorem metadata should permit promoted transition");
@@ -5145,7 +5163,7 @@ mod tests {
 
     #[test]
     fn store_lifecycle_transitions() {
-        let mut store = WitnessStore::new();
+        let mut store = WitnessStore::with_trust_root(test_trust_root());
         let witness = build_test_witness();
         let wid = witness.witness_id.clone();
         let ext_id = witness.extension_id.clone();
@@ -5173,7 +5191,7 @@ mod tests {
 
     #[test]
     fn store_supersedes_old_active() {
-        let mut store = WitnessStore::new();
+        let mut store = WitnessStore::with_trust_root(test_trust_root());
 
         // Insert and activate first witness.
         let w1 = build_test_witness();
@@ -5237,7 +5255,7 @@ mod tests {
 
     #[test]
     fn store_revoke_removes_active() {
-        let mut store = WitnessStore::new();
+        let mut store = WitnessStore::with_trust_root(test_trust_root());
         let witness = build_test_witness();
         let wid = witness.witness_id.clone();
         let ext_id = witness.extension_id.clone();
@@ -5269,7 +5287,7 @@ mod tests {
 
     #[test]
     fn store_invalid_transition_errors() {
-        let mut store = WitnessStore::new();
+        let mut store = WitnessStore::with_trust_root(test_trust_root());
         let witness = build_test_witness();
         let wid = witness.witness_id.clone();
         store.insert(witness);
@@ -5280,7 +5298,7 @@ mod tests {
 
     #[test]
     fn store_transition_to_active_rejects_forged_synthesizer_signature() {
-        let mut store = WitnessStore::new();
+        let mut store = WitnessStore::with_trust_root(test_trust_root());
         let witness = build_test_witness();
         let wid = witness.witness_id.clone();
         let ext_id = witness.extension_id.clone();
@@ -5316,7 +5334,7 @@ mod tests {
             .transition_to(LifecycleState::Promoted)
             .expect("serde serialization should succeed");
         witness
-            .transition_to(LifecycleState::Active)
+            .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
             .expect("serde serialization should succeed");
         witness.synthesizer_signature.clear();
 
@@ -5397,6 +5415,7 @@ mod tests {
             publication_config_with_governance(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
 
         let witness = build_promoted_witness(1);
         let publication_id = pipeline
@@ -5465,6 +5484,7 @@ mod tests {
             },
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
 
         let first = build_promoted_witness(10);
         let second = build_promoted_witness(11);
@@ -5505,6 +5525,7 @@ mod tests {
             publication_config_with_governance(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
 
         let witness = build_promoted_witness(20);
         let witness_id = witness.witness_id.clone();
@@ -5562,6 +5583,7 @@ mod tests {
             },
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
 
         let w1 = build_promoted_witness(31);
         let w2 = build_promoted_witness(32);
@@ -5607,6 +5629,7 @@ mod tests {
             },
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
 
         let witness = build_promoted_witness(40);
         pipeline
@@ -6963,6 +6986,7 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         let witness = build_promoted_witness(50);
         pipeline
             .publish_witness(witness.clone(), 100)
@@ -6984,6 +7008,7 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         let witness = build_promoted_witness(51);
         let wid = witness.witness_id.clone();
         pipeline
@@ -7025,6 +7050,7 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         let witness = build_promoted_witness(52);
         let wid = witness.witness_id.clone();
         pipeline
@@ -7396,6 +7422,7 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         let w1 = build_promoted_witness(60);
         let w2 = build_promoted_witness(61);
         let w1_id = w1.witness_id.clone();
@@ -7437,6 +7464,7 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         let witness = build_promoted_witness(70);
         let pub_id = pipeline
             .publish_witness(witness, 100)
@@ -7487,6 +7515,7 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         let w = build_promoted_witness(80);
         let wid = w.witness_id.clone();
         pipeline
@@ -7516,6 +7545,7 @@ mod tests {
             },
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
 
         let w1 = build_promoted_witness(90);
         pipeline
@@ -7552,6 +7582,7 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         let w = build_promoted_witness(100);
         let wid = w.witness_id.clone();
         pipeline
@@ -7740,7 +7771,7 @@ mod tests {
             .transition_to(LifecycleState::Promoted)
             .expect("serde serialization should succeed");
         witness
-            .transition_to(LifecycleState::Active)
+            .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
             .expect("serde serialization should succeed");
         witness.synthesizer_signature = vec![0x55; 64];
 
@@ -8394,9 +8425,10 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         let mut witness = build_promoted_witness(110);
         witness
-            .transition_to(LifecycleState::Active)
+            .transition_to_with_trust_root(LifecycleState::Active, &test_trust_root())
             .expect("serde serialization should succeed");
         let pub_id = pipeline
             .publish_witness(witness, 1000)
@@ -8425,6 +8457,7 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
 
         let witness = build_promoted_witness(120);
         let wid = witness.witness_id.clone();
@@ -8635,7 +8668,7 @@ mod tests {
 
     #[test]
     fn store_insert_active_witness_updates_active_pair() {
-        let mut store = WitnessStore::new();
+        let mut store = WitnessStore::with_trust_root(test_trust_root());
         let mut witness = build_test_witness();
         let ext_id = witness.extension_id.clone();
         witness.lifecycle_state = LifecycleState::Active;
@@ -8708,6 +8741,7 @@ mod tests {
             },
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         let w1 = build_promoted_witness(90);
         let policy_id = w1.policy_id.clone();
         pipeline
@@ -8742,7 +8776,7 @@ mod tests {
 
     #[test]
     fn store_serde_roundtrip_preserves_active_pairs() {
-        let mut store = WitnessStore::new();
+        let mut store = WitnessStore::with_trust_root(test_trust_root());
         let mut witness = build_test_witness();
         let ext_id = witness.extension_id.clone();
         witness.lifecycle_state = LifecycleState::Active;
@@ -8794,6 +8828,7 @@ mod tests {
             WitnessPublicationConfig::default(),
         )
         .expect("serde serialization should succeed");
+        pipeline.set_witness_trust_root(test_trust_root());
         assert!(pipeline.log_entries().is_empty(), "empty before publish");
         let w = build_promoted_witness(90);
         pipeline
@@ -8865,7 +8900,7 @@ mod tests {
     #[test]
     fn store_by_state_revoked() {
         let witness = build_test_witness();
-        let mut store = WitnessStore::new();
+        let mut store = WitnessStore::with_trust_root(test_trust_root());
         let wid = witness.witness_id.clone();
         store.insert(witness);
         store

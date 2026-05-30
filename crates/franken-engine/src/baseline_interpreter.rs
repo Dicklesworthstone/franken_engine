@@ -637,6 +637,15 @@ pub enum BuiltinFunctionKind {
     /// `String.prototype.padEnd` — receiver-aware; right-pads to a target
     /// length (bd-9a8cz.1).
     StringPadEnd,
+    /// `Number.prototype.toFixed` — receiver-aware; fixed-point notation with a
+    /// given number of digits after the decimal point (bd-i08nh).
+    NumberToFixed,
+    /// `Number.prototype.toString` — receiver-aware; supports an optional radix
+    /// (2..=36), default 10 (bd-i08nh).
+    NumberToString,
+    /// `Number.prototype.valueOf` — receiver-aware; returns the primitive number
+    /// value (bd-i08nh).
+    NumberValueOf,
     ProxyRevoke,
     /// `Array.prototype.push` — receiver-aware: appends its arguments to the
     /// `this` array and returns the new length. Resolved on array exotic
@@ -898,6 +907,33 @@ impl BuiltinFunction {
         }
     }
 
+    fn number_to_fixed() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::NumberToFixed,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn number_to_string() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::NumberToString,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn number_value_of() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::NumberValueOf,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn array_push() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayPush,
@@ -1140,6 +1176,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringRepeat => "repeat",
             BuiltinFunctionKind::StringPadStart => "padStart",
             BuiltinFunctionKind::StringPadEnd => "padEnd",
+            BuiltinFunctionKind::NumberToFixed => "toFixed",
+            BuiltinFunctionKind::NumberToString => "toString",
+            BuiltinFunctionKind::NumberValueOf => "valueOf",
             BuiltinFunctionKind::ProxyRevoke => "revoke",
             BuiltinFunctionKind::ArrayPush => "push",
             BuiltinFunctionKind::ArrayPop => "pop",
@@ -4810,6 +4849,47 @@ impl InterpreterCore {
                 let value = Self::require_object_coercible_to_string(&receiver)?;
                 Ok(Value::str(self.string_pad_value(&value, args, false)?))
             }
+            BuiltinFunctionKind::NumberToFixed => {
+                // ES2020 20.1.3.3: fixed-point notation with `digits` (0..=100)
+                // fraction digits. (bd-i08nh)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let num = Self::number_receiver_to_f64(&receiver);
+                let digits = match self.builtin_arg(args, 0)? {
+                    Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0).clamp(0, 100) as usize,
+                    None => 0,
+                };
+                let out = if num.is_nan() {
+                    "NaN".to_string()
+                } else if num.is_infinite() {
+                    if num.is_sign_positive() {
+                        "Infinity".to_string()
+                    } else {
+                        "-Infinity".to_string()
+                    }
+                } else {
+                    format!("{num:.digits$}")
+                };
+                Ok(Value::str(out))
+            }
+            BuiltinFunctionKind::NumberToString => {
+                // ES2020 20.1.3.6: string form, optional radix (2..=36),
+                // default 10. Reuses the shared radix conversion. (bd-i08nh)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let num = Self::number_receiver_to_f64(&receiver);
+                let radix = match self.builtin_arg(args, 0)? {
+                    Some(Value::Undefined) | None => 10,
+                    Some(arg) => Self::coerce_finite_radix_or_default(arg, 10),
+                };
+                match self.number_to_string_impl(num, radix) {
+                    Ok(result) => Ok(Value::str(result)),
+                    Err(_) => Ok(Value::str("RangeError")),
+                }
+            }
+            BuiltinFunctionKind::NumberValueOf => {
+                // ES2020 20.1.3.7: return the primitive number value itself. The
+                // number-property seam only routes Int/Float receivers here.
+                Ok(receiver.unwrap_or(Value::Undefined))
+            }
             BuiltinFunctionKind::ArrayPush => {
                 // ES2020 23.1.3.20: append each argument to `this` at the
                 // current length and return the new length. The receiver is
@@ -7492,6 +7572,12 @@ impl InterpreterCore {
                             let prop = Self::string_property_value(&s, &key_str);
                             self.write_reg(dst, prop)?;
                         }
+                        Value::Int(_) | Value::Float(_) => {
+                            // Member access on a number primitive resolves
+                            // Number.prototype methods, else undefined (bd-i08nh).
+                            let prop = Self::number_property_value(&key_str);
+                            self.write_reg(dst, prop)?;
+                        }
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -9678,6 +9764,33 @@ impl InterpreterCore {
             "repeat" => Value::BuiltinFunction(BuiltinFunction::string_repeat()),
             "padStart" => Value::BuiltinFunction(BuiltinFunction::string_pad_start()),
             "padEnd" => Value::BuiltinFunction(BuiltinFunction::string_pad_end()),
+            _ => Value::Undefined,
+        }
+    }
+
+    /// Coerce a `Number.prototype` receiver to an `f64`, mirroring the
+    /// receiver-less `builtin:NumberPrototype*` handlers (bd-i08nh).
+    fn number_receiver_to_f64(receiver: &Value) -> f64 {
+        match receiver {
+            Value::Int(n) => *n as f64,
+            Value::Float(f) => f.inner(),
+            Value::Bool(true) => 1.0,
+            Value::Bool(false) | Value::Null => 0.0,
+            Value::Str(s) => s.trim().parse::<f64>().unwrap_or(f64::NAN),
+            _ => f64::NAN,
+        }
+    }
+
+    /// Receiver-aware `Number.prototype` method seam (bd-i08nh): resolve a
+    /// member access on a number PRIMITIVE (e.g. `(3.14).toFixed(2)`) to the
+    /// corresponding builtin. Mirrors `string_property_value` /
+    /// `array_prototype_method`. Unknown keys resolve to `undefined` (a number
+    /// member access is not a TypeError in ES2020).
+    fn number_property_value(key: &str) -> Value {
+        match key {
+            "toFixed" => Value::BuiltinFunction(BuiltinFunction::number_to_fixed()),
+            "toString" => Value::BuiltinFunction(BuiltinFunction::number_to_string()),
+            "valueOf" => Value::BuiltinFunction(BuiltinFunction::number_value_of()),
             _ => Value::Undefined,
         }
     }
@@ -12336,6 +12449,10 @@ impl InterpreterCore {
                             self.iterator_property_value(iterator_handle, &key_string)
                         }
                         Value::Str(s) => Self::string_property_value(&s, &key_string),
+                        Value::Int(_) | Value::Float(_) => {
+                            // Number.prototype member access (bd-i08nh).
+                            Self::number_property_value(&key_string)
+                        }
                         other => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -12543,6 +12660,10 @@ impl InterpreterCore {
                             self.iterator_property_value(iterator_handle, &key_string)
                         }
                         Value::Str(s) => Self::string_property_value(&s, &key_string),
+                        Value::Int(_) | Value::Float(_) => {
+                            // Number.prototype member access (bd-i08nh).
+                            Self::number_property_value(&key_string)
+                        }
                         other => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),

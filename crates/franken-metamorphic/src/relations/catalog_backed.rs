@@ -4,6 +4,7 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
+use crate::engine_adapter::{EngineEvalAdapter, ParseOutcome};
 use crate::relation::{
     ChoiceStream, Equivalence, GeneratedCase, GeneratedPair, GenerationChoice, MetamorphicRelation,
     PropertyContract, RelationSpec, default_generator_id,
@@ -52,27 +53,47 @@ impl CatalogBackedRelation {
     }
 
     fn parser_oracle(&self, pair: &GeneratedPair) -> Equivalence {
-        let input_program = match Self::parse_or_diverge(&pair.input_source, "input") {
-            Ok(program) => program,
-            Err(error) => return error,
-        };
-        let variant_program = match Self::parse_or_diverge(&pair.variant_source, "variant") {
-            Ok(program) => program,
-            Err(error) => return error,
-        };
+        // bd-x9t1n.2 / bd-q90jg: drive the REAL engine (CanonicalEs2020Parser +
+        // HybridRouter), not the toy parser. Every Parser-subsystem relation is a
+        // positive, semantics-preserving source transform (whitespace, comments,
+        // parenthesization, ASI, unicode escapes, source repositioning), so the
+        // observable verdict must be invariant: both sides must reach the same
+        // parse outcome, and — when accepted — compute the same execution value.
+        // We compare `exec_value` (definitionally invariant under these transforms)
+        // rather than `ir_digest`, which legitimately encodes source spans that
+        // `parser_source_position_independence` deliberately perturbs.
+        let adapter = EngineEvalAdapter::new();
+        let input = adapter.evaluate(&pair.input_source);
+        let variant = adapter.evaluate(&pair.variant_source);
 
-        let input_signature = canonical_program_signature(&input_program);
-        let variant_signature = canonical_program_signature(&variant_program);
-
-        if input_signature == variant_signature {
-            Equivalence::Equivalent
-        } else {
-            Equivalence::Diverged {
+        if input.parse_outcome != variant.parse_outcome {
+            return Equivalence::Diverged {
                 detail: format!(
-                    "parser semantic signatures differ: input={input_signature} variant={variant_signature}"
+                    "real-engine parse acceptance differs: input={:?} variant={:?}",
+                    input.parse_outcome, variant.parse_outcome
                 ),
-            }
+            };
         }
+
+        // A positive parser relation must produce source the real parser accepts;
+        // a rejected base means the generated corpus is not engine-valid (a
+        // generator regression, not a real metamorphic equivalence), so surface it.
+        if input.parse_outcome == ParseOutcome::Rejected {
+            return Equivalence::Diverged {
+                detail: "real engine rejected both sources; parser relation corpus must be engine-valid (bd-x9t1n.7)".to_string(),
+            };
+        }
+
+        if input.exec_value != variant.exec_value {
+            return Equivalence::Diverged {
+                detail: format!(
+                    "real-engine execution value differs under a semantics-preserving transform: input={:?} variant={:?}",
+                    input.exec_value, variant.exec_value
+                ),
+            };
+        }
+
+        Equivalence::Equivalent
     }
 
     fn ir_oracle(&self, pair: &GeneratedPair) -> Equivalence {

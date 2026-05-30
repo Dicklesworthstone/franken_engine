@@ -1744,6 +1744,40 @@ fn eval_via_native_pipeline(
             )
         })?;
 
+    // Static-semantics early errors (ES2020 §13.x EarlyErrors): enforce the
+    // unambiguous, false-positive-free subset of static_semantics::analyze.
+    // A bare (unlabeled) `break`/`continue` outside any loop/switch is a
+    // SyntaxError that must surface before lowering/execution. Only the
+    // break/continue-outside-loop classes are wired here (bd-bg9l1.27.6 /
+    // DISC-008): static_semantics flags them solely for the unlabeled form
+    // when neither `in_loop` nor `in_switch` holds, and every loop form
+    // (For/While/DoWhile/ForIn/ForOf) sets `in_loop` — so no valid program is
+    // affected. The analyzer covers 18 further early-error classes; broadening
+    // to those is gated on full-suite regression validation.
+    if let Some(static_error) = static_semantics::analyze(&syntax_tree)
+        .errors
+        .into_iter()
+        .find(|error| {
+            matches!(
+                error.kind,
+                static_semantics::StaticErrorKind::BreakOutsideLoop
+                    | static_semantics::StaticErrorKind::ContinueOutsideLoop
+            )
+        })
+    {
+        let eval_error = EvalError::parse_failure(format!(
+            "{} ({})",
+            static_error.message,
+            static_error.kind.diagnostic_code()
+        ));
+        return Err(attach_eval_correlation(
+            eval_error,
+            prepared.trace_id.as_str(),
+            prepared.decision_id.as_str(),
+            prepared.policy_id.as_str(),
+        ));
+    }
+
     let lowering_context = LoweringContext::new(
         prepared.trace_id.as_str(),
         prepared.decision_id.as_str(),

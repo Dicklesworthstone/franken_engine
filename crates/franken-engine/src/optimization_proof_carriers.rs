@@ -20,6 +20,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::ir_contract::{Ir1Op, Ir2Op, Ir3Instruction};
+use crate::policy_theorem_engine::{Z3Outcome, invoke_z3};
 
 /// Types of optimization passes supported by proof carriers.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -523,39 +524,55 @@ impl OptimizationProofCarrier {
     }
 
     /// Verify a single proof obligation.
+    ///
+    /// **bd-cixqu.7.17.2**: previously this method returned
+    /// `Ok(ProofResult::Verified)` unconditionally for every
+    /// `VerificationMethod` variant, fabricating proofs for any obligation
+    /// passed in. The unconditional-Verified stub is replaced here with a
+    /// fail-closed router:
+    ///
+    /// - `FormalLogic` / `TheoremProving` / `ModelChecking` /
+    ///   `SymbolicExecution` route through Z3 (`policy_theorem_engine::invoke_z3`,
+    ///   exposed by bd-cixqu.7.17). The premise and conclusion are taken to be
+    ///   SMT-LIB-2 formula fragments; the verifier asserts
+    ///   `(not (=> premise conclusion))` and accepts `unsat` (the universal
+    ///   theorem `P ⇒ C` holds) as `Verified`. A `sat` result is a real
+    ///   counterexample → `Failed`. `unknown` / parse errors / Z3 absent →
+    ///   `Failed` (no fabricated Verified). This is the only path that can
+    ///   today return `Verified`, and only when the obligation's premise and
+    ///   conclusion are real SMT-LIB shapes — the optimization-pass obligation
+    ///   generators (e.g. dead-code elimination) currently emit PROSE
+    ///   premises, so they fail closed; that's the correct signal that
+    ///   FE-CLAIM-019 / FE-CLAIM-020 stay `hypothesis` in the matrix until
+    ///   the obligation generators are extended to emit SMT-LIB formulas.
+    /// - `DifferentialTesting` / `PropertyTesting` are NOT yet wired to real
+    ///   machinery (no diff-oracle runner; no proptest fixtures). Returning
+    ///   `Verified` here would be the same fabrication this bead is closing;
+    ///   they fail-close to `Failed` until the runners exist.
+    /// - Any obligation with an empty `premise` or `conclusion` is rejected:
+    ///   there's no formula to verify.
+    ///
+    /// Reuse the new `invoke_z3` helper bd-cixqu.7.17 exposed; no separate Z3
+    /// subprocess wrapper lives here.
     fn verify_proof_obligation(&self, obligation: &ProofObligation) -> Result<ProofResult, String> {
-        // Simulate verification based on verification method
+        if obligation.premise.trim().is_empty() || obligation.conclusion.trim().is_empty() {
+            return Ok(ProofResult::Failed);
+        }
         match obligation.verification_method {
-            VerificationMethod::FormalLogic => {
-                if obligation.premise.is_empty() || obligation.conclusion.is_empty() {
-                    Ok(ProofResult::Failed)
-                } else {
-                    Ok(ProofResult::Verified)
-                }
+            VerificationMethod::FormalLogic
+            | VerificationMethod::TheoremProving
+            | VerificationMethod::ModelChecking
+            | VerificationMethod::SymbolicExecution => {
+                Ok(verify_via_z3(&obligation.premise, &obligation.conclusion))
             }
-            VerificationMethod::ModelChecking => {
-                // Simulate model checking
-                if obligation.obligation_type == ObligationType::SemanticPreservation {
-                    Ok(ProofResult::Verified)
-                } else {
-                    Ok(ProofResult::Verified) // Simplified for demo
-                }
-            }
-            VerificationMethod::TheoremProving => {
-                // Simulate theorem proving
-                Ok(ProofResult::Verified)
-            }
-            VerificationMethod::SymbolicExecution => {
-                // Simulate symbolic execution
-                Ok(ProofResult::Verified)
-            }
-            VerificationMethod::PropertyTesting => {
-                // Simulate property testing
-                Ok(ProofResult::Verified)
-            }
-            VerificationMethod::DifferentialTesting => {
-                // Simulate differential testing
-                Ok(ProofResult::Verified)
+            VerificationMethod::PropertyTesting | VerificationMethod::DifferentialTesting => {
+                // The bead acknowledges these need separate runner machinery
+                // (proptest fixtures + a diff-oracle that runs both old and
+                // new optimization passes on the obligation's sample
+                // inputs). Until that lands, refuse to fabricate `Verified` —
+                // the upstream emit_proof_bundles will then correctly skip
+                // FE-CLAIM-019 / FE-CLAIM-020 (matrix stays `hypothesis`).
+                Ok(ProofResult::Failed)
             }
         }
     }
@@ -658,6 +675,45 @@ impl OptimizationProofCarrier {
         })
     }
 }
+
+/// Route a proof obligation through Z3 and return a fail-closed
+/// [`ProofResult`].
+///
+/// Builds an SMT-LIB input that asserts `(not (=> premise conclusion))` —
+/// `unsat` from Z3 means the universal implication `premise ⇒ conclusion`
+/// holds, so the obligation is `Verified`. `sat` is a real counterexample
+/// → `Failed`. `unknown` (Z3 gave up) and any subprocess error → `Failed`;
+/// the verifier never fabricates `Verified` on solver indecision (the
+/// fail-closed behaviour bd-cixqu.7.17.2 introduces). Z3 must be on
+/// `$PATH`; if it isn't, the spawn fails and the obligation fails closed,
+/// which is the correct signal that no real proof was produced.
+///
+/// The premise and conclusion are passed through unchanged; obligation
+/// generators that want this verifier to ever return `Verified` must emit
+/// real SMT-LIB-2 formulas (the current dead-code / constant-folding
+/// generators emit PROSE premises, so every such obligation legitimately
+/// returns `Failed` here).
+fn verify_via_z3(premise: &str, conclusion: &str) -> ProofResult {
+    // The G.6/G.7 proof corpus needs first-order quantifiers; the existing
+    // `policy_theorem_engine` path uses (set-logic ALL) for the same reason.
+    let smt = format!(
+        "(set-logic ALL)\n\
+         (assert (not (=> {premise} {conclusion})))\n\
+         (check-sat)\n\
+         (exit)\n"
+    );
+    match invoke_z3(&smt, Z3_VERIFY_TIMEOUT_SECONDS) {
+        Ok(Z3Outcome::Unsat) => ProofResult::Verified,
+        Ok(Z3Outcome::Sat { .. }) | Ok(Z3Outcome::Unknown { .. }) => ProofResult::Failed,
+        Err(_) => ProofResult::Failed,
+    }
+}
+
+/// Per-obligation Z3 timeout (seconds). Five seconds is the same budget the
+/// `policy_theorem_engine` corpus uses for routine NI / monotonicity
+/// obligations; raise via a follow-up bead if specific optimization passes
+/// emit obligations that genuinely need longer.
+const Z3_VERIFY_TIMEOUT_SECONDS: u32 = 5;
 
 impl OptimizationPass {
     /// Get the type name for the optimization pass.
@@ -1029,6 +1085,15 @@ mod tests {
 
     #[test]
     fn proof_certificate_generation() {
+        // bd-cixqu.7.17.2: verify_proof_obligation no longer fabricates
+        // `Verified` for the prose-premise obligations the engine currently
+        // emits (see `generate_equivalence_proofs`). Until those generators
+        // start emitting real SMT-LIB-2 formulas, this workflow correctly
+        // produces NO `SemanticEquivalence` certificate (verified_passes is
+        // empty in `generate_proof_certificates`). Only the
+        // `PerformanceImprovement` certificate — which is gated on the
+        // engine-tracked `overall_performance_improvement`, not on real
+        // proof verification — still lands.
         let mut carrier = OptimizationProofCarrier::new(
             "cert_test_source".to_string(),
             "cert_test_target".to_string(),
@@ -1072,15 +1137,114 @@ mod tests {
         carrier.generate_equivalence_proofs().unwrap();
         carrier.verify_all_proofs().unwrap();
 
-        // Should have generated certificates
-        assert!(!carrier.proof_certificates.is_empty());
+        // Performance certificate still lands (gated on the engine metric,
+        // not on proof verification).
+        let performance_cert = carrier
+            .proof_certificates
+            .iter()
+            .find(|cert| cert.certificate_type == CertificateType::PerformanceImprovement);
+        assert!(
+            performance_cert.is_some(),
+            "performance improvement certificate must still be generated when overall_performance_improvement > 0.0"
+        );
 
-        // Check for semantic equivalence certificate
+        // Semantic-equivalence certificate must NOT land: no obligation
+        // verified through Z3 (prose premises). This is the fail-closed
+        // signal that FE-CLAIM-019 / FE-CLAIM-020 stay HYPOTHESIS.
         let semantic_cert = carrier
             .proof_certificates
             .iter()
             .find(|cert| cert.certificate_type == CertificateType::SemanticEquivalence);
-        assert!(semantic_cert.is_some());
+        assert!(
+            semantic_cert.is_none(),
+            "semantic_equivalence certificate must NOT be generated until obligation generators emit real SMT-LIB formulas (bd-cixqu.7.17.2)"
+        );
+    }
+
+    /// bd-cixqu.7.17.2: positive control — when the obligation premise and
+    /// conclusion ARE real SMT-LIB-2 formulas, `verify_via_z3` correctly
+    /// returns `Verified`. This is the path real obligation generators must
+    /// land on so FE-CLAIM-019 / FE-CLAIM-020 can promote out of HYPOTHESIS.
+    /// Gates on z3-on-PATH; skipped otherwise.
+    #[test]
+    fn verify_via_z3_proves_smt_lib_tautology() {
+        if !z3_is_available() {
+            eprintln!("z3 not on PATH — skipping verify_via_z3_proves_smt_lib_tautology");
+            return;
+        }
+        // The tautology `true ⇒ true` is universally true; Z3 should return
+        // unsat on its negation → `Verified`.
+        assert_eq!(verify_via_z3("true", "true"), ProofResult::Verified);
+        // A formula whose negation is satisfiable (Z3 finds a counterexample)
+        // must fail closed. `(declare-const p Bool)` would make `p ⇒ p` a
+        // tautology; instead use a non-theorem: `true ⇒ false` (clearly false).
+        assert_eq!(verify_via_z3("true", "false"), ProofResult::Failed);
+    }
+
+    /// bd-cixqu.7.17.2: empty premise / conclusion fails closed (was
+    /// already the FormalLogic-specific behaviour, now uniform).
+    #[test]
+    fn verify_proof_obligation_rejects_empty_strings() {
+        let carrier = OptimizationProofCarrier::new("src".to_string(), "tgt".to_string());
+        for method in [
+            VerificationMethod::FormalLogic,
+            VerificationMethod::ModelChecking,
+            VerificationMethod::TheoremProving,
+            VerificationMethod::SymbolicExecution,
+            VerificationMethod::PropertyTesting,
+            VerificationMethod::DifferentialTesting,
+        ] {
+            let obligation = ProofObligation {
+                obligation_id: "empty".to_string(),
+                obligation_type: ObligationType::SemanticPreservation,
+                premise: "".to_string(),
+                conclusion: "".to_string(),
+                proof_sketch: "".to_string(),
+                verification_method: method.clone(),
+            };
+            assert_eq!(
+                carrier.verify_proof_obligation(&obligation).unwrap(),
+                ProofResult::Failed,
+                "empty premise/conclusion must fail closed under {method:?}"
+            );
+        }
+    }
+
+    /// bd-cixqu.7.17.2: DifferentialTesting / PropertyTesting fail closed
+    /// regardless of premise content — neither has its runner machinery
+    /// wired yet; returning `Verified` would re-introduce the fabrication
+    /// this bead is closing.
+    #[test]
+    fn verify_proof_obligation_fails_closed_for_runner_dependent_methods() {
+        let carrier = OptimizationProofCarrier::new("src".to_string(), "tgt".to_string());
+        for method in [
+            VerificationMethod::DifferentialTesting,
+            VerificationMethod::PropertyTesting,
+        ] {
+            let obligation = ProofObligation {
+                obligation_id: "runner_dependent".to_string(),
+                obligation_type: ObligationType::SemanticPreservation,
+                // Even with a real SMT tautology, these methods MUST fail
+                // closed — the bead requires real runner machinery, not Z3.
+                premise: "true".to_string(),
+                conclusion: "true".to_string(),
+                proof_sketch: "".to_string(),
+                verification_method: method.clone(),
+            };
+            assert_eq!(
+                carrier.verify_proof_obligation(&obligation).unwrap(),
+                ProofResult::Failed,
+                "{method:?} must fail closed until a real runner is wired",
+            );
+        }
+    }
+
+    /// Reuse the policy_theorem_engine availability probe.
+    fn z3_is_available() -> bool {
+        match invoke_z3("(check-sat)", 1) {
+            Ok(_) => true,
+            Err(_) => false,
+        }
     }
 
     #[test]

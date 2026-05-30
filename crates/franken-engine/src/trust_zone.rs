@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::capability::{CapabilityProfile, RuntimeCapability};
 use crate::engine_object_id::{EngineObjectId, IdError, ObjectDomain, SchemaId, derive_id};
+use crate::runtime_observability::{
+    CrossZoneReferenceType, RuntimeSecurityObservability, SecurityEventContext,
+};
 
 const ZONE_SCHEMA: &[u8] = b"frankenengine.trust-zone.v1";
 const FE_ZONE_CEILING_EXCEEDED: &str = "FE-6001";
@@ -581,6 +584,58 @@ impl ZoneHierarchy {
         Ok(())
     }
 
+    /// Observability-aware variant of [`transition_entity`](Self::transition_entity)
+    /// that wires the `record_cross_zone_reference` runtime-security counter
+    /// into its real decision site (bd-x92qq, follow-up to bd-unc29).
+    ///
+    /// A zone transition *is* the trust-zone authority decision about crossing
+    /// a zone boundary, so it maps onto the cross-zone-reference taxonomy:
+    /// - a migrated entity crossed into the target zone with provenance allowed
+    ///   ([`CrossZoneReferenceType::ProvenanceAllowed`]);
+    /// - any failure — an unapproved policy gate or a structural error such as a
+    ///   missing zone — is an authority denial
+    ///   ([`CrossZoneReferenceType::AuthorityDenied`]), classified fail-closed so
+    ///   a reference that cannot be authorised is never under-reported.
+    ///
+    /// `timestamp_ns` is supplied by the caller so replays produce byte-identical
+    /// events; the underlying [`transition_entity`](Self::transition_entity) call
+    /// is delegated to unchanged, so no zone state or transition behaviour
+    /// differs from the non-observed path.
+    pub fn transition_entity_observed(
+        &mut self,
+        request: ZoneTransitionRequest,
+        observability: &mut RuntimeSecurityObservability,
+        timestamp_ns: u64,
+    ) -> Result<(), TrustZoneError> {
+        // Resolve the source zone before the (consuming) transition call so the
+        // recorded event names both endpoints even on the failure path. A
+        // missing assignment falls back to the registry default, mirroring
+        // `zone_for_entity`'s own default-zone resolution.
+        let from_zone = self
+            .zone_for_entity(&request.entity_id)
+            .map(|zone| zone.zone_name.clone())
+            .unwrap_or_else(|_| self.default_zone.clone());
+        let target_zone = request.to_zone_name.clone();
+        let context = SecurityEventContext {
+            timestamp_ns,
+            trace_id: request.trace_id.clone(),
+            principal_id: request.entity_id.clone(),
+            decision_id: request.decision_id.clone(),
+            policy_id: request.policy_id.clone(),
+            zone_id: target_zone.clone(),
+            component: "trust_zone".to_string(),
+        };
+
+        let result = self.transition_entity(request);
+        let reference_type = if result.is_ok() {
+            CrossZoneReferenceType::ProvenanceAllowed
+        } else {
+            CrossZoneReferenceType::AuthorityDenied
+        };
+        observability.record_cross_zone_reference(context, reference_type, &from_zone, &target_zone);
+        result
+    }
+
     pub fn compute_effective_ceiling(
         &self,
         zone_name: &str,
@@ -803,6 +858,142 @@ mod tests {
         assert_eq!(zone.zone_name, "team");
         let event = hierarchy.events().last().expect("event");
         assert_eq!(event.outcome, ZoneEventOutcome::Migrated);
+    }
+
+    #[test]
+    fn transition_observed_records_provenance_allowed_on_migration() {
+        let mut hierarchy = ZoneHierarchy::standard("maintainer", 1).expect("build hierarchy");
+        hierarchy
+            .assign_entity("ext-obs-ok", "community", "trace-a")
+            .expect("assign");
+        let mut obs = RuntimeSecurityObservability::new();
+
+        hierarchy
+            .transition_entity_observed(
+                ZoneTransitionRequest::new(
+                    "ext-obs-ok",
+                    "team",
+                    "trace-transition",
+                    "policy-zone",
+                    "decision-zone",
+                    true,
+                ),
+                &mut obs,
+                42,
+            )
+            .expect("transition");
+
+        // Underlying behaviour is unchanged: the entity migrated.
+        assert_eq!(
+            hierarchy.zone_for_entity("ext-obs-ok").expect("zone").zone_name,
+            "team"
+        );
+        // The cross-zone authority decision was recorded as allowed.
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::ProvenanceAllowed)
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::AuthorityDenied)
+                .copied(),
+            Some(0)
+        );
+        let event = obs.logs().last().expect("security event");
+        assert_eq!(event.event_type, "cross_zone_reference");
+        assert_eq!(event.outcome, "allowed");
+        assert_eq!(event.metadata.get("source_zone").map(String::as_str), Some("community"));
+        assert_eq!(event.metadata.get("target_zone").map(String::as_str), Some("team"));
+        assert_eq!(event.timestamp_ns, 42);
+    }
+
+    #[test]
+    fn transition_observed_records_authority_denied_on_policy_gate() {
+        let mut hierarchy = ZoneHierarchy::standard("maintainer", 1).expect("build hierarchy");
+        hierarchy
+            .assign_entity("ext-obs-denied", "community", "trace-a")
+            .expect("assign");
+        let mut obs = RuntimeSecurityObservability::new();
+
+        let err = hierarchy
+            .transition_entity_observed(
+                ZoneTransitionRequest::new(
+                    "ext-obs-denied",
+                    "team",
+                    "trace-transition",
+                    "policy-zone",
+                    "decision-zone",
+                    false,
+                ),
+                &mut obs,
+                7,
+            )
+            .expect_err("must deny without policy gate");
+
+        assert!(matches!(err, TrustZoneError::PolicyGateDenied { .. }));
+        // Behaviour preserved: the denied entity stayed in its source zone.
+        assert_eq!(
+            hierarchy
+                .zone_for_entity("ext-obs-denied")
+                .expect("zone")
+                .zone_name,
+            "community"
+        );
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::AuthorityDenied)
+                .copied(),
+            Some(1)
+        );
+        let event = obs.logs().last().expect("security event");
+        assert_eq!(event.event_type, "cross_zone_reference");
+        assert_eq!(event.outcome, "denied");
+    }
+
+    #[test]
+    fn transition_observed_fails_closed_to_authority_denied_on_missing_zone() {
+        let mut hierarchy = ZoneHierarchy::standard("maintainer", 1).expect("build hierarchy");
+        hierarchy
+            .assign_entity("ext-obs-missing", "community", "trace-a")
+            .expect("assign");
+        let mut obs = RuntimeSecurityObservability::new();
+
+        let err = hierarchy
+            .transition_entity_observed(
+                ZoneTransitionRequest::new(
+                    "ext-obs-missing",
+                    "does-not-exist",
+                    "trace-transition",
+                    "policy-zone",
+                    "decision-zone",
+                    true,
+                ),
+                &mut obs,
+                9,
+            )
+            .expect_err("must reject missing target zone");
+
+        assert!(matches!(err, TrustZoneError::ZoneMissing { .. }));
+        // A structural failure is fail-closed: recorded as an authority denial.
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::AuthorityDenied)
+                .copied(),
+            Some(1)
+        );
+        assert_eq!(
+            obs.metrics()
+                .cross_zone_reference_total
+                .get(&CrossZoneReferenceType::ProvenanceAllowed)
+                .copied(),
+            Some(0)
+        );
     }
 
     #[test]

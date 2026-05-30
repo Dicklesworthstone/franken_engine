@@ -603,6 +603,17 @@ pub enum BuiltinFunctionKind {
     /// `this` array and returns the new length. Resolved on array exotic
     /// objects in `prototype_chain_get` (bd-bg9l1.27.9 / DISC-012).
     ArrayPush,
+    /// `Array.prototype.pop` — receiver-aware: removes and returns the last
+    /// element, decrementing `length`; returns `undefined` when empty
+    /// (bd-962ev).
+    ArrayPop,
+    /// `Array.prototype.shift` — receiver-aware: removes and returns the first
+    /// element, re-indexing the remainder down by one; `undefined` when empty
+    /// (bd-962ev).
+    ArrayShift,
+    /// `Array.prototype.unshift` — receiver-aware: prepends its arguments,
+    /// shifting existing elements up, and returns the new length (bd-962ev).
+    ArrayUnshift,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -673,6 +684,33 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_pop() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayPop,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_shift() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayShift,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_unshift() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayUnshift,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn console_log() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleLog,
@@ -731,6 +769,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
             BuiltinFunctionKind::ProxyRevoke => "revoke",
             BuiltinFunctionKind::ArrayPush => "push",
+            BuiltinFunctionKind::ArrayPop => "pop",
+            BuiltinFunctionKind::ArrayShift => "shift",
+            BuiltinFunctionKind::ArrayUnshift => "unshift",
         }
     }
 }
@@ -4142,6 +4183,111 @@ impl InterpreterCore {
                     }
                 });
                 Ok(Value::Int(new_len))
+            }
+            BuiltinFunctionKind::ArrayPop => {
+                // ES2020 23.1.3.18: remove and return the last element,
+                // decrementing `length`; an empty array yields `undefined`
+                // and leaves `length` at 0. Receiver threaded via `CallMethod`.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.pop".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                if len == 0 {
+                    return Ok(Value::Undefined);
+                }
+                let was_dense = self.array_cache_is_dense(arr_id);
+                let last = len - 1;
+                let element = self
+                    .array_index_value(arr_id, last)?
+                    .unwrap_or(Value::Undefined);
+                self.remove_object_property(arr_id, &last.to_string())?;
+                let new_len = i64::try_from(last).unwrap_or(i64::MAX);
+                self.set_object_property(arr_id, "length".to_string(), Value::Int(new_len))?;
+                self.refresh_dense_length_cache(arr_id, last, was_dense);
+                Ok(element)
+            }
+            BuiltinFunctionKind::ArrayShift => {
+                // ES2020 23.1.3.24: remove and return the first element, moving
+                // every remaining element down one index and decrementing
+                // `length`; an empty array yields `undefined`.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.shift".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                if len == 0 {
+                    return Ok(Value::Undefined);
+                }
+                let was_dense = self.array_cache_is_dense(arr_id);
+                let first = self
+                    .array_index_value(arr_id, 0)?
+                    .unwrap_or(Value::Undefined);
+                for i in 1..len {
+                    let moved = self
+                        .array_index_value(arr_id, i)?
+                        .unwrap_or(Value::Undefined);
+                    self.set_object_property(arr_id, (i - 1).to_string(), moved)?;
+                }
+                let last = len - 1;
+                self.remove_object_property(arr_id, &last.to_string())?;
+                let new_len = i64::try_from(last).unwrap_or(i64::MAX);
+                self.set_object_property(arr_id, "length".to_string(), Value::Int(new_len))?;
+                self.refresh_dense_length_cache(arr_id, last, was_dense);
+                Ok(first)
+            }
+            BuiltinFunctionKind::ArrayUnshift => {
+                // ES2020 23.1.3.28: prepend the arguments, shifting existing
+                // elements up by the argument count, and return the new length.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.unshift".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let mut items = Vec::with_capacity(args.count as usize);
+                for i in 0..args.count {
+                    let reg =
+                        args.start
+                            .checked_add(i)
+                            .ok_or(InterpreterError::RegisterOutOfBounds {
+                                register: args.start,
+                                max: self.config.max_registers,
+                            })?;
+                    items.push(self.read_reg(reg)?);
+                }
+                let arg_count = items.len();
+                let new_len = len.saturating_add(arg_count);
+                if arg_count > 0 {
+                    let was_dense = self.array_cache_is_dense(arr_id);
+                    // Move existing elements up, top-down, so a source index is
+                    // read before its destination overwrites a later source.
+                    for i in (0..len).rev() {
+                        let moved = self
+                            .array_index_value(arr_id, i)?
+                            .unwrap_or(Value::Undefined);
+                        self.set_object_property(arr_id, (i + arg_count).to_string(), moved)?;
+                    }
+                    for (offset, item) in items.into_iter().enumerate() {
+                        self.set_object_property(arr_id, offset.to_string(), item)?;
+                    }
+                    let new_len_int = i64::try_from(new_len).unwrap_or(i64::MAX);
+                    self.set_object_property(
+                        arr_id,
+                        "length".to_string(),
+                        Value::Int(new_len_int),
+                    )?;
+                    self.refresh_dense_length_cache(arr_id, new_len, was_dense);
+                }
+                Ok(Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX)))
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -8641,6 +8787,9 @@ impl InterpreterCore {
     fn array_prototype_method(key: &str) -> Option<BuiltinFunction> {
         match key {
             "push" => Some(BuiltinFunction::array_push()),
+            "pop" => Some(BuiltinFunction::array_pop()),
+            "shift" => Some(BuiltinFunction::array_shift()),
+            "unshift" => Some(BuiltinFunction::array_unshift()),
             _ => None,
         }
     }
@@ -10608,6 +10757,36 @@ impl InterpreterCore {
             .get(array_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
         Ok(object.properties.get(&element_index.to_string()).cloned())
+    }
+
+    /// Whether the array's dense-length fast-path cache is currently populated.
+    /// Captured *before* an in-place mutation so the cache can be re-established
+    /// afterwards (the property set/remove helpers conservatively clear it).
+    fn array_cache_is_dense(&self, array_id: ObjectId) -> bool {
+        self.heap
+            .get(array_id.0 as usize)
+            .map(|object| object.cached_dense_length.is_some())
+            .unwrap_or(false)
+    }
+
+    /// Re-establish the dense-length cache after a contiguous in-place array
+    /// mutation (pop/shift/unshift keep the array dense). `set_object_property`
+    /// and `remove_object_property` clear the cache defensively; this restores
+    /// it to `new_len` only when the array was dense beforehand, mirroring the
+    /// coherence the IR `ArrayPush` fast path expects (see `ArrayPush` dispatch).
+    fn refresh_dense_length_cache(&mut self, array_id: ObjectId, new_len: usize, was_dense: bool) {
+        if !was_dense {
+            return;
+        }
+        let arr_index = array_id.0 as usize;
+        let cached_len = u32::try_from(new_len).ok();
+        self.mutate_heap(|heap| {
+            if let Some(object) = heap.get_mut(arr_index)
+                && object.is_array
+            {
+                object.cached_dense_length = cached_len;
+            }
+        });
     }
 
     fn array_like_argument_values(&self, value: Value) -> Result<Vec<Value>, InterpreterError> {

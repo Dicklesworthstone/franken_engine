@@ -321,6 +321,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     let governance_actions = repro_governance_actions_from_triage(&triage_report);
     write_repro_governance_actions_json(&governance_actions_path, &governance_actions)?;
 
+    // bd-q90jg: this suite executes a self-contained reference model
+    // (frankenengine-metamorphic's own parser/lowering/interpreter in
+    // relations/catalog_backed.rs), NOT franken-engine. A `violations=0`
+    // result therefore is NOT evidence that the real engine preserves
+    // behavior. Engine-backed wiring is tracked by epic bd-x9t1n; until it
+    // lands, the H7.3/H2.5 gates must not cite this as engine assurance.
+    println!(
+        "NOTICE [bd-q90jg]: metamorphic suite ran a SELF-CONTAINED reference model, NOT franken-engine; violations={} is NOT engine behavior-preservation evidence (engine-backed oracle pending: bd-x9t1n)",
+        suite.total_violations
+    );
+
     println!(
         "metamorphic suite relations={} total_pairs={} violations={} evidence={} events={} seed_transcript={} seed_manifest={} property_generator_catalog={} generator_choice_stream_schema={} shrinker_verdict_report={} minimized_property_counterexamples={} hdd_reducer_report={} structured_reduction_operator_catalog={} minimized_structured_repros={} reduction_stability_matrix={} triage_report={} governance_actions={} failures_dir={}",
         suite.relation_executions.len(),

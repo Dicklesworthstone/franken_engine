@@ -613,6 +613,30 @@ pub enum BuiltinFunctionKind {
     StringStartsWith,
     /// `String.prototype.endsWith` — receiver-aware suffix test (bd-9a8cz).
     StringEndsWith,
+    /// `String.prototype.indexOf` — receiver-aware; first index of the search
+    /// string at/after an optional position, or -1 (bd-9a8cz.1).
+    StringIndexOf,
+    /// `String.prototype.lastIndexOf` — receiver-aware; highest start index of
+    /// the search string at/before an optional position, or -1 (bd-9a8cz.1).
+    StringLastIndexOf,
+    /// `String.prototype.slice` — receiver-aware; negative indices count from
+    /// the end (bd-9a8cz.1).
+    StringSlice,
+    /// `String.prototype.substring` — receiver-aware; clamps negatives to 0 and
+    /// swaps start/end when start > end (bd-9a8cz.1).
+    StringSubstring,
+    /// `String.prototype.replace` — receiver-aware; string search value,
+    /// first-occurrence literal replacement (bd-9a8cz.1).
+    StringReplace,
+    /// `String.prototype.repeat` — receiver-aware; concatenates `count` copies
+    /// (bd-9a8cz.1).
+    StringRepeat,
+    /// `String.prototype.padStart` — receiver-aware; left-pads to a target
+    /// length (bd-9a8cz.1).
+    StringPadStart,
+    /// `String.prototype.padEnd` — receiver-aware; right-pads to a target
+    /// length (bd-9a8cz.1).
+    StringPadEnd,
     ProxyRevoke,
     /// `Array.prototype.push` — receiver-aware: appends its arguments to the
     /// `this` array and returns the new length. Resolved on array exotic
@@ -796,6 +820,78 @@ impl BuiltinFunction {
     fn string_ends_with() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringEndsWith,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_index_of() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringIndexOf,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_last_index_of() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringLastIndexOf,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_slice() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringSlice,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_substring() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringSubstring,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_replace() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringReplace,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_repeat() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringRepeat,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_pad_start() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringPadStart,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_pad_end() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringPadEnd,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -1036,6 +1132,14 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringIncludes => "includes",
             BuiltinFunctionKind::StringStartsWith => "startsWith",
             BuiltinFunctionKind::StringEndsWith => "endsWith",
+            BuiltinFunctionKind::StringIndexOf => "indexOf",
+            BuiltinFunctionKind::StringLastIndexOf => "lastIndexOf",
+            BuiltinFunctionKind::StringSlice => "slice",
+            BuiltinFunctionKind::StringSubstring => "substring",
+            BuiltinFunctionKind::StringReplace => "replace",
+            BuiltinFunctionKind::StringRepeat => "repeat",
+            BuiltinFunctionKind::StringPadStart => "padStart",
+            BuiltinFunctionKind::StringPadEnd => "padEnd",
             BuiltinFunctionKind::ProxyRevoke => "revoke",
             BuiltinFunctionKind::ArrayPush => "push",
             BuiltinFunctionKind::ArrayPop => "pop",
@@ -4442,35 +4546,61 @@ impl InterpreterCore {
                 Ok(Value::str(value.trim().to_string()))
             }
             BuiltinFunctionKind::StringIncludes => {
-                // ES2020 21.1.3.7: substring containment (position arg not yet
-                // honored — see bd-9a8cz follow-up).
+                // ES2020 21.1.3.7: substring containment from an optional start
+                // position (bd-9a8cz.1). Positions are Unicode scalar offsets,
+                // consistent with the slice/substring arms below.
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
                 let search = match self.builtin_arg(args, 0)? {
                     Some(arg) => self.value_to_string(&arg),
                     None => "undefined".to_string(),
                 };
-                Ok(Value::Bool(value.contains(&search)))
+                let char_len = value.chars().count();
+                let from = match self.builtin_arg(args, 1)? {
+                    Some(arg) => Self::coerce_to_number(&arg)
+                        .unwrap_or(0)
+                        .clamp(0, char_len as i64) as usize,
+                    None => 0,
+                };
+                let haystack: String = value.chars().skip(from).collect();
+                Ok(Value::Bool(haystack.contains(&search)))
             }
             BuiltinFunctionKind::StringStartsWith => {
-                // ES2020 21.1.3.20 (position arg not yet honored — bd-9a8cz).
+                // ES2020 21.1.3.20: prefix test at an optional position (bd-9a8cz.1).
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
                 let search = match self.builtin_arg(args, 0)? {
                     Some(arg) => self.value_to_string(&arg),
                     None => "undefined".to_string(),
                 };
-                Ok(Value::Bool(value.starts_with(&search)))
+                let char_len = value.chars().count();
+                let from = match self.builtin_arg(args, 1)? {
+                    Some(arg) => Self::coerce_to_number(&arg)
+                        .unwrap_or(0)
+                        .clamp(0, char_len as i64) as usize,
+                    None => 0,
+                };
+                let tail: String = value.chars().skip(from).collect();
+                Ok(Value::Bool(tail.starts_with(&search)))
             }
             BuiltinFunctionKind::StringEndsWith => {
-                // ES2020 21.1.3.6 (endPosition arg not yet honored — bd-9a8cz).
+                // ES2020 21.1.3.6: suffix test against the prefix of length
+                // `endPosition` (default = full length) (bd-9a8cz.1).
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
                 let search = match self.builtin_arg(args, 0)? {
                     Some(arg) => self.value_to_string(&arg),
                     None => "undefined".to_string(),
                 };
-                Ok(Value::Bool(value.ends_with(&search)))
+                let char_len = value.chars().count();
+                let end = match self.builtin_arg(args, 1)? {
+                    Some(Value::Undefined) | None => char_len,
+                    Some(arg) => Self::coerce_to_number(&arg)
+                        .unwrap_or(char_len as i64)
+                        .clamp(0, char_len as i64) as usize,
+                };
+                let head: String = value.chars().take(end).collect();
+                Ok(Value::Bool(head.ends_with(&search)))
             }
             BuiltinFunctionKind::StringSplit => {
                 // ES2020 21.1.3.19: split into an array of substrings. An
@@ -4503,6 +4633,182 @@ impl InterpreterCore {
                     Value::Int(i64::try_from(pieces.len()).unwrap_or(i64::MAX)),
                 )?;
                 Ok(Value::Object(result))
+            }
+            BuiltinFunctionKind::StringIndexOf => {
+                // ES2020 21.1.3.8: first index of `search` at/after an optional
+                // start position, else -1. Indices are Unicode scalar offsets
+                // (consistent with the slice/substring arms here). (bd-9a8cz.1)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let search = match self.builtin_arg(args, 0)? {
+                    Some(arg) => self.value_to_string(&arg),
+                    None => "undefined".to_string(),
+                };
+                let chars: Vec<char> = value.chars().collect();
+                let needle: Vec<char> = search.chars().collect();
+                let from = match self.builtin_arg(args, 1)? {
+                    Some(arg) => Self::coerce_to_number(&arg)
+                        .unwrap_or(0)
+                        .clamp(0, chars.len() as i64) as usize,
+                    None => 0,
+                };
+                let result = if needle.is_empty() {
+                    from.min(chars.len()) as i64
+                } else if needle.len() > chars.len() {
+                    -1
+                } else {
+                    let last = chars.len() - needle.len();
+                    let mut found = -1i64;
+                    let mut i = from;
+                    while i <= last {
+                        if chars[i..i + needle.len()] == needle[..] {
+                            found = i as i64;
+                            break;
+                        }
+                        i += 1;
+                    }
+                    found
+                };
+                Ok(Value::Int(result))
+            }
+            BuiltinFunctionKind::StringLastIndexOf => {
+                // ES2020 21.1.3.9: highest start index of `search` at/before an
+                // optional position (default = end of string), else -1. (bd-9a8cz.1)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let search = match self.builtin_arg(args, 0)? {
+                    Some(arg) => self.value_to_string(&arg),
+                    None => "undefined".to_string(),
+                };
+                let chars: Vec<char> = value.chars().collect();
+                let needle: Vec<char> = search.chars().collect();
+                let from = match self.builtin_arg(args, 1)? {
+                    Some(arg) => Self::coerce_to_number(&arg)
+                        .unwrap_or(chars.len() as i64)
+                        .clamp(0, chars.len() as i64) as usize,
+                    None => chars.len(),
+                };
+                let result = if needle.is_empty() {
+                    from.min(chars.len()) as i64
+                } else if needle.len() > chars.len() {
+                    -1
+                } else {
+                    let last = chars.len() - needle.len();
+                    let start = from.min(last);
+                    let mut found = -1i64;
+                    let mut i = start as i64;
+                    while i >= 0 {
+                        let idx = i as usize;
+                        if chars[idx..idx + needle.len()] == needle[..] {
+                            found = i;
+                            break;
+                        }
+                        i -= 1;
+                    }
+                    found
+                };
+                Ok(Value::Int(result))
+            }
+            BuiltinFunctionKind::StringSlice => {
+                // ES2020 21.1.3.18: negative indices count from the end; an
+                // empty/inverted range yields "". (bd-9a8cz.1)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let chars: Vec<char> = value.chars().collect();
+                let len = chars.len() as i64;
+                let normalize =
+                    |n: i64| -> i64 { if n < 0 { (len + n).max(0) } else { n.min(len) } };
+                let start = match self.builtin_arg(args, 0)? {
+                    Some(Value::Undefined) | None => 0,
+                    Some(arg) => normalize(Self::coerce_to_number(&arg).unwrap_or(0)),
+                };
+                let end = match self.builtin_arg(args, 1)? {
+                    Some(Value::Undefined) | None => len,
+                    Some(arg) => normalize(Self::coerce_to_number(&arg).unwrap_or(0)),
+                };
+                let result: String = if start < end {
+                    chars[start as usize..end as usize].iter().collect()
+                } else {
+                    String::new()
+                };
+                Ok(Value::str(result))
+            }
+            BuiltinFunctionKind::StringSubstring => {
+                // ES2020 21.1.3.21: clamp both indices to [0, len], then swap so
+                // start <= end. (bd-9a8cz.1)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let chars: Vec<char> = value.chars().collect();
+                let len = chars.len() as i64;
+                let clamp_idx = |n: i64| -> i64 { n.clamp(0, len) };
+                let start = match self.builtin_arg(args, 0)? {
+                    Some(Value::Undefined) | None => 0,
+                    Some(arg) => clamp_idx(Self::coerce_to_number(&arg).unwrap_or(0)),
+                };
+                let end = match self.builtin_arg(args, 1)? {
+                    Some(Value::Undefined) | None => len,
+                    Some(arg) => clamp_idx(Self::coerce_to_number(&arg).unwrap_or(0)),
+                };
+                let (lo, hi) = if start <= end {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                let result: String = chars[lo as usize..hi as usize].iter().collect();
+                Ok(Value::str(result))
+            }
+            BuiltinFunctionKind::StringReplace => {
+                // ES2020 21.1.3.17 for a string search value: replace only the
+                // FIRST occurrence with the literal replacement. Replacement
+                // pattern substitutions ($&, $1, ...) are not yet honored
+                // (bd-9a8cz follow-up). (bd-9a8cz.1)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let search = match self.builtin_arg(args, 0)? {
+                    Some(arg) => self.value_to_string(&arg),
+                    None => "undefined".to_string(),
+                };
+                let replacement = match self.builtin_arg(args, 1)? {
+                    Some(arg) => self.value_to_string(&arg),
+                    None => "undefined".to_string(),
+                };
+                Ok(Value::str(value.replacen(
+                    search.as_str(),
+                    replacement.as_str(),
+                    1,
+                )))
+            }
+            BuiltinFunctionKind::StringRepeat => {
+                // ES2020 21.1.3.16: concatenate `count` copies. A negative count
+                // is clamped to 0 (matching the existing receiver-less handler);
+                // an allocation guard rejects pathological sizes. (bd-9a8cz.1)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let count = match self.builtin_arg(args, 0)? {
+                    Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0).max(0) as usize,
+                    None => 0,
+                };
+                if value.len().saturating_mul(count) > 10_000_000 {
+                    return Err(InterpreterError::TypeError {
+                        expected: "String.prototype.repeat result within size limit".to_string(),
+                        got: format!("{} bytes", value.len().saturating_mul(count)),
+                    });
+                }
+                Ok(Value::str(value.repeat(count)))
+            }
+            BuiltinFunctionKind::StringPadStart => {
+                // ES2020 21.1.3.14: left-pad to `targetLength` (Unicode scalar
+                // count) with `padString` (default " "). (bd-9a8cz.1)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                Ok(Value::str(self.string_pad_value(&value, args, true)?))
+            }
+            BuiltinFunctionKind::StringPadEnd => {
+                // ES2020 21.1.3.13: right-pad to `targetLength` (Unicode scalar
+                // count) with `padString` (default " "). (bd-9a8cz.1)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                Ok(Value::str(self.string_pad_value(&value, args, false)?))
             }
             BuiltinFunctionKind::ArrayPush => {
                 // ES2020 23.1.3.20: append each argument to `this` at the
@@ -9364,6 +9670,14 @@ impl InterpreterCore {
             "includes" => Value::BuiltinFunction(BuiltinFunction::string_includes()),
             "startsWith" => Value::BuiltinFunction(BuiltinFunction::string_starts_with()),
             "endsWith" => Value::BuiltinFunction(BuiltinFunction::string_ends_with()),
+            "indexOf" => Value::BuiltinFunction(BuiltinFunction::string_index_of()),
+            "lastIndexOf" => Value::BuiltinFunction(BuiltinFunction::string_last_index_of()),
+            "slice" => Value::BuiltinFunction(BuiltinFunction::string_slice()),
+            "substring" => Value::BuiltinFunction(BuiltinFunction::string_substring()),
+            "replace" => Value::BuiltinFunction(BuiltinFunction::string_replace()),
+            "repeat" => Value::BuiltinFunction(BuiltinFunction::string_repeat()),
+            "padStart" => Value::BuiltinFunction(BuiltinFunction::string_pad_start()),
+            "padEnd" => Value::BuiltinFunction(BuiltinFunction::string_pad_end()),
             _ => Value::Undefined,
         }
     }
@@ -11238,6 +11552,41 @@ impl InterpreterCore {
     /// String.prototype receiver coercion with RequireObjectCoercible semantics.
     /// Throws TypeError for null/undefined as per ECMAScript specification.
     /// All String.prototype methods should use this for consistent behavior.
+    /// Shared padStart/padEnd core (bd-9a8cz.1). Pads `value` to `target_length`
+    /// Unicode scalar values using the optional pad string (default `" "`),
+    /// prepending when `pad_start` else appending. Returns `value` unchanged
+    /// when it is already at least `target_length` long or the pad string is
+    /// empty (per ES2020 21.1.3.13/21.1.3.14).
+    fn string_pad_value(
+        &self,
+        value: &str,
+        args: RegRange,
+        pad_start: bool,
+    ) -> Result<String, InterpreterError> {
+        let cur_len = value.chars().count();
+        let target = match self.builtin_arg(args, 0)? {
+            Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0).max(0) as usize,
+            None => 0,
+        };
+        let pad = match self.builtin_arg(args, 1)? {
+            Some(Value::Undefined) | None => " ".to_string(),
+            Some(arg) => self.value_to_string(&arg),
+        };
+        if target <= cur_len || pad.is_empty() {
+            return Ok(value.to_string());
+        }
+        let fill_needed = target - cur_len;
+        let pad_chars: Vec<char> = pad.chars().collect();
+        let filler: String = (0..fill_needed)
+            .map(|i| pad_chars[i % pad_chars.len()])
+            .collect();
+        Ok(if pad_start {
+            format!("{filler}{value}")
+        } else {
+            format!("{value}{filler}")
+        })
+    }
+
     fn require_object_coercible_to_string(value: &Value) -> Result<String, InterpreterError> {
         match value {
             Value::Null => Err(InterpreterError::TypeError {

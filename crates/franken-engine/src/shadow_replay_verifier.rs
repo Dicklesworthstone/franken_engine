@@ -374,6 +374,41 @@ impl ShadowReplayVerifier {
         Ok(report)
     }
 
+    /// Computes the canonical decision-output hash that drift detection will
+    /// produce for each event when `export` is replayed.
+    ///
+    /// This is the single source of truth for the per-event
+    /// `expected_decision_hash` metadata: a fixture that must replay to zero
+    /// behavioral drift embeds exactly these values, so the fixture and the
+    /// verifier can never disagree about what a *healthy* replay looks like.
+    /// The pipeline mirrors [`Self::replay_export`] exactly (timestamp
+    /// derivation -> event conversion -> batched composition) and hashes the
+    /// resulting per-event artifacts the same way
+    /// [`Self::detect_behavioral_regressions`] does, so embedded values match
+    /// by construction. The artifacts hash is derived solely from the journal
+    /// event fields (never from the `metadata` field), so feeding the result
+    /// back into a row's metadata cannot perturb the computation.
+    ///
+    /// Returns a map from `journal_event_id` to the replayed artifacts hash.
+    pub fn expected_decision_hashes(
+        &mut self,
+        export: &ShadowEvidenceJournalExport,
+    ) -> Result<BTreeMap<i64, ContentHash>, ReplayVerificationError> {
+        let replay_timestamp_ms = self.replay_timestamp_ms(export)?;
+        let generated_epoch_seconds = replay_epoch_seconds(replay_timestamp_ms);
+        let journal_events = self.convert_export_to_journal_events(export)?;
+        let replay_result = self.replay_events(&journal_events, generated_epoch_seconds)?;
+
+        let mut hashes = BTreeMap::new();
+        for (event_id_str, artifacts) in &replay_result.artifact_results {
+            if let Ok(event_id) = event_id_str.parse::<i64>() {
+                let artifacts_bytes = to_canonical_json_bytes(artifacts)?;
+                hashes.insert(event_id, ContentHash::compute(&artifacts_bytes));
+            }
+        }
+        Ok(hashes)
+    }
+
     fn replay_timestamp_ms(
         &self,
         export: &ShadowEvidenceJournalExport,

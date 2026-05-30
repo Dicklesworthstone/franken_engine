@@ -70,9 +70,48 @@ pub fn create_healthy_journal_fixture() -> ShadowEvidenceJournalExport {
         rows.push(row);
     }
 
-    ShadowEvidenceJournalExport {
+    let mut export = ShadowEvidenceJournalExport {
         schema_version: SHADOW_EVIDENCE_JOURNAL_SCHEMA_VERSION.to_string(),
         rows,
+    };
+
+    // A *healthy* fixture must replay to zero behavioral drift. The verifier
+    // compares each row's recorded `expected_decision_hash` against the
+    // canonical hash of the artifacts produced by replaying the journal (see
+    // ShadowReplayVerifier::detect_behavioral_regressions), which is computed
+    // from the per-batch composer output — NOT from the synthetic per-row
+    // summary that `compute_expected_decision_hash` builds. Those are
+    // structurally different objects and can never hash-match, so the healthy
+    // fixture has to embed the verifier's own replay hashes. We source them
+    // from the verifier itself (single source of truth) so the fixture cannot
+    // silently drift from the composer's real output.
+    embed_replay_decision_hashes(&mut export);
+
+    export
+}
+
+/// Overwrites each row's `expected_decision_hash` metadata with the canonical
+/// hash the replay verifier produces for that event, so the fixture replays to
+/// zero behavioral drift. Scoped to the healthy fixture; the
+/// degraded/contaminated/stale/mixed fixtures intentionally keep
+/// `compute_expected_decision_hash`'s deliberate mismatch to exercise drift
+/// detection, so the verifier never goes vacuous.
+fn embed_replay_decision_hashes(export: &mut ShadowEvidenceJournalExport) {
+    let mut verifier =
+        crate::shadow_replay_verifier::ShadowReplayVerifier::with_default_config()
+            .expect("default replay verifier config is valid");
+    let hashes = verifier
+        .expected_decision_hashes(export)
+        .expect("healthy fixture replays cleanly through the decision composer");
+    for row in &mut export.rows {
+        if let Some(hash) = hashes.get(&row.journal_event_id)
+            && let Value::Object(metadata_obj) = &mut row.metadata
+        {
+            metadata_obj.insert(
+                "expected_decision_hash".to_string(),
+                Value::String(hex_encode(hash.as_bytes())),
+            );
+        }
     }
 }
 

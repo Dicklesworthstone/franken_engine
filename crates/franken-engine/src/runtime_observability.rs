@@ -2280,24 +2280,38 @@ mod tests {
     fn observability_at_capacity_evicts_oldest_and_increments_overflow() {
         let mut obs = RuntimeSecurityObservability::new().with_max_log_capacity(3);
         // Push 5 events into a 3-slot buffer; the first two should be evicted.
+        //
+        // Each event must carry a DISTINCT context. `StructuredSecurityLogEvent`
+        // is a pure function of its context (no synthetic per-event sequence id —
+        // determinism is provided by the caller-supplied `timestamp_ns`, not a
+        // clock), so two records built from the same fixed `test_context()` are
+        // structurally equal. With identical events the `!logs().contains(&first)`
+        // assertions below would be defeated by a later, equal SignatureInvalid
+        // event still in the buffer — the eviction would be correct yet the test
+        // would falsely fail. Stamp a distinct timestamp per event so identity
+        // tracks the actual FIFO order, mirroring real distinct-time events.
+        let ctx_at = |ts: u64| SecurityEventContext {
+            timestamp_ns: ts,
+            ..test_context()
+        };
         let first = obs.record_auth_failure(
-            test_context(),
+            ctx_at(1_000_000),
             AuthFailureType::SignatureInvalid,
             None,
             None,
         );
         let second =
-            obs.record_auth_failure(test_context(), AuthFailureType::KeyExpired, None, None);
+            obs.record_auth_failure(ctx_at(2_000_000), AuthFailureType::KeyExpired, None, None);
         let _third = obs.record_auth_failure(
-            test_context(),
+            ctx_at(3_000_000),
             AuthFailureType::SignatureInvalid,
             None,
             None,
         );
         let _fourth =
-            obs.record_auth_failure(test_context(), AuthFailureType::KeyExpired, None, None);
+            obs.record_auth_failure(ctx_at(4_000_000), AuthFailureType::KeyExpired, None, None);
         let _fifth = obs.record_auth_failure(
-            test_context(),
+            ctx_at(5_000_000),
             AuthFailureType::SignatureInvalid,
             None,
             None,

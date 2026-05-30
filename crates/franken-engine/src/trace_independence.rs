@@ -17,6 +17,36 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+/// Serialize a `BTreeMap` with a non-string key as an ordered sequence of
+/// `(key, value)` pairs. `serde_json` rejects maps whose keys are not strings
+/// ("key must be a string"); emitting pairs keeps the JSON relation artifact
+/// stable and round-trippable while preserving the canonical `BTreeMap` type.
+mod map_as_pairs {
+    use serde::de::Deserialize;
+    use serde::ser::Serialize;
+    use serde::{Deserializer, Serializer};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<K, V, S>(map: &BTreeMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        K: Serialize + Ord,
+        V: Serialize,
+        S: Serializer,
+    {
+        serializer.collect_seq(map.iter())
+    }
+
+    pub fn deserialize<'de, K, V, D>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+    where
+        K: Deserialize<'de> + Ord,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        let pairs = Vec::<(K, V)>::deserialize(deserializer)?;
+        Ok(pairs.into_iter().collect())
+    }
+}
+
 const TRACE_INDEPENDENCE_SCHEMA_VERSION: &str = "frankenengine.trace-independence-relation.v1";
 
 fn append_u8(buf: &mut Vec<u8>, value: u8) {
@@ -207,6 +237,7 @@ pub struct TraceIndependenceRelation {
     /// Non-commuting event pairs.
     pub dependent_pairs: BTreeSet<TraceEventPair>,
     /// Full pairwise decisions for diagnostics and replay proofs.
+    #[serde(with = "map_as_pairs")]
     pub decisions: BTreeMap<TraceEventPair, TraceIndependenceDecision>,
 }
 

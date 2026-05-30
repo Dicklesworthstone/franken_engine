@@ -36,6 +36,36 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
 
+/// Serialize a `BTreeMap` with a non-string key as an ordered sequence of
+/// `(key, value)` pairs. `serde_json` rejects maps whose keys are not strings
+/// ("key must be a string"); emitting pairs keeps the cache JSON stable and
+/// round-trippable while preserving the canonical `BTreeMap` type.
+mod map_as_pairs {
+    use serde::de::Deserialize;
+    use serde::ser::Serialize;
+    use serde::{Deserializer, Serializer};
+    use std::collections::BTreeMap;
+
+    pub fn serialize<K, V, S>(map: &BTreeMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        K: Serialize + Ord,
+        V: Serialize,
+        S: Serializer,
+    {
+        serializer.collect_seq(map.iter())
+    }
+
+    pub fn deserialize<'de, K, V, D>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
+    where
+        K: Deserialize<'de> + Ord,
+        V: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        let pairs = Vec::<(K, V)>::deserialize(deserializer)?;
+        Ok(pairs.into_iter().collect())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // PassProof — one pass's translation-validation witness
 // ---------------------------------------------------------------------------
@@ -312,6 +342,7 @@ pub struct MemoizedProofDerivation {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProofDerivationCache {
     optimization_pack_version: String,
+    #[serde(with = "map_as_pairs")]
     entries: BTreeMap<ProofDerivationCacheKey, MemoizedProofDerivation>,
 }
 

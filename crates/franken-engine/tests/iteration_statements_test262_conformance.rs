@@ -813,6 +813,7 @@ fn iteration_statements_test262_conformance_integration() {
         "for-of-destructuring-nested",
         "for-of-destructuring-rest",
         "for-of-iterator-return-method",
+        "for-of-iterator-throw-handling",
         "for-of-statement-array",
         "for-of-statement-basic",
         "for-of-statement-const-declaration",
@@ -830,7 +831,7 @@ fn iteration_statements_test262_conformance_integration() {
         "while-statement-empty-body",
     ];
 
-    /// 3 frontier iteration-statement cases the engine currently does NOT pass.
+    /// 2 frontier iteration-statement cases the engine currently does NOT pass.
     /// (Was 14; bd-bg9l1.27.1 resolved the `//` comment-leak — DISC-001 — which
     /// unblocked `continue-for-of-skip` and the three `for-of-destructuring-*`
     /// cases; bd-bg9l1.27.4 + bd-t7txt added labelled `break`/`continue` —
@@ -850,8 +851,11 @@ fn iteration_statements_test262_conformance_integration() {
     /// key — DISC-003 — promoting `for-of-custom-iterator-basic`; the same fix
     /// unblocked `for-of-iterator-return-method` (DISC-009 return-on-break:
     /// custom-iterator dispatch + `iterator.return()` on early exit already
-    /// worked, they were gated only on `Symbol.iterator` resolving). The sibling
-    /// `for-of-iterator-throw-handling` (DISC-009 throw path) is still failing.)
+    /// worked, they were gated only on `Symbol.iterator` resolving). bd-bg9l1.27.7
+    /// then routed a throw from the iterator's `next()` through the enclosing
+    /// try/catch (ForOfNext re-routes the exception that `invoke_inline_method_call`
+    /// captures) and declared function-body builtin capabilities, promoting
+    /// `for-of-iterator-throw-handling` — DISC-009 fully RESOLVED.)
     /// Each entry pairs the test id with the tracking bead and the
     /// `ECMA262_DISCREPANCIES.md` row that documents the gap (bd-xkbrm FIND-5).
     /// Keep alphabetised by test id. When the engine repairs a gap, move the id
@@ -859,11 +863,6 @@ fn iteration_statements_test262_conformance_integration() {
     /// `Status: RESOLVED`.
     const KNOWN_FAILING_CASES: &[(&str, &str, &str)] = &[
         // (test_id, tracking_bead, discrepancies_row)
-        (
-            "for-of-iterator-throw-handling",
-            "bd-bg9l1.27.7",
-            "DISC-009 (IteratorClose throw)",
-        ),
         (
             "unlabeled-break-error",
             "bd-bg9l1.27.6",

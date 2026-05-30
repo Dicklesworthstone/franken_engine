@@ -174,17 +174,24 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-009: Iterator `return()` / `throw()` cleanup methods not invoked on abrupt completion
 
-- **Status:** PARTIAL — return-on-break RESOLVED (2026-05-30), throw path still open
+- **Status:** RESOLVED (2026-05-30, bd-bg9l1.27.3 + bd-bg9l1.27.7)
 - **ES2020 ref:** §7.4.6 (IteratorClose), §13.7.5.13 (Runtime Semantics: ForIn/OfBodyEvaluation)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`, `tests/iterator_protocol_test262_conformance.rs`
-- **Affected tests:** `for-of-iterator-return-method` (RESOLVED), `for-of-iterator-throw-handling` (still open)
+- **Affected tests:** `for-of-iterator-return-method` (RESOLVED), `for-of-iterator-throw-handling` (RESOLVED)
 - **Symptom:** When a for-of body abruptly completes (break / throw / return), the iterator's `return()` method is not invoked, and any error from a throwing iterator next-step is not routed through `IteratorClose`.
-- **Resolution (partial):** Once `Symbol.iterator` resolved (DISC-003 / bd-bg9l1.27.3),
-  `for-of-iterator-return-method` passes — the engine already invokes
-  `iterator.return()` on a `break` early-exit; it was gated only on the custom
-  iterable being dispatched at all. The `throw`-path case
-  (`for-of-iterator-throw-handling`) remains failing and is the live remainder of
-  bd-bg9l1.27.7.
+- **Resolution:** Two parts. (1) return-on-break: once `Symbol.iterator` resolved
+  (DISC-003 / bd-bg9l1.27.3), `for-of-iterator-return-method` passed — the engine
+  already invokes `iterator.return()` on a `break` early-exit; it was gated only
+  on the custom iterable being dispatched. (2) throw path (bd-bg9l1.27.7): a throw
+  from the iterator's `next()` was not catchable because for-of runs `next()` via
+  `invoke_inline_method_call`, which isolates `catch_frames` and surfaced an
+  uncaught throw as a value-less `UncaughtException` that escaped the loop. Fix:
+  `invoke_inline_method_call` now captures the thrown value before its snapshot
+  restore and re-arms `pending_exception`; the `ForOfNext` handler re-routes it
+  into the in-loop try/catch unwinding (mirroring the `Throw` instruction). The
+  conformance case's `throw new Error(...)` additionally required declaring
+  function-body builtin capabilities in `required_capabilities` (so `builtin:Error`
+  inside `next()` is not capability-denied). Both cases are EXPECTED_PASS.
 - **Tracking bead:** bd-bg9l1.27.7
 - **Reviewed:** 2026-05-30
 - **Next review:** 2026-06-30

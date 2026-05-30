@@ -5378,11 +5378,42 @@ impl InterpreterCore {
                     done_target,
                 } => {
                     let iterator = self.read_reg(iterator)?;
-                    if let Some(value) = self.advance_for_of_iterator(Some(module), iterator)? {
-                        self.write_reg(value_dst, value)?;
-                        self.ip += 1;
-                    } else {
-                        self.ip = done_target as usize;
+                    match self.advance_for_of_iterator(Some(module), iterator) {
+                        Ok(Some(value)) => {
+                            self.write_reg(value_dst, value)?;
+                            self.ip += 1;
+                        }
+                        Ok(None) => {
+                            self.ip = done_target as usize;
+                        }
+                        Err(err) => {
+                            // A throw from the iterator's `next()` (or `@@iterator`)
+                            // must be catchable by an enclosing try/catch
+                            // (bd-bg9l1.27.7). `invoke_inline_method_call` ran the
+                            // method in isolation and re-armed `pending_exception`
+                            // with the thrown value; route it into the in-loop
+                            // unwinding exactly like the `Throw` instruction, instead
+                            // of letting `?` escape the loop. Non-throw errors (e.g.
+                            // a missing `next` TypeError) leave `pending_exception`
+                            // unset and propagate unchanged.
+                            let Some(thrown) = self.pending_exception.clone() else {
+                                return Err(err);
+                            };
+                            self.suspend_current_abrupt_completion();
+                            self.pending_return = None;
+                            self.pending_exception = Some(thrown.clone());
+                            if let Some(frame) = self.pop_exception_target_frame() {
+                                self.ip = frame.catch_target;
+                            } else {
+                                if self.reject_nearest_async_boundary(thrown.clone())? {
+                                    continue;
+                                }
+                                self.suspended_abrupt_completions.clear();
+                                return Err(InterpreterError::UncaughtException {
+                                    value: Self::uncaught_exception_description(&thrown),
+                                });
+                            }
+                        }
                     }
                 }
                 Ir3Instruction::IteratorClose { iterator, reason } => {
@@ -11211,9 +11242,22 @@ impl InterpreterCore {
             }
             self.run_loop(&wrapper)
         })();
+        // If the callee threw and nothing inside it caught the exception, the
+        // isolated run cleared `catch_frames` so an *enclosing* try/catch was
+        // invisible here. Capture the thrown VALUE before the snapshot restore
+        // discards it, then re-arm `pending_exception` in the restored (caller)
+        // context so the caller can re-route the throw through its own unwinding
+        // (e.g. `ForOfNext` for `for (… of …)`). (bd-bg9l1.27.7)
+        let thrown_value = match &result {
+            Err(InterpreterError::UncaughtException { .. }) => self.pending_exception.clone(),
+            _ => None,
+        };
         self.restore_module_execution(snapshot);
         self.active_cjs_context = saved_active_cjs_context;
         self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+        if let Some(value) = thrown_value {
+            self.pending_exception = Some(value);
+        }
         result
     }
 

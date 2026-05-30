@@ -5536,6 +5536,19 @@ pub fn lower_ir2_to_ir3(
         });
     }
 
+    // Function-body `HostCall`s (e.g. `Math.PI` / `Symbol.iterator` / `new Error()`
+    // used inside a function) are emitted by the per-function lowering above and
+    // are NOT recorded in `required_capabilities` by the module-level pass. Scan
+    // the final instruction stream so every emitted HostCall capability is
+    // declared — otherwise the eval lane router (which grants
+    // Builtin/Console/Timer from `required_capabilities`) capability-denies a
+    // builtin used ONLY inside a function body (bd-bg9l1.27.7, bd-bg9l1.27.10).
+    for instruction in &ir3.instructions {
+        if let Ir3Instruction::HostCall { capability, .. } = instruction {
+            required_capabilities.insert(capability.0.clone());
+        }
+    }
+
     ir3.required_capabilities = required_capabilities
         .into_iter()
         .map(CapabilityTag)

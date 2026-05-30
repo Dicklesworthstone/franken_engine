@@ -21,10 +21,9 @@ use crate::ast::{
     ExportKind, Expression, ExpressionStatement, ForInStatement, ForOfStatement, ForStatement,
     FunctionDeclaration, FunctionParam, IfStatement, ImportClause, ImportDeclaration,
     ImportSpecifier, LabeledStatement, MethodDefinition, MethodKind, ObjectPatternProperty,
-    ObjectProperty,
-    ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement, SyntaxTree,
-    ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration, VariableDeclarationKind,
-    VariableDeclarator, WhileStatement, WithStatement,
+    ObjectProperty, ReturnStatement, SourceSpan, Statement, SwitchCase, SwitchStatement,
+    SyntaxTree, ThrowStatement, TryCatchStatement, UnaryOperator, VariableDeclaration,
+    VariableDeclarationKind, VariableDeclarator, WhileStatement, WithStatement,
 };
 use crate::deterministic_serde::{self, CanonicalValue};
 
@@ -4845,9 +4844,7 @@ fn validate_template_unicode_escape(bytes: &[u8], start: usize) -> Result<(), St
                     digits += 1;
                 }
                 None => {
-                    return Err(
-                        "malformed \\u{...} unicode escape: non-hex content".to_string()
-                    );
+                    return Err("malformed \\u{...} unicode escape: non-hex content".to_string());
                 }
             }
             j += 1;

@@ -614,6 +614,24 @@ pub enum BuiltinFunctionKind {
     /// `Array.prototype.unshift` — receiver-aware: prepends its arguments,
     /// shifting existing elements up, and returns the new length (bd-962ev).
     ArrayUnshift,
+    /// `Array.prototype.indexOf` — receiver-aware: first index strictly equal
+    /// to the search element (from an optional `fromIndex`), else -1
+    /// (bd-962ev.1).
+    ArrayIndexOf,
+    /// `Array.prototype.includes` — receiver-aware: SameValueZero membership
+    /// test (NaN matches NaN), returning a boolean (bd-962ev.1).
+    ArrayIncludes,
+    /// `Array.prototype.reverse` — receiver-aware: reverses the elements in
+    /// place and returns the array (bd-962ev.1).
+    ArrayReverse,
+    /// `Array.prototype.fill` — receiver-aware: fills `[start, end)` with a
+    /// value in place (negative indices count from the end), returns the array
+    /// (bd-962ev.1).
+    ArrayFill,
+    /// `Array.prototype.join` — receiver-aware: concatenates elements with a
+    /// separator (default `","`); `undefined`/`null` render as `""`
+    /// (bd-962ev.1).
+    ArrayJoin,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -711,6 +729,51 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_index_of() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayIndexOf,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_includes() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayIncludes,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_reverse() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayReverse,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_fill() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayFill,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_join() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayJoin,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn console_log() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleLog,
@@ -772,6 +835,11 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayPop => "pop",
             BuiltinFunctionKind::ArrayShift => "shift",
             BuiltinFunctionKind::ArrayUnshift => "unshift",
+            BuiltinFunctionKind::ArrayIndexOf => "indexOf",
+            BuiltinFunctionKind::ArrayIncludes => "includes",
+            BuiltinFunctionKind::ArrayReverse => "reverse",
+            BuiltinFunctionKind::ArrayFill => "fill",
+            BuiltinFunctionKind::ArrayJoin => "join",
         }
     }
 }
@@ -4288,6 +4356,148 @@ impl InterpreterCore {
                     self.refresh_dense_length_cache(arr_id, new_len, was_dense);
                 }
                 Ok(Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX)))
+            }
+            BuiltinFunctionKind::ArrayIndexOf => {
+                // ES2020 23.1.3.12: return the first index whose element is
+                // strictly equal (`values_equal`) to the search argument,
+                // starting at the optional `fromIndex`, or -1.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.indexOf".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let from = match self.builtin_arg(args, 1)? {
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    None => 0,
+                };
+                let mut found = -1i64;
+                for i in from..len {
+                    let element = self
+                        .array_index_value(arr_id, i)?
+                        .unwrap_or(Value::Undefined);
+                    if Self::values_equal(&element, &search) {
+                        found = i64::try_from(i).unwrap_or(i64::MAX);
+                        break;
+                    }
+                }
+                Ok(Value::Int(found))
+            }
+            BuiltinFunctionKind::ArrayIncludes => {
+                // ES2020 23.1.3.13: SameValueZero membership test (NaN matches
+                // NaN, unlike strict equality), honoring an optional fromIndex.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.includes".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let from = match self.builtin_arg(args, 1)? {
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    None => 0,
+                };
+                let mut present = false;
+                for i in from..len {
+                    let element = self
+                        .array_index_value(arr_id, i)?
+                        .unwrap_or(Value::Undefined);
+                    if Self::values_equal(&element, &search) || Self::both_nan(&element, &search) {
+                        present = true;
+                        break;
+                    }
+                }
+                Ok(Value::Bool(present))
+            }
+            BuiltinFunctionKind::ArrayReverse => {
+                // ES2020 23.1.3.21: reverse the elements in place and return the
+                // array itself.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.reverse".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                if len > 1 {
+                    let was_dense = self.array_cache_is_dense(arr_id);
+                    for i in 0..(len / 2) {
+                        let j = len - 1 - i;
+                        let lo = self
+                            .array_index_value(arr_id, i)?
+                            .unwrap_or(Value::Undefined);
+                        let hi = self
+                            .array_index_value(arr_id, j)?
+                            .unwrap_or(Value::Undefined);
+                        self.set_object_property(arr_id, i.to_string(), hi)?;
+                        self.set_object_property(arr_id, j.to_string(), lo)?;
+                    }
+                    self.refresh_dense_length_cache(arr_id, len, was_dense);
+                }
+                Ok(Value::Object(arr_id))
+            }
+            BuiltinFunctionKind::ArrayFill => {
+                // ES2020 23.1.3.6: fill `[start, end)` with the value in place;
+                // negative bounds count from the end. Returns the array.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.fill".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let fill_value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let start = match self.builtin_arg(args, 1)? {
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    None => 0,
+                };
+                let end = match self.builtin_arg(args, 2)? {
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    None => len,
+                };
+                if start < end {
+                    let was_dense = self.array_cache_is_dense(arr_id);
+                    for i in start..end {
+                        self.set_object_property(arr_id, i.to_string(), fill_value.clone())?;
+                    }
+                    self.refresh_dense_length_cache(arr_id, len, was_dense);
+                }
+                Ok(Value::Object(arr_id))
+            }
+            BuiltinFunctionKind::ArrayJoin => {
+                // ES2020 23.1.3.13(join): concatenate elements with `separator`
+                // (default ","); `undefined`/`null` elements render as "".
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.join".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let separator = match self.builtin_arg(args, 0)? {
+                    None | Some(Value::Undefined) => ",".to_string(),
+                    Some(value) => self.value_to_string(&value),
+                };
+                let mut parts = Vec::with_capacity(len);
+                for i in 0..len {
+                    let element = self
+                        .array_index_value(arr_id, i)?
+                        .unwrap_or(Value::Undefined);
+                    let rendered = match element {
+                        Value::Undefined | Value::Null => String::new(),
+                        other => self.value_to_string(&other),
+                    };
+                    parts.push(rendered);
+                }
+                Ok(Value::str(parts.join(&separator)))
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -8790,6 +9000,11 @@ impl InterpreterCore {
             "pop" => Some(BuiltinFunction::array_pop()),
             "shift" => Some(BuiltinFunction::array_shift()),
             "unshift" => Some(BuiltinFunction::array_unshift()),
+            "indexOf" => Some(BuiltinFunction::array_index_of()),
+            "includes" => Some(BuiltinFunction::array_includes()),
+            "reverse" => Some(BuiltinFunction::array_reverse()),
+            "fill" => Some(BuiltinFunction::array_fill()),
+            "join" => Some(BuiltinFunction::array_join()),
             _ => None,
         }
     }
@@ -10787,6 +11002,60 @@ impl InterpreterCore {
                 object.cached_dense_length = cached_len;
             }
         });
+    }
+
+    /// Read the `index`th positional argument of a builtin call, or `None` when
+    /// fewer arguments were supplied. Shared by the non-callback
+    /// `Array.prototype` methods (bd-962ev.1) for their optional parameters.
+    fn builtin_arg(&self, args: RegRange, index: u32) -> Result<Option<Value>, InterpreterError> {
+        if index >= args.count {
+            return Ok(None);
+        }
+        let reg = args
+            .start
+            .checked_add(index)
+            .ok_or(InterpreterError::RegisterOutOfBounds {
+                register: args.start,
+                max: self.config.max_registers,
+            })?;
+        Ok(Some(self.read_reg(reg)?))
+    }
+
+    /// `ToIntegerOrInfinity`-style coercion for the integer index arguments
+    /// (`fromIndex`/`start`/`end`) of the non-callback `Array.prototype`
+    /// methods: integers pass through, floats truncate toward zero (`NaN` → 0),
+    /// everything else contributes 0.
+    fn value_as_integer(value: &Value) -> i64 {
+        match value {
+            Value::Int(n) => *n,
+            Value::Float(f) => {
+                let v = f.inner();
+                if v.is_nan() { 0 } else { v.trunc() as i64 }
+            }
+            Value::Bool(true) => 1,
+            _ => 0,
+        }
+    }
+
+    /// Clamp a possibly-negative relative array index into `[0, len]`, per the
+    /// `Array.prototype` convention where a negative index counts from the end.
+    fn clamp_relative_index(raw: i64, len: usize) -> usize {
+        let len_i = len as i64;
+        let idx = if raw < 0 {
+            (len_i + raw).max(0)
+        } else {
+            raw.min(len_i)
+        };
+        idx as usize
+    }
+
+    /// `SameValueZero` only differs from strict equality (`values_equal`) in
+    /// treating `NaN` as equal to `NaN`; `Array.prototype.includes` needs that.
+    fn both_nan(a: &Value, b: &Value) -> bool {
+        matches!(
+            (a, b),
+            (Value::Float(x), Value::Float(y)) if x.inner().is_nan() && y.inner().is_nan()
+        )
     }
 
     fn array_like_argument_values(&self, value: Value) -> Result<Vec<Value>, InterpreterError> {

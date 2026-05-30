@@ -4546,7 +4546,16 @@ pub fn lower_ir2_to_ir3(
             if !free_vars.is_empty() {
                 for bop in body_ops.iter() {
                     match bop {
-                        Ir1Op::LoadBinding { binding_id } | Ir1Op::StoreBinding { binding_id }
+                        // `AssignOp` references a captured var too (compound
+                        // read-modify-write); without it a var solely
+                        // compound-assigned as an expression — `return c++`
+                        // => `(c += 1) - 1` with no separate read — is omitted
+                        // from the free-var set, so its store lands in an
+                        // uninitialised local register instead of the captured
+                        // scope and yields NaN (bd-ut6ku).
+                        Ir1Op::LoadBinding { binding_id }
+                        | Ir1Op::StoreBinding { binding_id }
+                        | Ir1Op::AssignOp { binding_id, .. }
                             if *binding_id >= param_count =>
                         {
                             fv_ids.insert(*binding_id);
@@ -4567,12 +4576,27 @@ pub fn lower_ir2_to_ir3(
             if !free_vars.is_empty() {
                 // The body lowering creates forward-reference bindings
                 // in order of first appearance.  Match them up.
+                //
+                // A free (captured) variable can first appear via ANY binding
+                // reference, not just a read: `StoreBinding` (plain write) and
+                // `AssignOp` (compound read-modify-write) reference it too. If
+                // we only scanned `LoadBinding`, a captured var that is solely
+                // compound-assigned as an expression value — e.g. `return c++`
+                // lowered to `(c += 1) - 1` with no separate read of `c` — would
+                // be missing here, so its `AssignOp` would fall through to the
+                // local-binding path against an uninitialised register and yield
+                // NaN (bd-ut6ku). Collect the first appearance across all
+                // free-var binding references to keep this map aligned 1:1 with
+                // `free_vars` by first-appearance order.
                 let mut seen_ids = Vec::new();
                 for bop in body_ops.iter() {
-                    if let Ir1Op::LoadBinding { binding_id } = bop
-                        && free_var_binding_ids.contains(binding_id)
-                        && !seen_ids.contains(binding_id)
-                    {
+                    let binding_id = match bop {
+                        Ir1Op::LoadBinding { binding_id }
+                        | Ir1Op::StoreBinding { binding_id }
+                        | Ir1Op::AssignOp { binding_id, .. } => binding_id,
+                        _ => continue,
+                    };
+                    if free_var_binding_ids.contains(binding_id) && !seen_ids.contains(binding_id) {
                         seen_ids.push(*binding_id);
                     }
                 }

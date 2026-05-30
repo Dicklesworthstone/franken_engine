@@ -464,24 +464,34 @@ fn generate_pair_for_relation(
             let a = machine.int_inclusive("parser_parenthesization_invariance.a", 2, 8)?;
             let b = machine.int_inclusive("parser_parenthesization_invariance.b", 3, 9)?;
             Some(GeneratedPair {
-                input_source: format!("let {name} = {a} + {b}; return {name};"),
-                variant_source: format!("let {name} = (({a})) + (({b})); return ({name});"),
+                // Engine-valid ES2020 (bd-x9t1n.7): no top-level `return` (the real
+                // engine rejects it as ReturnOutsideFunction); end with an expression
+                // statement. Both sides drop it identically, so the parenthesization
+                // invariance is preserved and the source still parses in the toy.
+                input_source: format!("let {name} = {a} + {b}; {name};"),
+                variant_source: format!("let {name} = (({a})) + (({b})); ({name});"),
             })
         }
         "parser_asi_equivalence" => {
             let name = pick_identifier(machine, "parser_asi_equivalence.name")?;
             let value = machine.int_inclusive("parser_asi_equivalence.value", 1, 9)?;
             Some(GeneratedPair {
-                input_source: format!("let {name} = {value} + 1\nemit({name})\nreturn {name}\n"),
-                variant_source: format!("let {name} = {value} + 1; emit({name}); return {name};"),
+                // Engine-valid ES2020 (bd-x9t1n.7): the ASI contrast is between
+                // newline-terminated and semicolon-terminated statements; drop the
+                // toy-only `emit(...)` and top-level `return` (rejected by the real
+                // engine), ending each statement with a bare expression.
+                input_source: format!("let {name} = {value} + 1\n{name}\n"),
+                variant_source: format!("let {name} = {value} + 1; {name};"),
             })
         }
         "parser_unicode_escape_equivalence" => {
             let plain = pick_identifier(machine, "parser_unicode_escape_equivalence.plain")?;
             let escaped = escape_identifier(plain);
             Some(GeneratedPair {
-                input_source: format!("let {plain} = 4 + 5; return {plain};"),
-                variant_source: format!("let {escaped} = 4 + 5; return {escaped};"),
+                // Engine-valid ES2020 (bd-x9t1n.7): no top-level `return`; the
+                // unicode-escape-vs-plain identifier contrast is unaffected.
+                input_source: format!("let {plain} = 4 + 5; {plain};"),
+                variant_source: format!("let {escaped} = 4 + 5; {escaped};"),
             })
         }
         "parser_source_position_independence" => {
@@ -586,8 +596,15 @@ fn generate_arithmetic_program(machine: &mut GeneratorMachine<'_>, prefix: &str)
     let second = machine.int_inclusive(&format!("{prefix}.second"), 1, 11)?;
     let multiplier = machine.int_inclusive(&format!("{prefix}.multiplier"), 2, 6)?;
 
+    // Engine-valid ES2020 (bd-x9t1n.7): the shared arithmetic base must parse under
+    // the real engine for the parser/IR relations that consume it, so it drops the
+    // toy-only `emit(...)` and the top-level `return` (rejected as
+    // ReturnOutsideFunction) and ends with a bare expression statement. Consumers
+    // compare parse signatures / lowered IR / (gc_timing) identical-base output, so
+    // dropping these identically on every consumer leaves every relation's verdict
+    // unchanged while making the corpus engine-acceptable.
     Some(format!(
-        "let {left} = {first} + {second}; let {right} = {left} * {multiplier}; emit({right}); return {right};"
+        "let {left} = {first} + {second}; let {right} = {left} * {multiplier}; {right};"
     ))
 }
 

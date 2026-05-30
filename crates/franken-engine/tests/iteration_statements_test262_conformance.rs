@@ -797,6 +797,7 @@ fn iteration_statements_test262_conformance_integration() {
     use std::collections::BTreeSet;
 
     const EXPECTED_PASS: &[&str] = &[
+        "break-for-of-early-exit",
         "break-statement-for-loop",
         "continue-for-of-skip",
         "continue-statement-while-loop",
@@ -826,13 +827,15 @@ fn iteration_statements_test262_conformance_integration() {
         "while-statement-empty-body",
     ];
 
-    /// 8 frontier iteration-statement cases the engine currently does NOT pass.
+    /// 7 frontier iteration-statement cases the engine currently does NOT pass.
     /// (Was 14; bd-bg9l1.27.1 resolved the `//` comment-leak — DISC-001 — which
     /// unblocked `continue-for-of-skip` and the three `for-of-destructuring-*`
     /// cases; bd-bg9l1.27.4 + bd-t7txt added labelled `break`/`continue` —
     /// DISC-006/006b — promoting `labeled-break-statement` and
     /// `labeled-continue-statement` (the statement splitter now treats a
-    /// labelled compound statement as block-terminated).)
+    /// labelled compound statement as block-terminated); bd-bg9l1.27.9 wired
+    /// `Array.prototype.push` as a receiver-aware `CallMethod` builtin — DISC-012 —
+    /// promoting `break-for-of-early-exit`.)
     /// Each entry pairs the test id with the tracking bead and the
     /// `ECMA262_DISCREPANCIES.md` row that documents the gap (bd-xkbrm FIND-5).
     /// Keep alphabetised by test id. When the engine repairs a gap, move the id
@@ -840,7 +843,6 @@ fn iteration_statements_test262_conformance_integration() {
     /// `Status: RESOLVED`.
     const KNOWN_FAILING_CASES: &[(&str, &str, &str)] = &[
         // (test_id, tracking_bead, discrepancies_row)
-        ("break-for-of-early-exit", "bd-bg9l1.27.9", "DISC-012 (Array.prototype.push/.length)"),
         ("for-of-custom-iterator-basic", "bd-bg9l1.27.3", "DISC-003 (Symbol.iterator)"),
         ("for-of-iterator-return-method", "bd-bg9l1.27.7", "DISC-009 (IteratorClose return)"),
         ("for-of-iterator-throw-handling", "bd-bg9l1.27.7", "DISC-009 (IteratorClose throw)"),

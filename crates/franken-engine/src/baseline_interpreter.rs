@@ -599,6 +599,10 @@ pub enum BuiltinFunctionKind {
     StringCharAt,
     StringCharCodeAt,
     ProxyRevoke,
+    /// `Array.prototype.push` — receiver-aware: appends its arguments to the
+    /// `this` array and returns the new length. Resolved on array exotic
+    /// objects in `prototype_chain_get` (bd-bg9l1.27.9 / DISC-012).
+    ArrayPush,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -654,6 +658,15 @@ impl BuiltinFunction {
     fn string_char_code_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringCharCodeAt,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_push() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayPush,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -717,6 +730,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringCharAt => "charAt",
             BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
             BuiltinFunctionKind::ProxyRevoke => "revoke",
+            BuiltinFunctionKind::ArrayPush => "push",
         }
     }
 }
@@ -4086,6 +4100,47 @@ impl InterpreterCore {
                     None
                 };
                 Self::string_prototype_char_code_at_value(receiver, index)
+            }
+            BuiltinFunctionKind::ArrayPush => {
+                // ES2020 23.1.3.20: append each argument to `this` at the
+                // current length and return the new length. The receiver is
+                // the array the method was invoked on (`arr.push(x)`), threaded
+                // through `CallMethod`. The receiver-less `builtin:Array...`
+                // hostcall path is a separate, detached-function fallback.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.push".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let mut next_index = self.array_like_length(arr_id)?;
+                for i in 0..args.count {
+                    let reg = args.start.checked_add(i).ok_or(
+                        InterpreterError::RegisterOutOfBounds {
+                            register: args.start,
+                            max: self.config.max_registers,
+                        },
+                    )?;
+                    let element = self.read_reg(reg)?;
+                    self.set_object_property(arr_id, next_index.to_string(), element)?;
+                    next_index = next_index.saturating_add(1);
+                }
+                let new_len = i64::try_from(next_index).unwrap_or(i64::MAX);
+                self.set_object_property(arr_id, "length".to_string(), Value::Int(new_len))?;
+                // Keep the dense-length cache coherent with the IR ArrayPush
+                // fast path (set_object_property does not maintain it).
+                let arr_index = arr_id.0 as usize;
+                let cached_len = u32::try_from(next_index).ok();
+                self.mutate_heap(|heap| {
+                    if let Some(obj) = heap.get_mut(arr_index)
+                        && obj.is_array
+                        && obj.cached_dense_length.is_some()
+                    {
+                        obj.cached_dense_length = cached_len;
+                    }
+                });
+                Ok(Value::Int(new_len))
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -8488,6 +8543,20 @@ impl InterpreterCore {
             depth += 1;
         }
 
+        // Array exotic objects expose their prototype methods (e.g. `push`)
+        // even though we do not allocate a shared `Array.prototype` object.
+        // This is a fallback: own/inherited data properties walked above win,
+        // so a user-assigned `arr.push = ...` still shadows the builtin
+        // (bd-bg9l1.27.9 / DISC-012).
+        let root_is_array = self
+            .heap
+            .get(object_id.0 as usize)
+            .map(|object| object.is_array)
+            .unwrap_or(false);
+        if root_is_array && let Some(builtin) = Self::array_prototype_method(key) {
+            return Ok(Value::BuiltinFunction(builtin));
+        }
+
         // Capture property resolution failure for deterministic replay
         self.nondeterminism_trace.capture(
             NondeterminismSource::PropertyResolution,
@@ -8496,6 +8565,17 @@ impl InterpreterCore {
             "baseline_interpreter",
         );
         Ok(Value::Undefined)
+    }
+
+    /// Resolve an `Array.prototype` method name to its receiver-aware builtin
+    /// callable. Only `push` is wired today (bd-bg9l1.27.9 / DISC-012); the
+    /// receiver-less `builtin:ArrayPrototype*` hostcalls remain the
+    /// detached-function path for the others.
+    fn array_prototype_method(key: &str) -> Option<BuiltinFunction> {
+        match key {
+            "push" => Some(BuiltinFunction::array_push()),
+            _ => None,
+        }
     }
 
     /// Walk the prototype chain to find a property descriptor.

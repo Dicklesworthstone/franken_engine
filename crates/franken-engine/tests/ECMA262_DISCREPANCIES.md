@@ -196,7 +196,18 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-012: `Array.prototype` mutators (`push`/`pop`/…) unresolved on member access; receiver (`this`) not threaded
 
-- **Status:** WILL-FIX
+- **Status:** RESOLVED (push; 2026-05-29, commits 5d19cb63 + e8bec5a1) — `pop`/`shift`/… still stubbed
+- **Resolution:** `prototype_chain_get` now resolves `push` on array exotic
+  objects to a receiver-aware `BuiltinFunction(ArrayPush)` as a fallback (own
+  props still win); `dispatch_builtin_function` appends each arg to the `this`
+  array at `array_like_length`, updates `length`, keeps `cached_dense_length`
+  coherent, and returns the new length. The receiver was already threaded to
+  `dispatch_builtin_function` by `CallMethod`; the missing pieces were
+  array-method *resolution* (path (a)) and a real `push` body (path (c)).
+  `break-for-of-early-exit` → EXPECTED_PASS; regression in
+  `tests/array_prototype_push_disc012.rs`. The other mutators
+  (`pop`/`shift`/`unshift`/…) keep their receiver-less stub bodies — resolve
+  them via the same `array_prototype_method` seam when a case demands it.
 - **ES2020 ref:** §22.1.3.18 (Array.prototype.push), §22.1.3.x (length own property)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
 - **Affected tests:** `break-for-of-early-exit`

@@ -1460,7 +1460,7 @@ mod tests {
 
     #[test]
     fn append_multiple_events() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         for i in 0..5u8 {
@@ -1495,7 +1495,7 @@ mod tests {
 
     #[test]
     fn is_revoked_returns_true_for_revoked_target() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
         let target = EngineObjectId([42; 32]);
 
@@ -1521,7 +1521,7 @@ mod tests {
 
     #[test]
     fn lookup_revocation_returns_details() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(
@@ -1545,7 +1545,7 @@ mod tests {
 
     #[test]
     fn duplicate_target_rejected() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev1 = make_revocation(
@@ -1578,7 +1578,7 @@ mod tests {
 
     #[test]
     fn verify_chain_after_appends() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         for i in 0..10u8 {
@@ -1598,7 +1598,7 @@ mod tests {
 
     #[test]
     fn verify_chain_detects_tampered_event() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         for i in 0..3u8 {
@@ -1622,7 +1622,7 @@ mod tests {
 
     #[test]
     fn verify_chain_detects_sequence_discontinuity() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         for i in 0..3u8 {
@@ -1727,7 +1727,7 @@ mod tests {
 
     #[test]
     fn verify_chain_detects_tampered_revocation_signature() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
         let rev = make_revocation(
             RevocationTargetType::Key,
@@ -1747,7 +1747,7 @@ mod tests {
 
     #[test]
     fn verify_chain_detects_tampered_head_signature() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
         let rev = make_revocation(
             RevocationTargetType::Key,
@@ -1869,7 +1869,7 @@ mod tests {
 
     #[test]
     fn head_seq_increases_monotonically() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let mut prev_seq = None;
@@ -1897,7 +1897,7 @@ mod tests {
 
     #[test]
     fn all_target_types_can_be_revoked() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let types = [
@@ -1930,7 +1930,7 @@ mod tests {
 
     #[test]
     fn all_revocation_reasons_accepted() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let reasons = [
@@ -2073,7 +2073,7 @@ mod tests {
 
     #[test]
     fn rebuild_from_events_succeeds() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         for i in 0..5u8 {
@@ -2110,7 +2110,7 @@ mod tests {
 
     #[test]
     fn rebuild_detects_tampered_chain() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         for i in 0..3u8 {
@@ -2135,7 +2135,7 @@ mod tests {
 
     #[test]
     fn rebuild_detects_head_mismatch() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(
@@ -2163,7 +2163,7 @@ mod tests {
 
     #[test]
     fn zone_mismatch_rejected() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let mut rev = make_revocation(
@@ -2182,7 +2182,7 @@ mod tests {
 
     #[test]
     fn audit_events_emitted_on_append() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(
@@ -2205,7 +2205,7 @@ mod tests {
 
     #[test]
     fn audit_events_emitted_on_rejection() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(
@@ -2244,7 +2244,7 @@ mod tests {
 
     #[test]
     fn drain_events_clears() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(
@@ -2370,7 +2370,7 @@ mod tests {
 
     #[test]
     fn large_chain_verification() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         for i in 0..120u16 {
@@ -2409,7 +2409,7 @@ mod tests {
     #[test]
     fn chain_hash_is_deterministic() {
         let build_chain = || {
-            let mut chain = RevocationChain::new(TEST_ZONE);
+            let mut chain = trusted_test_chain();
             let sk = test_signing_key();
 
             for i in 0..3u8 {
@@ -2435,7 +2435,7 @@ mod tests {
 
     #[test]
     fn verify_chain_mut_emits_audit() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(
@@ -2656,7 +2656,7 @@ mod tests {
 
     #[test]
     fn head_advanced_event_emitted_on_second_append() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev1 = make_revocation(
@@ -2750,7 +2750,7 @@ mod tests {
     #[test]
     fn chain_hash_changes_on_second_append() {
         let sk = test_signing_key();
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
 
         let rev1 = make_revocation(
             RevocationTargetType::Key,
@@ -2845,7 +2845,7 @@ mod tests {
 
     #[test]
     fn chain_hash_accessor_matches_head_chain_hash() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
         let rev = make_revocation(
             RevocationTargetType::Key,
@@ -2867,7 +2867,7 @@ mod tests {
 
     #[test]
     fn event_counts_tracks_all_types() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         // Append two events — should produce: 2 appended, 1 head_advanced
@@ -2937,7 +2937,7 @@ mod tests {
 
     #[test]
     fn events_accessor_returns_all_events() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         for i in 0..3u8 {
@@ -2961,7 +2961,7 @@ mod tests {
 
     #[test]
     fn rebuild_detects_duplicate_target_in_events() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev = make_revocation(
@@ -3002,7 +3002,7 @@ mod tests {
 
     #[test]
     fn revocation_event_canonical_bytes_differ_for_different_events() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
 
         let rev1 = make_revocation(
@@ -3167,7 +3167,7 @@ mod tests {
 
     #[test]
     fn rebuild_from_events_detects_genesis_seq_mismatch() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
         let rev = make_revocation(
             RevocationTargetType::Key,
@@ -3195,7 +3195,7 @@ mod tests {
 
     #[test]
     fn rebuild_from_events_detects_chain_hash_mismatch() {
-        let mut chain = RevocationChain::new(TEST_ZONE);
+        let mut chain = trusted_test_chain();
         let sk = test_signing_key();
         let rev = make_revocation(
             RevocationTargetType::Key,

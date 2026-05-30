@@ -224,6 +224,12 @@ tee-test-mock = []
 # so enabling it cannot fabricate a `Success` either (bd-kppha).
 tee-real-sdk = []
 
+# Windows-only: cross-platform advisory file locking (LockFileEx) used by the
+# flock_compat shims in proof_artifact.rs / shadow_decision_composer.rs, where
+# rustix's Unix-only `flock` is unavailable. Unix continues to use rustix.
+[target.'cfg(windows)'.dependencies]
+fs2 = "0.4"
+
 [dependencies]
 # NOTE: frankenengine-core dependency temporarily removed — franken-core crate
 # is mid-modularization (cb049273) and does not yet compile. franken-engine

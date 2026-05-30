@@ -16,7 +16,38 @@ use std::{
     sync::Mutex,
 };
 
+#[cfg(unix)]
 use rustix::fs::{FlockOperation, flock};
+// Windows portability shim: rustix's `flock` is Unix-only. `fs2` provides the
+// same advisory whole-file locking (LockFileEx) on Windows, preserving the
+// exclusive / non-blocking / unlock semantics the Unix path relies on.
+#[cfg(windows)]
+use self::flock_compat::{FlockOperation, flock};
+#[cfg(windows)]
+mod flock_compat {
+    use fs2::FileExt;
+    use std::fs::File;
+    use std::io;
+
+    #[derive(Clone, Copy, Debug)]
+    pub enum FlockOperation {
+        LockExclusive,
+        NonBlockingLockExclusive,
+        LockShared,
+        NonBlockingLockShared,
+        Unlock,
+    }
+
+    pub fn flock(file: &File, operation: FlockOperation) -> io::Result<()> {
+        match operation {
+            FlockOperation::LockExclusive => file.lock_exclusive(),
+            FlockOperation::NonBlockingLockExclusive => file.try_lock_exclusive(),
+            FlockOperation::LockShared => file.lock_shared(),
+            FlockOperation::NonBlockingLockShared => file.try_lock_shared(),
+            FlockOperation::Unlock => file.unlock(),
+        }
+    }
+}
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

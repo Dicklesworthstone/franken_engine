@@ -7877,16 +7877,31 @@ fn lower_expression_to_ir1(
         }
         Expression::ArrowFunction { params, body, .. } => {
             // Lower arrow function body with its own fresh scope.
-            let param_names: Vec<String> = params
-                .iter()
-                .filter_map(|p| p.name().map(String::from))
-                .collect();
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
+            // Build param names: simple identifiers keep their name; non-identifier
+            // patterns (default `x = v` / destructuring) get a synthetic slot that is
+            // destructured at body entry. WITHOUT this, `p.name()` returns None and a
+            // plain `filter_map` silently DROPPED such params — the arrow ended up
+            // arity 0 with the value lost, so `((x = 5) => x)()` (and even `(9)`)
+            // returned undefined (bd-f2iw8). Mirrors the function-declaration path.
+            let mut param_names: Vec<String> = Vec::with_capacity(params.len());
+            let mut destructure_params: Vec<(String, &BindingPattern)> =
+                Vec::with_capacity(params.len());
+            for (index, param) in params.iter().enumerate() {
+                match param.name() {
+                    Some(name) => param_names.push(name.to_string()),
+                    None => {
+                        let synthetic = format!("__param_{index}");
+                        param_names.push(synthetic.clone());
+                        destructure_params.push((synthetic, &param.pattern));
+                    }
+                }
+            }
             // Allocate parameter bindings in the body scope.
             for pname in &param_names {
                 let _ = alloc_binding(
@@ -7899,6 +7914,36 @@ fn lower_expression_to_ir1(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
             }
+            // Destructure non-identifier params (applies defaults) before the body.
+            for (synthetic_name, pattern) in &destructure_params {
+                for inner_name in pattern.binding_names() {
+                    let _ = alloc_binding(
+                        &mut body_bindings,
+                        &mut body_lookup,
+                        &mut body_binding_index,
+                        body_scope,
+                        inner_name,
+                        BindingKind::Var,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?;
+                }
+                let source_bid = *body_lookup
+                    .get(synthetic_name.as_str())
+                    .expect("synthetic param binding allocated above");
+                lower_destructuring_to_ir1(
+                    pattern,
+                    source_bid,
+                    &mut body_ops,
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    &mut body_label_counter,
+                )?;
+            }
+            // Snapshot all param-introduced names (synthetics + destructured inner
+            // names) so the free-var scan below does not misclassify them.
+            let pre_lower_names: BTreeSet<String> = body_lookup.keys().cloned().collect();
             match body {
                 ArrowBody::Expression(expr) => {
                     lower_expression_to_ir1(
@@ -7934,7 +7979,6 @@ fn lower_expression_to_ir1(
                 }
                 body_ops.push(Ir1Op::Return);
             }
-            let pre_lower_names: BTreeSet<String> = param_names.iter().cloned().collect();
             let arrow_free_vars: Vec<String> = body_lookup
                 .keys()
                 .filter(|n| {
@@ -7958,17 +8002,30 @@ fn lower_expression_to_ir1(
             ..
         } => {
             // Same as ArrowFunction but with a BlockStatement body and optional name.
-            let param_names: Vec<String> = params
-                .iter()
-                .filter_map(|p| p.name().map(String::from))
-                .collect();
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
             let mut body_binding_index: BindingId = 0;
             let body_scope = ScopeId { depth: 0, index: 0 };
             let mut body_label_counter: u32 = 0;
-            let pre_lower_names: BTreeSet<String> = param_names.iter().cloned().collect();
+            // Simple identifier params keep their name; non-identifier patterns
+            // (default `x = v` / destructuring) get a synthetic slot destructured at
+            // body entry. Without this a `filter_map` silently dropped them — the
+            // function expression ended up arity 0 with the value lost (bd-f2iw8,
+            // sibling of the arrow case). Mirrors the function-declaration path.
+            let mut param_names: Vec<String> = Vec::with_capacity(params.len());
+            let mut destructure_params: Vec<(String, &BindingPattern)> =
+                Vec::with_capacity(params.len());
+            for (index, param) in params.iter().enumerate() {
+                match param.name() {
+                    Some(name) => param_names.push(name.to_string()),
+                    None => {
+                        let synthetic = format!("__param_{index}");
+                        param_names.push(synthetic.clone());
+                        destructure_params.push((synthetic, &param.pattern));
+                    }
+                }
+            }
             for pname in &param_names {
                 let _ = alloc_binding(
                     &mut body_bindings,
@@ -7980,6 +8037,33 @@ fn lower_expression_to_ir1(
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
             }
+            for (synthetic_name, pattern) in &destructure_params {
+                for inner_name in pattern.binding_names() {
+                    let _ = alloc_binding(
+                        &mut body_bindings,
+                        &mut body_lookup,
+                        &mut body_binding_index,
+                        body_scope,
+                        inner_name,
+                        BindingKind::Var,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?;
+                }
+                let source_bid = *body_lookup
+                    .get(synthetic_name.as_str())
+                    .expect("synthetic param binding allocated above");
+                lower_destructuring_to_ir1(
+                    pattern,
+                    source_bid,
+                    &mut body_ops,
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    &mut body_label_counter,
+                )?;
+            }
+            let pre_lower_names: BTreeSet<String> = body_lookup.keys().cloned().collect();
             for stmt in &body.body {
                 lower_statement_to_ir1(
                     stmt,

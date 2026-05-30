@@ -8,11 +8,11 @@
 //! `builtin:<Name>` hostcall (`error_constructor_capability` in
 //! `lowering_pipeline.rs`), producing a real error object with `name` + `message`.
 //!
-//! NOTE: the inline `new Error("x").message` form (member access directly on the
-//! `new` result) is NOT exercised here — it hits a *separate* `new X(args).prop`
-//! parse-precedence limitation (see `inline_member_on_new_is_separate_gap`),
-//! independent of this bead. Real usage (`throw new Error(...)` / a bound
-//! `let e = new Error(...)`) works.
+//! The inline `new X(args).prop` form (member/call/index directly on a `new`
+//! result) is covered by `inline_member_on_new_result` /
+//! `inline_call_and_index_on_new_result` — that was a separate parse-precedence
+//! gap fixed under bd-if9uy (`parse_new_expression` re-groups the trailing chain
+//! per ES2020 §13.3 `new X(a).b` == `(new X(a)).b`).
 
 use frankenengine_engine::HybridRouter;
 
@@ -90,16 +90,38 @@ fn throw_subclass_is_catchable_with_name() {
     );
 }
 
-/// Documents the SEPARATE pre-existing limitation that motivated the two-step
-/// forms above: a member access placed directly on a `new X(args)` result faults
-/// (parse precedence of `new … (args) . prop`). This is NOT bd-bg9l1.27.10; it is
-/// independent of the error-constructor binding and also affects user
-/// constructors. Pinned here so a future `new`-precedence fix can flip it.
+/// `new X(args).prop` (a member/call/index chain directly on a `new` result)
+/// must parse as `(new X(args)).prop` per ES2020 §13.3 (bd-if9uy). This was
+/// previously a parse-precedence gap (the trailing chain was absorbed into the
+/// constructor callee, faulting); `parse_new_expression` now re-groups it.
 #[test]
-fn inline_member_on_new_is_separate_gap() {
-    let inline = eval_value(r#"new Error("boom").message"#);
-    assert!(
-        inline.starts_with("ERR:"),
-        "expected the inline new-member form to still fault (separate gap); got {inline}"
+fn inline_member_on_new_result() {
+    // Builtin constructor + member.
+    assert_eq!(eval_value(r#"new Error("boom").message"#), "boom");
+    assert_eq!(eval_value(r#"new TypeError("t").name"#), "TypeError");
+    // User constructor + member.
+    assert_eq!(
+        eval_value(r#"let C = function () { this.x = 5; }; new C().x"#),
+        "5"
+    );
+    // No-arg builtin + member.
+    assert_eq!(eval_value(r#"new Error().name"#), "Error");
+    // Parenthesised form stays correct (regression guard for the regrouping).
+    assert_eq!(eval_value(r#"(new Error("boom")).message"#), "boom");
+}
+
+/// Trailing call and index chains on a `new` result also bind to the
+/// constructed object (`new X(a).m()`, `new X(a)[k]`).
+#[test]
+fn inline_call_and_index_on_new_result() {
+    // Member-then-call on the constructed object.
+    assert_eq!(
+        eval_value(r#"let C = function () { this.go = function () { return 9; }; }; new C().go()"#),
+        "9"
+    );
+    // Index access on the constructed object.
+    assert_eq!(
+        eval_value(r#"let C = function () { this[0] = 7; }; new C()[0]"#),
+        "7"
     );
 }

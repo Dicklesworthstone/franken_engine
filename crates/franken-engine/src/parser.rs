@@ -4579,6 +4579,27 @@ fn parse_new_expression(
     recursion_depth: u64,
 ) -> ParseResult<Expression> {
     // `rest` is everything after `new `, e.g. `Foo(a, b)` or `Foo` or `Foo.Bar()`
+    //
+    // A member / call / index chain that follows the constructor's argument list
+    // binds to the NEW RESULT, not the callee: per ES2020 §13.3, `new X(a).b`
+    // parses as `(new X(a)).b` (and `new X(a)()` / `new X(a)[i]` likewise). The
+    // base cases below only handle a `rest` whose constructor call is the whole
+    // expression; when a trailing chain follows the `)`, re-group explicitly so
+    // the trailing access applies to the constructed object, reusing the existing
+    // postfix (member/call/index) machinery (bd-if9uy). The parenthesised form is
+    // known-good, so this is a faithful regrouping rather than new parsing logic.
+    if let Some((open, close)) = find_first_top_level_paren_pair(rest) {
+        let callee_src = rest[..open].trim();
+        let trailing = rest[close + 1..].trim();
+        if !callee_src.is_empty()
+            && !trailing.is_empty()
+            && (trailing.starts_with('.') || trailing.starts_with('[') || trailing.starts_with('('))
+        {
+            let grouped = format!("(new {}){}", &rest[..=close], trailing);
+            return parse_expression(&grouped, span, context, recursion_depth + 1);
+        }
+    }
+
     // Find the arguments list at the end, if any.
     if rest.ends_with(')')
         && let Some((callee_src, args_inner)) = {
@@ -5979,6 +6000,63 @@ fn find_top_level_template_start(s: &str) -> Option<usize> {
         }
     }
 
+    None
+}
+
+/// Find the first top-level `(`…`)` pair in `s` — the open `(` that appears at
+/// depth 0 of all bracket kinds and outside quotes, plus its matching `)`.
+/// Returns `(open_index, close_index)`. Used to locate a constructor's argument
+/// list so any trailing member/call/index chain can be split off (bd-if9uy).
+fn find_first_top_level_paren_pair(s: &str) -> Option<(usize, usize)> {
+    let bytes = s.as_bytes();
+    let mut in_quote: Option<u8> = None;
+    let mut escaped = false;
+    let mut open: Option<usize> = None;
+    let mut paren: i64 = 0;
+    let mut bracket: i64 = 0;
+    let mut brace: i64 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if let Some(q) = in_quote {
+            if escaped {
+                escaped = false;
+            } else if b == b'\\' {
+                escaped = true;
+            } else if b == q {
+                in_quote = None;
+            }
+            i += 1;
+            continue;
+        }
+        match b {
+            b'\'' | b'"' | b'`' => in_quote = Some(b),
+            b'[' => bracket += 1,
+            b']' => bracket -= 1,
+            b'{' => brace += 1,
+            b'}' => brace -= 1,
+            b'(' => {
+                if open.is_none() {
+                    if bracket == 0 && brace == 0 {
+                        open = Some(i);
+                        paren = 1;
+                    }
+                } else {
+                    paren += 1;
+                }
+            }
+            b')' => {
+                if open.is_some() {
+                    paren -= 1;
+                    if paren == 0 {
+                        return Some((open.unwrap(), i));
+                    }
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
     None
 }
 

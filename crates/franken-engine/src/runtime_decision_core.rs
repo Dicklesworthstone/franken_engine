@@ -3076,22 +3076,27 @@ mod tests {
             .map(|dep| dep.evidence_type.as_str())
             .collect();
 
+        // `fallback_trigger` is the decision-defining GuardrailActivation atom
+        // (full influence weight), so it is the one atom single-cover retains for
+        // that factor.
         assert!(evidence_types.contains("fallback_trigger"));
-        assert!(evidence_types.contains("latency_observation"));
 
         // Verify the relevant decision factors are represented (bd-o4cbn.3.3.11).
         //
-        // We assert FACTOR coverage, not the specific `regime_detection`
-        // evidence_type. The minimal causal set is single-cover by contract
+        // We assert FACTOR coverage, not specific dropped evidence atoms. The
+        // minimal causal set is single-cover by contract
         // (`minimal_causal_set_minimality_gate`: "each decision factor is covered
         // by exactly one retained evidence atom; if two atoms share a factor ...
-        // the set is not minimal"). `regime_detection` is recorded under
-        // `ConstraintActivation`, which also carries other (higher-influence)
-        // constraint atoms, so the greedy max-influence minimizer legitimately
-        // drops the `regime_detection` atom while keeping the factor covered.
-        // Asserting the specific atom survives minimization would contradict the
-        // single-cover minimality contract; asserting the factor is the correct,
-        // contract-aligned check (matching the GuardrailActivation assertion).
+        // the set is not minimal"). Two evidence atoms here are legitimately
+        // dropped by the greedy max-influence minimizer because they share a
+        // factor with a higher-influence atom that wins:
+        //   - `latency_observation` is recorded under `GuardrailActivation`, the
+        //     same factor as the higher-influence `fallback_trigger` (which wins).
+        //   - `regime_detection` is recorded under `ConstraintActivation`, which
+        //     also carries higher-influence constraint atoms.
+        // Asserting either dropped atom survives minimization would contradict the
+        // single-cover contract; asserting the factor is the correct, contract-
+        // aligned check.
         let factors: std::collections::BTreeSet<_> = causal_set
             .dependencies
             .iter()

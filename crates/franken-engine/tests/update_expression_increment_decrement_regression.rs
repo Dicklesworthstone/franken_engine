@@ -16,11 +16,16 @@
 //! true, and evaluation dies with "instruction budget exhausted". This is why
 //! the iteration-statements conformance cases that use `i++` fail.
 //!
-//! All tests are `#[ignore]`d until the operators are implemented. Un-ignore
-//! them (and flip the corresponding conformance cases to EXPECTED_PASS) when
-//! bd-um9a3 lands. The per-iteration-environment case at the bottom is gated
-//! behind bd-um9a3 *and* bd-bg9l1.27.8: it can only be observed once `i++`
-//! actually advances the loop.
+//! RESOLVED by bd-um9a3 (CrimsonHarbor): the parser now desugars `++`/`--` into
+//! the existing compound-assignment / binary nodes (`try_parse_update` in
+//! `parser.rs`), so all six cases below are active.
+//!
+//! Notable finding: the per-iteration-lexical-environment case at the bottom
+//! (bd-bg9l1.27.8 / DISC-010) *also* passes once `++` works. The engine already
+//! creates a fresh per-iteration binding for C-style `for (let i ...)` loops;
+//! the only reason that case appeared to fail was that `i++` never advanced the
+//! loop (instruction-budget exhaustion). So bd-um9a3 was the *sole* blocker —
+//! there is no separate per-iteration-env gap to fix.
 
 use frankenengine_engine::HybridRouter;
 
@@ -36,19 +41,16 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-um9a3: parser drops postfix ++ (i++ parses as bare i, no write-back)"]
 fn postfix_increment_writes_back_to_binding() {
     assert_eq!(eval_value("let i = 0; i++; i;"), "1");
 }
 
 #[test]
-#[ignore = "bd-um9a3: parser drops prefix ++ (++i parses as bare i, no write-back)"]
 fn prefix_increment_writes_back_to_binding() {
     assert_eq!(eval_value("let i = 0; ++i; i;"), "1");
 }
 
 #[test]
-#[ignore = "bd-um9a3: parser drops postfix -- (i-- parses as bare i, no write-back)"]
 fn postfix_decrement_writes_back_to_binding() {
     assert_eq!(eval_value("let i = 3; i--; i;"), "2");
 }
@@ -57,7 +59,6 @@ fn postfix_decrement_writes_back_to_binding() {
 /// (The old-value half is already correct today because `i++` currently *is*
 /// just `i`; this test guards against a fix that returns the new value.)
 #[test]
-#[ignore = "bd-um9a3: postfix ++ must return the pre-increment value AND write back"]
 fn postfix_increment_returns_old_value_and_writes_back() {
     // j captures the pre-increment value (5); i is left at 6.
     assert_eq!(eval_value("let i = 5; let j = i++; j;"), "5");
@@ -68,20 +69,21 @@ fn postfix_increment_returns_old_value_and_writes_back() {
 /// terminate. Today this faults with "instruction budget exhausted" because the
 /// update never advances `i`.
 #[test]
-#[ignore = "bd-um9a3: for(;;i++) infinite-loops because ++ never advances i"]
 fn c_style_for_loop_with_postfix_increment_terminates() {
     let sum = eval_value("let s = 0; for (let i = 0; i < 3; i++) { s = s + i; } s;");
     assert_eq!(sum, "3", "expected 0+1+2=3; got {sum}");
 }
 
-/// Per-iteration lexical environment (bd-bg9l1.27.8 / DISC-010). Gated behind
-/// bd-um9a3: only observable once `i++` actually advances the loop. ES2020
+/// Per-iteration lexical environment (bd-bg9l1.27.8 / DISC-010). ES2020
 /// §13.7.4.7 (CreatePerIterationEnvironment) requires each iteration to get a
 /// FRESH binding, so the three closures capture 0, 1, 2 (sum 3). A single shared
 /// binding makes them all observe the final `i` (sum 9). Written array-free to
 /// isolate per-iteration-env from Array.prototype.push/.length (bd-bg9l1.27.9).
+///
+/// This PASSES as soon as `i++` works (bd-um9a3): the engine already builds a
+/// fresh per-iteration binding, so there is no distinct per-iteration-env gap —
+/// the loop just never used to advance. (Confirmed against HEAD a93604fa.)
 #[test]
-#[ignore = "bd-bg9l1.27.8 (blocked by bd-um9a3): C-style for(let) needs per-iteration lexical env"]
 fn for_let_closures_capture_distinct_per_iteration_bindings() {
     let total = eval_value(
         r#"

@@ -4081,6 +4081,13 @@ fn parse_expression(
         return Ok(Expression::RegExpLiteral { pattern, flags });
     }
 
+    // Update expressions (`++x`, `--x`, `x++`, `x--`): must precede binary
+    // scanning, which would otherwise mis-split `i++` into `i + +` and silently
+    // drop the write-back entirely (bd-um9a3).
+    if let Some(result) = try_parse_update(expression, span, context, recursion_depth) {
+        return result;
+    }
+
     // Try binary expression with precedence scanning.
     if let Some(result) = try_parse_binary(expression, span, context, recursion_depth) {
         return result;
@@ -5536,6 +5543,108 @@ fn try_parse_unary_prefix(
     }
 
     None
+}
+
+/// Try to parse a prefix or postfix update expression (`++x`, `--x`, `x++`,
+/// `x--`).
+///
+/// The string-based parser has no dedicated `UpdateExpression` AST node, and
+/// threading one through the whole IR0→IR1→IR3 pipeline + interpreter would be a
+/// large blast radius. Instead we desugar into the existing compound-assignment
+/// and binary nodes, which already write back to the target and (for compound
+/// assignment) evaluate to the *new* value (see `Ir1Op::AssignOp` lowering):
+///
+/// * prefix  `++x` ⇒ `x += 1`         (value = new)
+/// * prefix  `--x` ⇒ `x -= 1`         (value = new)
+/// * postfix `x++` ⇒ `(x += 1) - 1`   (value = old; target left incremented)
+/// * postfix `x--` ⇒ `(x -= 1) + 1`   (value = old; target left decremented)
+///
+/// The `- 1` / `+ 1` adjustment recovers the pre-update value without needing a
+/// temporary, because the compound assignment already yields the post-update
+/// value. The target is read and written exactly once (via the compound
+/// assignment), so there is no double-evaluation of member targets.
+///
+/// Only fires when the operand is a simple assignment target (identifier or
+/// member access). Mixed forms like `++a + b` or `a + b++` are left to the
+/// binary scanner, which recurses back here on the cleanly-split operand.
+fn try_parse_update(
+    expr: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> Option<ParseResult<Expression>> {
+    let expr = expr.trim();
+    // Shortest update is `++x` / `x++` (3 bytes for a 1-char target).
+    if expr.len() < 3 {
+        return None;
+    }
+
+    // Prefix: `++x` / `--x`.
+    let prefix_op = if expr.starts_with("++") {
+        Some(AssignmentOperator::AddAssign)
+    } else if expr.starts_with("--") {
+        Some(AssignmentOperator::SubtractAssign)
+    } else {
+        None
+    };
+    if let Some(op) = prefix_op {
+        let operand_src = expr[2..].trim();
+        // Reject chained/ambiguous forms (`+++x`, `++ -x`); leave them to the
+        // unary path or to a fail-closed parse.
+        if operand_src.is_empty() || operand_src.starts_with('+') || operand_src.starts_with('-') {
+            return None;
+        }
+        let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
+        if !is_simple_update_target(&target) {
+            return None;
+        }
+        // `++x` ⇒ `x += 1` (compound assignment evaluates to the new value).
+        return Some(Ok(Expression::Assignment {
+            operator: op,
+            left: Box::new(target),
+            right: Box::new(Expression::NumericLiteral(1)),
+        }));
+    }
+
+    // Postfix: `x++` / `x--`.
+    let postfix = if expr.ends_with("++") {
+        Some((AssignmentOperator::AddAssign, BinaryOperator::Subtract))
+    } else if expr.ends_with("--") {
+        Some((AssignmentOperator::SubtractAssign, BinaryOperator::Add))
+    } else {
+        None
+    };
+    if let Some((assign_op, adjust_op)) = postfix {
+        let operand_src = expr[..expr.len() - 2].trim();
+        if operand_src.is_empty() || operand_src.ends_with('+') || operand_src.ends_with('-') {
+            return None;
+        }
+        let target = parse_expression(operand_src, span, context, recursion_depth + 1).ok()?;
+        if !is_simple_update_target(&target) {
+            return None;
+        }
+        // `x++` ⇒ `(x += 1) - 1`: write the increment back, evaluate to the old
+        // value. `x--` mirrors with `(x -= 1) + 1`.
+        let write_back = Expression::Assignment {
+            operator: assign_op,
+            left: Box::new(target),
+            right: Box::new(Expression::NumericLiteral(1)),
+        };
+        return Some(Ok(Expression::Binary {
+            operator: adjust_op,
+            left: Box::new(write_back),
+            right: Box::new(Expression::NumericLiteral(1)),
+        }));
+    }
+
+    None
+}
+
+/// A valid target for `++`/`--`: a bare identifier or a member access
+/// (`obj.prop`, `obj[key]`). Anything else is not assignable, so the candidate
+/// is not an update expression.
+fn is_simple_update_target(expr: &Expression) -> bool {
+    matches!(expr, Expression::Identifier(_) | Expression::Member { .. })
 }
 
 // ---------------------------------------------------------------------------

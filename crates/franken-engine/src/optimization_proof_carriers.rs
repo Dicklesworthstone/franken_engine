@@ -489,10 +489,15 @@ impl OptimizationProofCarrier {
             OptimizationVerificationStatus::VerificationFailed
         };
 
-        // Generate proof certificates for verified proofs
-        if verified_proofs > 0 {
-            self.generate_proof_certificates()?;
-        }
+        // Generate proof certificates. Always run: `generate_proof_certificates`
+        // internally gates each certificate. The SemanticEquivalence cert is gated
+        // on actually-verified passes, so it stays fail-closed when
+        // `verified_proofs == 0` (prose-premise obligations fail closed through Z3 —
+        // bd-cixqu.7.17.2). The PerformanceImprovement cert is gated on the
+        // engine-tracked `overall_performance_improvement`, independent of proof
+        // verification. Guarding the whole call on `verified_proofs > 0` wrongly
+        // suppressed the performance cert once verification became fail-closed.
+        self.generate_proof_certificates()?;
 
         Ok(OptimizationVerificationResult {
             total_proofs: self.equivalence_proofs.len(),

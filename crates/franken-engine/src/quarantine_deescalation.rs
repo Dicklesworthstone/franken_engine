@@ -311,15 +311,19 @@ impl ReAdmissionDecision {
             ..self.clone()
         };
 
-        verify_signature(
+        // A non-matching signature is the normal "invalid" outcome and must
+        // surface as Ok(false), not Err: `Result<bool>` here means
+        // Ok(true)=valid, Ok(false)=invalid, Err=operational failure. Ed25519
+        // verify returns Err on signature mismatch (unlike the old MAC compare),
+        // so collapse it through `is_ok()` — matching the canonical
+        // `proof_schema::verify_signature` pattern and the fail-closed contract
+        // the tests pin (a wrong key yields Ok(false), never an error).
+        Ok(verify_signature(
             operator_key,
             &unsigned.preimage_bytes(),
             &self.operator_signature,
         )
-        .map(|_| true)
-        .map_err(|e| {
-            ReAdmissionError::Verification(format!("Signature verification failed: {}", e))
-        })
+        .is_ok())
     }
 
     /// Computes content hash for deterministic ID generation.

@@ -2722,14 +2722,25 @@ fn lower_statement_to_ir1_with_flow(
             // Find the constructor method, if any.
             let constructor = cls.body.iter().find(|m| m.kind == MethodKind::Constructor);
             // Lower constructor as a function declaration.
-            let param_names: Vec<String> = constructor
-                .map(|c| {
-                    c.params
-                        .iter()
-                        .filter_map(|p| p.name().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
+            // Simple identifier params keep their name; non-identifier patterns
+            // (default `x = v` / destructuring) get a synthetic `__param_N` slot
+            // destructured at body entry. A plain `filter_map(|p| p.name())`
+            // silently DROPPED such params (arity short, value lost) — bd-7yrmf,
+            // the class-constructor sibling of bd-f2iw8.
+            let mut param_names: Vec<String> = Vec::new();
+            let mut destructure_params: Vec<(String, &BindingPattern)> = Vec::new();
+            if let Some(c) = constructor {
+                for (index, param) in c.params.iter().enumerate() {
+                    match param.name() {
+                        Some(name) => param_names.push(name.to_string()),
+                        None => {
+                            let synthetic = format!("__param_{index}");
+                            param_names.push(synthetic.clone());
+                            destructure_params.push((synthetic, &param.pattern));
+                        }
+                    }
+                }
+            }
             // perf: pre-size body_ops Vec based on constructor body statement count
             let estimated_body_ops = constructor
                 .map(|c| c.body.body.len().saturating_mul(2).max(8))
@@ -2751,6 +2762,33 @@ fn lower_statement_to_ir1_with_flow(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+            }
+            // Destructure non-identifier ctor params (applies defaults) before the body.
+            for (synthetic_name, pattern) in &destructure_params {
+                for inner_name in pattern.binding_names() {
+                    let _ = alloc_binding(
+                        &mut body_bindings,
+                        &mut body_lookup,
+                        &mut body_binding_index,
+                        body_scope,
+                        inner_name,
+                        BindingKind::Var,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?;
+                }
+                let source_bid = *body_lookup
+                    .get(synthetic_name.as_str())
+                    .expect("synthetic param binding allocated above");
+                lower_destructuring_to_ir1(
+                    pattern,
+                    source_bid,
+                    &mut body_ops,
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    &mut body_label_counter,
+                )?;
             }
             if let Some(ctor) = constructor {
                 for stmt in &ctor.body.body {
@@ -2833,11 +2871,23 @@ fn lower_statement_to_ir1_with_flow(
                 };
 
                 // Lower method body with its own scope.
-                let m_param_names: Vec<String> = method
-                    .params
-                    .iter()
-                    .filter_map(|p| p.name().map(String::from))
-                    .collect();
+                // Identifier params keep their name; non-identifier patterns
+                // (default `x = v` / destructuring) get a synthetic `__param_N`
+                // slot destructured at body entry (bd-7yrmf, class-method sibling
+                // of bd-f2iw8) — a plain `filter_map` silently dropped them.
+                let mut m_param_names: Vec<String> = Vec::with_capacity(method.params.len());
+                let mut m_destructure_params: Vec<(String, &BindingPattern)> =
+                    Vec::with_capacity(method.params.len());
+                for (index, param) in method.params.iter().enumerate() {
+                    match param.name() {
+                        Some(name) => m_param_names.push(name.to_string()),
+                        None => {
+                            let synthetic = format!("__param_{index}");
+                            m_param_names.push(synthetic.clone());
+                            m_destructure_params.push((synthetic, &param.pattern));
+                        }
+                    }
+                }
                 let mut m_body_ops = Vec::new();
                 let mut m_bindings = Vec::new();
                 let mut m_lookup = BTreeMap::new();
@@ -2854,6 +2904,33 @@ fn lower_statement_to_ir1_with_flow(
                         BindingKind::Parameter,
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
+                }
+                // Destructure non-identifier params (applies defaults) before the body.
+                for (synthetic_name, pattern) in &m_destructure_params {
+                    for inner_name in pattern.binding_names() {
+                        let _ = alloc_binding(
+                            &mut m_bindings,
+                            &mut m_lookup,
+                            &mut m_binding_index,
+                            m_scope,
+                            inner_name,
+                            BindingKind::Var,
+                        )
+                        .map_err(LoweringPipelineError::SemanticViolation)?;
+                    }
+                    let source_bid = *m_lookup
+                        .get(synthetic_name.as_str())
+                        .expect("synthetic param binding allocated above");
+                    lower_destructuring_to_ir1(
+                        pattern,
+                        source_bid,
+                        &mut m_body_ops,
+                        &mut m_bindings,
+                        &mut m_lookup,
+                        &mut m_binding_index,
+                        m_scope,
+                        &mut m_label_counter,
+                    )?;
                 }
                 for stmt in &method.body.body {
                     lower_statement_to_ir1(
@@ -8198,14 +8275,24 @@ fn lower_expression_to_ir1(
             )?;
 
             let constructor = body.iter().find(|m| m.kind == MethodKind::Constructor);
-            let param_names: Vec<String> = constructor
-                .map(|c| {
-                    c.params
-                        .iter()
-                        .filter_map(|p| p.name().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default();
+            // Identifier params keep their name; non-identifier patterns (default
+            // `x = v` / destructuring) get a synthetic `__param_N` slot
+            // destructured at body entry (bd-7yrmf, class-expression-constructor
+            // sibling of bd-f2iw8) — a plain `filter_map` silently dropped them.
+            let mut param_names: Vec<String> = Vec::new();
+            let mut destructure_params: Vec<(String, &BindingPattern)> = Vec::new();
+            if let Some(c) = constructor {
+                for (index, param) in c.params.iter().enumerate() {
+                    match param.name() {
+                        Some(name) => param_names.push(name.to_string()),
+                        None => {
+                            let synthetic = format!("__param_{index}");
+                            param_names.push(synthetic.clone());
+                            destructure_params.push((synthetic, &param.pattern));
+                        }
+                    }
+                }
+            }
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
@@ -8222,6 +8309,33 @@ fn lower_expression_to_ir1(
                     BindingKind::Parameter,
                 )
                 .map_err(LoweringPipelineError::SemanticViolation)?;
+            }
+            // Destructure non-identifier ctor params (applies defaults) before the body.
+            for (synthetic_name, pattern) in &destructure_params {
+                for inner_name in pattern.binding_names() {
+                    let _ = alloc_binding(
+                        &mut body_bindings,
+                        &mut body_lookup,
+                        &mut body_binding_index,
+                        body_scope,
+                        inner_name,
+                        BindingKind::Var,
+                    )
+                    .map_err(LoweringPipelineError::SemanticViolation)?;
+                }
+                let source_bid = *body_lookup
+                    .get(synthetic_name.as_str())
+                    .expect("synthetic param binding allocated above");
+                lower_destructuring_to_ir1(
+                    pattern,
+                    source_bid,
+                    &mut body_ops,
+                    &mut body_bindings,
+                    &mut body_lookup,
+                    &mut body_binding_index,
+                    body_scope,
+                    &mut body_label_counter,
+                )?;
             }
             if let Some(ctor) = constructor {
                 for stmt in &ctor.body.body {
@@ -8282,11 +8396,23 @@ fn lower_expression_to_ir1(
                     Expression::StringLiteral(s) => s.clone(),
                     _ => "anonymous_method".to_string(),
                 };
-                let m_param_names: Vec<String> = method
-                    .params
-                    .iter()
-                    .filter_map(|p| p.name().map(String::from))
-                    .collect();
+                // Identifier params keep their name; non-identifier patterns
+                // (default `x = v` / destructuring) get a synthetic `__param_N`
+                // slot destructured at body entry (bd-7yrmf, class-expression-
+                // method sibling of bd-f2iw8) — a plain `filter_map` dropped them.
+                let mut m_param_names: Vec<String> = Vec::with_capacity(method.params.len());
+                let mut m_destructure_params: Vec<(String, &BindingPattern)> =
+                    Vec::with_capacity(method.params.len());
+                for (index, param) in method.params.iter().enumerate() {
+                    match param.name() {
+                        Some(name) => m_param_names.push(name.to_string()),
+                        None => {
+                            let synthetic = format!("__param_{index}");
+                            m_param_names.push(synthetic.clone());
+                            m_destructure_params.push((synthetic, &param.pattern));
+                        }
+                    }
+                }
                 let mut m_body_ops = Vec::new();
                 let mut m_bindings = Vec::new();
                 let mut m_lookup = BTreeMap::new();
@@ -8303,6 +8429,33 @@ fn lower_expression_to_ir1(
                         BindingKind::Parameter,
                     )
                     .map_err(LoweringPipelineError::SemanticViolation)?;
+                }
+                // Destructure non-identifier params (applies defaults) before the body.
+                for (synthetic_name, pattern) in &m_destructure_params {
+                    for inner_name in pattern.binding_names() {
+                        let _ = alloc_binding(
+                            &mut m_bindings,
+                            &mut m_lookup,
+                            &mut m_binding_index,
+                            m_scope,
+                            inner_name,
+                            BindingKind::Var,
+                        )
+                        .map_err(LoweringPipelineError::SemanticViolation)?;
+                    }
+                    let source_bid = *m_lookup
+                        .get(synthetic_name.as_str())
+                        .expect("synthetic param binding allocated above");
+                    lower_destructuring_to_ir1(
+                        pattern,
+                        source_bid,
+                        &mut m_body_ops,
+                        &mut m_bindings,
+                        &mut m_lookup,
+                        &mut m_binding_index,
+                        m_scope,
+                        &mut m_label_counter,
+                    )?;
                 }
                 for stmt in &method.body.body {
                     lower_statement_to_ir1(

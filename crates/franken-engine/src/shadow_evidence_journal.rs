@@ -985,7 +985,18 @@ mod tests {
         let err = append_journal_events(&mut adapter, &[advisory_seed(42)], &context)
             .expect_err("unknown parent links must fail closed");
         assert!(matches!(err, StorageError::IntegrityViolation { .. }));
-        assert!(err.to_string().contains("parent event 42 does not exist"));
+        // A lone derived append carrying parent 42 is rejected by the typed-shape
+        // invariant (a parent must reference an EARLIER journal sequence id, and at
+        // append time none exist), which fires before `validate_parent_links`'s
+        // existence check. The append allocator only ever hands out contiguous
+        // sequence ids, so a structurally-valid-but-missing parent can only arise on
+        // the import/read path — its "parent event N does not exist" message is
+        // exercised by `read_refuses_missing_stored_parent_link`.
+        assert!(
+            err.to_string()
+                .contains("parent event links must reference earlier journal sequence ids"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

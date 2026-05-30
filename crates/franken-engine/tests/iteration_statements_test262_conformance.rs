@@ -815,6 +815,7 @@ fn iteration_statements_test262_conformance_integration() {
         "for-of-statement-basic",
         "for-of-statement-const-declaration",
         "for-statement-basic",
+        "for-statement-block-scope-isolation",
         "for-statement-const-declaration",
         "for-statement-empty-body",
         "for-statement-empty-parts",
@@ -827,7 +828,7 @@ fn iteration_statements_test262_conformance_integration() {
         "while-statement-empty-body",
     ];
 
-    /// 7 frontier iteration-statement cases the engine currently does NOT pass.
+    /// 5 frontier iteration-statement cases the engine currently does NOT pass.
     /// (Was 14; bd-bg9l1.27.1 resolved the `//` comment-leak — DISC-001 — which
     /// unblocked `continue-for-of-skip` and the three `for-of-destructuring-*`
     /// cases; bd-bg9l1.27.4 + bd-t7txt added labelled `break`/`continue` —
@@ -835,7 +836,14 @@ fn iteration_statements_test262_conformance_integration() {
     /// `labeled-continue-statement` (the statement splitter now treats a
     /// labelled compound statement as block-terminated); bd-bg9l1.27.9 wired
     /// `Array.prototype.push` as a receiver-aware `CallMethod` builtin — DISC-012 —
-    /// promoting `break-for-of-early-exit`.)
+    /// promoting `break-for-of-early-exit`; bd-um9a3 implemented `++`/`--`
+    /// write-back, which let `for (let i...; i++)` loops terminate — promoting
+    /// `for-statement-block-scope-isolation` to `EXPECTED_PASS` (DISC-010: the
+    /// engine already creates a fresh per-iteration binding, confirmed by closures
+    /// capturing distinct 0,1,2). The same `++`/`--` fix flipped
+    /// `for-statement-let-tdz` to an is_ok `Pass` — but that case is a NEGATIVE
+    /// "should throw ReferenceError" case the is_ok harness cannot credit, so it
+    /// moved to `HARNESS_BLIND_SHOULD_THROW`, not `EXPECTED_PASS`.)
     /// Each entry pairs the test id with the tracking bead and the
     /// `ECMA262_DISCREPANCIES.md` row that documents the gap (bd-xkbrm FIND-5).
     /// Keep alphabetised by test id. When the engine repairs a gap, move the id
@@ -859,16 +867,6 @@ fn iteration_statements_test262_conformance_integration() {
             "DISC-009 (IteratorClose throw)",
         ),
         (
-            "for-statement-block-scope-isolation",
-            "bd-bg9l1.27.8",
-            "DISC-010 (per-iteration env)",
-        ),
-        (
-            "for-statement-let-tdz",
-            "bd-bg9l1.27.5",
-            "DISC-007 (let TDZ)",
-        ),
-        (
             "unlabeled-break-error",
             "bd-bg9l1.27.6",
             "DISC-008 (bare break/continue outside loop)",
@@ -880,14 +878,53 @@ fn iteration_statements_test262_conformance_integration() {
         ),
     ];
 
+    /// NEGATIVE "should-throw" cases the is_ok harness CANNOT credit.
+    ///
+    /// `execute_test_case` scores `Pass` iff `engine.eval()` returns `Ok`. For a
+    /// case whose spec requirement is *throw a ReferenceError* (or other error),
+    /// an is_ok `Pass` is meaningless — and usually a FALSE pass: the engine
+    /// returned `Ok` precisely because it did NOT throw. Such a case can be
+    /// neither `EXPECTED_PASS` (that would assert the wrong, non-throwing
+    /// behaviour) nor `KNOWN_FAILING_CASES` (Invariant 3 trips the moment the
+    /// engine returns `Ok`, demanding a promotion that would be wrong). It lives
+    /// here instead: excluded from Invariants 2 and 3, with the real gap tracked
+    /// by the cited bead/DISC and verified out-of-band (e.g. static-semantics unit
+    /// tests). See the §"Exact-gap drift detector" note that an is_ok harness can
+    /// never express negative should-throw expectations.
+    ///
+    /// `for-statement-let-tdz` (`for (let x = (x = 1); ...)` — must throw a TDZ
+    /// ReferenceError): static rejection landed in 8ed0e8f4 (bd-bg9l1.27.5,
+    /// verified via static_semantics tests), but it is not enforced on the
+    /// `HybridRouter::eval` register path, so `eval` returns `Ok`. The bd-um9a3
+    /// `++`/`--` fix removed the prior incidental "budget exhausted" error, which
+    /// is why this surfaced now. Runtime TDZ enforcement remains the open gap.
+    const HARNESS_BLIND_SHOULD_THROW: &[(&str, &str, &str)] = &[
+        // (test_id, tracking_bead, discrepancies_row)
+        (
+            "for-statement-let-tdz",
+            "bd-bg9l1.27.5",
+            "DISC-007 (let TDZ — runtime enforcement; static done in 8ed0e8f4)",
+        ),
+    ];
+
     // Surface the frontier inventory in CI output so reviewers don't have to
     // grep tests/ECMA262_DISCREPANCIES.md to know what's still red.
     println!("\nKnown failing cases (bd-xkbrm — see tests/ECMA262_DISCREPANCIES.md):");
     for (id, bead, disc) in KNOWN_FAILING_CASES {
         println!("  {id}  [{bead}]  {disc}");
     }
+    println!(
+        "\nHarness-blind should-throw cases (is_ok harness cannot credit — see DISCREPANCIES.md):"
+    );
+    for (id, bead, disc) in HARNESS_BLIND_SHOULD_THROW {
+        println!("  {id}  [{bead}]  {disc}");
+    }
 
     let expected_pass: BTreeSet<&str> = EXPECTED_PASS.iter().copied().collect();
+    let harness_blind: BTreeSet<&str> = HARNESS_BLIND_SHOULD_THROW
+        .iter()
+        .map(|(id, _, _)| *id)
+        .collect();
     let expected_fail: BTreeSet<&str> = KNOWN_FAILING_CASES.iter().map(|(id, _, _)| *id).collect();
     let actual_pass: BTreeSet<&str> = IterationStatementConformanceHarness::STATIC_TEST_CASES
         .iter()
@@ -904,26 +941,32 @@ fn iteration_statements_test262_conformance_integration() {
         .map(|test_case| test_case.id)
         .collect();
 
-    let classified: BTreeSet<&str> = expected_pass.union(&expected_fail).copied().collect();
+    let classified: BTreeSet<&str> = expected_pass
+        .union(&expected_fail)
+        .copied()
+        .chain(harness_blind.iter().copied())
+        .collect();
 
-    // Invariant 1: every static case is in exactly one bucket.
+    // Invariant 1: every static case is in exactly one of the three buckets.
     let overlap: Vec<&str> = expected_pass
         .intersection(&expected_fail)
         .copied()
+        .chain(expected_pass.intersection(&harness_blind).copied())
+        .chain(expected_fail.intersection(&harness_blind).copied())
         .collect();
     assert!(
         overlap.is_empty(),
-        "bd-xkbrm: cases listed in BOTH EXPECTED_PASS and KNOWN_FAILING_CASES (must be one or the other): {overlap:?}"
+        "bd-xkbrm: cases listed in more than one of EXPECTED_PASS / KNOWN_FAILING_CASES / HARNESS_BLIND_SHOULD_THROW (must be in exactly one): {overlap:?}"
     );
     let unclassified: Vec<&str> = all_ids.difference(&classified).copied().collect();
     assert!(
         unclassified.is_empty(),
-        "bd-xkbrm: static cases missing from BOTH EXPECTED_PASS and KNOWN_FAILING_CASES (silent omission is the bug this gate was added to prevent): {unclassified:?}"
+        "bd-xkbrm: static cases missing from EXPECTED_PASS / KNOWN_FAILING_CASES / HARNESS_BLIND_SHOULD_THROW (silent omission is the bug this gate was added to prevent): {unclassified:?}"
     );
     let stale: Vec<&str> = classified.difference(&all_ids).copied().collect();
     assert!(
         stale.is_empty(),
-        "bd-xkbrm: EXPECTED_PASS / KNOWN_FAILING_CASES reference test ids that no longer exist in STATIC_TEST_CASES — prune them: {stale:?}"
+        "bd-xkbrm: EXPECTED_PASS / KNOWN_FAILING_CASES / HARNESS_BLIND_SHOULD_THROW reference test ids that no longer exist in STATIC_TEST_CASES — prune them: {stale:?}"
     );
 
     // Invariant 2: every EXPECTED_PASS id still passes.

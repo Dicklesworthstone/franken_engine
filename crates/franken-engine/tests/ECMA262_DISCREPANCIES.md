@@ -144,9 +144,10 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
 - **Affected tests:** `for-statement-let-tdz`, related `let` cases that probe `(x = (x = 1); ...; ...)`
 - **Symptom:** Accessing a `let`-bound name before its declaration site does not raise `ReferenceError`; the interpreter treats the binding as already-initialized.
-- **Tracking bead:** bd-bg9l1.27
-- **Reviewed:** 2026-05-28
-- **Next review:** 2026-06-28
+- **Partial fix:** Static self-reference rejection landed in 8ed0e8f4 (bd-bg9l1.27.5) — `static_semantics` rejects `for (let x = (x = 1); ...)` and `let x = x;`. It is verified by `static_semantics` unit tests but is **not** enforced on the `HybridRouter::eval` register path, so `eval` still returns `Ok` for the conformance case. **Runtime TDZ enforcement remains the open gap.**
+- **Harness note:** `for-statement-let-tdz` is a NEGATIVE *should-throw* case. The is_ok harness (`tests/iteration_statements_test262_conformance.rs`) scores `Pass` iff `eval()==Ok`, so it credits this case a (false) `Pass` precisely because the engine fails to throw. Since bd-um9a3 fixed `++`/`--` (removing the prior incidental budget-exhaustion error), the case began returning `Ok` and would falsely trip the drift detector's "promote" invariant — so it is classified in `HARNESS_BLIND_SHOULD_THROW`, **not** `EXPECTED_PASS`. The gap is tracked here and verified out-of-band.
+- **Tracking bead:** bd-bg9l1.27.5 (static) / runtime TDZ open under bd-bg9l1.27
+- **Reviewed:** 2026-05-30
 
 ### DISC-008: Bare `break` / `continue` outside any loop not rejected as `SyntaxError`
 
@@ -170,16 +171,16 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Reviewed:** 2026-05-28
 - **Next review:** 2026-06-28
 
-### DISC-010: `for`-statement per-iteration block-scope isolation (`let`) not enforced
+### DISC-010: `for`-statement per-iteration block-scope isolation (`let`) — RESOLVED
 
-- **Status:** WILL-FIX
+- **Status:** RESOLVED (2026-05-30, bd-bg9l1.27.8)
 - **ES2020 ref:** §13.7.4.7 (Runtime Semantics: LabelledEvaluation — for / let), §13.7.4.8 (CreatePerIterationEnvironment)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
-- **Affected tests:** `for-statement-block-scope-isolation`
-- **Symptom:** A `for (let i = 0; ...; i++)` loop body closure observes a *single* shared `i` binding rather than a fresh per-iteration `i`. The expected test value `0+1+2 = 3` produced by closures captured per-iteration is currently observed as a different (single-binding) result.
-- **Tracking bead:** bd-bg9l1.27
-- **Reviewed:** 2026-05-28
-- **Next review:** 2026-06-28
+- **Affected tests:** `for-statement-block-scope-isolation` (now `EXPECTED_PASS`)
+- **Symptom (historical):** A `for (let i = 0; ...; i++)` loop body closure was reported to observe a *single* shared `i` binding rather than a fresh per-iteration `i`.
+- **Resolution:** The engine in fact already creates a fresh per-iteration declarative binding — the case's three closures capture distinct `0,1,2` and sum to `3`. The gap was *masked* by bd-um9a3: `++`/`--` were silently dropped, so `for (let i...; i++)` never terminated (instruction-budget exhaustion) and per-iteration semantics never got a chance to be observed. Once bd-um9a3 implemented `++`/`--` write-back (22866f7c), the case passes. No per-iteration-env code change was required; promoted to `EXPECTED_PASS`.
+- **Tracking bead:** bd-bg9l1.27.8
+- **Reviewed:** 2026-05-30
 
 ### DISC-011: `Promise.any` (§27.2.4.5) MUST-tier cases live inside the ES2020 async-promise harness
 

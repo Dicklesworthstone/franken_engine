@@ -921,7 +921,12 @@ impl ZoneHierarchy {
         } else {
             CrossZoneReferenceType::AuthorityDenied
         };
-        observability.record_cross_zone_reference(context, reference_type, &source_zone, &target_zone);
+        observability.record_cross_zone_reference(
+            context,
+            reference_type,
+            &source_zone,
+            &target_zone,
+        );
         result
     }
 

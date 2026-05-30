@@ -244,15 +244,39 @@ pub fn test_associativity_law(
     priorities3: &[EffectPriority],
 ) -> bool {
     // Left association: (h1 ∘ h2) ∘ h3
-    let stack1_left = generate_test_stack(&format!("{}_1", name_prefix), priorities1.len(), priorities1);
-    let stack2_left = generate_test_stack(&format!("{}_2", name_prefix), priorities2.len(), priorities2);
-    let stack3_left = generate_test_stack(&format!("{}_3", name_prefix), priorities3.len(), priorities3);
+    let stack1_left = generate_test_stack(
+        &format!("{}_1", name_prefix),
+        priorities1.len(),
+        priorities1,
+    );
+    let stack2_left = generate_test_stack(
+        &format!("{}_2", name_prefix),
+        priorities2.len(),
+        priorities2,
+    );
+    let stack3_left = generate_test_stack(
+        &format!("{}_3", name_prefix),
+        priorities3.len(),
+        priorities3,
+    );
     let left_composed = stack1_left.compose(stack2_left).compose(stack3_left);
 
     // Right association: h1 ∘ (h2 ∘ h3) — same logical handlers per position.
-    let stack1_right = generate_test_stack(&format!("{}_1", name_prefix), priorities1.len(), priorities1);
-    let stack2_right = generate_test_stack(&format!("{}_2", name_prefix), priorities2.len(), priorities2);
-    let stack3_right = generate_test_stack(&format!("{}_3", name_prefix), priorities3.len(), priorities3);
+    let stack1_right = generate_test_stack(
+        &format!("{}_1", name_prefix),
+        priorities1.len(),
+        priorities1,
+    );
+    let stack2_right = generate_test_stack(
+        &format!("{}_2", name_prefix),
+        priorities2.len(),
+        priorities2,
+    );
+    let stack3_right = generate_test_stack(
+        &format!("{}_3", name_prefix),
+        priorities3.len(),
+        priorities3,
+    );
     let right_composed = stack1_right.compose(stack2_right.compose(stack3_right));
 
     stacks_equivalent(&left_composed, &right_composed)
@@ -307,8 +331,7 @@ pub fn associativity_proof() -> &'static str {
 /// differ, so [`stacks_equivalent`] returned `false` regardless of the law.
 pub fn test_left_identity_law(name_prefix: &str, priorities: &[EffectPriority]) -> bool {
     let identity = identity_stack();
-    let original =
-        generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
+    let original = generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
     let reference =
         generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
     let composed = identity.compose(original);
@@ -323,8 +346,7 @@ pub fn test_left_identity_law(name_prefix: &str, priorities: &[EffectPriority]) 
 /// differ, so [`stacks_equivalent`] returned `false` regardless of the law.
 pub fn test_right_identity_law(name_prefix: &str, priorities: &[EffectPriority]) -> bool {
     let identity = identity_stack();
-    let original =
-        generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
+    let original = generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
     let reference =
         generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
     let composed = original.compose(identity);

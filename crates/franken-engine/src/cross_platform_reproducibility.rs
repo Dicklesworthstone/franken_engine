@@ -7,7 +7,7 @@
 #![forbid(unsafe_code)]
 
 use crate::hash_tiers::ContentHash;
-use crate::rch_worker_registry::{RchWorkerRegistry, RchWorkerError, WorkerPlatform};
+use crate::rch_worker_registry::{RchWorkerError, RchWorkerRegistry, WorkerPlatform};
 use crate::worker_env_capture::WorkerEnvironment;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -186,10 +186,7 @@ impl std::fmt::Debug for CrossPlatformReproducibilityTester {
 
 impl CrossPlatformReproducibilityTester {
     /// Create a new reproducibility tester.
-    pub fn new(
-        worker_registry: RchWorkerRegistry,
-        config: ReproducibilityTestConfig,
-    ) -> Self {
+    pub fn new(worker_registry: RchWorkerRegistry, config: ReproducibilityTestConfig) -> Self {
         Self {
             worker_registry,
             config,
@@ -380,10 +377,7 @@ impl CrossPlatformReproducibilityTester {
         platform_results: &BTreeMap<WorkerPlatform, PlatformExecutionResult>,
         divergences: &mut Vec<PlatformDivergence>,
     ) -> Result<bool, ReproducibilityTestError> {
-        let successful_results: Vec<_> = platform_results
-            .values()
-            .filter(|r| r.success)
-            .collect();
+        let successful_results: Vec<_> = platform_results.values().filter(|r| r.success).collect();
 
         if successful_results.is_empty() {
             return Ok(false); // No successful executions
@@ -423,7 +417,9 @@ impl CrossPlatformReproducibilityTester {
             // Check performance divergence
             let performance_diff = if reference.execution_time_ms > 0 {
                 ((result.execution_time_ms as f64 - reference.execution_time_ms as f64)
-                 / reference.execution_time_ms as f64 * 100.0).abs()
+                    / reference.execution_time_ms as f64
+                    * 100.0)
+                    .abs()
             } else {
                 0.0
             };
@@ -450,7 +446,11 @@ impl CrossPlatformReproducibilityTester {
                     divergence_type: DivergenceType::ExecutionFailure,
                     description: format!("Execution failed on {}", platform.as_str()),
                     expected_value: "success".to_string(),
-                    actual_value: result.error.as_ref().unwrap_or(&"unknown error".to_string()).clone(),
+                    actual_value: result
+                        .error
+                        .as_ref()
+                        .unwrap_or(&"unknown error".to_string())
+                        .clone(),
                 });
             }
         }
@@ -471,7 +471,6 @@ impl CrossPlatformReproducibilityTester {
                 flags: vec![],
                 deterministic: true,
             },
-
             // String operations
             ReproducibilityTestInput {
                 test_id: "string_operations".to_string(),
@@ -482,7 +481,6 @@ impl CrossPlatformReproducibilityTester {
                 flags: vec![],
                 deterministic: true,
             },
-
             // Array operations
             ReproducibilityTestInput {
                 test_id: "array_operations".to_string(),
@@ -493,7 +491,6 @@ impl CrossPlatformReproducibilityTester {
                 flags: vec![],
                 deterministic: true,
             },
-
             // Object operations
             ReproducibilityTestInput {
                 test_id: "object_operations".to_string(),
@@ -504,51 +501,50 @@ impl CrossPlatformReproducibilityTester {
                 flags: vec![],
                 deterministic: true,
             },
-
             // Function definitions
             ReproducibilityTestInput {
                 test_id: "function_definitions".to_string(),
                 description: "Function definition and invocation".to_string(),
-                source_code: "function add(a, b) { return a + b; } console.log(add(5, 3))".to_string(),
+                source_code: "function add(a, b) { return a + b; } console.log(add(5, 3))"
+                    .to_string(),
                 output_type: OutputType::Stdout,
                 module_type: ModuleType::Script,
                 flags: vec![],
                 deterministic: true,
             },
-
             // Control flow
             ReproducibilityTestInput {
                 test_id: "control_flow".to_string(),
                 description: "If/else and loop constructs".to_string(),
-                source_code: "let sum = 0; for(let i = 0; i < 5; i++) sum += i; console.log(sum)".to_string(),
+                source_code: "let sum = 0; for(let i = 0; i < 5; i++) sum += i; console.log(sum)"
+                    .to_string(),
                 output_type: OutputType::Stdout,
                 module_type: ModuleType::Script,
                 flags: vec![],
                 deterministic: true,
             },
-
             // Error handling
             ReproducibilityTestInput {
                 test_id: "error_handling".to_string(),
                 description: "Try/catch error handling".to_string(),
-                source_code: "try { throw new Error('test'); } catch(e) { console.log('caught') }".to_string(),
+                source_code: "try { throw new Error('test'); } catch(e) { console.log('caught') }"
+                    .to_string(),
                 output_type: OutputType::Stdout,
                 module_type: ModuleType::Script,
                 flags: vec![],
                 deterministic: true,
             },
-
             // JSON operations
             ReproducibilityTestInput {
                 test_id: "json_operations".to_string(),
                 description: "JSON stringify/parse operations".to_string(),
-                source_code: "const obj = {x: 42}; console.log(JSON.parse(JSON.stringify(obj)).x)".to_string(),
+                source_code: "const obj = {x: 42}; console.log(JSON.parse(JSON.stringify(obj)).x)"
+                    .to_string(),
                 output_type: OutputType::Stdout,
                 module_type: ModuleType::Script,
                 flags: vec![],
                 deterministic: true,
             },
-
             // Regular expressions
             ReproducibilityTestInput {
                 test_id: "regex_operations".to_string(),
@@ -559,7 +555,6 @@ impl CrossPlatformReproducibilityTester {
                 flags: vec![],
                 deterministic: true,
             },
-
             // Date operations (deterministic subset)
             ReproducibilityTestInput {
                 test_id: "date_operations".to_string(),
@@ -574,7 +569,9 @@ impl CrossPlatformReproducibilityTester {
     }
 
     /// Run the full reproducibility test suite.
-    pub fn run_test_suite(&mut self) -> Result<Vec<ReproducibilityTestResult>, ReproducibilityTestError> {
+    pub fn run_test_suite(
+        &mut self,
+    ) -> Result<Vec<ReproducibilityTestResult>, ReproducibilityTestError> {
         let test_suite = Self::generate_standard_test_suite();
         let mut results = Vec::new();
 
@@ -591,15 +588,17 @@ impl CrossPlatformReproducibilityTester {
         results: &[ReproducibilityTestResult],
         output_path: &Path,
     ) -> Result<(), ReproducibilityTestError> {
-        let json = serde_json::to_string_pretty(results)
-            .map_err(|e| ReproducibilityTestError::Serialization { details: e.to_string() })?;
+        let json = serde_json::to_string_pretty(results).map_err(|e| {
+            ReproducibilityTestError::Serialization {
+                details: e.to_string(),
+            }
+        })?;
 
-        std::fs::write(output_path, json)
-            .map_err(|e| ReproducibilityTestError::IoError {
-                operation: "write_results".to_string(),
-                path: output_path.to_string_lossy().to_string(),
-                error: e.to_string(),
-            })?;
+        std::fs::write(output_path, json).map_err(|e| ReproducibilityTestError::IoError {
+            operation: "write_results".to_string(),
+            path: output_path.to_string_lossy().to_string(),
+            error: e.to_string(),
+        })?;
 
         Ok(())
     }
@@ -618,7 +617,11 @@ pub enum ReproducibilityTestError {
     PlatformUnavailable { platform: WorkerPlatform },
 
     #[error("I/O error during {operation} on {path}: {error}")]
-    IoError { operation: String, path: String, error: String },
+    IoError {
+        operation: String,
+        path: String,
+        error: String,
+    },
 
     #[error("Serialization error: {details}")]
     Serialization { details: String },
@@ -644,14 +647,21 @@ mod tests {
         };
 
         let json = serde_json::to_string(&input).expect("serialization should work");
-        let deserialized: ReproducibilityTestInput = serde_json::from_str(&json).expect("deserialization should work");
+        let deserialized: ReproducibilityTestInput =
+            serde_json::from_str(&json).expect("deserialization should work");
         assert_eq!(input, deserialized);
     }
 
     #[test]
     fn test_platform_divergence_types() {
-        assert_eq!(DivergenceType::ContentHashMismatch, DivergenceType::ContentHashMismatch);
-        assert_ne!(DivergenceType::ContentHashMismatch, DivergenceType::ExitCodeMismatch);
+        assert_eq!(
+            DivergenceType::ContentHashMismatch,
+            DivergenceType::ContentHashMismatch
+        );
+        assert_ne!(
+            DivergenceType::ContentHashMismatch,
+            DivergenceType::ExitCodeMismatch
+        );
     }
 
     #[test]
@@ -667,7 +677,11 @@ mod tests {
         // Should have unique test IDs
         let mut test_ids = std::collections::HashSet::new();
         for test in &tests {
-            assert!(test_ids.insert(test.test_id.clone()), "Duplicate test ID: {}", test.test_id);
+            assert!(
+                test_ids.insert(test.test_id.clone()),
+                "Duplicate test ID: {}",
+                test.test_id
+            );
         }
     }
 
@@ -675,8 +689,16 @@ mod tests {
     fn test_reproducibility_test_config_default() {
         let config = ReproducibilityTestConfig::default();
         assert_eq!(config.target_platforms.len(), 3);
-        assert!(config.target_platforms.contains(&WorkerPlatform::MacOSArm64));
-        assert!(config.target_platforms.contains(&WorkerPlatform::WindowsX64));
+        assert!(
+            config
+                .target_platforms
+                .contains(&WorkerPlatform::MacOSArm64)
+        );
+        assert!(
+            config
+                .target_platforms
+                .contains(&WorkerPlatform::WindowsX64)
+        );
         assert!(config.target_platforms.contains(&WorkerPlatform::LinuxX64));
     }
 

@@ -743,7 +743,10 @@ mod tests {
             .compute_posterior_update(&prior, &evidence)
             .expect("posterior update should succeed");
 
-        assert!(updated.is_valid(), "updated posterior must be a valid distribution");
+        assert!(
+            updated.is_valid(),
+            "updated posterior must be a valid distribution"
+        );
         // The stub returned the prior verbatim; a real update must move it.
         assert_ne!(
             updated, prior,

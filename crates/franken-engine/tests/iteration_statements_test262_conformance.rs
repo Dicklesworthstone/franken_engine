@@ -843,13 +843,41 @@ fn iteration_statements_test262_conformance_integration() {
     /// `Status: RESOLVED`.
     const KNOWN_FAILING_CASES: &[(&str, &str, &str)] = &[
         // (test_id, tracking_bead, discrepancies_row)
-        ("for-of-custom-iterator-basic", "bd-bg9l1.27.3", "DISC-003 (Symbol.iterator)"),
-        ("for-of-iterator-return-method", "bd-bg9l1.27.7", "DISC-009 (IteratorClose return)"),
-        ("for-of-iterator-throw-handling", "bd-bg9l1.27.7", "DISC-009 (IteratorClose throw)"),
-        ("for-statement-block-scope-isolation", "bd-bg9l1.27.8", "DISC-010 (per-iteration env)"),
-        ("for-statement-let-tdz", "bd-bg9l1.27.5", "DISC-007 (let TDZ)"),
-        ("unlabeled-break-error", "bd-bg9l1.27.6", "DISC-008 (bare break/continue outside loop)"),
-        ("unlabeled-continue-error", "bd-bg9l1.27.6", "DISC-008 (bare break/continue outside loop)"),
+        (
+            "for-of-custom-iterator-basic",
+            "bd-bg9l1.27.3",
+            "DISC-003 (Symbol.iterator)",
+        ),
+        (
+            "for-of-iterator-return-method",
+            "bd-bg9l1.27.7",
+            "DISC-009 (IteratorClose return)",
+        ),
+        (
+            "for-of-iterator-throw-handling",
+            "bd-bg9l1.27.7",
+            "DISC-009 (IteratorClose throw)",
+        ),
+        (
+            "for-statement-block-scope-isolation",
+            "bd-bg9l1.27.8",
+            "DISC-010 (per-iteration env)",
+        ),
+        (
+            "for-statement-let-tdz",
+            "bd-bg9l1.27.5",
+            "DISC-007 (let TDZ)",
+        ),
+        (
+            "unlabeled-break-error",
+            "bd-bg9l1.27.6",
+            "DISC-008 (bare break/continue outside loop)",
+        ),
+        (
+            "unlabeled-continue-error",
+            "bd-bg9l1.27.6",
+            "DISC-008 (bare break/continue outside loop)",
+        ),
     ];
 
     // Surface the frontier inventory in CI output so reviewers don't have to
@@ -876,11 +904,13 @@ fn iteration_statements_test262_conformance_integration() {
         .map(|test_case| test_case.id)
         .collect();
 
-    let classified: BTreeSet<&str> =
-        expected_pass.union(&expected_fail).copied().collect();
+    let classified: BTreeSet<&str> = expected_pass.union(&expected_fail).copied().collect();
 
     // Invariant 1: every static case is in exactly one bucket.
-    let overlap: Vec<&str> = expected_pass.intersection(&expected_fail).copied().collect();
+    let overlap: Vec<&str> = expected_pass
+        .intersection(&expected_fail)
+        .copied()
+        .collect();
     assert!(
         overlap.is_empty(),
         "bd-xkbrm: cases listed in BOTH EXPECTED_PASS and KNOWN_FAILING_CASES (must be one or the other): {overlap:?}"
@@ -915,8 +945,7 @@ fn iteration_statements_test262_conformance_integration() {
     // Invariant 2b: any case outside both EXPECTED_PASS and KNOWN_FAILING_CASES
     // that now passes is a brand-new uncatalogued case the harness forgot to
     // classify. Should fail loudly so the partition stays exhaustive.
-    let uncatalogued_pass: Vec<&str> =
-        actual_pass.difference(&classified).copied().collect();
+    let uncatalogued_pass: Vec<&str> = actual_pass.difference(&classified).copied().collect();
     assert!(
         uncatalogued_pass.is_empty(),
         "bd-xkbrm: uncatalogued cases pass — add them to EXPECTED_PASS or KNOWN_FAILING_CASES: {uncatalogued_pass:?}"

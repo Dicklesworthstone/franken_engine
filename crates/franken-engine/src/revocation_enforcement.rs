@@ -1291,7 +1291,11 @@ mod tests {
         let mut enforcer = make_enforcer();
         let mut obs = RuntimeSecurityObservability::new();
         let token = EngineObjectId([7; 32]);
-        revoke_target(&mut enforcer, RevocationTargetType::Token, *token.as_bytes());
+        revoke_target(
+            &mut enforcer,
+            RevocationTargetType::Token,
+            *token.as_bytes(),
+        );
 
         let result = enforcer.check_token_acceptance_observed(
             &token,

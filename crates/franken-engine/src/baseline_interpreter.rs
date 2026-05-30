@@ -3036,17 +3036,17 @@ impl InterpreterCore {
     ) -> Result<Label, InterpreterError> {
         let mut joined = Label::Public;
         for i in 0..args.count {
-            let reg = args.start.checked_add(i).ok_or(
-                InterpreterError::RegisterOutOfBounds {
+            let reg = args
+                .start
+                .checked_add(i)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
                     register: args.start,
                     max: u32::MAX,
-                },
-            )?;
+                })?;
             joined = joined.join(self.get_register_label(reg)?);
         }
         Ok(joined)
     }
-
 
     // ---------------------------------------------------------------------------
     // GC write barrier management
@@ -4116,12 +4116,13 @@ impl InterpreterCore {
                 };
                 let mut next_index = self.array_like_length(arr_id)?;
                 for i in 0..args.count {
-                    let reg = args.start.checked_add(i).ok_or(
-                        InterpreterError::RegisterOutOfBounds {
-                            register: args.start,
-                            max: self.config.max_registers,
-                        },
-                    )?;
+                    let reg =
+                        args.start
+                            .checked_add(i)
+                            .ok_or(InterpreterError::RegisterOutOfBounds {
+                                register: args.start,
+                                max: self.config.max_registers,
+                            })?;
                     let element = self.read_reg(reg)?;
                     self.set_object_property(arr_id, next_index.to_string(), element)?;
                     next_index = next_index.saturating_add(1);
@@ -19026,7 +19027,11 @@ impl InterpreterCore {
         if let Some(&first_char) = chars.peek() {
             if first_char == '+' || first_char == '-' {
                 // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(chars.next().expect("operation should succeed for valid inputs"));
+                result_str.push(
+                    chars
+                        .next()
+                        .expect("operation should succeed for valid inputs"),
+                );
                 prev_char = first_char;
             }
         }
@@ -19035,21 +19040,37 @@ impl InterpreterCore {
         while let Some(&c) = chars.peek() {
             if c.is_ascii_digit() {
                 // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(chars.next().expect("operation should succeed for valid inputs"));
+                result_str.push(
+                    chars
+                        .next()
+                        .expect("operation should succeed for valid inputs"),
+                );
             } else if c == '.' && !has_dot && !has_exponent {
                 // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(chars.next().expect("operation should succeed for valid inputs"));
+                result_str.push(
+                    chars
+                        .next()
+                        .expect("operation should succeed for valid inputs"),
+                );
                 has_dot = true;
             } else if (c == 'e' || c == 'E') && !has_exponent {
                 // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(chars.next().expect("operation should succeed for valid inputs"));
+                result_str.push(
+                    chars
+                        .next()
+                        .expect("operation should succeed for valid inputs"),
+                );
                 has_exponent = true;
             } else if has_exponent
                 && (c == '+' || c == '-')
                 && (prev_char == 'e' || prev_char == 'E')
             {
                 // SAFETY: peek() just confirmed a character exists, so next() cannot return None
-                result_str.push(chars.next().expect("operation should succeed for valid inputs"));
+                result_str.push(
+                    chars
+                        .next()
+                        .expect("operation should succeed for valid inputs"),
+                );
             } else {
                 break;
             }
@@ -21860,7 +21881,10 @@ mod active_builtin_regressions {
             .capability_denial_total
             .values()
             .sum();
-        assert_eq!(total_denials, 0, "no denial should be recorded on a clean run");
+        assert_eq!(
+            total_denials, 0,
+            "no denial should be recorded on a clean run"
+        );
         assert!(core.security_observability().logs().is_empty());
     }
 
@@ -27350,7 +27374,9 @@ mod tests {
     #[test]
     fn scope_chain_push_respects_max_scope_depth() {
         let mut chain = ScopeChain::new();
-        chain.push(2).expect("operation should succeed for valid inputs");
+        chain
+            .push(2)
+            .expect("operation should succeed for valid inputs");
         let err = chain.push(2).unwrap_err();
         assert!(matches!(
             err,
@@ -29449,8 +29475,8 @@ mod tests {
             };
 
             let signature = log.sign_receipt(&receipt);
-            let mut expected_mac =
-                Hmac::<Sha256>::new_from_slice(&key).expect("operation should succeed for valid inputs");
+            let mut expected_mac = Hmac::<Sha256>::new_from_slice(&key)
+                .expect("operation should succeed for valid inputs");
             // bd-gn3mt: receipt_signing_message now returns Vec<u8> directly.
             expected_mac.update(&log.receipt_signing_message(&receipt));
             let expected = format!(

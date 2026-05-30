@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::hash_tiers::{AuthenticityHash, ContentHash};
 use crate::runtime_observability::{
-    ReplayDropReason as ObservedReplayDropReason, RuntimeSecurityObservability, SecurityEventContext,
+    ReplayDropReason as ObservedReplayDropReason, RuntimeSecurityObservability,
+    SecurityEventContext,
 };
 use crate::signature_preimage::{
     Signature, SignatureError, SigningKey, VerificationKey, sign_preimage, verify_signature,
@@ -1854,14 +1855,18 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, SessionChannelError::ReplayDetected { .. }));
         assert_eq!(
-            obs.metrics.replay_drop_total
+            obs.metrics
+                .replay_drop_total
                 .get(&ReplayDropReason::DuplicateSeq)
                 .copied(),
             Some(1),
             "duplicate-sequence drop must increment replay_drop_total[DuplicateSeq]"
         );
         assert_eq!(
-            obs.metrics.replay_drop_total.get(&ReplayDropReason::StaleSeq).copied(),
+            obs.metrics
+                .replay_drop_total
+                .get(&ReplayDropReason::StaleSeq)
+                .copied(),
             Some(0),
             "a duplicate must not be miscounted as a stale replay"
         );
@@ -1903,12 +1908,16 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, SessionChannelError::ReplayDetected { .. }));
         assert_eq!(
-            obs.metrics.replay_drop_total.get(&ReplayDropReason::StaleSeq).copied(),
+            obs.metrics
+                .replay_drop_total
+                .get(&ReplayDropReason::StaleSeq)
+                .copied(),
             Some(1),
             "stale replay (seq < last_received) must increment replay_drop_total[StaleSeq]"
         );
         assert_eq!(
-            obs.metrics.replay_drop_total
+            obs.metrics
+                .replay_drop_total
                 .get(&ReplayDropReason::DuplicateSeq)
                 .copied(),
             Some(0)
@@ -1928,14 +1937,18 @@ mod tests {
             .receive_observed(&handle, "trace-recv", 102, None, None, &mut obs)
             .expect("receive should succeed");
         assert_eq!(
-            obs.metrics.replay_drop_total
+            obs.metrics
+                .replay_drop_total
                 .get(&ReplayDropReason::DuplicateSeq)
                 .copied(),
             Some(0),
             "a successful receive must not increment any replay-drop counter"
         );
         assert_eq!(
-            obs.metrics.replay_drop_total.get(&ReplayDropReason::StaleSeq).copied(),
+            obs.metrics
+                .replay_drop_total
+                .get(&ReplayDropReason::StaleSeq)
+                .copied(),
             Some(0)
         );
     }

@@ -418,8 +418,14 @@ impl PersistenceComputer {
                         union_find.union(root_source, root_target);
                         // This edge is a spanning-forest edge; record it in both
                         // directions so cycle reconstruction can walk the tree.
-                        spanning_adj.entry(*source).or_default().push((*target, *id));
-                        spanning_adj.entry(*target).or_default().push((*source, *id));
+                        spanning_adj
+                            .entry(*source)
+                            .or_default()
+                            .push((*target, *id));
+                        spanning_adj
+                            .entry(*target)
+                            .or_default()
+                            .push((*source, *id));
                     } else if self.config.detect_cycles {
                         // Cycle detected - birth of a 1-dimensional feature. The
                         // representative cycle is the unique spanning-tree path
@@ -2022,8 +2028,14 @@ mod tests {
         // traverse all three edges in order; an identical endpoint yields none.
         let mut adjacency: BTreeMap<NodeId, Vec<(NodeId, EdgeId)>> = BTreeMap::new();
         let mut link = |a: u64, b: u64, e: u64| {
-            adjacency.entry(NodeId(a)).or_default().push((NodeId(b), EdgeId(e)));
-            adjacency.entry(NodeId(b)).or_default().push((NodeId(a), EdgeId(e)));
+            adjacency
+                .entry(NodeId(a))
+                .or_default()
+                .push((NodeId(b), EdgeId(e)));
+            adjacency
+                .entry(NodeId(b))
+                .or_default()
+                .push((NodeId(a), EdgeId(e)));
         };
         link(1, 2, 100);
         link(2, 3, 101);

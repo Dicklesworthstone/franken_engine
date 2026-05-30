@@ -29,8 +29,14 @@ fn push_mutates_receiver_and_returns_new_length() {
     assert_eq!(eval_value("let a = []; a.push(10);"), "1");
     assert_eq!(eval_value("let a = []; a.push(10); a.push(20);"), "2");
     // push mutates `this`: length and indexed reads reflect appended elements.
-    assert_eq!(eval_value("let a = []; a.push(10); a.push(20); a.length;"), "2");
-    assert_eq!(eval_value("let a = []; a.push(10); a.push(20); a[1];"), "20");
+    assert_eq!(
+        eval_value("let a = []; a.push(10); a.push(20); a.length;"),
+        "2"
+    );
+    assert_eq!(
+        eval_value("let a = []; a.push(10); a.push(20); a[1];"),
+        "20"
+    );
     // push onto a non-empty literal appends after the existing length.
     assert_eq!(eval_value("let a = [1, 2, 3]; a.push(4); a.length;"), "4");
     assert_eq!(eval_value("let a = [1, 2, 3]; a.push(4); a[3];"), "4");

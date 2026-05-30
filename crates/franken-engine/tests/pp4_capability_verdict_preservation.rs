@@ -258,7 +258,10 @@ fn pp4_full_profile_grants_every_family_dispatch_denies_fs_network() {
         let prior = profile.has(required);
         let substrate = substrate_allows_hostcall(&profile, effect.as_ref());
         emit_event("dispatch", "full", name, prior, substrate);
-        assert!(prior, "legacy Full must grant {required} (membership preserved)");
+        assert!(
+            prior,
+            "legacy Full must grant {required} (membership preserved)"
+        );
         let key = ("full".to_string(), name.to_string());
         if frozen.contains(&key) {
             assert!(

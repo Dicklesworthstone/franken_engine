@@ -21,7 +21,9 @@ use frankenengine_engine::HybridRouter;
 fn eval_ok(source: &str) {
     let mut engine = HybridRouter::default();
     engine.eval(source).unwrap_or_else(|err| {
-        panic!("`{source}` must eval without a fault (timer builtin must be callable), got: {err:?}")
+        panic!(
+            "`{source}` must eval without a fault (timer builtin must be callable), got: {err:?}"
+        )
     });
 }
 

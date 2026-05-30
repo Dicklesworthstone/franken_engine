@@ -35,7 +35,7 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Data, DeriveInput, Fields, Ident, Type, Variant, parse_macro_input};
+use syn::{parse_macro_input, Data, DeriveInput, Fields, Ident, Type, Variant};
 
 /// Derive macro for the FixedLayout trait.
 #[proc_macro_derive(FixedLayout)]

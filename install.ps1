@@ -124,7 +124,12 @@ if (-not $NoVerify) {
     if (-not $ChecksumUrl) { $ChecksumUrl = "$url.sha256" }
     Write-Info "Fetching checksum from $ChecksumUrl"
     try {
-      $checksumToUse = (Invoke-WebRequest -Uri $ChecksumUrl -UseBasicParsing).Content.Trim().Split(' ')[0]
+      # Download to a file rather than reading .Content: GitHub serves .sha256 as
+      # application/octet-stream, which Windows PowerShell 5.1 surfaces as a byte
+      # array (no .Trim()). Reading the saved file as text avoids that.
+      $shaFile = Join-Path $tmp "$zip.sha256"
+      Invoke-WebRequest -Uri $ChecksumUrl -OutFile $shaFile -UseBasicParsing
+      $checksumToUse = (Get-Content $shaFile -Raw).Trim().Split(' ')[0]
     } catch {
       Write-Err "Checksum file not found or invalid; refusing to install."
       exit 1

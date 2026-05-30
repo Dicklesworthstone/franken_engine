@@ -5372,11 +5372,42 @@ pub fn lower_ir2_to_ir3(
                         reason: *reason,
                     });
                 }
-                // Hostcall operations should be handled at module level, not function level
-                Ir1Op::HostCall { .. } => {
-                    unreachable!(
-                        "HostCall operations should be handled at module level, not in function bodies"
-                    );
+                // HostCall in a function body — same lowering as module level
+                // (bd-bg9l1.27.10). A builtin recognized at lowering (e.g.
+                // `Math.PI`, `Symbol.iterator`, `new Error(...)`) can appear inside
+                // any function, so this must mirror the module-level arm rather
+                // than panic.
+                Ir1Op::HostCall {
+                    capability,
+                    arg_count,
+                } => {
+                    let count = *arg_count as usize;
+                    if count > fn_value_stack.len() {
+                        return Err(LoweringPipelineError::ValueStackUnderflow);
+                    }
+                    let mut args = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        args.push(pop_lowering_value(&mut fn_value_stack)?);
+                    }
+                    args.reverse();
+                    let start_reg = fn_reg;
+                    for arg_reg in args {
+                        let contiguous_dst = alloc_register(&mut fn_reg);
+                        ir3.instructions.push(Ir3Instruction::Move {
+                            dst: contiguous_dst,
+                            src: arg_reg,
+                        });
+                    }
+                    let dst = alloc_register(&mut fn_reg);
+                    ir3.instructions.push(Ir3Instruction::HostCall {
+                        capability: CapabilityTag(capability.clone()),
+                        args: RegRange {
+                            start: start_reg,
+                            count: *arg_count,
+                        },
+                        dst,
+                    });
+                    fn_value_stack.push(dst);
                 }
             }
         }
@@ -7788,6 +7819,36 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::New { callee, arguments } => {
+            // `new Error(msg)` / error subclasses have no global binding on the
+            // eval scope path; recognize the constructor and route to the
+            // `builtin:<Name>` hostcall (bd-bg9l1.27.10), mirroring the Math/Symbol
+            // interceptions. Args are lowered onto the value stack; the callee is
+            // NOT loaded (it would resolve to undefined).
+            if let Some(capability) = error_constructor_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             lower_expression_to_ir1(
                 callee,
                 ops,
@@ -8052,6 +8113,35 @@ fn symbol_iterator_member(
         }
         (true, Expression::StringLiteral(name)) => name == "iterator",
         _ => false,
+    }
+}
+
+/// Capability string for `new <Name>(...)` on a known global error constructor
+/// (bd-bg9l1.27.10). Like `Symbol`/`Math`, the error constructors have no global
+/// binding on the `HybridRouter::eval` scope path, so `new Error(msg)` would
+/// otherwise resolve its callee to `undefined` and fault
+/// ("expected function, got undefined"). Recognize them here and route to the
+/// `builtin:<Name>` hostcall. Returns `None` when the name is shadowed by a user
+/// binding (`let Error = …`), so a local constructor is never reinterpreted.
+fn error_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "Error" => Some("builtin:Error"),
+        "TypeError" => Some("builtin:TypeError"),
+        "RangeError" => Some("builtin:RangeError"),
+        "ReferenceError" => Some("builtin:ReferenceError"),
+        "SyntaxError" => Some("builtin:SyntaxError"),
+        "EvalError" => Some("builtin:EvalError"),
+        "URIError" => Some("builtin:URIError"),
+        _ => None,
     }
 }
 

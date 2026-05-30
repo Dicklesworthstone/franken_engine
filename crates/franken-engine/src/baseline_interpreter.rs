@@ -8371,6 +8371,41 @@ impl InterpreterCore {
         }
     }
 
+    /// Construct an error object (`Error` or a subclass) with the given `name`
+    /// and a `message` derived from the first argument. Shared by the
+    /// `builtin:Error` / `builtin:TypeError` / … hostcall arms (bd-bg9l1.27.10).
+    fn construct_error_object(
+        &mut self,
+        name: &str,
+        args: RegRange,
+    ) -> Result<Value, InterpreterError> {
+        let message = if args.count > 0 {
+            let msg_val = self.read_reg(args.start)?;
+            match msg_val {
+                Value::Str(s) => s.to_string(),
+                Value::Int(i) => i.to_string(),
+                Value::Float(f) => f.inner().to_string(),
+                Value::Bool(b) => b.to_string(),
+                Value::Null => "null".to_string(),
+                Value::Undefined => "undefined".to_string(),
+                _ => name.to_string(),
+            }
+        } else {
+            String::new()
+        };
+
+        // Create a new Error object via the capability-checked allocator.
+        let error_id = self.alloc_object_with_prototype(None)?;
+        self.set_object_property(error_id, "name".to_string(), Value::str(name))?;
+        self.set_object_property(error_id, "message".to_string(), Value::str(message))?;
+
+        // Generate and set stack trace property (bd-2fx18)
+        let stack_trace = self.format_stack_trace();
+        self.set_object_property(error_id, "stack".to_string(), Value::str(stack_trace))?;
+
+        Ok(Value::Object(error_id))
+    }
+
     fn alloc_iterator_result_object(
         &mut self,
         next_value: Option<Value>,
@@ -13961,35 +13996,17 @@ impl InterpreterCore {
 
                 Ok(this_val)
             }
-            "builtin:Error" => {
-                // Error(message) constructor implementation
-                let message = if args.count > 0 {
-                    let msg_val = self.read_reg(args.start)?;
-                    match msg_val {
-                        Value::Str(s) => s.to_string(),
-                        Value::Int(i) => i.to_string(),
-                        Value::Float(f) => f.inner().to_string(),
-                        Value::Bool(b) => b.to_string(),
-                        Value::Null => "null".to_string(),
-                        Value::Undefined => "undefined".to_string(),
-                        _ => "Error".to_string(),
-                    }
-                } else {
-                    String::new()
-                };
-
-                // Create a new Error object via the capability-checked
-                // allocator.
-                let error_id = self.alloc_object_with_prototype(None)?;
-                self.set_object_property(error_id, "name".to_string(), Value::str("Error"))?;
-                self.set_object_property(error_id, "message".to_string(), Value::str(message))?;
-
-                // Generate and set stack trace property (bd-2fx18)
-                let stack_trace = self.format_stack_trace();
-                self.set_object_property(error_id, "stack".to_string(), Value::str(stack_trace))?;
-
-                Ok(Value::Object(error_id))
-            }
+            "builtin:Error" => self.construct_error_object("Error", args),
+            // Error subclasses (bd-bg9l1.27.10). Same shape as Error, with the
+            // correct `name`. These are reached only via the `new <Name>(...)`
+            // lowering interception (error_constructor_capability) since there is
+            // no global binding for them on the eval scope path.
+            "builtin:TypeError" => self.construct_error_object("TypeError", args),
+            "builtin:RangeError" => self.construct_error_object("RangeError", args),
+            "builtin:ReferenceError" => self.construct_error_object("ReferenceError", args),
+            "builtin:SyntaxError" => self.construct_error_object("SyntaxError", args),
+            "builtin:EvalError" => self.construct_error_object("EvalError", args),
+            "builtin:URIError" => self.construct_error_object("URIError", args),
             "builtin:StringPrototypePadEnd" => {
                 // String.prototype.padEnd(targetLength[, padString]) implementation
                 if args.count == 0 {

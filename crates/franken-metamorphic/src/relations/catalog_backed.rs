@@ -535,8 +535,13 @@ fn generate_pair_for_relation(
         "ir_optimization_idempotence" => {
             let name = pick_identifier(machine, "ir_optimization_idempotence.name")?;
             Some(GeneratedPair {
-                input_source: format!("let {name} = 1 + 2 + 0; return {name};"),
-                variant_source: format!("let {name} = ((1 + 2)) + 0; return ({name});"),
+                // Engine-valid ES2020 (bd-x9t1n.8): no top-level `return` (rejected
+                // by the real engine as ReturnOutsideFunction); end with an
+                // expression statement. Both sides drop it identically, so the
+                // optimization-idempotence relation is preserved and the source
+                // still parses in the toy.
+                input_source: format!("let {name} = 1 + 2 + 0; {name};"),
+                variant_source: format!("let {name} = ((1 + 2)) + 0; ({name});"),
             })
         }
         "ir_capability_preservation" => {
@@ -562,8 +567,11 @@ fn generate_pair_for_relation(
         "ir_constant_folding_equivalence" => {
             let name = pick_identifier(machine, "ir_constant_folding_equivalence.name")?;
             Some(GeneratedPair {
-                input_source: format!("let {name} = 2 + 3 * 4; return {name};"),
-                variant_source: format!("let {name} = 14; return {name};"),
+                // Engine-valid ES2020 (bd-x9t1n.8): no top-level `return`; the
+                // constant-folding equivalence (`2 + 3 * 4` vs the folded `14`) is
+                // unaffected.
+                input_source: format!("let {name} = 2 + 3 * 4; {name};"),
+                variant_source: format!("let {name} = 14; {name};"),
             })
         }
         "execution_evaluation_order_determinism" => Some(GeneratedPair {
@@ -603,9 +611,11 @@ fn generate_pair_for_relation(
             input_source: "promise(alpha,beta,gamma,delta); return 0;".to_string(),
             variant_source: "promise(alpha,beta,gamma,delta); return 0;".to_string(),
         }),
+        // Default fallback: engine-valid ES2020 (bd-x9t1n.8) — a bare expression
+        // statement rather than a top-level `return` (rejected by the real engine).
         _ => Some(GeneratedPair {
-            input_source: "return 0;".to_string(),
-            variant_source: "return 0;".to_string(),
+            input_source: "0;".to_string(),
+            variant_source: "0;".to_string(),
         }),
     }
 }

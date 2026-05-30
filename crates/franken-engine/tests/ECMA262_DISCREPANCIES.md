@@ -194,21 +194,36 @@ test reports, not buried in const sets (see DISC-005 below).
 - **Reviewed:** 2026-05-28
 - **Next review:** 2026-08-26
 
-### DISC-012: `Array.prototype.push` / `Array.prototype.length` not supported in for-of bodies
+### DISC-012: `Array.prototype` mutators (`push`/`pop`/…) unresolved on member access; receiver (`this`) not threaded
 
 - **Status:** WILL-FIX
 - **ES2020 ref:** §22.1.3.18 (Array.prototype.push), §22.1.3.x (length own property)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`
 - **Affected tests:** `break-for-of-early-exit`
-- **Symptom:** `break-for-of-early-exit` builds an array via `seen.push(value)` and
-  reads `seen.length` to assert the loop body ran the expected number of times.
-  Once the `//` comment leak (DISC-001) was fixed the case parses cleanly, but it
-  still fails: the interpreter does not evaluate `Array.prototype.push` /
-  `.length` against an array literal binding. This is the remaining blocker on
-  this case (the `break`-in-for-of control flow itself is fine — see the passing
-  `continue-for-of-skip`, which uses only `sum +=`).
-- **Tracking bead:** bd-bg9l1.27 (was mis-filed under DISC-001 / comment leak)
-- **Reviewed:** 2026-05-28
+- **Symptom (corrected 2026-05-29, verified by runtime repro):** `.length` is NOT
+  the blocker — `[1,2,3].length` and `let a=[1,2,3]; a.length` both eval to `3`
+  (length is stored as an own property at array-literal creation). The actual
+  blocker is `seen.push(value)`, which faults with `type error: expected function,
+  got undefined`, for two compounding reasons:
+  1. **No prototype-method resolution on member access.** `Ir3Instruction::GetProperty`
+     on a `Value::Object` reads only OWN properties
+     (`baseline_interpreter.rs` ~10703-10709 and the twin handler ~10918), with no
+     `Array.prototype` fallback, so `a.push` resolves to `Undefined`. (Contrast
+     `string_property_value` ~8342, which maps `charAt`/etc. to `BuiltinFunction`s.)
+  2. **Mutator builtins ignore `this`.** Even when reached, `builtin:ArrayPrototypePush`
+     (`baseline_interpreter.rs` ~11702) is a stub — its own comment notes `'this'
+     would be passed separately, but for now` it allocates a *throwaway* array and
+     returns `args.count`; `pop`/`shift` similarly "assume […] an empty array".
+  A real fix needs: (a) resolve known `Array.prototype` method names to bound
+  `BuiltinFunction`s in `GetProperty` when `object.is_array` and the own prop is
+  absent; (b) thread the receiver (`this`) through the method-call ABI to the
+  builtin (strings carry the same latent gap — `string_char_at()` captures no
+  receiver); (c) rewrite the ~10 array mutators to operate on `this`. This is a
+  method-call-ABI change in `baseline_interpreter.rs`. The `break`-in-for-of
+  control flow itself is fine (see the passing `continue-for-of-skip`, which uses
+  only `sum +=`).
+- **Tracking bead:** bd-bg9l1.27.9 (DISC-012; under bd-bg9l1.27)
+- **Reviewed:** 2026-05-29
 - **Next review:** 2026-06-28
 
 ## Resolved divergences

@@ -7099,6 +7099,36 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            if let Some(capability) = global_function_call_capability(callee, binding_lookup) {
+                // Bare global function builtins (`parseInt`/`parseFloat`/`isNaN`/
+                // `isFinite`) have no eval-scope binding; dispatch them as host
+                // calls (bd-n5lhl), mirroring the Math-builtin convention — the
+                // handlers read arguments from `args.start` with no receiver
+                // placeholder, so arg_count is exactly `arguments.len()`.
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Some(capability) = string_literal_builtin_call_capability(callee) {
                 let arg_count = arguments.len().saturating_add(1);
                 if arg_count > u32::MAX as usize {
@@ -8598,6 +8628,33 @@ fn timer_builtin_call_capability(
         "setInterval" => Some("builtin:SetInterval"),
         "clearTimeout" => Some("builtin:ClearTimeout"),
         "clearInterval" => Some("builtin:ClearInterval"),
+        _ => None,
+    }
+}
+
+/// Capability for a bare global function-builtin call (`parseInt("42")`,
+/// `parseFloat("3.5")`, `isNaN(x)`, `isFinite(x)`). These standard globals have
+/// no binding on the eval scope, so — like the Math/timer/error interceptions —
+/// recognize the bare identifier callee and route to the canonical
+/// `builtin:<name>` hostcall (whose impls already exist in
+/// `dispatch_builtin_hostcall_inner`). Returns `None` when the name is shadowed
+/// by a user binding in scope, so a local `let parseInt = …` is never
+/// reinterpreted as the host builtin (bd-n5lhl).
+fn global_function_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "parseInt" => Some("builtin:parseInt"),
+        "parseFloat" => Some("builtin:parseFloat"),
+        "isNaN" => Some("builtin:isNaN"),
+        "isFinite" => Some("builtin:isFinite"),
         _ => None,
     }
 }

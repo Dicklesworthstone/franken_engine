@@ -65,8 +65,12 @@ impl WorkerStatus {
     }
 
     /// Check if the worker is in a terminal state.
+    ///
+    /// Only `Terminated` (permanently removed) is terminal. `Failed` is
+    /// recoverable — it signals the worker needs intervention (restart or
+    /// teardown), not that it has reached an end-of-life state.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, WorkerStatus::Failed | WorkerStatus::Terminated)
+        matches!(self, WorkerStatus::Terminated)
     }
 
     /// Get string representation of the status.

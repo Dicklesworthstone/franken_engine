@@ -3077,15 +3077,27 @@ mod tests {
             .collect();
 
         assert!(evidence_types.contains("fallback_trigger"));
-        assert!(evidence_types.contains("regime_detection"));
         assert!(evidence_types.contains("latency_observation"));
 
-        // Verify guardrail activation factor is present
+        // Verify the relevant decision factors are represented (bd-o4cbn.3.3.11).
+        //
+        // We assert FACTOR coverage, not the specific `regime_detection`
+        // evidence_type. The minimal causal set is single-cover by contract
+        // (`minimal_causal_set_minimality_gate`: "each decision factor is covered
+        // by exactly one retained evidence atom; if two atoms share a factor ...
+        // the set is not minimal"). `regime_detection` is recorded under
+        // `ConstraintActivation`, which also carries other (higher-influence)
+        // constraint atoms, so the greedy max-influence minimizer legitimately
+        // drops the `regime_detection` atom while keeping the factor covered.
+        // Asserting the specific atom survives minimization would contradict the
+        // single-cover minimality contract; asserting the factor is the correct,
+        // contract-aligned check (matching the GuardrailActivation assertion).
         let factors: std::collections::BTreeSet<_> = causal_set
             .dependencies
             .iter()
             .map(|dep| dep.influenced_factor)
             .collect();
         assert!(factors.contains(&DecisionFactor::GuardrailActivation));
+        assert!(factors.contains(&DecisionFactor::ConstraintActivation));
     }
 }

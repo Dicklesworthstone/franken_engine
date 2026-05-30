@@ -632,6 +632,27 @@ pub enum BuiltinFunctionKind {
     /// separator (default `","`); `undefined`/`null` render as `""`
     /// (bd-962ev.1).
     ArrayJoin,
+    /// `Array.prototype.forEach` — receiver-aware: invokes the callback for each
+    /// element, returns `undefined` (bd-962ev.2).
+    ArrayForEach,
+    /// `Array.prototype.map` — receiver-aware: returns a new array of callback
+    /// results (bd-962ev.2).
+    ArrayMap,
+    /// `Array.prototype.filter` — receiver-aware: returns a new array of the
+    /// elements for which the callback is truthy (bd-962ev.2).
+    ArrayFilter,
+    /// `Array.prototype.find` — receiver-aware: returns the first element for
+    /// which the callback is truthy, else `undefined` (bd-962ev.2).
+    ArrayFind,
+    /// `Array.prototype.findIndex` — receiver-aware: returns the index of the
+    /// first element for which the callback is truthy, else -1 (bd-962ev.2).
+    ArrayFindIndex,
+    /// `Array.prototype.some` — receiver-aware: true if the callback is truthy
+    /// for any element (bd-962ev.2).
+    ArraySome,
+    /// `Array.prototype.every` — receiver-aware: true if the callback is truthy
+    /// for every element (bd-962ev.2).
+    ArrayEvery,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -774,6 +795,69 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_for_each() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayForEach,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_map() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayMap,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_filter() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayFilter,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_find() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayFind,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_find_index() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayFindIndex,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_some() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArraySome,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_every() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayEvery,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn console_log() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleLog,
@@ -840,6 +924,13 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayReverse => "reverse",
             BuiltinFunctionKind::ArrayFill => "fill",
             BuiltinFunctionKind::ArrayJoin => "join",
+            BuiltinFunctionKind::ArrayForEach => "forEach",
+            BuiltinFunctionKind::ArrayMap => "map",
+            BuiltinFunctionKind::ArrayFilter => "filter",
+            BuiltinFunctionKind::ArrayFind => "find",
+            BuiltinFunctionKind::ArrayFindIndex => "findIndex",
+            BuiltinFunctionKind::ArraySome => "some",
+            BuiltinFunctionKind::ArrayEvery => "every",
         }
     }
 }
@@ -4498,6 +4589,177 @@ impl InterpreterCore {
                     parts.push(rendered);
                 }
                 Ok(Value::str(parts.join(&separator)))
+            }
+            BuiltinFunctionKind::ArrayForEach => {
+                // ES2020 23.1.3.12: call the callback for each element (holes
+                // skipped); returns undefined. Callback receives
+                // (element, index, array) with the optional thisArg.
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.forEach")?;
+                for index in 0..len {
+                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                        continue;
+                    };
+                    self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        arr_id,
+                    )?;
+                }
+                Ok(Value::Undefined)
+            }
+            BuiltinFunctionKind::ArrayMap => {
+                // ES2020 23.1.3.18: new array of callback results, one per
+                // element (holes skipped).
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.map")?;
+                let result = self.alloc_array_with_prototype(None)?;
+                for index in 0..len {
+                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                        continue;
+                    };
+                    let mapped = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        arr_id,
+                    )?;
+                    self.set_object_property(result, index.to_string(), mapped)?;
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(len).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
+            }
+            BuiltinFunctionKind::ArrayFilter => {
+                // ES2020 23.1.3.7: new array of elements for which the callback
+                // is truthy, with compacted indices.
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.filter")?;
+                let result = self.alloc_array_with_prototype(None)?;
+                let mut out = 0usize;
+                for index in 0..len {
+                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                        continue;
+                    };
+                    let keep = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element.clone(),
+                        index,
+                        arr_id,
+                    )?;
+                    if keep.is_truthy() {
+                        self.set_object_property(result, out.to_string(), element)?;
+                        out += 1;
+                    }
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
+            }
+            BuiltinFunctionKind::ArrayFind => {
+                // ES2020 23.1.3.8: first element for which the callback is
+                // truthy (holes visited as undefined), else undefined.
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.find")?;
+                for index in 0..len {
+                    let element = self
+                        .array_index_value(arr_id, index)?
+                        .unwrap_or(Value::Undefined);
+                    let hit = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element.clone(),
+                        index,
+                        arr_id,
+                    )?;
+                    if hit.is_truthy() {
+                        return Ok(element);
+                    }
+                }
+                Ok(Value::Undefined)
+            }
+            BuiltinFunctionKind::ArrayFindIndex => {
+                // ES2020 23.1.3.9: index of the first element for which the
+                // callback is truthy, else -1.
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.findIndex")?;
+                for index in 0..len {
+                    let element = self
+                        .array_index_value(arr_id, index)?
+                        .unwrap_or(Value::Undefined);
+                    let hit = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        arr_id,
+                    )?;
+                    if hit.is_truthy() {
+                        return Ok(Value::Int(i64::try_from(index).unwrap_or(i64::MAX)));
+                    }
+                }
+                Ok(Value::Int(-1))
+            }
+            BuiltinFunctionKind::ArraySome => {
+                // ES2020 23.1.3.24: true if the callback is truthy for any
+                // element (holes skipped).
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.some")?;
+                for index in 0..len {
+                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                        continue;
+                    };
+                    let result = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        arr_id,
+                    )?;
+                    if result.is_truthy() {
+                        return Ok(Value::Bool(true));
+                    }
+                }
+                Ok(Value::Bool(false))
+            }
+            BuiltinFunctionKind::ArrayEvery => {
+                // ES2020 23.1.3.6: true if the callback is truthy for every
+                // element (holes skipped); short-circuits on the first falsy.
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.every")?;
+                for index in 0..len {
+                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                        continue;
+                    };
+                    let result = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        arr_id,
+                    )?;
+                    if !result.is_truthy() {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -9005,6 +9267,13 @@ impl InterpreterCore {
             "reverse" => Some(BuiltinFunction::array_reverse()),
             "fill" => Some(BuiltinFunction::array_fill()),
             "join" => Some(BuiltinFunction::array_join()),
+            "forEach" => Some(BuiltinFunction::array_for_each()),
+            "map" => Some(BuiltinFunction::array_map()),
+            "filter" => Some(BuiltinFunction::array_filter()),
+            "find" => Some(BuiltinFunction::array_find()),
+            "findIndex" => Some(BuiltinFunction::array_find_index()),
+            "some" => Some(BuiltinFunction::array_some()),
+            "every" => Some(BuiltinFunction::array_every()),
             _ => None,
         }
     }
@@ -11056,6 +11325,29 @@ impl InterpreterCore {
             (a, b),
             (Value::Float(x), Value::Float(y)) if x.inner().is_nan() && y.inner().is_nan()
         )
+    }
+
+    /// Extract `(array, callback, thisArg, length)` for a receiver-aware
+    /// `Array.prototype` callback method (`arr.map(fn, thisArg)`): the array is
+    /// the `this` receiver, the callback is the first argument, the optional
+    /// `thisArg` is the second (bd-962ev.2). A non-array receiver is a TypeError.
+    fn array_callback_receiver(
+        &self,
+        receiver: Option<Value>,
+        args: RegRange,
+        method: &str,
+    ) -> Result<(ObjectId, Value, Value, usize), InterpreterError> {
+        let receiver = receiver.unwrap_or(Value::Undefined);
+        let Value::Object(arr_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: format!("array receiver for {method}"),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+        let len = self.array_like_length(arr_id)?;
+        Ok((arr_id, callback, this_arg, len))
     }
 
     fn array_like_argument_values(&self, value: Value) -> Result<Vec<Value>, InterpreterError> {

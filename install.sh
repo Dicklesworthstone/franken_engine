@@ -132,7 +132,9 @@ usage() { sed -n '3,38p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'; }
 
 # ── Cleanup / locking ─────────────────────────────────────────────────────────
 cleanup() {
-  [ "$LOCK_HELD" -eq 1 ] && rmdir "$LOCK_DIR" 2>/dev/null || true
+  # rm -rf, not rmdir: the lock dir holds a `pid` file, so rmdir would always
+  # fail and leak the lock (triggering a spurious stale-lock warning next run).
+  if [ "$LOCK_HELD" -eq 1 ]; then rm -rf "$LOCK_DIR" 2>/dev/null || true; fi
   if [ -n "${WORK_DIR:-}" ] && [ -d "${WORK_DIR}" ]; then
     case "${WORK_DIR}" in
       "${TMPDIR:-/tmp}"/frankenctl-install.*) rm -rf -- "${WORK_DIR}" ;;
@@ -191,7 +193,7 @@ detect_platform() {
     *) die "unsupported architecture: $arch" ;;
   esac
   case "${os}-${arch}" in
-    linux-x86_64)   TARGET="x86_64-unknown-linux-musl" ; TARGET_FALLBACK="x86_64-unknown-linux-gnu" ;;
+    linux-x86_64)   TARGET="x86_64-unknown-linux-gnu"  ; TARGET_FALLBACK="x86_64-unknown-linux-musl" ;;
     linux-aarch64)  TARGET="aarch64-unknown-linux-gnu" ; TARGET_FALLBACK="" ;;
     darwin-x86_64)  TARGET="x86_64-apple-darwin"       ; TARGET_FALLBACK="" ;;
     darwin-aarch64) TARGET="aarch64-apple-darwin"      ; TARGET_FALLBACK="" ;;
@@ -375,7 +377,7 @@ self_test() {
   [ "$VERIFY" -eq 1 ] || return 0
   info "Running self-test"
   bin_version >/dev/null 2>&1 \
-    && ok "Self-test passed" || warn "Self-test could not run $BINARY_NAME --version"
+    && ok "Self-test passed" || warn "Self-test: could not run $BINARY_NAME"
 }
 
 final_summary() {

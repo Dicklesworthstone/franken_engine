@@ -646,14 +646,23 @@ mod tests {
                 "self.signature.constant_time_eq(&expected)",
             ),
             (
-                "proof_schema.rs",
-                "self.issuer_signature.constant_time_eq(&expected)",
-            ),
-            (
                 "translation_validation_receipt.rs",
                 "self.signature.constant_time_eq(&expected)",
             ),
         ];
+
+        // `proof_schema.rs`'s issuer signature migrated from a symmetric keyed
+        // hash (verified via `AuthenticityHash::constant_time_eq`) to an
+        // ASYMMETRIC Ed25519 signature (`issuer_signature: Vec<u8>`). The
+        // timing-safety invariant still holds — it's now enforced by the
+        // Ed25519 verifier (`verify_signature(...).is_ok()`, constant-time by
+        // construction and fail-closed), not by `constant_time_eq`. Assert the
+        // issuer path keeps going through that verifier rather than a byte
+        // comparison, so this guard still covers the issuer signature.
+        let required_ed25519_verifier_calls = [(
+            "proof_schema.rs",
+            "verify_signature(verification_key, &preimage, &signature)",
+        )];
 
         for (name, expected_call) in required_constant_time_calls {
             let source = checked_sources
@@ -663,6 +672,18 @@ mod tests {
             assert!(
                 source.contains(expected_call),
                 "{name} must keep the keyed-hash verifier call `{expected_call}`"
+            );
+        }
+
+        for (name, expected_call) in required_ed25519_verifier_calls {
+            let source = checked_sources
+                .iter()
+                .find_map(|(source_name, source)| (*source_name == name).then_some(*source))
+                .unwrap_or_else(|| panic!("missing checked source for {name}"));
+            assert!(
+                source.contains(expected_call),
+                "{name} must verify the asymmetric issuer signature via the Ed25519 \
+                 verifier `{expected_call}`, not a timing-unsafe byte comparison"
             );
         }
 

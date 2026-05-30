@@ -999,8 +999,23 @@ mod tests {
         );
     }
 
+    /// A payload-hash mismatch (corrupted `normalized_payload_json` while the
+    /// stored content hashes still point at the original payload) is caught
+    /// fail-closed at STORE time: `ShadowEvidenceJournalEntry::validate_typed_record`
+    /// recomputes the payload hash inside `put_typed`, so the corrupted row never
+    /// lands. (bd-o4cbn.3.3.13: this test previously asserted the corruption was
+    /// caught at READ via `validated_payload_from_entry`, but the typed-shape
+    /// validation became strict and now rejects at store — the same root cause and
+    /// reframing as the sibling `append_refuses_unknown_parent_links`.)
+    ///
+    /// The read-time `validated_payload_from_entry` performs the identical
+    /// recomputation as deepest defense-in-depth for corruption that reaches
+    /// storage via a non-typed path; with the typed API the corruption is rejected
+    /// first at `put_typed`/`to_store_record` (store) and `from_store_record`
+    /// (read) — both exercised by `typed_persistence_models`'s
+    /// `shadow_evidence_boundary_rejects_payload_hash_mismatches`.
     #[test]
-    fn read_refuses_stored_payload_hash_mismatch() {
+    fn store_refuses_payload_hash_mismatch() {
         let mut adapter = InMemoryStorageAdapter::new();
         let context = ctx();
         let mut entry = append_to_entry(source_seed(), 0).expect("source entry should build");
@@ -1009,16 +1024,15 @@ mod tests {
         )
         .expect("alternate payload should serialize");
 
-        adapter
+        let err = adapter
             .put_typed(&entry, &context)
-            .expect("typed shape validation should allow the corrupted fixture");
-        let err = read_all_events(&mut adapter, &context)
-            .expect_err("stored content-hash mismatches must fail closed");
+            .expect_err("stored content-hash mismatches must fail closed at store time");
 
         assert!(matches!(err, StorageError::IntegrityViolation { .. }));
         assert!(
             err.to_string()
-                .contains("stored payload hash mismatch for journal event 0")
+                .contains("payload hash mismatch for journal event 0"),
+            "unexpected error: {err}"
         );
     }
 

@@ -653,6 +653,16 @@ pub enum BuiltinFunctionKind {
     /// `Array.prototype.every` — receiver-aware: true if the callback is truthy
     /// for every element (bd-962ev.2).
     ArrayEvery,
+    /// `Array.prototype.reduce` — receiver-aware: left fold via the callback,
+    /// with an optional initial value (bd-962ev.2).
+    ArrayReduce,
+    /// `Array.prototype.reduceRight` — receiver-aware: right fold via the
+    /// callback, with an optional initial value (bd-962ev.2).
+    ArrayReduceRight,
+    /// `Array.prototype.sort` — receiver-aware: in-place sort, by an optional
+    /// comparator (sign of its result) or lexicographically by default; returns
+    /// the array (bd-962ev.2).
+    ArraySort,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -858,6 +868,33 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_reduce() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayReduce,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_reduce_right() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayReduceRight,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_sort() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArraySort,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn console_log() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleLog,
@@ -931,6 +968,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayFindIndex => "findIndex",
             BuiltinFunctionKind::ArraySome => "some",
             BuiltinFunctionKind::ArrayEvery => "every",
+            BuiltinFunctionKind::ArrayReduce => "reduce",
+            BuiltinFunctionKind::ArrayReduceRight => "reduceRight",
+            BuiltinFunctionKind::ArraySort => "sort",
         }
     }
 }
@@ -4760,6 +4800,74 @@ impl InterpreterCore {
                     }
                 }
                 Ok(Value::Bool(true))
+            }
+            BuiltinFunctionKind::ArrayReduce => {
+                self.array_reduce_receiver(module, receiver, args, false, "Array.prototype.reduce")
+            }
+            BuiltinFunctionKind::ArrayReduceRight => self.array_reduce_receiver(
+                module,
+                receiver,
+                args,
+                true,
+                "Array.prototype.reduceRight",
+            ),
+            BuiltinFunctionKind::ArraySort => {
+                // ES2020 23.1.3.27: in-place sort. With a comparator, order by
+                // the sign of comparator(a, b) (manual insertion sort, since the
+                // comparator re-enters the interpreter); otherwise lexicographic
+                // by ToString. Returns the array.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.sort".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let comparator = match self.builtin_arg(args, 0)? {
+                    Some(Value::Undefined) | None => None,
+                    Some(callback) => Some(callback),
+                };
+                if len > 1 {
+                    let mut elements = Vec::with_capacity(len);
+                    for index in 0..len {
+                        elements.push(
+                            self.array_index_value(arr_id, index)?
+                                .unwrap_or(Value::Undefined),
+                        );
+                    }
+                    if let Some(comparator) = comparator {
+                        // Insertion sort: keep the comparator's re-entrant call
+                        // outside any closure borrowing `self`.
+                        for i in 1..elements.len() {
+                            let mut j = i;
+                            while j > 0 {
+                                let ordering = self.sort_compare(
+                                    module,
+                                    &comparator,
+                                    &elements[j - 1],
+                                    &elements[j],
+                                )?;
+                                if ordering == std::cmp::Ordering::Greater {
+                                    elements.swap(j - 1, j);
+                                    j -= 1;
+                                } else {
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        elements.sort_by(|a, b| {
+                            Self::sort_string_key(a).cmp(&Self::sort_string_key(b))
+                        });
+                    }
+                    let was_dense = self.array_cache_is_dense(arr_id);
+                    for (index, element) in elements.into_iter().enumerate() {
+                        self.set_object_property(arr_id, index.to_string(), element)?;
+                    }
+                    self.refresh_dense_length_cache(arr_id, len, was_dense);
+                }
+                Ok(Value::Object(arr_id))
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -9274,6 +9382,9 @@ impl InterpreterCore {
             "findIndex" => Some(BuiltinFunction::array_find_index()),
             "some" => Some(BuiltinFunction::array_some()),
             "every" => Some(BuiltinFunction::array_every()),
+            "reduce" => Some(BuiltinFunction::array_reduce()),
+            "reduceRight" => Some(BuiltinFunction::array_reduce_right()),
+            "sort" => Some(BuiltinFunction::array_sort()),
             _ => None,
         }
     }
@@ -11348,6 +11459,114 @@ impl InterpreterCore {
         let this_arg = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
         let len = self.array_like_length(arr_id)?;
         Ok((arr_id, callback, this_arg, len))
+    }
+
+    /// Receiver-aware `Array.prototype.reduce`/`reduceRight` (bd-962ev.2): the
+    /// array is the `this` receiver, the callback is arg0, and the optional
+    /// initial value is arg1. `reverse` selects the fold direction. Reuses the
+    /// existing `invoke_simple_reduce_callback` accumulator machinery.
+    fn array_reduce_receiver(
+        &mut self,
+        module: &Ir3Module,
+        receiver: Option<Value>,
+        args: RegRange,
+        reverse: bool,
+        method: &str,
+    ) -> Result<Value, InterpreterError> {
+        let receiver = receiver.unwrap_or(Value::Undefined);
+        let Value::Object(arr_id) = receiver else {
+            return Err(InterpreterError::TypeError {
+                expected: format!("array receiver for {method}"),
+                got: receiver.type_name().to_string(),
+            });
+        };
+        let callback = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+        let length = self.array_like_length(arr_id)?;
+        let has_initial = args.count > 1;
+        let order: Vec<usize> = if reverse {
+            (0..length).rev().collect()
+        } else {
+            (0..length).collect()
+        };
+        let mut iter = order.into_iter();
+        let mut accumulator = if has_initial {
+            self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined)
+        } else {
+            let mut seed = None;
+            for idx in iter.by_ref() {
+                if let Some(value) = self.array_index_value(arr_id, idx)? {
+                    seed = Some(value);
+                    break;
+                }
+            }
+            match seed {
+                Some(value) => value,
+                None => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "non-empty array or initialValue".to_string(),
+                        got: format!("empty {method} without initialValue"),
+                    });
+                }
+            }
+        };
+        for idx in iter {
+            let Some(current) = self.array_index_value(arr_id, idx)? else {
+                continue;
+            };
+            accumulator = self.invoke_simple_reduce_callback(
+                Some(module),
+                &callback,
+                accumulator,
+                current,
+                idx,
+                arr_id,
+            )?;
+        }
+        Ok(accumulator)
+    }
+
+    /// Default `Array.prototype.sort` ordering key: the element's string form
+    /// (ES sorts by `ToString` when no comparator is given).
+    fn sort_string_key(value: &Value) -> String {
+        match value {
+            Value::Str(s) => s.to_string(),
+            Value::Int(n) => n.to_string(),
+            Value::Float(f) => f.inner().to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Null => "null".to_string(),
+            Value::Undefined => "undefined".to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// Compare two elements via a user `Array.prototype.sort` comparator: the
+    /// sign of `comparator(a, b)` gives the order (negative → a first). A
+    /// non-numeric / NaN result is treated as equal.
+    fn sort_compare(
+        &mut self,
+        module: &Ir3Module,
+        comparator: &Value,
+        a: &Value,
+        b: &Value,
+    ) -> Result<std::cmp::Ordering, InterpreterError> {
+        let result = self.invoke_inline_method_call(
+            Some(module),
+            comparator.clone(),
+            Value::Undefined,
+            vec![a.clone(), b.clone()],
+        )?;
+        let n = match result {
+            Value::Int(i) => i as f64,
+            Value::Float(f) => f.inner(),
+            _ => 0.0,
+        };
+        Ok(if n < 0.0 {
+            std::cmp::Ordering::Less
+        } else if n > 0.0 {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Equal
+        })
     }
 
     fn array_like_argument_values(&self, value: Value) -> Result<Vec<Value>, InterpreterError> {

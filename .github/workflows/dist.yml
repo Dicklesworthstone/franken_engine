@@ -95,14 +95,16 @@ jobs:
             cosign sign-blob --yes --bundle "${f}.sigstore.json" "$f"
           done
 
-      - name: Copy + checksum install script
+      - name: Copy + checksum install scripts
         run: |
           set -euo pipefail
-          cp install.sh dist/ 2>/dev/null || echo "no install.sh"
-          if [ -f dist/install.sh ]; then
-            (cd dist && shasum -a 256 install.sh > install.sh.sha256)
-            cosign sign-blob --yes --bundle dist/install.sh.sigstore.json dist/install.sh
-          fi
+          for script in install.sh install.ps1; do
+            cp "$script" dist/ 2>/dev/null || echo "no $script"
+            if [ -f "dist/$script" ]; then
+              (cd dist && shasum -a 256 "$script" > "$script.sha256")
+              cosign sign-blob --yes --bundle "dist/$script.sigstore.json" "dist/$script"
+            fi
+          done
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

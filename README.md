@@ -1388,11 +1388,19 @@ The five other runtimes are excellent at the workloads they were built for; Fran
 
 ### Prebuilt binary (recommended)
 
+**Linux / macOS:**
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.sh | bash
 ```
 
-The installer downloads the latest `frankenctl` release asset for your platform, verifies it against its `SHA256` sidecar (and a cosign signature when present), and installs to `~/.local/bin`. Prebuilt binaries currently ship for **Linux x86_64** and **macOS Apple Silicon (arm64)**; on other platforms the installer falls back to a standalone source build (`--no-default-features`, no sibling repos required). Run with `--help` for options (`--prefix`, `--dest`, `--method`, `--offline`, `--easy-mode`).
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/Dicklesworthstone/franken_engine/main/install.ps1 | iex
+```
+
+The installer downloads the latest `frankenctl` release asset for your platform, verifies it against its `SHA256` sidecar (and a cosign signature when present), and installs to `~/.local/bin` (`%USERPROFILE%\.local\bin` on Windows). Prebuilt binaries ship for **Linux x86_64**, **macOS Apple Silicon (arm64)**, and **Windows x86_64**; on other platforms the bash installer falls back to a standalone source build (`--no-default-features`, no sibling repos required). Pass `--help` (bash) / `-EasyMode` (PowerShell adds the dir to PATH) for options.
 
 ### Build from source
 

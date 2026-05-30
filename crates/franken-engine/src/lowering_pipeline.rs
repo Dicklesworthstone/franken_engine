@@ -7246,6 +7246,23 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            // `Symbol.iterator` resolves to the engine's canonical
+            // well-known-iterator key string `"@@iterator"` (bd-bg9l1.27.3 /
+            // DISC-003). There is no global `Symbol` binding in the eval scope —
+            // like `Math.*`, it is recognized here at lowering — so a user object
+            // literal `{ [Symbol.iterator]() { ... } }` lowers its computed key to
+            // the same `"@@iterator"` string used by the Array `@@iterator` install,
+            // `BuiltinFunctionKind::IteratorSelf`, and the for-of dispatch's
+            // `lookup_symbol_iterator_method` (strategy 1). Custom-iterator dispatch
+            // and iterator closure state already work; this Symbol.iterator
+            // resolution was the sole remaining gap. (Full `Symbol(description)`
+            // construction + unique-symbol identity remain out of scope.)
+            if symbol_iterator_member(object, property, *computed, binding_lookup) {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("@@iterator".to_string()),
+                });
+                return Ok(());
+            }
             lower_expression_to_ir1(
                 object,
                 ops,
@@ -8009,6 +8026,32 @@ fn math_object_property_name<'a>(
         }
         (true, Expression::StringLiteral(name)) => Some(name.as_str()),
         _ => None,
+    }
+}
+
+/// Recognize `Symbol.iterator` member access (the well-known iterator symbol).
+///
+/// Mirrors `math_object_property_name`: `Symbol` has no global binding in the
+/// eval scope, so the access is resolved here at lowering. Returns `false` when
+/// `Symbol` is shadowed by a user binding (`let Symbol = …`). Both the static
+/// `Symbol.iterator` and quoted `Symbol["iterator"]` forms are accepted.
+fn symbol_iterator_member(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> bool {
+    if !matches!(object, Expression::Identifier(name) if name == "Symbol")
+        || binding_lookup.contains_key("Symbol")
+    {
+        return false;
+    }
+    match (computed, property) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => {
+            name == "iterator"
+        }
+        (true, Expression::StringLiteral(name)) => name == "iterator",
+        _ => false,
     }
 }
 

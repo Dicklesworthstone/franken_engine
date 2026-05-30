@@ -72,14 +72,26 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-003: Custom `Symbol.iterator` protocol not executed end-to-end
 
-- **Status:** WILL-FIX
+- **Status:** RESOLVED (2026-05-30, bd-bg9l1.27.3)
 - **ES2020 ref:** §7.4.1 (GetIterator), §13.7.5.16 (Runtime Semantics: ForIn/OfHeadEvaluation)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`, `tests/iterator_protocol_test262_conformance.rs`
-- **Affected tests:** `for-of-custom-iterator-basic`, `for-of-iterator-return-method`, `for-of-iterator-throw-handling`
-- **Symptom:** The interpreter does not invoke a user-defined `[Symbol.iterator]()` method on a for-of right-hand operand; it falls back to a built-in array iteration path.
-- **Tracking bead:** bd-bg9l1.27
-- **Reviewed:** 2026-05-28
-- **Next review:** 2026-06-28
+- **Affected tests:** `for-of-custom-iterator-basic` (RESOLVED), `for-of-iterator-return-method` (RESOLVED, see DISC-009), `for-of-iterator-throw-handling` (still open, DISC-009)
+- **Symptom:** The interpreter did not invoke a user-defined `[Symbol.iterator]()` method on a for-of right-hand operand; it fell back to a built-in array iteration path.
+- **Resolution:** The root cause was three layers (SilentBass + CrimsonHarbor):
+  (1) the parser had no object-method-shorthand branch, so `[Symbol.iterator]() {}`
+  / `next() {}` misparsed — fixed in bd-bg9l1.27.3 (commit 394055fd, parser.rs);
+  (2/3) custom for-of `@@iterator` dispatch and the iterator's `next()` closure
+  state were independently fixed by intervening interpreter work (verified at HEAD:
+  dispatch invokes `@@iterator` once and `next()` advances correctly). The sole
+  remaining gap was that `Symbol.iterator` resolved to `undefined` — there is no
+  global `Symbol` binding in the eval scope. Fixed by recognizing `Symbol.iterator`
+  at lowering (mirroring `Math.PI`) as the engine's canonical well-known-iterator
+  key string `"@@iterator"` (`lowering_pipeline.rs::symbol_iterator_member`), so a
+  user `{ [Symbol.iterator]() {...} }` stores its method under the exact key the
+  for-of dispatch (`lookup_symbol_iterator_method` strategy 1) looks up.
+- **Tracking bead:** bd-bg9l1.27.3
+- **Reviewed:** 2026-05-30
+- **Next review:** 2026-06-30
 
 ### DISC-004: for-of binding destructuring (nested patterns, defaults, rest) not supported
 
@@ -162,14 +174,20 @@ test reports, not buried in const sets (see DISC-005 below).
 
 ### DISC-009: Iterator `return()` / `throw()` cleanup methods not invoked on abrupt completion
 
-- **Status:** WILL-FIX
+- **Status:** PARTIAL — return-on-break RESOLVED (2026-05-30), throw path still open
 - **ES2020 ref:** §7.4.6 (IteratorClose), §13.7.5.13 (Runtime Semantics: ForIn/OfBodyEvaluation)
 - **Affected harnesses:** `tests/iteration_statements_test262_conformance.rs`, `tests/iterator_protocol_test262_conformance.rs`
-- **Affected tests:** `for-of-iterator-throw-handling`, `for-of-iterator-return-method`
+- **Affected tests:** `for-of-iterator-return-method` (RESOLVED), `for-of-iterator-throw-handling` (still open)
 - **Symptom:** When a for-of body abruptly completes (break / throw / return), the iterator's `return()` method is not invoked, and any error from a throwing iterator next-step is not routed through `IteratorClose`.
-- **Tracking bead:** bd-bg9l1.27
-- **Reviewed:** 2026-05-28
-- **Next review:** 2026-06-28
+- **Resolution (partial):** Once `Symbol.iterator` resolved (DISC-003 / bd-bg9l1.27.3),
+  `for-of-iterator-return-method` passes — the engine already invokes
+  `iterator.return()` on a `break` early-exit; it was gated only on the custom
+  iterable being dispatched at all. The `throw`-path case
+  (`for-of-iterator-throw-handling`) remains failing and is the live remainder of
+  bd-bg9l1.27.7.
+- **Tracking bead:** bd-bg9l1.27.7
+- **Reviewed:** 2026-05-30
+- **Next review:** 2026-06-30
 
 ### DISC-010: `for`-statement per-iteration block-scope isolation (`let`) — RESOLVED
 

@@ -807,10 +807,12 @@ fn iteration_statements_test262_conformance_integration() {
         "for-in-statement-let-declaration",
         "for-in-statement-var-declaration",
         "for-of-array-iterator-simple",
+        "for-of-custom-iterator-basic",
         "for-of-destructuring-basic",
         "for-of-destructuring-defaults",
         "for-of-destructuring-nested",
         "for-of-destructuring-rest",
+        "for-of-iterator-return-method",
         "for-of-statement-array",
         "for-of-statement-basic",
         "for-of-statement-const-declaration",
@@ -828,7 +830,7 @@ fn iteration_statements_test262_conformance_integration() {
         "while-statement-empty-body",
     ];
 
-    /// 5 frontier iteration-statement cases the engine currently does NOT pass.
+    /// 3 frontier iteration-statement cases the engine currently does NOT pass.
     /// (Was 14; bd-bg9l1.27.1 resolved the `//` comment-leak — DISC-001 — which
     /// unblocked `continue-for-of-skip` and the three `for-of-destructuring-*`
     /// cases; bd-bg9l1.27.4 + bd-t7txt added labelled `break`/`continue` —
@@ -843,7 +845,13 @@ fn iteration_statements_test262_conformance_integration() {
     /// capturing distinct 0,1,2). The same `++`/`--` fix flipped
     /// `for-statement-let-tdz` to an is_ok `Pass` — but that case is a NEGATIVE
     /// "should throw ReferenceError" case the is_ok harness cannot credit, so it
-    /// moved to `HARNESS_BLIND_SHOULD_THROW`, not `EXPECTED_PASS`.)
+    /// moved to `HARNESS_BLIND_SHOULD_THROW`, not `EXPECTED_PASS`. bd-bg9l1.27.3
+    /// recognized `Symbol.iterator` at lowering as the canonical `"@@iterator"`
+    /// key — DISC-003 — promoting `for-of-custom-iterator-basic`; the same fix
+    /// unblocked `for-of-iterator-return-method` (DISC-009 return-on-break:
+    /// custom-iterator dispatch + `iterator.return()` on early exit already
+    /// worked, they were gated only on `Symbol.iterator` resolving). The sibling
+    /// `for-of-iterator-throw-handling` (DISC-009 throw path) is still failing.)
     /// Each entry pairs the test id with the tracking bead and the
     /// `ECMA262_DISCREPANCIES.md` row that documents the gap (bd-xkbrm FIND-5).
     /// Keep alphabetised by test id. When the engine repairs a gap, move the id
@@ -851,16 +859,6 @@ fn iteration_statements_test262_conformance_integration() {
     /// `Status: RESOLVED`.
     const KNOWN_FAILING_CASES: &[(&str, &str, &str)] = &[
         // (test_id, tracking_bead, discrepancies_row)
-        (
-            "for-of-custom-iterator-basic",
-            "bd-bg9l1.27.3",
-            "DISC-003 (Symbol.iterator)",
-        ),
-        (
-            "for-of-iterator-return-method",
-            "bd-bg9l1.27.7",
-            "DISC-009 (IteratorClose return)",
-        ),
         (
             "for-of-iterator-throw-handling",
             "bd-bg9l1.27.7",

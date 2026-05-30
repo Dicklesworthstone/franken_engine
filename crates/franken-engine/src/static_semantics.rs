@@ -1204,9 +1204,7 @@ fn analyze_variable_declaration(
         // is the for-head case `for (let x = (x = 1); …)` (DISC-007 /
         // bd-bg9l1.27.5) and the general `let x = x` form. References deferred
         // inside nested closures (`let f = () => f`) are not violations.
-        if is_lexical
-            && let Some(ref init_expr) = declarator.initializer
-        {
+        if is_lexical && let Some(ref init_expr) = declarator.initializer {
             let targets: BTreeSet<&str> = names.iter().copied().collect();
             if let Some(hit) = initializer_self_reference(init_expr, &targets) {
                 state.push_error(
@@ -1579,9 +1577,7 @@ fn check_await_in_expression(state: &mut AnalyzerState, expr: &Expression, span:
 /// positive that would reject valid code.
 fn initializer_self_reference(expr: &Expression, targets: &BTreeSet<&str>) -> Option<String> {
     match expr {
-        Expression::Identifier(name) => {
-            targets.contains(name.as_str()).then(|| name.clone())
-        }
+        Expression::Identifier(name) => targets.contains(name.as_str()).then(|| name.clone()),
         Expression::Await(inner) | Expression::SpreadElement(inner) => {
             initializer_self_reference(inner, targets)
         }
@@ -2538,7 +2534,10 @@ mod tests {
         );
         let result = analyze(&tree);
         assert!(!result.passed());
-        assert!(has_tdz(&result), "self-write in initializer must be a TDZ violation");
+        assert!(
+            has_tdz(&result),
+            "self-write in initializer must be a TDZ violation"
+        );
     }
 
     #[test]
@@ -2553,7 +2552,10 @@ mod tests {
                 1,
             )],
         );
-        assert!(has_tdz(&analyze(&tree)), "self-read in initializer must be a TDZ violation");
+        assert!(
+            has_tdz(&analyze(&tree)),
+            "self-read in initializer must be a TDZ violation"
+        );
     }
 
     #[test]

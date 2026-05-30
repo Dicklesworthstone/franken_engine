@@ -77,7 +77,9 @@ fn break_inside_a_plain_block_but_outside_any_loop_is_rejected() {
         result.ok()
     );
     assert!(
-        result.unwrap_err().contains("FE-STATIC-DIAG-BREAK-OUTSIDE-0014"),
+        result
+            .unwrap_err()
+            .contains("FE-STATIC-DIAG-BREAK-OUTSIDE-0014"),
         "must surface the break-outside-loop early error"
     );
 }
@@ -97,7 +99,11 @@ fn break_inside_a_for_loop_is_accepted() {
         "`break` inside a for-loop is valid and must not be rejected, got {:?}",
         result.err()
     );
-    assert_eq!(result.unwrap(), "0", "loop should break on the first iteration");
+    assert_eq!(
+        result.unwrap(),
+        "0",
+        "loop should break on the first iteration"
+    );
 }
 
 #[test]

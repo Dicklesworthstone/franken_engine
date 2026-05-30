@@ -441,9 +441,14 @@ impl CausationGraph {
 
     /// Check if adding an edge would create a cycle.
     fn would_create_cycle(&self, source: NodeId, target: NodeId) -> Result<bool, GraphError> {
-        // If target can reach source, then source -> target would create a cycle
-        let reachable = self.get_causal_chain(target, 1000)?; // Use reasonable depth limit
-        Ok(reachable.contains(&source))
+        // Adding `source -> target` closes a cycle iff a forward path `target ->...-> source`
+        // already exists — i.e. `target` is an ancestor of `source`. `get_causal_chain`
+        // walks `reverse_adjacency`, so it returns the queried node plus its ancestors; ask
+        // for the ancestors of `source` and check whether `target` is among them. (Querying
+        // `target` instead would test whether `source` is an ancestor of `target`, which only
+        // flags a redundant forward path, not a cycle, and misses real back-edges.)
+        let ancestors_of_source = self.get_causal_chain(source, 1000)?; // reasonable depth limit
+        Ok(ancestors_of_source.contains(&target))
     }
 
     /// Update the topological ordering of nodes.

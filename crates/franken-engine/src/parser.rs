@@ -6182,6 +6182,17 @@ fn parse_object_literal(
                 computed,
                 shorthand: false,
             });
+        } else if let Some((key, value, computed)) =
+            try_parse_object_method(p, span, context, recursion_depth)?
+        {
+            // Method shorthand: `name(params){body}` or `[expr](params){body}`,
+            // desugared to a data property whose value is a function expression.
+            properties.push(ObjectProperty {
+                key,
+                value,
+                computed,
+                shorthand: false,
+            });
         } else {
             // Shorthand property: { x } means { x: x }
             let key = Expression::Identifier(p.to_string());
@@ -6195,6 +6206,49 @@ fn parse_object_literal(
         }
     }
     Ok(Expression::ObjectLiteral(properties))
+}
+
+/// Try to parse an object-literal method shorthand:
+/// `name(params){body}` (plain) or `[expr](params){body}` (computed).
+///
+/// Returns `Ok(Some((key, value, computed)))` where `value` is a function
+/// expression, or `Ok(None)` when `part` is not a method definition so the
+/// caller can fall back to shorthand-identifier handling.
+///
+/// Getter/setter (`get`/`set`), `async`, and generator (`*`) method forms are
+/// intentionally not recognized here — their key is not a bare identifier, so
+/// they return `None` and fall through unchanged rather than being silently
+/// reinterpreted as plain data methods.
+fn try_parse_object_method(
+    part: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+    recursion_depth: u64,
+) -> ParseResult<Option<(Expression, Expression, bool)>> {
+    // Computed method: `[expr](params){body}`.
+    if part.starts_with('[') {
+        if let Some((key_inner, after)) = extract_balanced(part, '[', ']') {
+            let after = after.trim_start();
+            if after.starts_with('(') {
+                let key = parse_expression(key_inner.trim(), span, context, recursion_depth + 1)?;
+                let value = parse_function_expression(after, span, context, recursion_depth + 1)?;
+                return Ok(Some((key, value, true)));
+            }
+        }
+        return Ok(None);
+    }
+
+    // Plain method: `name(params){body}` where `name` is a bare identifier.
+    let Some(paren_idx) = part.find('(') else {
+        return Ok(None);
+    };
+    let name = part[..paren_idx].trim();
+    if !is_identifier(name) {
+        return Ok(None);
+    }
+    let value = parse_function_expression(&part[paren_idx..], span, context, recursion_depth + 1)?;
+    let key = Expression::Identifier(name.to_string());
+    Ok(Some((key, value, false)))
 }
 
 // ---------------------------------------------------------------------------
@@ -12472,6 +12526,67 @@ mod tests {
         match first_expr(&tree) {
             Expression::ObjectLiteral(properties) => {
                 assert!(properties.is_empty());
+            }
+            other => panic!("expected ObjectLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn object_literal_plain_method_shorthand() {
+        // bd-bg9l1.27.3 / DISC-003: `name() {}` must parse as a method (a data
+        // property whose value is a function), not a shorthand identifier.
+        let tree = parse_script("({ next() { return 1; } })");
+        match first_expr(&tree) {
+            Expression::ObjectLiteral(properties) => {
+                assert_eq!(properties.len(), 1);
+                let prop = &properties[0];
+                assert!(!prop.computed);
+                assert!(!prop.shorthand);
+                assert!(matches!(&prop.key, Expression::Identifier(n) if n == "next"));
+                assert!(
+                    matches!(&prop.value, Expression::Function { .. }),
+                    "method value should be a function, got {:?}",
+                    prop.value
+                );
+            }
+            other => panic!("expected ObjectLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn object_literal_computed_method_shorthand() {
+        // bd-bg9l1.27.3 / DISC-003: `[expr]() {}` must parse as a computed
+        // method with a function value.
+        let tree = parse_script("({ [Symbol.iterator]() { return 1; } })");
+        match first_expr(&tree) {
+            Expression::ObjectLiteral(properties) => {
+                assert_eq!(properties.len(), 1);
+                let prop = &properties[0];
+                assert!(prop.computed);
+                assert!(!prop.shorthand);
+                assert!(matches!(&prop.key, Expression::Member { .. }));
+                assert!(
+                    matches!(&prop.value, Expression::Function { .. }),
+                    "computed method value should be a function, got {:?}",
+                    prop.value
+                );
+            }
+            other => panic!("expected ObjectLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn object_literal_shorthand_not_misparsed_as_method() {
+        // Plain shorthand `{ x }` must still be a shorthand identifier property,
+        // and `key: value` must be unaffected by the method branch.
+        let tree = parse_script("({ x, y: 2 })");
+        match first_expr(&tree) {
+            Expression::ObjectLiteral(properties) => {
+                assert_eq!(properties.len(), 2);
+                assert!(properties[0].shorthand);
+                assert!(matches!(&properties[0].key, Expression::Identifier(n) if n == "x"));
+                assert!(!properties[1].shorthand);
+                assert!(matches!(&properties[1].key, Expression::Identifier(n) if n == "y"));
             }
             other => panic!("expected ObjectLiteral, got {other:?}"),
         }

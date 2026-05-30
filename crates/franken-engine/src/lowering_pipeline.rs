@@ -3161,6 +3161,38 @@ fn lower_unary_op_to_ir3(operator: UnaryOperator, dst: Reg, src: Reg) -> Ir3Inst
     }
 }
 
+/// Map an arithmetic/bitwise compound assignment operator (`+=`, `*=`, `<<=`, …)
+/// to the binary operator it applies (`+`, `*`, `<<`, …). Used by member-target
+/// compound-assignment lowering (bd-cwfiv) to build the read-modify-write
+/// `object[key] = object[key] <op> rhs`. `Assign` and the logical compound ops
+/// (`&&=`/`||=`/`??=`) are handled on dedicated paths and must not reach here.
+fn compound_assignment_binary_operator(
+    operator: AssignmentOperator,
+) -> Result<BinaryOperator, LoweringPipelineError> {
+    Ok(match operator {
+        AssignmentOperator::AddAssign => BinaryOperator::Add,
+        AssignmentOperator::SubtractAssign => BinaryOperator::Subtract,
+        AssignmentOperator::MultiplyAssign => BinaryOperator::Multiply,
+        AssignmentOperator::DivideAssign => BinaryOperator::Divide,
+        AssignmentOperator::RemainderAssign => BinaryOperator::Remainder,
+        AssignmentOperator::ExponentiateAssign => BinaryOperator::Exponentiate,
+        AssignmentOperator::LeftShiftAssign => BinaryOperator::LeftShift,
+        AssignmentOperator::RightShiftAssign => BinaryOperator::RightShift,
+        AssignmentOperator::UnsignedRightShiftAssign => BinaryOperator::UnsignedRightShift,
+        AssignmentOperator::BitwiseAndAssign => BinaryOperator::BitwiseAnd,
+        AssignmentOperator::BitwiseOrAssign => BinaryOperator::BitwiseOr,
+        AssignmentOperator::BitwiseXorAssign => BinaryOperator::BitwiseXor,
+        AssignmentOperator::Assign
+        | AssignmentOperator::LogicalAndAssign
+        | AssignmentOperator::LogicalOrAssign
+        | AssignmentOperator::NullishCoalescingAssign => {
+            return Err(LoweringPipelineError::InvariantViolation {
+                detail: "non-arithmetic assignment operator reached compound member lowering",
+            });
+        }
+    })
+}
+
 fn lower_assign_op_to_ir3(
     operator: AssignmentOperator,
     dst: Reg,
@@ -6689,6 +6721,131 @@ fn lower_expression_to_ir1(
                     });
                     ops.push(Ir1Op::SetProperty { key });
                     ops.push(Ir1Op::Label { id: end_label });
+                    return Ok(());
+                }
+
+                // bd-cwfiv: arithmetic/bitwise compound assignment to a member
+                // target (`o.c += rhs`). The plain path below only stores the RHS,
+                // dropping the operator entirely — so `o.c += 1` lowered to
+                // `o.c = 1` and repeated `o.c += 1` never accumulated (read the
+                // original value every time). Lower a read-modify-write instead,
+                // evaluating the object (and computed key) exactly once, mirroring
+                // the logical-member path above. (Logical compound ops `&&=`/`||=`/
+                // `??=` already returned; only `Assign` and arithmetic/bitwise
+                // compound ops reach here.)
+                if !matches!(operator, AssignmentOperator::Assign) {
+                    let binary_operator = compound_assignment_binary_operator(*operator)?;
+
+                    let object_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "member_compound_object",
+                    )?;
+                    lower_expression_to_ir1(
+                        object,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: object_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    let (key, dynamic_key_binding) = if *computed {
+                        let key_binding = alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            "member_compound_key",
+                        )?;
+                        lower_expression_to_ir1(
+                            property,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            root_scope_id,
+                            label_counter,
+                        )?;
+                        ops.push(Ir1Op::StoreBinding {
+                            binding_id: key_binding,
+                        });
+                        ops.push(Ir1Op::Pop);
+                        (Ir1PropertyKey::Dynamic, Some(key_binding))
+                    } else {
+                        (
+                            lower_member_property_key_to_ir1(
+                                property,
+                                false,
+                                ops,
+                                bindings,
+                                binding_lookup,
+                                binding_index,
+                                root_scope_id,
+                                label_counter,
+                            )?,
+                            None,
+                        )
+                    };
+
+                    // current = object[key]
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::GetProperty { key: key.clone() });
+
+                    // result = current <op> rhs  (BinaryOp computes lhs OP rhs;
+                    // `current` is pushed first as lhs, `rhs` second.)
+                    lower_expression_to_ir1(
+                        right,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::BinaryOp {
+                        operator: binary_operator,
+                    });
+
+                    // object[key] = result. SetProperty pops value, then (key),
+                    // then object, so re-stage them in that order.
+                    let result_binding = alloc_internal_binding(
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        "member_compound_result",
+                    )?;
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: result_binding,
+                    });
+                    ops.push(Ir1Op::Pop);
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: object_binding,
+                    });
+                    if let Some(key_binding) = dynamic_key_binding {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: key_binding,
+                        });
+                    }
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: result_binding,
+                    });
+                    ops.push(Ir1Op::SetProperty { key });
                     return Ok(());
                 }
 
@@ -14804,5 +14961,59 @@ mod tests {
         // High authority should subsume low authority
         assert!(high_auth.subsumes(&low_auth));
         assert!(!low_auth.subsumes(&high_auth));
+    }
+
+    // --- bd-cwfiv: member-target compound assignment must read-modify-write ---
+    //
+    // Before the fix, the member-target assignment lowering ignored the operator
+    // and stored only the RHS, so `o.c += 1` lowered to `o.c = 1`; repeated
+    // `o.c += 1` never accumulated (each read the original value). These exercise
+    // the full pipeline via `HybridRouter::eval` and assert the accumulated value.
+    fn cwfiv_eval(source: &str) -> String {
+        let mut engine = crate::HybridRouter::default();
+        match engine.eval(source) {
+            Ok(outcome) => outcome.value,
+            Err(err) => format!("ERR:{err}"),
+        }
+    }
+
+    #[test]
+    fn member_compound_add_accumulates_in_function_bd_cwfiv() {
+        // The exact bd-cwfiv repro: previously yielded "1" (stale read), must be "3".
+        assert_eq!(
+            cwfiv_eval(
+                "let g = function (o) { o.c += 1; o.c += 1; o.c += 1; return o.c; }; g({ c: 0 });"
+            ),
+            "3"
+        );
+    }
+
+    #[test]
+    fn member_compound_add_accumulates_top_level_bd_cwfiv() {
+        assert_eq!(
+            cwfiv_eval("let o = { c: 0 }; o.c += 1; o.c += 1; o.c += 1; o.c;"),
+            "3"
+        );
+    }
+
+    #[test]
+    fn member_compound_subtract_and_multiply_bd_cwfiv() {
+        assert_eq!(cwfiv_eval("let o = { n: 10 }; o.n -= 3; o.n;"), "7");
+        assert_eq!(cwfiv_eval("let o = { n: 5 }; o.n *= 4; o.n;"), "20");
+    }
+
+    #[test]
+    fn member_compound_computed_key_bd_cwfiv() {
+        assert_eq!(
+            cwfiv_eval(r#"let o = { c: 0 }; o["c"] += 5; o["c"] += 5; o["c"];"#),
+            "10"
+        );
+    }
+
+    #[test]
+    fn member_plain_assign_unchanged_bd_cwfiv() {
+        // Control: plain `=` must still overwrite (the compound branch must not
+        // intercept the Assign operator).
+        assert_eq!(cwfiv_eval("let o = { c: 9 }; o.c = 1; o.c;"), "1");
     }
 }

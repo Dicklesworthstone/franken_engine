@@ -1,15 +1,14 @@
 use chrono::{DateTime, Utc};
 #[cfg(unix)]
 use rustix::fs::{FlockOperation, flock};
-// Windows portability shim: rustix's `flock` is Unix-only. `fs2` provides the
-// same advisory whole-file locking (LockFileEx) on Windows, preserving the
+// Windows portability shim: rustix's `flock` is Unix-only. Use std's native
+// cross-platform file locking (stabilized in 1.89) on Windows, preserving the
 // exclusive / non-blocking / unlock semantics the Unix path relies on.
 #[cfg(windows)]
 use self::flock_compat::{FlockOperation, flock};
 #[cfg(windows)]
 mod flock_compat {
-    use fs2::FileExt;
-    use std::fs::File;
+    use std::fs::{File, TryLockError};
     use std::io;
 
     #[derive(Clone, Copy, Debug)]
@@ -21,12 +20,21 @@ mod flock_compat {
         Unlock,
     }
 
+    fn map_try(result: Result<(), TryLockError>) -> io::Result<()> {
+        result.map_err(|err| match err {
+            TryLockError::WouldBlock => {
+                io::Error::new(io::ErrorKind::WouldBlock, "file lock would block")
+            }
+            TryLockError::Error(err) => err,
+        })
+    }
+
     pub fn flock(file: &File, operation: FlockOperation) -> io::Result<()> {
         match operation {
-            FlockOperation::LockExclusive => file.lock_exclusive(),
-            FlockOperation::NonBlockingLockExclusive => file.try_lock_exclusive(),
+            FlockOperation::LockExclusive => file.lock(),
+            FlockOperation::NonBlockingLockExclusive => map_try(file.try_lock()),
             FlockOperation::LockShared => file.lock_shared(),
-            FlockOperation::NonBlockingLockShared => file.try_lock_shared(),
+            FlockOperation::NonBlockingLockShared => map_try(file.try_lock_shared()),
             FlockOperation::Unlock => file.unlock(),
         }
     }

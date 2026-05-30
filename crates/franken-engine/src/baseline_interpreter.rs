@@ -13437,6 +13437,100 @@ impl InterpreterCore {
         }
     }
 
+    /// Recursively serialize a value as JSON (`JSON.stringify`). Returns `None`
+    /// for values JSON omits (undefined / functions / cyclic references) — the
+    /// caller maps a top-level `None` to "undefined", an object member is
+    /// dropped, and an array element becomes `null`. Objects serialize their own
+    /// string-keyed properties (skipping engine-internal `__`-prefixed metadata
+    /// such as Symbol fields); arrays serialize their dense `0..length` slots.
+    /// (bd-9a8cz.3 — was a `"{}"` stub for every object.)
+    fn json_stringify_value(&self, value: &Value, visited: &mut Vec<ObjectId>) -> Option<String> {
+        let rendered = match value {
+            Value::Undefined => return None,
+            Value::Null => "null".to_string(),
+            Value::Bool(b) => {
+                if *b {
+                    "true".to_string()
+                } else {
+                    "false".to_string()
+                }
+            }
+            Value::Int(n) => n.to_string(),
+            Value::Float(f) => {
+                let val = f.inner();
+                if val.is_nan() || val.is_infinite() {
+                    "null".to_string()
+                } else {
+                    val.to_string()
+                }
+            }
+            Value::Str(s) => {
+                format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\"))
+            }
+            Value::Object(id) => {
+                if visited.contains(id) {
+                    // Cyclic reference: ES throws TypeError; omit to stay safe
+                    // rather than recurse forever.
+                    return None;
+                }
+                let object = self.heap.get(id.0 as usize).cloned()?;
+                visited.push(*id);
+                let rendered = if object.is_array {
+                    let len = object
+                        .properties
+                        .get("length")
+                        .and_then(|v| match v {
+                            Value::Int(n) if *n >= 0 => Some(*n as usize),
+                            _ => None,
+                        })
+                        .or_else(|| object.cached_dense_length.map(|l| l as usize))
+                        .unwrap_or(0);
+                    let items: Vec<String> = (0..len)
+                        .map(|i| {
+                            object
+                                .properties
+                                .get(&i.to_string())
+                                .and_then(|v| self.json_stringify_value(v, visited))
+                                .unwrap_or_else(|| "null".to_string())
+                        })
+                        .collect();
+                    format!("[{}]", items.join(","))
+                } else {
+                    let mut members = Vec::new();
+                    for (key, val) in &object.properties {
+                        // Engine-internal metadata (e.g. Symbol __type/__key) is
+                        // not a real enumerable JS property — do not serialize it.
+                        if key.starts_with("__") {
+                            continue;
+                        }
+                        if let Some(rendered_val) = self.json_stringify_value(val, visited) {
+                            let escaped_key = key.replace('"', "\\\"").replace('\\', "\\\\");
+                            members.push(format!("\"{escaped_key}\":{rendered_val}"));
+                        }
+                    }
+                    format!("{{{}}}", members.join(","))
+                };
+                visited.pop();
+                rendered
+            }
+            // Functions have no JSON representation (omitted).
+            Value::Function(_)
+            | Value::Closure(_)
+            | Value::GeneratorFunction(_)
+            | Value::AsyncFunction(_)
+            | Value::AsyncGeneratorFunction(_)
+            | Value::BuiltinFunction(_) => return None,
+            // Other object-likes: preserve the prior "{}" fallback rather than
+            // leaking internal structure.
+            Value::Iterator(_)
+            | Value::Promise(_)
+            | Value::Generator(_)
+            | Value::AsyncFunctionObject(_)
+            | Value::AsyncGeneratorObject(_) => "{}".to_string(),
+        };
+        Some(rendered)
+    }
+
     fn dispatch_builtin_hostcall(
         &mut self,
         cap: &str,
@@ -14658,41 +14752,15 @@ impl InterpreterCore {
                 }
 
                 let value = self.read_reg(args.start)?;
-                let json_str = match value {
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Bool(b) => {
-                        if b {
-                            "true".to_string()
-                        } else {
-                            "false".to_string()
-                        }
-                    }
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => {
-                        let val = f.inner();
-                        if val.is_nan() || val.is_infinite() {
-                            "null".to_string()
-                        } else {
-                            val.to_string()
-                        }
-                    }
-                    Value::Str(s) => {
-                        format!("\"{}\"", s.replace('"', "\\\"").replace('\\', "\\\\"))
-                    }
-                    Value::Object(_) => "{}".to_string(), // Basic object stringification
-                    Value::Function(_) => "undefined".to_string(),
-                    Value::Closure(_) => "undefined".to_string(),
-                    Value::Iterator(_) => "{}".to_string(),
-                    Value::GeneratorFunction(_) => "undefined".to_string(),
-                    Value::Promise(_) => "{}".to_string(),
-                    Value::Generator(_) => "{}".to_string(),
-                    Value::AsyncFunction(_) => "undefined".to_string(),
-                    Value::AsyncFunctionObject(_) => "{}".to_string(),
-                    Value::AsyncGeneratorFunction(_) => "undefined".to_string(),
-                    Value::AsyncGeneratorObject(_) => "{}".to_string(),
-                    Value::BuiltinFunction(_) => "undefined".to_string(),
-                };
+                // bd-9a8cz.3: real recursive object/array serialization. Previously
+                // `Value::Object(_)` was a `"{}"` stub. `json_stringify_value`
+                // returns `None` for values JSON omits (undefined/function); at the
+                // top level that stringifies to "undefined" (preserving prior
+                // behavior).
+                let mut visited = Vec::new();
+                let json_str = self
+                    .json_stringify_value(&value, &mut visited)
+                    .unwrap_or_else(|| "undefined".to_string());
                 Ok(Value::str(json_str))
             }
             "builtin:JsonParse" => {
@@ -35242,5 +35310,56 @@ mod lazy_seed_tests {
             ),
             "expected InternalError with chokepoint-miss detail, got: {err:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod json_stringify_bd9a8cz3_tests {
+    //! bd-9a8cz.3: `JSON.stringify` object/array serialization (was a `"{}"` stub
+    //! for every object). Reachable from eval because lowering recognizes
+    //! `JSON.stringify` as a builtin call (`object_json_builtin_call_capability`)
+    //! with no eval-scope global binding required. Keys serialize in the engine's
+    //! deterministic (BTreeMap-sorted) order.
+    fn eval_value(source: &str) -> String {
+        let mut engine = crate::HybridRouter::default();
+        match engine.eval(source) {
+            Ok(outcome) => outcome.value,
+            Err(err) => format!("ERR:{err}"),
+        }
+    }
+
+    #[test]
+    fn stringify_plain_object_serializes_properties() {
+        assert_eq!(
+            eval_value("JSON.stringify({a: 1, b: 2});"),
+            r#"{"a":1,"b":2}"#
+        );
+    }
+
+    #[test]
+    fn stringify_array_serializes_elements() {
+        assert_eq!(eval_value("JSON.stringify([1, 2, 3]);"), "[1,2,3]");
+    }
+
+    #[test]
+    fn stringify_nested_object_and_array() {
+        assert_eq!(
+            eval_value(r#"JSON.stringify({arr: [1, 2], obj: {k: 3}, s: "x"});"#),
+            r#"{"arr":[1,2],"obj":{"k":3},"s":"x"}"#
+        );
+    }
+
+    #[test]
+    fn stringify_empty_object_and_array() {
+        assert_eq!(eval_value("JSON.stringify({});"), "{}");
+        assert_eq!(eval_value("JSON.stringify([]);"), "[]");
+    }
+
+    #[test]
+    fn stringify_primitives_unchanged() {
+        assert_eq!(eval_value("JSON.stringify(5);"), "5");
+        assert_eq!(eval_value("JSON.stringify(true);"), "true");
+        assert_eq!(eval_value(r#"JSON.stringify("x");"#), r#""x""#);
+        assert_eq!(eval_value("JSON.stringify(null);"), "null");
     }
 }

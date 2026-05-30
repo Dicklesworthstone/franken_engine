@@ -1615,6 +1615,12 @@ fn classify_bug_severity(message: &str) -> BugSeverity {
         BugSeverity::Critical
     } else if lower_message.contains("incorrect") || lower_message.contains("wrong") {
         BugSeverity::Major
+    } else if lower_message.contains("invalid") || lower_message.contains("violation") {
+        // Validity/violation language denotes a real (at least Minor) bug, even when
+        // the message also mentions "format" (e.g. "Invalid schema format detected").
+        // This must precede the cosmetic branch so a schema violation is not silently
+        // downgraded to Cosmetic/Backlog by the bare "format" keyword.
+        BugSeverity::Minor
     } else if lower_message.contains("format") || lower_message.contains("display") {
         BugSeverity::Cosmetic
     } else {
@@ -3094,7 +3100,17 @@ mod tests {
                 decision_path: "test".to_string(),
                 outcome: "ok".to_string(),
             }),
-            franken_signature: None,
+            // A two-sided ambiguity needs both observed traces: franken's own
+            // state-transition signature feeds `franken_behavior`. (Previously
+            // left None, which made `extract_franken_behavior` fall back to the
+            // "not captured" placeholder and the assertion below could never hold.)
+            franken_signature: Some(FrxTraceEventSignature {
+                seq: 1,
+                phase: "state".to_string(),
+                event: "transition".to_string(),
+                decision_path: "test".to_string(),
+                outcome: "diverged".to_string(),
+            }),
         };
 
         let classification = classify_divergence(&divergence);
@@ -3143,7 +3159,9 @@ mod tests {
             evidence.evidence_sources[0].source_type,
             EvidenceSourceType::ReferenceImplementation
         );
-        assert!(evidence.signature.is_none()); // Not implemented yet
+        // bd-k2bz7: divergence evidence is now Ed25519-signed by the engine's
+        // default evidence signer (see divergence_evidence_is_signed_and_verifies_bd_k2bz7).
+        assert!(evidence.signature.is_some());
     }
 
     #[test]

@@ -7058,6 +7058,39 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            if let Some(capability) = object_json_builtin_call_capability(callee, binding_lookup) {
+                // `Object.keys/values/entries` and `JSON.parse/stringify` —
+                // the `Object`/`JSON` globals have no eval-scope binding, so
+                // (like Math/global-function interception) recognize the bare
+                // member-call here and route to the canonical `builtin:*`
+                // hostcall whose impl already exists in
+                // `dispatch_builtin_hostcall_inner` (bd-9a8cz.2). These read
+                // their argument from slot 0 (no receiver placeholder), the
+                // same convention as the Math builtins.
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Some(capability) = timer_builtin_call_capability(callee, binding_lookup) {
                 // Bare global timer builtins (`setTimeout`/`setInterval`/
                 // `clearTimeout`/`clearInterval`) are dispatched as host calls
@@ -8703,6 +8736,47 @@ fn math_builtin_call_capability(
         "acosh" => Some("builtin:MathAcosh"),
         "asinh" => Some("builtin:MathAsinh"),
         "atanh" => Some("builtin:MathAtanh"),
+        _ => None,
+    }
+}
+
+/// Recognize calls to the standard `Object.*` / `JSON.*` static methods whose
+/// receiver is the bare (unbound) global identifier. `Object`/`JSON` have no
+/// binding on the eval scope, so — like the Math/timer/global-function
+/// interceptions — route the recognized member call to the canonical
+/// `builtin:*` hostcall whose impl already exists in
+/// `dispatch_builtin_hostcall_inner` (bd-9a8cz.2). Returns `None` when the
+/// global is shadowed by a user binding (so `let JSON = …` is honored) or the
+/// property is not one of the supported static methods.
+fn object_json_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    let Expression::Identifier(global) = object.as_ref() else {
+        return None;
+    };
+    if binding_lookup.contains_key(global.as_str()) {
+        return None;
+    }
+    let property_name = match (*computed, property.as_ref()) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    match (global.as_str(), property_name) {
+        ("Object", "keys") => Some("builtin:ObjectKeys"),
+        ("Object", "values") => Some("builtin:ObjectValues"),
+        ("Object", "entries") => Some("builtin:ObjectEntries"),
+        ("JSON", "parse") => Some("builtin:JsonParse"),
+        ("JSON", "stringify") => Some("builtin:JsonStringify"),
         _ => None,
     }
 }

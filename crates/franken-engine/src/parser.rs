@@ -4119,14 +4119,29 @@ fn parse_primary_expression(
     // starting with `'` or `"` that did not parse as a balanced string literal
     // would otherwise fall through to `Expression::Raw`, silently passing
     // malformed source on to lowering instead of fail-closed parsing.
+    //
+    // EXCEPTION (bd-bulsc): a *balanced* string literal may be the base of a
+    // postfix member/call/index chain (`"abc".split(",")`). In that case the
+    // whole expression is not a pure string (so `parse_quoted_string` above
+    // returned `None`), but it is well-formed — fall through to
+    // `try_parse_postfix` below, which parses the tail as postfix on the
+    // `StringLiteral` base. Only fail closed when the leading quote does not
+    // open a balanced literal followed by a `.`/`[`/`(` tail.
     if let Some(first) = expression.as_bytes().first()
         && (*first == b'"' || *first == b'\'')
     {
-        return Err(unsupported_expression_syntax_error(
-            "unterminated or malformed string literal",
-            span,
-            context,
-        ));
+        let string_prefixed_postfix =
+            leading_string_literal_end(expression).is_some_and(|end| {
+                let tail = expression[end..].trim_start();
+                tail.starts_with('.') || tail.starts_with('[') || tail.starts_with('(')
+            });
+        if !string_prefixed_postfix {
+            return Err(unsupported_expression_syntax_error(
+                "unterminated or malformed string literal",
+                span,
+                context,
+            ));
+        }
     }
 
     // Regex literal: /pattern/flags
@@ -6635,6 +6650,34 @@ fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
 
     // Try to parse as f64
     digits_ref.parse::<f64>().ok()
+}
+
+/// If `expr` begins with a string literal (`"..."` or `'...'`), return the byte
+/// index just past its closing quote. Unlike [`parse_quoted_string`], the literal
+/// need not span the whole input, so a string literal can be recognized as the
+/// base of a postfix member/call/index chain (`"abc".split(",")`, bd-bulsc).
+///
+/// Returns `None` for a genuinely unterminated literal (no closing quote, or an
+/// embedded newline before it — mirroring `parse_quoted_string`'s single-line
+/// acceptance), so the bd-wa01t fail-closed guard still fires for malformed input.
+/// Quotes, backslash, and newlines are ASCII, so byte scanning is UTF-8-safe and
+/// the returned index lands on a char boundary (just past an ASCII quote).
+fn leading_string_literal_end(expr: &str) -> Option<usize> {
+    let bytes = expr.as_bytes();
+    let quote = *bytes.first()?;
+    if quote != b'"' && quote != b'\'' {
+        return None;
+    }
+    let mut i = 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2, // skip the escaped byte
+            b'\n' | b'\r' => return None, // unterminated single-line literal
+            c if c == quote => return Some(i + 1),
+            _ => i += 1,
+        }
+    }
+    None // ran off the end without a closing quote
 }
 
 fn parse_quoted_string(input: &str) -> Option<String> {
@@ -10438,6 +10481,44 @@ mod tests {
             .expect_err("right parse should fail");
         assert_eq!(left.code, ParseErrorCode::BudgetExceeded);
         assert_eq!(left, right);
+    }
+
+    #[test]
+    fn string_literal_receiver_member_call_parses_bd_bulsc() {
+        // bd-bulsc: a string literal used as a member-access / call / index
+        // receiver must PARSE (as postfix on the StringLiteral), not fail closed
+        // with "unterminated or malformed string literal".
+        let parser = CanonicalEs2020Parser;
+        let options = ParserOptions::default();
+        for source in [
+            r#""abc".length;"#,
+            r#""abc".split(",").length;"#,
+            r#""hello".replace("l", "L");"#,
+            r#""5".padStart(3, "0");"#,
+        ] {
+            let result = parser.parse_with_options(source, ParseGoal::Script, &options);
+            assert!(
+                result.is_ok(),
+                "string-literal receiver must parse (bd-bulsc): {source:?} -> {:?}",
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    fn genuinely_unterminated_string_still_fails_closed_bd_wa01t() {
+        // The bd-bulsc relaxation must NOT weaken the bd-wa01t fail-closed guard:
+        // a quote that opens no balanced literal (no close / embedded newline)
+        // must still be rejected, not silently passed through as Raw.
+        let parser = CanonicalEs2020Parser;
+        let options = ParserOptions::default();
+        for source in [r#""unterminated ;"#, "let s = \"abc;"] {
+            let result = parser.parse_with_options(source, ParseGoal::Script, &options);
+            assert!(
+                result.is_err(),
+                "genuinely unterminated string must still fail closed (bd-wa01t): {source:?}"
+            );
+        }
     }
 
     #[test]

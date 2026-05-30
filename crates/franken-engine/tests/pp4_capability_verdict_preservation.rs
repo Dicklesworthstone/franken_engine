@@ -16,18 +16,22 @@
 //! algebraic-effects `HandlerStack` built by `create_handler_stack_from_profile`.
 //!
 //! ## Regression discipline (do NOT silently accept divergence — bd-cixqu.42.4)
-//! PP.3 fully migrated the `Full`, `EngineCore`, and `ComputeOnly` profiles to real
-//! handlers, but left `Policy` and `Remote` mapped to a `ComputeOnly` *placeholder*
-//! handler (see `hostcall_effects_migration::create_handler_stack_from_profile`). That
-//! placeholder loses the capabilities those two profiles legacy-grant — a real, known gap.
+//! Two verdict layers are tracked separately:
+//!   - **membership** (`substrate_provides`) — which capabilities a profile's stack grants.
+//!     PP.3 migrated `Full`/`EngineCore`/`ComputeOnly` faithfully and once left `Policy`/
+//!     `Remote` on a `ComputeOnly` placeholder; those have since been implemented (bd-08wwg —
+//!     `PolicyCapsHandler`/`RemoteCapsHandler` grant their canonical sets), so membership is
+//!     now fully preserved and `FROZEN_PLACEHOLDER_DIVERGENCES` is empty.
+//!   - **dispatch** (`substrate_allows_hostcall`) — whether a real executor runs the hostcall.
+//!     A capability can be granted yet have no executor: post-bd-6wc97 `FullCapsHandler`
+//!     explicitly denies `fs:read`/`fs:write`/`network` (no in-engine executor — denies
+//!     rather than fabricating data), and the `Remote` placeholder defers `network`. These
+//!     granted-but-undispatchable cells are frozen in `FROZEN_DISPATCH_DIVERGENCES`.
 //!
-//! Rather than silently asserting the placeholder is "correct", this test FREEZES the exact
-//! set of placeholder divergences. The frozen set is asserted with `assert_eq!`, so the
-//! suite fails in BOTH directions:
-//!   - a NEW divergence (PP.3 changed a verdict it should have preserved) → regression, fail.
-//!   - a frozen entry that no longer diverges (the real Policy/Remote handler landed) →
-//!     stale allowlist, fail and force this test to be updated.
-//! Every frozen divergence is logged loudly on each run so the gap stays visible.
+//! Both frozen sets are asserted with `assert_eq!`, so the suite fails in BOTH directions:
+//!   - a NEW divergence (a verdict that should have been preserved changed) → regression, fail.
+//!   - a frozen entry that no longer diverges (a real handler/executor landed) → stale
+//!     allowlist, fail and force the set to be updated.
 //!
 //! Per bd-cixqu.45 logging discipline: self-describing `pp4_*` test names, ≥30 cases,
 //! events.jsonl-shaped structured logging, and content-hash equality (not merely structural)
@@ -132,7 +136,11 @@ fn substrate_provides(profile: &CapabilityProfile, cap: RuntimeCapability) -> bo
     EffectCapabilities::runtime([cap]).is_satisfied_by(stack.capabilities())
 }
 
-/// New-substrate verdict for an actual hostcall dispatch: ALLOW iff `handle_effect` succeeds.
+/// New-substrate verdict for an *actual hostcall dispatch*: ALLOW iff `handle_effect`
+/// succeeds. This is strictly stronger than capability membership — it also requires a real
+/// executor. Post-bd-6wc97, `Full` grants fs/network at the membership layer but its handler
+/// explicitly denies them at dispatch (no executor), so a granted capability can still DENY
+/// here (see `FROZEN_DISPATCH_DIVERGENCES`).
 fn substrate_allows_hostcall(profile: &CapabilityProfile, effect: &dyn ErasedEffect) -> bool {
     let mut stack = create_handler_stack_from_profile(profile);
     stack.handle_effect(effect).is_ok()
@@ -239,18 +247,27 @@ fn pp4_fixture_manifest_covers_every_present_verdict_file() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn pp4_full_profile_allows_every_hostcall_family() {
+fn pp4_full_profile_grants_every_family_dispatch_denies_fs_network() {
+    // Full GRANTS every hostcall-family capability (membership ALLOW, preserved). At the
+    // dispatch layer it really runs console/timer/module, but `fs:read`/`fs:write`/`network`
+    // are explicitly denied (bd-6wc97: no real executor — `CapabilityDenied` rather than
+    // fabricated data). Those denied-but-granted cells are the frozen dispatch-divergences.
     let profile = CapabilityProfile::full();
+    let frozen = frozen_dispatch_divergences();
     for (name, required, effect) in hostcall_effects() {
         let prior = profile.has(required);
         let substrate = substrate_allows_hostcall(&profile, effect.as_ref());
         emit_event("dispatch", "full", name, prior, substrate);
-        assert!(prior, "legacy Full must grant {required}");
-        assert!(substrate, "substrate Full must ALLOW {name}");
-        assert_eq!(
-            prior, substrate,
-            "Full verdict for {name} must be preserved"
-        );
+        assert!(prior, "legacy Full must grant {required} (membership preserved)");
+        let key = ("full".to_string(), name.to_string());
+        if frozen.contains(&key) {
+            assert!(
+                !substrate,
+                "Full's {name} has no real executor — explicitly denied (bd-6wc97)"
+            );
+        } else {
+            assert!(substrate, "Full really dispatches {name}");
+        }
     }
 }
 
@@ -335,9 +352,13 @@ fn pp4_capability_membership_equivalence_for_faithful_profiles() {
 }
 
 #[test]
-fn pp4_hostcall_dispatch_equivalence_for_faithful_profiles() {
+fn pp4_hostcall_dispatch_equivalence_for_faithful_profiles_modulo_frozen() {
     // Exercises the real `handle_effect` path (capability gate + handler dispatch), not just
-    // membership: Full | EngineCore | ComputeOnly  x  6 hostcall families = 18 verdict cases.
+    // membership: Full | EngineCore | ComputeOnly  x  6 hostcall families. The dispatch
+    // verdict equals the membership verdict EXCEPT where a capability is granted but has no
+    // real executor — those cells are the frozen dispatch-divergences (bd-6wc97), asserted
+    // exhaustively in `pp4_known_hostcall_dispatch_divergences_are_exactly_frozen`.
+    let frozen = frozen_dispatch_divergences();
     for (pname, profile) in canonical_profiles() {
         if !FAITHFUL_PROFILES.contains(&pname) {
             continue;
@@ -346,10 +367,18 @@ fn pp4_hostcall_dispatch_equivalence_for_faithful_profiles() {
             let prior = profile.has(required);
             let substrate = substrate_allows_hostcall(&profile, effect.as_ref());
             emit_event("dispatch", pname, name, prior, substrate);
-            assert_eq!(
-                prior, substrate,
-                "dispatch verdict for ({pname}, {name}) diverged from legacy has({required})"
-            );
+            let key = (pname.to_string(), name.to_string());
+            if frozen.contains(&key) {
+                assert!(
+                    prior && !substrate,
+                    "frozen dispatch-divergence ({pname}, {name}) must be granted-but-unimplemented"
+                );
+            } else {
+                assert_eq!(
+                    prior, substrate,
+                    "dispatch verdict for ({pname}, {name}) diverged from legacy has({required})"
+                );
+            }
         }
     }
 }
@@ -358,19 +387,41 @@ fn pp4_hostcall_dispatch_equivalence_for_faithful_profiles() {
 // 4. Frozen known-divergence guard (catches NEW regressions + stale allowlist)
 // ---------------------------------------------------------------------------
 
-/// The EXACT set of `(profile, capability)` membership verdicts that PP.3's placeholder
-/// `Policy`/`Remote` handlers currently diverge on. These are the only divergences the
-/// migration is permitted to have. Removing a placeholder (implementing a real handler)
-/// must delete the corresponding entries here, or this test fails — by design.
-const FROZEN_PLACEHOLDER_DIVERGENCES: [(&str, RuntimeCapability); 7] = [
-    ("policy", RuntimeCapability::PolicyRead),
-    ("policy", RuntimeCapability::PolicyWrite),
-    ("policy", RuntimeCapability::EvidenceEmit),
-    ("policy", RuntimeCapability::DecisionInvoke),
-    ("remote", RuntimeCapability::NetworkEgress),
-    ("remote", RuntimeCapability::LeaseManagement),
-    ("remote", RuntimeCapability::IdempotencyDerive),
+/// The EXACT set of `(profile, capability)` **membership** divergences the migration is
+/// permitted to have. Now EMPTY: `PolicyCapsHandler`/`RemoteCapsHandler` were implemented
+/// (bd-08wwg) and grant their canonical capability sets, so every profile's membership is
+/// faithfully preserved. (Was 7 policy/remote entries while those were ComputeOnly
+/// placeholders.) Implementing a placeholder must delete its entries here — that is exactly
+/// what happened. If a NEW entry appears, a verdict regressed.
+const FROZEN_PLACEHOLDER_DIVERGENCES: [(&str, RuntimeCapability); 0] = [];
+
+/// The EXACT set of `(profile, hostcall_family)` **dispatch** divergences: cells where the
+/// legacy capability verdict is ALLOW (the profile grants the capability) but the substrate
+/// cannot actually dispatch the hostcall, so `handle_effect` is not `Ok`.
+///
+/// Unlike membership (which capabilities a profile *grants*), this is about whether a real
+/// *executor* runs. Per bd-6wc97 (commit 1ac8fabe), `FullCapsHandler` now EXPLICITLY DENIES
+/// `fs:read`/`fs:write`/`network` (no real in-engine executor — `CapabilityDenied` instead
+/// of fabricating data) while still granting those capabilities at the membership layer;
+/// `console`/`timer`/`module` keep their in-process paths and still dispatch. The
+/// `(remote, network)` entry is the pre-existing PP.3 Remote placeholder (grants
+/// NetworkEgress, defers dispatch). Frozen with `assert_eq!`: a new unimplemented executor
+/// OR a newly-wired real one must update this set. (NB: `CapabilityDenied` for a granted
+/// capability is semantically loose — `Unhandled` = "granted, no executor" would be cleaner;
+/// tracked under bd-6wc97, not relitigated here. pp4 keys on `is_ok()` either way.)
+const FROZEN_DISPATCH_DIVERGENCES: [(&str, &str); 4] = [
+    ("full", "hostcall:fs:read"),
+    ("full", "hostcall:fs:write"),
+    ("full", "hostcall:network"),
+    ("remote", "hostcall:network"),
 ];
+
+fn frozen_dispatch_divergences() -> BTreeSet<(String, String)> {
+    FROZEN_DISPATCH_DIVERGENCES
+        .iter()
+        .map(|(p, n)| ((*p).to_string(), (*n).to_string()))
+        .collect()
+}
 
 #[test]
 fn pp4_known_placeholder_divergences_are_exactly_frozen() {
@@ -414,26 +465,36 @@ fn pp4_known_placeholder_divergences_are_exactly_frozen() {
 }
 
 #[test]
-fn pp4_remote_network_is_the_only_hostcall_dispatch_divergence() {
-    // At the hostcall-dispatch level the single permitted divergence is (Remote, network):
-    // legacy Remote grants NetworkEgress, but PP.3's Remote placeholder denies it.
+fn pp4_known_hostcall_dispatch_divergences_are_exactly_frozen() {
+    // A hostcall-dispatch divergence is a (profile, family) where the legacy capability
+    // verdict is ALLOW but the substrate cannot really dispatch it. After bd-6wc97 these are
+    // exactly: Full's fs:read/fs:write/network (granted, but explicitly denied — no executor)
+    // and Remote's network (PP.3 Remote placeholder). Frozen with `assert_eq!` so a new gap
+    // OR a newly-wired executor forces this set (and bd-6wc97) to be updated.
     let mut observed: BTreeSet<(String, String)> = BTreeSet::new();
     for (pname, profile) in canonical_profiles() {
         for (name, required, effect) in hostcall_effects() {
             let prior = profile.has(required);
             let substrate = substrate_allows_hostcall(&profile, effect.as_ref());
             if prior != substrate {
+                // Divergence is only ever permitted in the granted-but-unimplemented
+                // direction; the reverse (dispatch succeeds without the capability) is an
+                // authority leak.
+                assert!(
+                    prior && !substrate,
+                    "illegal dispatch divergence ({pname}, {name}): substrate must never ALLOW \
+                     a hostcall the legacy verdict DENIES"
+                );
                 observed.insert((pname.to_string(), name.to_string()));
             }
         }
     }
-    let expected: BTreeSet<(String, String)> =
-        [("remote".to_string(), "hostcall:network".to_string())]
-            .into_iter()
-            .collect();
     assert_eq!(
-        observed, expected,
-        "the only known hostcall-dispatch divergence is (remote, hostcall:network)"
+        observed,
+        frozen_dispatch_divergences(),
+        "hostcall-dispatch divergence set changed. New entries = an unpreserved verdict or a \
+         newly-unimplemented executor; missing entries = a real executor landed — update \
+         FROZEN_DISPATCH_DIVERGENCES and bd-6wc97."
     );
 }
 

@@ -1,5 +1,5 @@
-total=186
-unique=186
+total=206
+unique=206
 duplicates=0
 
 builtin:ArrayFrom
@@ -43,6 +43,7 @@ builtin:ArrayPrototypeUnshift
 builtin:ArrayPrototypeValues
 builtin:ArrayPrototypeWith
 builtin:Boolean
+builtin:ClearInterval
 builtin:ClearTimeout
 builtin:ConsoleError
 builtin:ConsoleInfo
@@ -51,12 +52,16 @@ builtin:ConsoleWarn
 builtin:Date
 builtin:DateNow
 builtin:DatePrototypeGetTime
+builtin:DatePrototypeToLocaleDateString
+builtin:DatePrototypeToLocaleString
+builtin:DatePrototypeToLocaleTimeString
 builtin:DatePrototypeToString
 builtin:DecodeURI
 builtin:DecodeURIComponent
 builtin:EncodeURI
 builtin:EncodeURIComponent
 builtin:Error
+builtin:EvalError
 builtin:FunctionPrototypeApply
 builtin:FunctionPrototypeCall
 builtin:JsonParse
@@ -115,6 +120,7 @@ builtin:ObjectEntries
 builtin:ObjectFreeze
 builtin:ObjectGetOwnPropertyDescriptor
 builtin:ObjectGetOwnPropertyNames
+builtin:ObjectGetPropertyDescriptor
 builtin:ObjectGetPrototypeOf
 builtin:ObjectHasOwnProperty
 builtin:ObjectIs
@@ -133,9 +139,20 @@ builtin:ParseFloat
 builtin:PromiseAll
 builtin:PromiseReject
 builtin:PromiseResolve
+builtin:Proxy
+builtin:ProxyRevocable
+builtin:RangeError
+builtin:ReferenceError
+builtin:ReflectApply
+builtin:ReflectConstruct
+builtin:ReflectDeleteProperty
+builtin:ReflectGet
+builtin:ReflectHas
+builtin:ReflectSet
 builtin:RegExp
 builtin:RegExpPrototypeTest
 builtin:Set
+builtin:SetInterval
 builtin:SetPrototypeAdd
 builtin:SetPrototypeClear
 builtin:SetPrototypeDelete
@@ -179,6 +196,9 @@ builtin:StringPrototypeTrimEnd
 builtin:StringPrototypeTrimStart
 builtin:Symbol
 builtin:SymbolIterator
+builtin:SyntaxError
+builtin:TypeError
+builtin:URIError
 builtin:WeakMap
 builtin:WeakMapPrototypeGet
 builtin:WeakMapPrototypeHas

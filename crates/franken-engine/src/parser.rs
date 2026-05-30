@@ -6375,9 +6375,23 @@ fn parse_object_literal(
             // Split on first top-level colon for key:value.
             let key_src = p[..colon_idx].trim();
             let value_src = p[colon_idx + 1..].trim();
-            let key = parse_expression(key_src, span, context, recursion_depth + 1)?;
-            let value = parse_expression(value_src, span, context, recursion_depth + 1)?;
             let computed = key_src.starts_with('[');
+            // For a computed key `[expr]`, the surrounding brackets are the
+            // computed-key delimiter, not an array literal — strip one level and
+            // parse the inner expression as the key. Otherwise `["a"+"b"]` parses
+            // as the array literal `["ab"]`, so the property key becomes an array
+            // object rather than the string key "ab" (bd-rjxpx).
+            let key_src_inner = if computed {
+                key_src
+                    .strip_prefix('[')
+                    .and_then(|s| s.strip_suffix(']'))
+                    .map(str::trim)
+                    .unwrap_or(key_src)
+            } else {
+                key_src
+            };
+            let key = parse_expression(key_src_inner, span, context, recursion_depth + 1)?;
+            let value = parse_expression(value_src, span, context, recursion_depth + 1)?;
             properties.push(ObjectProperty {
                 key,
                 value,

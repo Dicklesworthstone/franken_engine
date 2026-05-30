@@ -2499,8 +2499,14 @@ mod tests {
 
     #[test]
     fn test_operational_readiness_report_generation() {
-        let gate = ProductionHardeningGateExecution::new("test-gate-012".to_string())
+        let mut gate = ProductionHardeningGateExecution::new("test-gate-012".to_string())
             .expect("operation should succeed for valid inputs");
+        // `fuzz_cpu_hours_total` is evidence-derived (sum of each campaign's
+        // `actual_cpu_hours`); a bare gate records none, so seed the per-target
+        // budget the assertion below expects (>= 144 = 6 targets * 24h).
+        for campaign in gate.fuzz_campaigns.iter_mut() {
+            campaign.actual_cpu_hours = Some(30);
+        }
         let report = gate
             .generate_operational_readiness_report()
             .expect("operation should succeed for valid inputs");

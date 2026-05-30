@@ -3519,7 +3519,7 @@ fn parse_binding_pattern(
                 Some(span.clone()),
             ));
         }
-        return Ok(BindingPattern::Identifier(trimmed.to_string()));
+        return Ok(BindingPattern::Identifier(canonicalize_identifier(trimmed)));
     }
 
     Err(ParseError::new(
@@ -4130,11 +4130,10 @@ fn parse_primary_expression(
     if let Some(first) = expression.as_bytes().first()
         && (*first == b'"' || *first == b'\'')
     {
-        let string_prefixed_postfix =
-            leading_string_literal_end(expression).is_some_and(|end| {
-                let tail = expression[end..].trim_start();
-                tail.starts_with('.') || tail.starts_with('[') || tail.starts_with('(')
-            });
+        let string_prefixed_postfix = leading_string_literal_end(expression).is_some_and(|end| {
+            let tail = expression[end..].trim_start();
+            tail.starts_with('.') || tail.starts_with('[') || tail.starts_with('(')
+        });
         if !string_prefixed_postfix {
             return Err(unsupported_expression_syntax_error(
                 "unterminated or malformed string literal",
@@ -4297,7 +4296,7 @@ fn parse_primary_expression(
     }
 
     if is_identifier(expression) {
-        return Ok(Expression::Identifier(expression.to_string()));
+        return Ok(Expression::Identifier(canonicalize_identifier(expression)));
     }
 
     if is_unseparated_expression_sequence(expression) {
@@ -6671,7 +6670,7 @@ fn leading_string_literal_end(expr: &str) -> Option<usize> {
     let mut i = 1;
     while i < bytes.len() {
         match bytes[i] {
-            b'\\' => i += 2, // skip the escaped byte
+            b'\\' => i += 2,              // skip the escaped byte
             b'\n' | b'\r' => return None, // unterminated single-line literal
             c if c == quote => return Some(i + 1),
             _ => i += 1,
@@ -7176,8 +7175,82 @@ fn is_identifier_continue(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_' || ch == '$'
 }
 
+/// Decode the `\uXXXX` / `\u{X..}` `UnicodeEscapeSequence`s permitted in an
+/// `IdentifierName` (ES2020 §11.6). Returns the decoded spelling when every
+/// escape is well-formed, else `None`. Non-`\u` escapes are not valid in an
+/// identifier and yield `None`. This does not itself validate that the decoded
+/// characters are identifier-legal — `is_identifier` does that on the result.
+fn decode_identifier_escapes(input: &str) -> Option<String> {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        // Only `\u` escapes are legal in an IdentifierName.
+        if chars.next()? != 'u' {
+            return None;
+        }
+        let code_point = if chars.peek() == Some(&'{') {
+            chars.next(); // consume `{`
+            let mut hex = String::new();
+            loop {
+                match chars.next()? {
+                    '}' => break,
+                    digit if digit.is_ascii_hexdigit() => hex.push(digit),
+                    _ => return None,
+                }
+            }
+            if hex.is_empty() {
+                return None;
+            }
+            u32::from_str_radix(&hex, 16).ok()?
+        } else {
+            let mut hex = String::with_capacity(4);
+            for _ in 0..4 {
+                let digit = chars.next()?;
+                if !digit.is_ascii_hexdigit() {
+                    return None;
+                }
+                hex.push(digit);
+            }
+            u32::from_str_radix(&hex, 16).ok()?
+        };
+        out.push(char::from_u32(code_point)?);
+    }
+    Some(out)
+}
+
+/// Canonical spelling of an identifier name: any `\u` escapes decoded to the
+/// characters they denote (ES2020 §11.6 — `net` and `net` are the same
+/// identifier), otherwise the input unchanged. Callers use this when capturing
+/// a binding or reference name so the two spellings resolve to one binding.
+fn canonicalize_identifier(input: &str) -> String {
+    if input.contains('\\')
+        && let Some(decoded) = decode_identifier_escapes(input)
+    {
+        return decoded;
+    }
+    input.to_string()
+}
+
 fn is_identifier(input: &str) -> bool {
-    let mut chars = input.chars();
+    // An IdentifierName may spell its characters with `\uXXXX` / `\u{X..}`
+    // escapes (ES2020 §11.6); validate the decoded form (bd-dbosg).
+    let decoded;
+    let candidate = if input.contains('\\') {
+        match decode_identifier_escapes(input) {
+            Some(value) => {
+                decoded = value;
+                decoded.as_str()
+            }
+            None => return false,
+        }
+    } else {
+        input
+    };
+    let mut chars = candidate.chars();
     let Some(first) = chars.next() else {
         return false;
     };

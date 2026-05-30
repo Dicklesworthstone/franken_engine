@@ -840,14 +840,14 @@ fn iteration_statements_test262_conformance_integration() {
     /// `Status: RESOLVED`.
     const KNOWN_FAILING_CASES: &[(&str, &str, &str)] = &[
         // (test_id, tracking_bead, discrepancies_row)
-        ("break-for-of-early-exit", "bd-bg9l1.27", "DISC-012 (Array.prototype.push/.length)"),
-        ("for-of-custom-iterator-basic", "bd-bg9l1.27", "DISC-003 (Symbol.iterator)"),
-        ("for-of-iterator-return-method", "bd-bg9l1.27", "DISC-009 (IteratorClose return)"),
-        ("for-of-iterator-throw-handling", "bd-bg9l1.27", "DISC-009 (IteratorClose throw)"),
-        ("for-statement-block-scope-isolation", "bd-bg9l1.27", "DISC-010 (per-iteration env)"),
-        ("for-statement-let-tdz", "bd-bg9l1.27", "DISC-007 (let TDZ)"),
-        ("unlabeled-break-error", "bd-bg9l1.27", "DISC-008 (bare break/continue outside loop)"),
-        ("unlabeled-continue-error", "bd-bg9l1.27", "DISC-008 (bare break/continue outside loop)"),
+        ("break-for-of-early-exit", "bd-bg9l1.27.9", "DISC-012 (Array.prototype.push/.length)"),
+        ("for-of-custom-iterator-basic", "bd-bg9l1.27.3", "DISC-003 (Symbol.iterator)"),
+        ("for-of-iterator-return-method", "bd-bg9l1.27.7", "DISC-009 (IteratorClose return)"),
+        ("for-of-iterator-throw-handling", "bd-bg9l1.27.7", "DISC-009 (IteratorClose throw)"),
+        ("for-statement-block-scope-isolation", "bd-bg9l1.27.8", "DISC-010 (per-iteration env)"),
+        ("for-statement-let-tdz", "bd-bg9l1.27.5", "DISC-007 (let TDZ)"),
+        ("unlabeled-break-error", "bd-bg9l1.27.6", "DISC-008 (bare break/continue outside loop)"),
+        ("unlabeled-continue-error", "bd-bg9l1.27.6", "DISC-008 (bare break/continue outside loop)"),
     ];
 
     // Surface the frontier inventory in CI output so reviewers don't have to

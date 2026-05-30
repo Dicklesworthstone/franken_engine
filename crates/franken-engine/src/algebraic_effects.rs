@@ -2333,10 +2333,17 @@ mod tests {
         // Set timeout - should return a handle
         let timeout_result = adapter.dispatch_hostcall("timer:setTimeout", &["1000".to_string()]);
 
-        // Timer operations may not be fully implemented in mock, but should parse correctly
+        // Timer operations may not be fully implemented in mock, but should parse correctly.
+        // The adapter's default stack (Console + MockFsHandler) grants neither a timer handler
+        // nor the `timer` capability, so post-PP.3 capability gating (bd-cixqu.42.3) reports the
+        // absence as `CapabilityDenied` rather than the pre-gating `Unhandled`. Both are valid
+        // "not available in this mock adapter" signals; a hard error or a parse failure is not.
         assert!(
             timeout_result.is_ok()
-                || matches!(timeout_result.unwrap_err(), EffectError::Unhandled { .. })
+                || matches!(
+                    timeout_result.unwrap_err(),
+                    EffectError::Unhandled { .. } | EffectError::CapabilityDenied { .. }
+                )
         );
     }
 
@@ -2349,8 +2356,17 @@ mod tests {
             &["example.com".to_string(), "80".to_string()],
         );
 
-        // Network operations may not be fully implemented in mock
-        assert!(result.is_ok() || matches!(result.unwrap_err(), EffectError::Unhandled { .. }));
+        // Network operations may not be fully implemented in mock. As with the timer case, the
+        // adapter grants neither a network handler nor `NetworkEgress`, so post-PP.3 gating
+        // (bd-cixqu.42.3) surfaces the gap as `CapabilityDenied` instead of the pre-gating
+        // `Unhandled`; both are acceptable "not available in this mock adapter" outcomes.
+        assert!(
+            result.is_ok()
+                || matches!(
+                    result.unwrap_err(),
+                    EffectError::Unhandled { .. } | EffectError::CapabilityDenied { .. }
+                )
+        );
     }
 
     #[test]

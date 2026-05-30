@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
+# Real engine, for the EngineEvalAdapter (bd-x9t1n.1): the metamorphic oracle
+# must exercise frankenengine-engine, not a self-contained toy interpreter
+# (bd-q90jg). One-way dep only — the engine must NOT depend on this crate.
+frankenengine-engine = { path = "../franken-engine" }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 hex = "0.4"

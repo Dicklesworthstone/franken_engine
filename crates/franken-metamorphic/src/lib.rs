@@ -1,9 +1,12 @@
 #![forbid(unsafe_code)]
 
 pub mod catalog;
+pub mod engine_adapter;
 pub mod relation;
 pub mod relations;
 pub mod runner;
+
+pub use engine_adapter::{EngineEval, EngineEvalAdapter, ParseOutcome};
 
 use catalog::RelationCatalog;
 use relation::RelationSpec;

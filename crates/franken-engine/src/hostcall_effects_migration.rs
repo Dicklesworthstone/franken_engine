@@ -227,14 +227,16 @@ impl FullCapsHandler {
     /// (`fs:read` / `fs:write` / `network`) to the engine's real hostcall
     /// implementations.
     ///
-    /// Returns `false` today (bd-1lw7r.11): despite providing the full
-    /// capability set, [`FullCapsHandler::handle`] SIMULATES these effects —
-    /// `fs:read` returns a canned `"simulated content of {path}"` string,
-    /// `fs:write` discards the write, and `network` returns a hardcoded
-    /// response. A future change that routes these to the real
-    /// `dispatch_*_hostcall` surface (honoring the capability gate,
-    /// deterministic-replay recording, and IFC labeling) must flip this to
-    /// `true` and update the regression test that pins the simulated bodies.
+    /// Returns `false` (bd-1lw7r.11, bd-6wc97): no real in-engine fs/network
+    /// executor exists. Rather than SIMULATE those effects (the prior behaviour
+    /// — fake fs reads / discarded writes / hardcoded network responses, which
+    /// handed callers fake data while claiming full capability),
+    /// [`FullCapsHandler::handle`] now EXPLICITLY DENIES `fs:read`, `fs:write`
+    /// and `network` with `CapabilityDenied`. Real guest fs/network is deferred
+    /// to the `frankenengine-extension-host` epic; if that lands, route those
+    /// arms to the real `dispatch_*_hostcall` surface (honoring the capability
+    /// gate, deterministic-replay recording, and IFC labeling) and flip this to
+    /// `true`.
     pub const fn dispatches_real_hostcalls() -> bool {
         false
     }
@@ -246,13 +248,12 @@ impl Handler for FullCapsHandler {
     }
 
     fn handle(&self, effect: &dyn ErasedEffect) -> Result<Option<EffectResult>, EffectError> {
-        // FullCaps is permitted to invoke all hostcalls. FIXME (bd-1lw7r.11):
-        // the side-effecting hostcalls below are SIMULATED, not dispatched to
-        // the engine's real hostcall implementations — `fs:read` returns a
-        // canned string, `fs:write` discards the write, and `network` returns a
-        // hardcoded response, so callers of the Full profile receive FAKE data
-        // while this handler claims full capability. See
-        // `FullCapsHandler::dispatches_real_hostcalls()`.
+        // FullCaps is permitted to invoke all hostcalls, but `fs:read`,
+        // `fs:write` and `network` are EXPLICITLY DENIED (bd-6wc97): no real
+        // in-engine executor exists, so rather than hand back simulated/fake
+        // data they return `CapabilityDenied`. `console`, `timer` and `module`
+        // run their in-process paths. `dispatches_real_hostcalls()` stays
+        // `false`. Real guest fs/network is deferred to the extension-host epic.
         match effect.effect_name() {
             "hostcall:console" => {
                 if let Ok(params) = effect.parameters().downcast::<(String, Vec<String>)>() {
@@ -278,71 +279,20 @@ impl Handler for FullCapsHandler {
                     })
                 }
             }
-            "hostcall:fs:read" => {
-                if let Ok(params) = effect
-                    .parameters()
-                    .downcast::<(FsOperation, String, Option<Vec<u8>>)>()
-                {
-                    let (_, path, _) = *params;
-                    // FIXME (bd-1lw7r.11): SIMULATED — returns a canned string
-                    // instead of reading `path` via the real fs hostcall.
-                    let content = format!("simulated content of {}", path).into_bytes();
-                    Ok(Some(EffectResult::new(Some(content))))
-                } else {
-                    Err(EffectError::InvalidParameters {
-                        effect_name: effect.effect_name().to_string(),
-                        reason: "Expected (FsOperation, String, Option<Vec<u8>>) parameters"
-                            .to_string(),
-                    })
-                }
-            }
-            "hostcall:fs:write" => {
-                if let Ok(params) = effect
-                    .parameters()
-                    .downcast::<(FsOperation, String, Option<Vec<u8>>)>()
-                {
-                    let (_, path, content) = *params;
-                    // FIXME (bd-1lw7r.11): SIMULATED — discards the write (no
-                    // real fs hostcall); returns an empty buffer.
-                    println!(
-                        "Writing {} bytes to {}",
-                        content.as_ref().map_or(0, |c| c.len()),
-                        path
-                    );
-                    Ok(Some(EffectResult::new(Some(Vec::<u8>::new()))))
-                } else {
-                    Err(EffectError::InvalidParameters {
-                        effect_name: effect.effect_name().to_string(),
-                        reason: "Expected (FsOperation, String, Option<Vec<u8>>) parameters"
-                            .to_string(),
-                    })
-                }
-            }
-            "hostcall:network" => {
-                if let Ok(params) =
-                    effect
-                        .parameters()
-                        .downcast::<(String, String, Vec<(String, String)>, Option<Vec<u8>>)>()
-                {
-                    let (url, method, _, _) = *params;
-                    // FIXME (bd-1lw7r.11): SIMULATED — returns a hardcoded
-                    // response instead of performing/routing the real request.
-                    let response = NetworkResponse {
-                        status: 200,
-                        headers: vec![("content-type".to_string(), "application/json".to_string())],
-                        body: format!(
-                            r#"{{"result": "simulated response for {} {}", "success": true}}"#,
-                            method, url
-                        )
-                        .into_bytes(),
-                    };
-                    Ok(Some(EffectResult::new(response)))
-                } else {
-                    Err(EffectError::InvalidParameters {
-                        effect_name: effect.effect_name().to_string(),
-                        reason: "Expected network parameters".to_string(),
-                    })
-                }
+            "hostcall:fs:read" | "hostcall:fs:write" | "hostcall:network" => {
+                // bd-6wc97 / bd-6wc97.1 decision: EXPLICIT-DENY by design.
+                // There is no real in-engine fs/network executor (only
+                // `MockFsHandler`); routing to host `std::fs`/sockets would be a
+                // sandbox escape, and real guest I/O is deferred to the
+                // frankenengine-extension-host epic. These arms previously
+                // SIMULATED the effects — a canned fs read, a discarded write,
+                // a hardcoded network response — handing callers FAKE data while
+                // the Full profile claimed full capability. That is exactly the
+                // dishonesty `bd-1lw7r.11` guards against, so deny rather than
+                // fake. `dispatches_real_hostcalls()` stays `false`.
+                Err(EffectError::CapabilityDenied {
+                    required: effect.required_capabilities(),
+                })
             }
             "hostcall:timer" => {
                 if let Ok(params) = effect
@@ -745,57 +695,71 @@ mod tests {
     }
 
     #[test]
-    fn full_caps_fs_network_are_simulated_not_dispatched_bd_1lw7r_11() {
-        // bd-1lw7r.11: FullCapsHandler SIMULATES side-effecting hostcalls
-        // instead of dispatching them to the real hostcall surface. Pin the
-        // current (fake) behavior so future real-dispatch wiring is forced to
-        // flip the helper and update these assertions.
+    fn full_caps_fs_network_are_explicitly_denied_bd_6wc97() {
+        // bd-6wc97 (decision bd-6wc97.1): FullCapsHandler no longer SIMULATES
+        // side-effecting fs/network hostcalls (the bd-1lw7r.11 dishonesty — fake
+        // data while claiming full capability). With no real in-engine executor,
+        // it EXPLICITLY DENIES them with `CapabilityDenied`. `timer` keeps its
+        // in-process path and the helper stays `false`.
         assert!(
             !FullCapsHandler::dispatches_real_hostcalls(),
-            "FullCapsHandler must report false until fs/network dispatch is wired (bd-1lw7r.11)"
+            "no real fs/network executor exists, so this must stay false (bd-6wc97)"
         );
 
         let handler = FullCapsHandler;
 
-        // fs:read returns a canned "simulated content of {path}" buffer rather
-        // than reading the file.
-        let fs_effect = FsHostcallEffect {
+        // fs:read — denied, not a canned "simulated content of {path}" buffer.
+        let fs_read = FsHostcallEffect {
             operation: FsOperation::Read,
             path: "/etc/hostname".to_string(),
             content: None,
         };
-        let fs_bytes = handler
-            .handle(&fs_effect)
-            .expect("fs:read is handled")
-            .expect("fs:read produces a result")
-            .downcast::<Option<Vec<u8>>>()
-            .expect("fs:read result is Option<Vec<u8>>")
-            .expect("fs:read returns Some bytes");
-        assert_eq!(
-            String::from_utf8(fs_bytes).unwrap(),
-            "simulated content of /etc/hostname",
-            "fs:read is still simulated (bd-1lw7r.11)"
+        assert!(
+            matches!(
+                handler.handle(&fs_read),
+                Err(EffectError::CapabilityDenied { .. })
+            ),
+            "fs:read must be explicitly denied (bd-6wc97)"
         );
 
-        // network returns a hardcoded simulated response body rather than
-        // performing the request.
+        // fs:write — denied, not a discarded write.
+        let fs_write = FsHostcallEffect {
+            operation: FsOperation::Write,
+            path: "/tmp/out".to_string(),
+            content: Some(b"data".to_vec()),
+        };
+        assert!(
+            matches!(
+                handler.handle(&fs_write),
+                Err(EffectError::CapabilityDenied { .. })
+            ),
+            "fs:write must be explicitly denied (bd-6wc97)"
+        );
+
+        // network — denied, not a hardcoded simulated response.
         let net_effect = NetworkHostcallEffect {
             url: "https://example.com".to_string(),
             method: "GET".to_string(),
             headers: Vec::new(),
             body: None,
         };
-        let net_response = handler
-            .handle(&net_effect)
-            .expect("network is handled")
-            .expect("network produces a result")
-            .downcast::<NetworkResponse>()
-            .expect("network result is a NetworkResponse");
         assert!(
-            String::from_utf8(net_response.body)
-                .unwrap()
-                .contains("simulated response"),
-            "network is still simulated (bd-1lw7r.11)"
+            matches!(
+                handler.handle(&net_effect),
+                Err(EffectError::CapabilityDenied { .. })
+            ),
+            "network must be explicitly denied (bd-6wc97)"
+        );
+
+        // timer keeps its in-process path (the decision denies only fs/network).
+        let timer_effect = TimerHostcallEffect {
+            operation: TimerOperation::SetTimeout,
+            duration_ms: Some(10),
+            timer_id: None,
+        };
+        assert!(
+            handler.handle(&timer_effect).is_ok(),
+            "timer must remain handled (bd-6wc97 denies only fs/network)"
         );
     }
 

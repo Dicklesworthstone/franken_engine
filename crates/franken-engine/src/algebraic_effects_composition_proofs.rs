@@ -228,47 +228,31 @@ pub fn handler_sequence(stack: &HandlerStack) -> Vec<(&'static str, EffectPriori
 ///
 /// This property-based test verifies that handler composition is associative
 /// by creating handler stacks and comparing the two composition orders.
-/// Since HandlerStack doesn't implement Clone, we generate the stacks fresh for each test.
+///
+/// Both groupings must be built from the SAME logical handlers — identical
+/// names, priorities and effects per position (`_1`, `_2`, `_3`) — so that
+/// [`stacks_equivalent`] (which compares handler names and capabilities) is
+/// actually exercised. bd-lc4gl.2: the two sides previously used distinct
+/// `_1l/_2l/_3l` vs `_1r/_2r/_3r` prefixes, so the name lists never matched and
+/// the proof returned `false` unconditionally regardless of whether composition
+/// was associative. `HandlerStack` is not `Clone`, so each side is regenerated
+/// from the same prefixes rather than sharing instances.
 pub fn test_associativity_law(
     name_prefix: &str,
     priorities1: &[EffectPriority],
     priorities2: &[EffectPriority],
     priorities3: &[EffectPriority],
 ) -> bool {
-    // Generate fresh stacks for left association: (h1 ∘ h2) ∘ h3
-    let stack1_left = generate_test_stack(
-        &format!("{}_1l", name_prefix),
-        priorities1.len(),
-        priorities1,
-    );
-    let stack2_left = generate_test_stack(
-        &format!("{}_2l", name_prefix),
-        priorities2.len(),
-        priorities2,
-    );
-    let stack3_left = generate_test_stack(
-        &format!("{}_3l", name_prefix),
-        priorities3.len(),
-        priorities3,
-    );
+    // Left association: (h1 ∘ h2) ∘ h3
+    let stack1_left = generate_test_stack(&format!("{}_1", name_prefix), priorities1.len(), priorities1);
+    let stack2_left = generate_test_stack(&format!("{}_2", name_prefix), priorities2.len(), priorities2);
+    let stack3_left = generate_test_stack(&format!("{}_3", name_prefix), priorities3.len(), priorities3);
     let left_composed = stack1_left.compose(stack2_left).compose(stack3_left);
 
-    // Generate fresh stacks for right association: h1 ∘ (h2 ∘ h3)
-    let stack1_right = generate_test_stack(
-        &format!("{}_1r", name_prefix),
-        priorities1.len(),
-        priorities1,
-    );
-    let stack2_right = generate_test_stack(
-        &format!("{}_2r", name_prefix),
-        priorities2.len(),
-        priorities2,
-    );
-    let stack3_right = generate_test_stack(
-        &format!("{}_3r", name_prefix),
-        priorities3.len(),
-        priorities3,
-    );
+    // Right association: h1 ∘ (h2 ∘ h3) — same logical handlers per position.
+    let stack1_right = generate_test_stack(&format!("{}_1", name_prefix), priorities1.len(), priorities1);
+    let stack2_right = generate_test_stack(&format!("{}_2", name_prefix), priorities2.len(), priorities2);
+    let stack3_right = generate_test_stack(&format!("{}_3", name_prefix), priorities3.len(), priorities3);
     let right_composed = stack1_right.compose(stack2_right.compose(stack3_right));
 
     stacks_equivalent(&left_composed, &right_composed)
@@ -316,35 +300,33 @@ pub fn associativity_proof() -> &'static str {
 // ---------------------------------------------------------------------------
 
 /// Test left identity law: id ∘ h = h
+///
+/// `original` and `reference` use the SAME prefix (`_h`) so they carry identical
+/// handler names — the empty `identity_stack` adds nothing, so `id ∘ h` must
+/// equal `h`. bd-lc4gl.2: a previous `_orig` vs `_ref` split made the names
+/// differ, so [`stacks_equivalent`] returned `false` regardless of the law.
 pub fn test_left_identity_law(name_prefix: &str, priorities: &[EffectPriority]) -> bool {
     let identity = identity_stack();
-    let original = generate_test_stack(
-        &format!("{}_orig", name_prefix),
-        priorities.len(),
-        priorities,
-    );
-    let reference = generate_test_stack(
-        &format!("{}_ref", name_prefix),
-        priorities.len(),
-        priorities,
-    );
+    let original =
+        generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
+    let reference =
+        generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
     let composed = identity.compose(original);
     stacks_equivalent(&composed, &reference)
 }
 
 /// Test right identity law: h ∘ id = h
+///
+/// `original` and `reference` use the SAME prefix (`_h`) so they carry identical
+/// handler names — the empty `identity_stack` adds nothing, so `h ∘ id` must
+/// equal `h`. bd-lc4gl.2: a previous `_orig` vs `_ref` split made the names
+/// differ, so [`stacks_equivalent`] returned `false` regardless of the law.
 pub fn test_right_identity_law(name_prefix: &str, priorities: &[EffectPriority]) -> bool {
     let identity = identity_stack();
-    let original = generate_test_stack(
-        &format!("{}_orig", name_prefix),
-        priorities.len(),
-        priorities,
-    );
-    let reference = generate_test_stack(
-        &format!("{}_ref", name_prefix),
-        priorities.len(),
-        priorities,
-    );
+    let original =
+        generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
+    let reference =
+        generate_test_stack(&format!("{}_h", name_prefix), priorities.len(), priorities);
     let composed = original.compose(identity);
     stacks_equivalent(&composed, &reference)
 }

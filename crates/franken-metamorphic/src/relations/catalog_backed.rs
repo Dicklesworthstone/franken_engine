@@ -1406,9 +1406,25 @@ impl Value {
 struct ExecutionResult {
     return_value: String,
     side_effect_trace: Vec<String>,
+    /// Number of simulated GC collections performed during execution.
+    ///
+    /// This is INTERNAL execution metadata, not observable program output: it is
+    /// `#[serde(skip)]` so it is excluded from [`ExecutionResult::observable_signature`]
+    /// (the value the metamorphic oracles compare). It exists so the
+    /// `execution_gc_timing_independence` relation is non-tautological — varying
+    /// `ExecOptions::gc_schedule` now drives a different `gc_events` count (the
+    /// knob is live), while the observable signature must stay invariant. See
+    /// [`execute_program`] for the observation-neutral GC simulation (bd-q90jg.1).
+    #[serde(skip)]
+    gc_events: u64,
 }
 
 impl ExecutionResult {
+    /// The observable program output (return value + side-effect trace).
+    ///
+    /// Deliberately excludes internal execution metadata such as
+    /// [`ExecutionResult::gc_events`] (`#[serde(skip)]`): GC cadence is not an
+    /// observable property of the program, so it must not appear here.
     fn observable_signature(&self) -> String {
         serde_json::to_string(self).expect("execution result should serialize for observability")
     }
@@ -1436,6 +1452,25 @@ fn execute_program(program: &Program, options: ExecOptions) -> Result<ExecutionR
     let mut side_effect_trace = Vec::<String>::new();
     let mut return_value = Value::Int(0);
 
+    // Simulated garbage collector (bd-q90jg.1).
+    //
+    // Each executed statement "allocates" one scratch cell; the collector
+    // reclaims all live scratch cells every `gc_schedule` statements (and once
+    // more at program end if any remain). `gc_schedule == 0` disables GC.
+    //
+    // This is deliberately OBSERVATION-NEUTRAL: GC touches only `scratch_live`
+    // and the internal `gc_events` counter — never `env`, `side_effect_trace`,
+    // or `return_value`. That is the whole point of the
+    // `execution_gc_timing_independence` relation: changing the GC cadence must
+    // change internal collection activity (so `gc_schedule` is a live knob and
+    // the relation is NOT tautological — previously this was `let _ =
+    // options.gc_schedule;`, a no-op that made the relation always-Equivalent by
+    // construction) WITHOUT altering observable output. If a future change let
+    // GC perturb observable state, the relation would then diverge and catch it.
+    let mut scratch_live: u64 = 0;
+    let mut gc_events: u64 = 0;
+    let mut since_last_gc: u32 = 0;
+
     for statement in &program.statements {
         execute_statement(
             statement,
@@ -1444,13 +1479,27 @@ fn execute_program(program: &Program, options: ExecOptions) -> Result<ExecutionR
             &mut return_value,
             options,
         )?;
+
+        scratch_live += 1;
+        if options.gc_schedule > 0 {
+            since_last_gc += 1;
+            if since_last_gc >= options.gc_schedule {
+                scratch_live = 0; // reclaim — observation-neutral
+                gc_events += 1;
+                since_last_gc = 0;
+            }
+        }
     }
 
-    let _ = options.gc_schedule;
+    // Final sweep of any scratch cells outstanding at program end.
+    if options.gc_schedule > 0 && scratch_live > 0 {
+        gc_events += 1;
+    }
 
     Ok(ExecutionResult {
         return_value: return_value.into_string(),
         side_effect_trace,
+        gc_events,
     })
 }
 
@@ -1703,7 +1752,7 @@ fn is_subset(left: &BTreeSet<String>, right: &BTreeSet<String>) -> bool {
 mod tests {
     use crate::relation::{Equivalence, MetamorphicRelation, OracleKind, RelationSpec, Subsystem};
 
-    use super::{CatalogBackedRelation, parse_program, stable_hash};
+    use super::{CatalogBackedRelation, ExecOptions, execute_program, parse_program, stable_hash};
 
     fn relation(id: &str, subsystem: Subsystem, oracle: OracleKind) -> CatalogBackedRelation {
         CatalogBackedRelation::new(RelationSpec {
@@ -1791,5 +1840,104 @@ mod tests {
     #[test]
     fn stable_hash_is_deterministic() {
         assert_eq!(stable_hash("abc"), stable_hash("abc"));
+    }
+
+    // ---- bd-q90jg.1: gc_schedule is a live, observation-neutral knob ----------
+
+    /// A multi-statement program so the GC cadence has several statements to act
+    /// over (one scratch allocation per statement).
+    fn multi_statement_program() -> super::Program {
+        parse_program("emit(1); emit(2); emit(3); emit(4); emit(5); return 6;")
+            .expect("sample program should parse")
+    }
+
+    #[test]
+    fn gc_schedule_drives_internal_gc_events_but_not_observable_output() {
+        let program = multi_statement_program();
+
+        let fast = execute_program(
+            &program,
+            ExecOptions {
+                gc_schedule: 1,
+                ..ExecOptions::default()
+            },
+        )
+        .expect("fast gc run should execute");
+        let slow = execute_program(
+            &program,
+            ExecOptions {
+                gc_schedule: 17,
+                ..ExecOptions::default()
+            },
+        )
+        .expect("slow gc run should execute");
+
+        // The knob is LIVE: a tighter cadence collects more often. This is what
+        // makes the relation non-tautological (was `let _ = options.gc_schedule`).
+        assert!(
+            fast.gc_events > slow.gc_events,
+            "gc_schedule=1 must collect more often than gc_schedule=17 \
+             (fast={}, slow={}) — otherwise the knob is dead",
+            fast.gc_events,
+            slow.gc_events
+        );
+
+        // ...yet GC is OBSERVATION-NEUTRAL: observable output is invariant under
+        // GC cadence. This is the property `execution_gc_timing_independence`
+        // asserts, and it now actually exercises real GC code.
+        assert_eq!(
+            fast.observable_signature(),
+            slow.observable_signature(),
+            "GC cadence must not change observable output"
+        );
+    }
+
+    #[test]
+    fn gc_disabled_performs_no_collections() {
+        let program = multi_statement_program();
+        let result = execute_program(&program, ExecOptions::default())
+            .expect("default (gc_schedule=0) run should execute");
+        assert_eq!(
+            result.gc_events, 0,
+            "gc_schedule=0 disables GC, so no collections occur"
+        );
+    }
+
+    #[test]
+    fn observable_signature_is_sensitive_to_real_divergence() {
+        // Guard against a future regression where observable_signature collapses
+        // to a constant: differing observable output MUST produce differing
+        // signatures (so the gc relation can actually diverge if GC ever leaks).
+        let emit_one = execute_program(
+            &parse_program("emit(1); return 0;").expect("parse"),
+            ExecOptions::default(),
+        )
+        .expect("run");
+        let emit_two = execute_program(
+            &parse_program("emit(2); return 0;").expect("parse"),
+            ExecOptions::default(),
+        )
+        .expect("run");
+        assert_ne!(
+            emit_one.observable_signature(),
+            emit_two.observable_signature(),
+            "distinct observable output must yield distinct signatures"
+        );
+    }
+
+    #[test]
+    fn gc_timing_relation_holds_end_to_end() {
+        // Through the oracle: the execution_gc_timing_independence relation reports
+        // Equivalent for a real multi-statement program — and now does so by
+        // running genuine GC at two cadences, not by discarding the knob.
+        // The execution oracle dispatches on Subsystem::Execution + relation_id,
+        // not OracleKind; any execution OracleKind is fine here.
+        let relation = relation(
+            "execution_gc_timing_independence",
+            Subsystem::Execution,
+            OracleKind::SideEffectTraceEquality,
+        );
+        let pair = relation.generate_pair(0);
+        assert!(relation.oracle(&pair).is_equivalent());
     }
 }

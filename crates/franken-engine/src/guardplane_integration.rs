@@ -1589,22 +1589,39 @@ mod tests {
     #[test]
     fn evidence_no_longer_calls_systemtime_or_rand() {
         // Architectural regression guard: this test is more of a code-shape
-        // assertion than a behavior test. If a future refactor reintroduces
-        // SystemTime::now() or rand::random in evidence generation, the
-        // module re-introduces `use std::time::...` or `use rand::...`. Both
-        // were intentionally removed by bd-jn3uv. We assert their absence
-        // here so a code-review reviewer is forced to confront the
-        // deterministic-replay contract.
+        // assertion than a behavior test. If a future refactor reintroduces a
+        // wall-clock or randomness call in evidence generation, the module
+        // re-introduces `use std::time::...` or `use rand::...`. Both were
+        // intentionally removed by bd-jn3uv. We assert their absence here so a
+        // code-review reviewer is forced to confront the deterministic-replay
+        // contract.
+        //
+        // Two subtleties this guard MUST handle, because `include_str!` pulls
+        // in this very file (bd-o4cbn.3.3.* gate fix):
+        //   1. Doc/line comments here describe the *removed* historical
+        //      construction, so we scan code lines only (full-line comments
+        //      stripped) to avoid matching that prose.
+        //   2. The forbidden needles are assembled by concatenation so neither
+        //      this `contains` call nor the failure messages embed the literal
+        //      pattern verbatim (which would make the guard match itself and
+        //      fail unconditionally).
         const MODULE_SOURCE: &str = include_str!("guardplane_integration.rs");
+        let code_only: String = MODULE_SOURCE
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let systemtime_now_call = ["SystemTime", "::now()"].concat();
+        let rand_random_call = ["rand", "::random"].concat();
         assert!(
-            !MODULE_SOURCE.contains("SystemTime::now()"),
-            "bd-jn3uv: evidence generation must not call SystemTime::now() — \\
+            !code_only.contains(&systemtime_now_call),
+            "bd-jn3uv: evidence generation must not call the wall-clock now() — \\
              if you reintroduce it, you must also reintroduce a deterministic-clock \\
              alternative for the replay path"
         );
         assert!(
-            !MODULE_SOURCE.contains("rand::random"),
-            "bd-jn3uv: evidence generation must not call rand::random — \\
+            !code_only.contains(&rand_random_call),
+            "bd-jn3uv: evidence generation must not call the rand crate — \\
              decision_id is now a deterministic content hash"
         );
     }

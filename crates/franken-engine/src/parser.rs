@@ -5858,13 +5858,17 @@ fn try_parse_postfix(
             return Some(Ok(if optional {
                 Expression::OptionalMember {
                     object: Box::new(object),
-                    property: Box::new(Expression::Identifier(property_src.to_string())),
+                    property: Box::new(Expression::Identifier(canonicalize_identifier(
+                        property_src,
+                    ))),
                     computed: false,
                 }
             } else {
                 Expression::Member {
                     object: Box::new(object),
-                    property: Box::new(Expression::Identifier(property_src.to_string())),
+                    property: Box::new(Expression::Identifier(canonicalize_identifier(
+                        property_src,
+                    ))),
                     computed: false,
                 }
             }));
@@ -6393,8 +6397,8 @@ fn parse_object_literal(
             });
         } else {
             // Shorthand property: { x } means { x: x }
-            let key = Expression::Identifier(p.to_string());
-            let value = Expression::Identifier(p.to_string());
+            let key = Expression::Identifier(canonicalize_identifier(p));
+            let value = Expression::Identifier(canonicalize_identifier(p));
             properties.push(ObjectProperty {
                 key,
                 value,
@@ -6445,7 +6449,7 @@ fn try_parse_object_method(
         return Ok(None);
     }
     let value = parse_function_expression(&part[paren_idx..], span, context, recursion_depth + 1)?;
-    let key = Expression::Identifier(name.to_string());
+    let key = Expression::Identifier(canonicalize_identifier(name));
     Ok(Some((key, value, false)))
 }
 

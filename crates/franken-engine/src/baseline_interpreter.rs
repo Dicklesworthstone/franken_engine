@@ -7578,6 +7578,19 @@ impl InterpreterCore {
                             let prop = Self::number_property_value(&key_str);
                             self.write_reg(dst, prop)?;
                         }
+                        // Functions are objects: reading `fn.prototype` returns the
+                        // function's prototype object (where class instance methods
+                        // live), matching what `Construct` links instances to so
+                        // `new C().m()` resolves up the chain (bd-62un6).
+                        Value::Closure(closure_id) => {
+                            let func_idx = self.closure_function_index(closure_id)?;
+                            let prop = self.function_property_value(func_idx, &key_str)?;
+                            self.write_reg(dst, prop)?;
+                        }
+                        Value::Function(idx) => {
+                            let prop = self.function_property_value(idx, &key_str)?;
+                            self.write_reg(dst, prop)?;
+                        }
                         _ => {
                             return Err(InterpreterError::TypeError {
                                 expected: "object".to_string(),
@@ -22340,6 +22353,39 @@ impl InterpreterCore {
             self.mutate_function_prototypes(|fp| fp.insert(func_idx, prototype));
             Ok(prototype)
         }
+    }
+
+    /// Resolve a property read on a function value. Functions are objects whose
+    /// `prototype` is the (lazily-created) object that `new`-constructed
+    /// instances inherit from — and it is where class instance methods are
+    /// attached at class-definition time (`C.prototype.m = ...`). Reading
+    /// `C.prototype` therefore MUST return the same object the `Construct`
+    /// handler links instances to via [`Self::ensure_function_prototype`], so
+    /// that `new C().m()` resolves `m` up the prototype chain (bd-62un6).
+    /// Other properties are not modelled on the function object and read as
+    /// `undefined`.
+    fn function_property_value(
+        &mut self,
+        func_idx: u32,
+        key: &str,
+    ) -> Result<Value, InterpreterError> {
+        if key == "prototype" {
+            Ok(Value::Object(self.ensure_function_prototype(func_idx)?))
+        } else {
+            Ok(Value::Undefined)
+        }
+    }
+
+    /// Resolve the function index backing a closure handle, erroring if the
+    /// closure table no longer holds it.
+    fn closure_function_index(&self, closure_id: u32) -> Result<u32, InterpreterError> {
+        self.closures
+            .get(closure_id as usize)
+            .map(|c| c.function_index)
+            .ok_or_else(|| InterpreterError::TypeError {
+                expected: "valid closure".to_string(),
+                got: format!("closure#{closure_id} not found"),
+            })
     }
 
     /// Get the number of objects on the heap.

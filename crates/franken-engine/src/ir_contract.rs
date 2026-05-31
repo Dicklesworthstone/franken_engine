@@ -469,8 +469,18 @@ pub enum Ir1Op {
     EnterFinally,
     /// End a finally block.  Lowered to `Ir3Instruction::EndFinally`.
     EndFinally,
-    /// Pop/discard top-of-stack value.
+    /// Pop/discard top-of-stack value. At module (top-level) scope this also
+    /// records the discarded value as the script's expression-statement
+    /// completion value (moved into register 0).
     Pop,
+    /// Pop/discard top-of-stack value WITHOUT recording it as a completion
+    /// value. Used for internal statement-construction cleanup (e.g. discarding
+    /// the value `SetProperty` leaves on the stack while attaching class methods
+    /// to a constructor's prototype) where treating the discard as a module
+    /// completion would clobber register 0 — which aliases the first top-level
+    /// binding (bd-62un6). Mirrors the function-body `Pop`, which is already a
+    /// pure discard for the same reason.
+    Discard,
     /// Initialize a for..in enumeration: pop object from stack, push internal
     /// enumerator state that yields string-typed property keys.
     ForInInit,
@@ -714,6 +724,9 @@ impl Ir1Op {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("end_finally"))])
             }
             Self::Pop => CanonicalValue::map_from_entries([("op", CanonicalValue::str("pop"))]),
+            Self::Discard => {
+                CanonicalValue::map_from_entries([("op", CanonicalValue::str("discard"))])
+            }
             Self::ForInInit => {
                 CanonicalValue::map_from_entries([("op", CanonicalValue::str("for_in_init"))])
             }

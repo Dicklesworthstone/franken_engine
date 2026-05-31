@@ -510,19 +510,25 @@ mod class_runtime_execution_tests {
         );
     }
 
-    /// Prototype/instance method dispatch from source fails closed today: the method
-    /// is reached through the constructor function (not a property object), so the
-    /// call raises a `TypeError`. Pinned until bd-a7kpw lands.
+    /// Prototype/instance method dispatch executes end-to-end (bd-62un6).
+    /// Previously failed closed: the class lowering attaches methods to
+    /// `C.prototype` (read via `GetProperty` on the constructor function), but
+    /// (1) `GetProperty` had no arm for function values and (2) the module-level
+    /// completion register `r0` aliased the constructor's binding, so the
+    /// method-attach `Pop` clobbered `C` with the last method. Both fixed:
+    /// `fn.prototype` resolves to the prototype object instances inherit, and
+    /// `r0` is reserved for completion so the binding survives.
     #[test]
-    fn instance_method_dispatch_fails_closed() {
-        let err = run_err(concat!(
+    fn instance_method_dispatch_executes() {
+        let result = run_ok(concat!(
             "class Greeter { greet() { return \"hi\"; } }\n",
             "var g = new Greeter();\n",
             "g.greet();\n",
         ));
-        assert!(
-            err.starts_with("execute:") && err.contains("TypeError"),
-            "instance-method dispatch from source must fail closed today, got: {err}"
+        assert_eq!(
+            result.value,
+            Value::str("hi"),
+            "instance-method dispatch should return the method's value"
         );
     }
 }

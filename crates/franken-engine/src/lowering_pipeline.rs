@@ -2973,7 +2973,10 @@ fn lower_statement_to_ir1_with_flow(
                 ops.push(Ir1Op::SetProperty {
                     key: Ir1PropertyKey::Static(method_name),
                 });
-                ops.push(Ir1Op::Pop);
+                // Discard (not Pop): SetProperty leaves the method value on the
+                // stack; discarding it as a module completion would Move it into
+                // r0 and clobber the constructor's binding (bd-62un6).
+                ops.push(Ir1Op::Discard);
             }
         }
         Statement::Import(_) | Statement::Export(_) => {
@@ -3684,6 +3687,13 @@ pub fn lower_ir2_to_ir3(
                     value_stack.pop().unwrap_or(0)
                 };
                 ir3.instructions.push(Ir3Instruction::Return { value });
+            }
+            Ir1Op::Discard => {
+                // Pure discard: drop the value WITHOUT recording it as the
+                // module completion value (no `Move dst:0`). Prevents internal
+                // cleanup (e.g. class-method attachment) from clobbering r0,
+                // which aliases the first top-level binding (bd-62un6).
+                let _ = pop_lowering_value(&mut value_stack)?;
             }
             Ir1Op::Nop | Ir1Op::Pop => {
                 let register = pop_lowering_value(&mut value_stack)?;
@@ -4983,11 +4993,13 @@ pub fn lower_ir2_to_ir3(
                         label_id: *label_id,
                     });
                 }
-                Ir1Op::Pop => {
+                Ir1Op::Pop | Ir1Op::Discard => {
                     // Function-local Pop is stack cleanup, not script
                     // completion. Register 0 is the first parameter in a
                     // function frame, so mirroring the top-level completion
                     // register behavior here corrupts destructuring params.
+                    // `Discard` is always a pure discard, here and at module
+                    // scope (bd-62un6).
                     let _ = pop_lowering_value(&mut fn_value_stack)?;
                 }
                 Ir1Op::Nop => {
@@ -8554,7 +8566,10 @@ fn lower_expression_to_ir1(
                 ops.push(Ir1Op::SetProperty {
                     key: Ir1PropertyKey::Static(method_name),
                 });
-                ops.push(Ir1Op::Pop);
+                // Discard (not Pop): SetProperty leaves the method value on the
+                // stack; discarding it as a module completion would Move it into
+                // r0 and clobber the constructor's binding (bd-62un6).
+                ops.push(Ir1Op::Discard);
             }
 
             ops.push(Ir1Op::LoadBinding { binding_id: bid });

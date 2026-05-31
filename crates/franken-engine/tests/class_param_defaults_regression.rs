@@ -26,7 +26,6 @@ fn eval_value(source: &str) -> String {
 // ---- class-expression constructor (the bead's pinned repro) ----------------
 
 #[test]
-#[ignore = "blocked on bd-4a4yz: class expression as constructor faults (orthogonal to params)"]
 fn class_expr_constructor_default_param_missing_arg_uses_default() {
     assert_eq!(
         eval_value("let c = new (class { constructor(x = 5) { this.x = x; } })(); c.x;"),
@@ -35,7 +34,6 @@ fn class_expr_constructor_default_param_missing_arg_uses_default() {
 }
 
 #[test]
-#[ignore = "blocked on bd-4a4yz: class expression as constructor faults (orthogonal to params)"]
 fn class_expr_constructor_default_param_supplied_arg_wins() {
     assert_eq!(
         eval_value("let c = new (class { constructor(x = 5) { this.x = x; } })(9); c.x;"),
@@ -64,7 +62,6 @@ fn class_stmt_constructor_default_param_supplied_arg_wins() {
 // ---- class-statement method -----------------------------------------------
 
 #[test]
-#[ignore = "blocked on bd-62un6: class method dispatch faults (orthogonal to params)"]
 fn class_stmt_method_default_param_missing_arg_uses_default() {
     assert_eq!(
         eval_value("class C { m(x = 7) { return x; } } let c = new C(); c.m();"),
@@ -73,7 +70,6 @@ fn class_stmt_method_default_param_missing_arg_uses_default() {
 }
 
 #[test]
-#[ignore = "blocked on bd-62un6: class method dispatch faults (orthogonal to params)"]
 fn class_stmt_method_default_param_supplied_arg_wins() {
     assert_eq!(
         eval_value("class C { m(x = 7) { return x; } } let c = new C(); c.m(4);"),
@@ -84,7 +80,6 @@ fn class_stmt_method_default_param_supplied_arg_wins() {
 // ---- class-expression method ----------------------------------------------
 
 #[test]
-#[ignore = "blocked on bd-4a4yz (class expr ctor) + bd-62un6 (class method dispatch) — both orthogonal to params"]
 fn class_expr_method_default_param_missing_arg_uses_default() {
     assert_eq!(
         eval_value("let c = new (class { m(x = 7) { return x; } })(); c.m();"),
@@ -100,7 +95,6 @@ fn class_expr_method_default_param_missing_arg_uses_default() {
 // works, proving the param fix's host path (and this fix) is sound.
 
 #[test]
-#[ignore = "repro for bd-62un6: class method dispatch faults (orthogonal to params)"]
 fn diag_plain_class_stmt_method() {
     assert_eq!(
         eval_value("class C { m() { return 7; } } let c = new C(); c.m();"),
@@ -109,7 +103,6 @@ fn diag_plain_class_stmt_method() {
 }
 
 #[test]
-#[ignore = "repro for bd-4a4yz: class expression as constructor faults (orthogonal to params)"]
 fn diag_plain_class_expr_constructor() {
     assert_eq!(
         eval_value("let c = new (class { constructor() { this.x = 3; } })(); c.x;"),

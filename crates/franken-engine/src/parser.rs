@@ -4241,6 +4241,20 @@ fn parse_primary_expression(
         return parse_function_expression(rest, span, context, recursion_depth);
     }
 
+    // Class expression: `class { ... }`, `class Name { ... }`, or
+    // `class extends Base { ... }`. Without this arm the parser never produced
+    // `Expression::ClassExpression`, so a class in expression position
+    // (`let X = class {...}`, `new (class {...})()`, `typeof (class {...})`)
+    // fell through to a string-yielding fallback and faulted at runtime with
+    // "expected function, got string" (bd-4a4yz). Mirrors the function-
+    // expression arm above; the body is re-parsed from the full `class...`.
+    if expression
+        .strip_prefix("class")
+        .is_some_and(|r| r.starts_with('{') || r.starts_with(' ') || r.starts_with('\t'))
+    {
+        return parse_class_expression(expression, span, context);
+    }
+
     // Template literal: `text ${expr} text`
     if expression.starts_with('`') && expression.ends_with('`') {
         return parse_template_literal(expression, span, context, recursion_depth);
@@ -8704,11 +8718,19 @@ fn parse_function_expression(
     })
 }
 
-fn parse_class_declaration(
+/// Parse the shared anatomy of a class — optional name, optional `extends`
+/// clause, and braced body — from a `class ...` source. Used by both the
+/// declaration (`parse_class_declaration`) and expression
+/// (`parse_class_expression`) entry points so the two never diverge.
+fn parse_class_parts(
     statement: &str,
-    span: SourceSpan,
+    span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
-) -> ParseResult<Statement> {
+) -> ParseResult<(
+    Option<String>,
+    Option<Box<Expression>>,
+    Vec<MethodDefinition>,
+)> {
     let rest = statement
         .strip_prefix("class")
         .unwrap_or(statement)
@@ -8765,14 +8787,43 @@ fn parse_class_declaration(
         )
     })?;
 
-    let methods = parse_class_body(body_src, &span, context)?;
+    let methods = parse_class_body(body_src, span, context)?;
+
+    Ok((name, super_class, methods))
+}
+
+fn parse_class_declaration(
+    statement: &str,
+    span: SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Statement> {
+    let (name, super_class, body) = parse_class_parts(statement, &span, context)?;
 
     Ok(Statement::ClassDeclaration(ClassDeclaration {
         name,
         super_class,
-        body: methods,
+        body,
         span,
     }))
+}
+
+/// Parse a class **expression** (`class {...}`, `class Name {...}`,
+/// `class extends Base {...}`) into `Expression::ClassExpression`. The parser
+/// previously had no such path, so a class in expression position never became
+/// a `ClassExpression` and faulted at runtime (bd-4a4yz). Shares all parsing
+/// with the declaration form via `parse_class_parts`.
+fn parse_class_expression(
+    statement: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Expression> {
+    let (name, super_class, body) = parse_class_parts(statement, span, context)?;
+
+    Ok(Expression::ClassExpression {
+        name,
+        super_class,
+        body,
+    })
 }
 
 /// Parse the contents of a class body into a list of MethodDefinitions.

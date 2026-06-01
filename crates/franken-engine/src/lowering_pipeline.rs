@@ -7070,6 +7070,39 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            if let Some(capability) = number_static_builtin_call_capability(callee, binding_lookup) {
+                // `Number.isInteger/isFinite/isNaN/parseInt/parseFloat` — the
+                // `Number` global has no eval-scope binding, so (like the
+                // Object/JSON/Math interceptions) recognize the bare static
+                // member-call here and route to the canonical `builtin:Number*`
+                // hostcall whose impl already exists in
+                // `dispatch_builtin_hostcall_inner` (bd-6kkg6). These read their
+                // arguments from slot 0 (no receiver placeholder), the same
+                // convention as the Math/Object builtins.
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Some(capability) = object_json_builtin_call_capability(callee, binding_lookup) {
                 // `Object.keys/values/entries` and `JSON.parse/stringify` —
                 // the `Object`/`JSON` globals have no eval-scope binding, so
@@ -8803,6 +8836,51 @@ fn object_json_builtin_call_capability(
         ("Object", "entries") => Some("builtin:ObjectEntries"),
         ("JSON", "parse") => Some("builtin:JsonParse"),
         ("JSON", "stringify") => Some("builtin:JsonStringify"),
+        _ => None,
+    }
+}
+
+/// Recognize calls to the standard `Number.*` STATIC methods whose receiver is
+/// the bare (unbound) global identifier `Number` — `Number.isInteger(x)`,
+/// `Number.isFinite(x)`, `Number.isNaN(x)`, `Number.parseInt(s)`,
+/// `Number.parseFloat(s)`. Like `Object`/`JSON`/`Math`, the `Number` global has
+/// no binding on the eval scope, so the member-call must be recognized here and
+/// routed to the canonical `builtin:Number*` hostcall whose impl already exists
+/// in `dispatch_builtin_hostcall_inner` (bd-6kkg6 — execution + id-registry were
+/// already present; only this lowering interception was missing). Returns `None`
+/// when `Number` is shadowed by a user binding (so `let Number = …` is honored),
+/// when the receiver is computed in a way we can't statically resolve, or when
+/// the property is not a supported static method (instance/prototype methods like
+/// `n.toFixed` are handled by the receiver-aware member-access seam, not here).
+fn number_static_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    let Expression::Identifier(global) = object.as_ref() else {
+        return None;
+    };
+    if global.as_str() != "Number" || binding_lookup.contains_key(global.as_str()) {
+        return None;
+    }
+    let property_name = match (*computed, property.as_ref()) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    match property_name {
+        "isInteger" => Some("builtin:NumberIsInteger"),
+        "isFinite" => Some("builtin:NumberIsFinite"),
+        "isNaN" => Some("builtin:NumberIsNaN"),
+        "parseInt" => Some("builtin:NumberParseInt"),
+        "parseFloat" => Some("builtin:NumberParseFloat"),
         _ => None,
     }
 }

@@ -7136,6 +7136,48 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            if let Some(capability) = object_receiver_static_call_capability(callee, binding_lookup) {
+                // `Object.is` / `Object.isExtensible` — their execution handlers
+                // read the meaningful arguments starting at `args.start + 1`
+                // (slot 0 is the function-call receiver slot) and guard on a
+                // count that includes that receiver, so — like the timer
+                // builtins — push an `undefined` receiver placeholder ahead of
+                // the real arguments and size the call as `arguments.len() + 1`
+                // (bd-tvpjk). Distinct from the slot-0 Object/Array/String
+                // statics above.
+                let arg_count = arguments.len().saturating_add(1);
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                lower_expression_to_ir1(
+                    &Expression::UndefinedLiteral,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Some(capability) = timer_builtin_call_capability(callee, binding_lookup) {
                 // Bare global timer builtins (`setTimeout`/`setInterval`/
                 // `clearTimeout`/`clearInterval`) are dispatched as host calls
@@ -8799,14 +8841,17 @@ fn math_builtin_call_capability(
     }
 }
 
-/// Recognize calls to the standard `Object.*` / `JSON.*` static methods whose
-/// receiver is the bare (unbound) global identifier. `Object`/`JSON` have no
-/// binding on the eval scope, so — like the Math/timer/global-function
-/// interceptions — route the recognized member call to the canonical
-/// `builtin:*` hostcall whose impl already exists in
-/// `dispatch_builtin_hostcall_inner` (bd-9a8cz.2). Returns `None` when the
-/// global is shadowed by a user binding (so `let JSON = …` is honored) or the
-/// property is not one of the supported static methods.
+/// Recognize calls to the standard `Object.*` / `JSON.*` / `Array.*` / `String.*`
+/// STATIC methods whose receiver is the bare (unbound) global identifier. These
+/// globals have no binding on the eval scope, so — like the Math/timer/Number/
+/// global-function interceptions — route the recognized member call to the
+/// canonical `builtin:*` hostcall whose impl already exists in
+/// `dispatch_builtin_hostcall_inner` (bd-9a8cz.2 seeded Object/JSON; bd-tvpjk
+/// added the remaining Object statics + Array/String statics whose handlers were
+/// present but unwired). Returns `None` when the global is shadowed by a user
+/// binding (so `let JSON = …` is honored) or the property is not a supported
+/// static method. Instance/prototype methods (e.g. `obj.hasOwnProperty`) are NOT
+/// handled here — those go through the receiver-aware member-access seam.
 fn object_json_builtin_call_capability(
     callee: &Expression,
     binding_lookup: &BTreeMap<String, BindingId>,
@@ -8834,8 +8879,70 @@ fn object_json_builtin_call_capability(
         ("Object", "keys") => Some("builtin:ObjectKeys"),
         ("Object", "values") => Some("builtin:ObjectValues"),
         ("Object", "entries") => Some("builtin:ObjectEntries"),
+        // Additional `Object.*` statics whose execution handlers + id-registry
+        // entries already exist in `dispatch_builtin_hostcall_inner` but were
+        // never wired into this lowering interception (bd-tvpjk). All read their
+        // arguments from slot 0 with no receiver placeholder, the same
+        // convention as `Object.keys`.
+        ("Object", "assign") => Some("builtin:ObjectAssign"),
+        ("Object", "freeze") => Some("builtin:ObjectFreeze"),
+        ("Object", "isFrozen") => Some("builtin:ObjectIsFrozen"),
+        ("Object", "create") => Some("builtin:ObjectCreate"),
+        ("Object", "getPrototypeOf") => Some("builtin:ObjectGetPrototypeOf"),
+        ("Object", "setPrototypeOf") => Some("builtin:ObjectSetPrototypeOf"),
+        ("Object", "defineProperty") => Some("builtin:ObjectDefineProperty"),
+        ("Object", "getOwnPropertyNames") => Some("builtin:ObjectGetOwnPropertyNames"),
+        ("Object", "getOwnPropertyDescriptor") => Some("builtin:ObjectGetOwnPropertyDescriptor"),
+        // NOTE: Object.is / Object.isExtensible use the RECEIVER-PLACEHOLDER
+        // calling convention (handler reads args.start+1.., guards count<N
+        // counting a slot-0 receiver) — they are wired via
+        // `object_receiver_static_call_capability` below, NOT here.
         ("JSON", "parse") => Some("builtin:JsonParse"),
         ("JSON", "stringify") => Some("builtin:JsonStringify"),
+        // `Array.*` and `String.*` statics — same family, same slot-0 convention
+        // (bd-tvpjk). `Array`/`String` globals have no eval-scope binding either.
+        ("Array", "isArray") => Some("builtin:ArrayIsArray"),
+        ("Array", "from") => Some("builtin:ArrayFrom"),
+        ("Array", "of") => Some("builtin:ArrayOf"),
+        ("String", "fromCharCode") => Some("builtin:StringFromCharCode"),
+        _ => None,
+    }
+}
+
+/// `Object.*` statics whose execution handlers use the RECEIVER-PLACEHOLDER
+/// calling convention — they read their first meaningful argument from
+/// `args.start + 1` (slot 0 is the call receiver) and guard on a count that
+/// includes that receiver. Routed through the timer-style call-site that pushes
+/// an `undefined` receiver placeholder, NOT the slot-0 static call-site
+/// (bd-tvpjk). Kept separate from `object_json_builtin_call_capability` because
+/// mixing the two conventions at one call-site silently mis-feeds arguments
+/// (e.g. `Object.is(1, 1)` returned `false` when fed slot-0). Shadowing-safe.
+fn object_receiver_static_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    let Expression::Identifier(global) = object.as_ref() else {
+        return None;
+    };
+    if global.as_str() != "Object" || binding_lookup.contains_key(global.as_str()) {
+        return None;
+    }
+    let property_name = match (*computed, property.as_ref()) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    match property_name {
+        "is" => Some("builtin:ObjectIs"),
+        "isExtensible" => Some("builtin:ObjectIsExtensible"),
         _ => None,
     }
 }

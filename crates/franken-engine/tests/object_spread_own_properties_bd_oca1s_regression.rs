@@ -5,20 +5,20 @@
 //! `let o = {a:1}; let p = {...o, b:2}; p.a + p.b;` yields `"NaN"` (WRONG;
 //! expect `3` — `p.a` is `undefined` because `...o` copies nothing).
 //!
-//! DIAGNOSIS (OliveLake, read-only): the lowering DOES emit
-//! `Ir1Op::SpreadIntoObject` for spread props (lowering_pipeline.rs ObjectLiteral
-//! arm ~:7948) and the interpreter HAS a handler
-//! (baseline_interpreter.rs:8080 `Ir3Instruction::SpreadIntoObject{target,source}`)
-//! that copies the source's own properties to the target — which looks correct
-//! for the basic case. So the gap is most likely the Ir1->Ir3 register
-//! assignment for `SpreadIntoObject` (lowering_pipeline.rs ~:4162 / ~:5209) —
-//! e.g. `source`/`target` mis-bound, or the spread source not resolving to a
-//! `Value::Object` (the handler's `if let (Object, Object)` guard then silently
-//! no-ops). baseline_interpreter.rs is leased by another agent at staging time;
-//! these cases are `#[ignore]`d until the fix lands — un-ignore them in that
-//! commit.
+//! ROOT CAUSE + FIX (lowering_pipeline.rs, ObjectLiteral incremental/spread arm):
+//! the incremental path emitted `Ir1Op::SetProperty` for each data property, but
+//! `SetProperty`'s Ir1->Ir3 lowering pushes the assigned *value* back on the
+//! stack (correct for an `obj.x = v` assignment expression, which evaluates to
+//! `v`) — which CONSUMES the target object. So `{...o, b:2}` left the value `2`,
+//! not the object, on the stack, and `p.a` then faulted "expected object, got
+//! number". (The `SpreadIntoObject` handler and its Ir1->Ir3 register binding
+//! are both correct — a lone `{...o}` always worked.) Fixed by emitting each data
+//! property as a single-property temp object spread into the target
+//! (`NewObject{count:1}` + `SpreadIntoObject`), which preserves the target like
+//! the spread arm and keeps ES2018 override ordering (temp objects merge in
+//! source order). Interpreter unchanged.
 //!
-//! They assert VALUES (not just `eval == Ok`), covering the ES2018 override
+//! These assert VALUES (not just `eval == Ok`), covering the ES2018 override
 //! ordering (spread before/after an explicit key) the conformance harness
 //! cannot see.
 
@@ -33,7 +33,6 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-oca1s: blocked on SpreadIntoObject fix (baseline_interpreter.rs:8080 / lowering register binding); un-ignore when landed"]
 fn object_spread_copies_own_properties() {
     assert_eq!(
         eval_value("let o = {a:1, b:2}; let p = {...o}; p.a + p.b"),
@@ -42,7 +41,6 @@ fn object_spread_copies_own_properties() {
 }
 
 #[test]
-#[ignore = "bd-oca1s: blocked on SpreadIntoObject fix; un-ignore when landed"]
 fn object_spread_mixed_with_explicit_property() {
     // The original repro: spread then an explicit extra property.
     assert_eq!(
@@ -52,14 +50,12 @@ fn object_spread_mixed_with_explicit_property() {
 }
 
 #[test]
-#[ignore = "bd-oca1s: blocked on SpreadIntoObject fix; un-ignore when landed"]
 fn later_explicit_property_overrides_spread() {
     // `{ ...{a:1}, a:9 }` — the explicit `a:9` comes AFTER the spread, so it wins.
     assert_eq!(eval_value("({ ...{a:1}, a:9 }).a"), "9");
 }
 
 #[test]
-#[ignore = "bd-oca1s: blocked on SpreadIntoObject fix; un-ignore when landed"]
 fn spread_overrides_earlier_explicit_property() {
     // `{ a:9, ...{a:1} }` — the spread comes AFTER `a:9`, so the spread's `a:1` wins.
     assert_eq!(eval_value("({ a:9, ...{a:1} }).a"), "1");

@@ -7983,9 +7983,20 @@ fn lower_expression_to_ir1(
                             root_scope_id,
                             label_counter,
                         )?;
-                        ops.push(Ir1Op::SetProperty {
-                            key: Ir1PropertyKey::Dynamic,
-                        });
+                        // Build a single-property temp object `{key: value}` and
+                        // spread it into the target. A bare `SetProperty` here is
+                        // WRONG for an object literal (bd-oca1s): its Ir1->Ir3
+                        // lowering pushes the assigned *value* back on the stack
+                        // (correct for an `obj.x = v` assignment expression, which
+                        // evaluates to `v`), which CONSUMES the target object — so
+                        // `{...o, b: 2}` left the value `2`, not the object, on the
+                        // stack and `p.a` then faulted "expected object, got
+                        // number". `SpreadIntoObject` instead preserves the target
+                        // (it pops source+target and pushes the target back, like
+                        // the spread arm above), and ES2018 override ordering is
+                        // preserved because temp objects merge in source order.
+                        ops.push(Ir1Op::NewObject { count: 1 });
+                        ops.push(Ir1Op::SpreadIntoObject);
                     }
                 }
             } else {

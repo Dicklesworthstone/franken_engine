@@ -6722,9 +6722,92 @@ fn parse_quoted_string(input: &str) -> Option<String> {
         if inner.contains('\n') || inner.contains('\r') {
             return None;
         }
-        return Some(inner.to_string());
+        return unescape_string_literal(inner);
     }
     None
+}
+
+/// Translate ES2020 string-literal escape sequences in the already-delimited
+/// inner content (no surrounding quotes) into their character values
+/// (bd-kmdzx). Single- and double-quoted literals share identical escape
+/// semantics. Returns `None` for a malformed escape (incomplete `\x`/`\u`,
+/// out-of-range code point, trailing backslash) so the caller fails closed with
+/// a parse error rather than silently keeping corrupt content — matching the
+/// ES2020 early SyntaxError for bad escapes. Raw line terminators are rejected
+/// by the caller before this runs, so `\n`/`\t`/… here are always the
+/// two-character backslash forms, never literal control characters.
+fn unescape_string_literal(inner: &str) -> Option<String> {
+    if !inner.contains('\\') {
+        // Fast path: nothing to unescape.
+        return Some(inner.to_string());
+    }
+    let mut out = String::with_capacity(inner.len());
+    let mut chars = inner.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch != '\\' {
+            out.push(ch);
+            continue;
+        }
+        // Backslash begins an escape sequence; consume the descriptor char.
+        let esc = chars.next()?;
+        match esc {
+            'n' => out.push('\n'),
+            't' => out.push('\t'),
+            'r' => out.push('\r'),
+            'b' => out.push('\u{0008}'),
+            'f' => out.push('\u{000C}'),
+            'v' => out.push('\u{000B}'),
+            // `\0` is the NUL character only when not the start of a legacy
+            // octal escape (i.e. not followed by another digit).
+            '0' if !chars.peek().is_some_and(|c| c.is_ascii_digit()) => out.push('\0'),
+            '\\' => out.push('\\'),
+            '\'' => out.push('\''),
+            '"' => out.push('"'),
+            '`' => out.push('`'),
+            'x' => {
+                // `\xHH`: exactly two hex digits.
+                let hi = chars.next()?.to_digit(16)?;
+                let lo = chars.next()?.to_digit(16)?;
+                out.push(char::from_u32(hi * 16 + lo)?);
+            }
+            'u' => {
+                if chars.peek() == Some(&'{') {
+                    // `\u{H...}`: one or more hex digits, code point <= 0x10FFFF.
+                    chars.next();
+                    let mut code: u32 = 0;
+                    let mut digits = 0u32;
+                    loop {
+                        match chars.next()? {
+                            '}' => break,
+                            c => {
+                                let d = c.to_digit(16)?;
+                                code = code.checked_mul(16)?.checked_add(d)?;
+                                if code > 0x0010_FFFF {
+                                    return None;
+                                }
+                                digits += 1;
+                            }
+                        }
+                    }
+                    if digits == 0 {
+                        return None;
+                    }
+                    out.push(char::from_u32(code)?);
+                } else {
+                    // `\uHHHH`: exactly four hex digits.
+                    let mut code: u32 = 0;
+                    for _ in 0..4 {
+                        code = code * 16 + chars.next()?.to_digit(16)?;
+                    }
+                    out.push(char::from_u32(code)?);
+                }
+            }
+            // Any other escaped character is the identity of that character
+            // (ES2020 non-strict `NonEscapeCharacter`), e.g. `\q` -> `q`.
+            other => out.push(other),
+        }
+    }
+    Some(out)
 }
 
 /// Parse a regex literal: `/pattern/flags`.

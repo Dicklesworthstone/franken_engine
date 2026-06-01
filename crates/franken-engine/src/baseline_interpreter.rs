@@ -7791,14 +7791,27 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            let prop = self.proxy_aware_get_property(
-                                Some(module),
-                                oid,
-                                &key_str,
-                                Value::Object(oid),
-                                0,
-                            )?;
-                            self.write_reg(dst, prop)?;
+                            if key_str == "__proto__" {
+                                // `__proto__` reads the internal prototype link
+                                // (set by class `extends` and `o.__proto__ = p`),
+                                // not a data property (bd-ppfds).
+                                let proto = self
+                                    .heap
+                                    .get(oid.0 as usize)
+                                    .and_then(|o| o.prototype)
+                                    .map(Value::Object)
+                                    .unwrap_or(Value::Null);
+                                self.write_reg(dst, proto)?;
+                            } else {
+                                let prop = self.proxy_aware_get_property(
+                                    Some(module),
+                                    oid,
+                                    &key_str,
+                                    Value::Object(oid),
+                                    0,
+                                )?;
+                                self.write_reg(dst, prop)?;
+                            }
                         }
                         Value::Iterator(iterator_handle) => {
                             let prop = self.iterator_property_value(iterator_handle, &key_str);
@@ -7845,7 +7858,27 @@ impl InterpreterCore {
                     match obj_val {
                         Value::Object(oid) => {
                             self.run_pre_property_access_hook(module, oid, &key_str)?;
-                            if !self.proxy_aware_set_property(
+                            if key_str == "__proto__" {
+                                // `__proto__` sets the internal prototype link so
+                                // prototype-chain lookups (incl. class `extends`,
+                                // which lowers to `Child.prototype.__proto__ =
+                                // Parent.prototype`) traverse it — not a data
+                                // property (bd-ppfds). A non-object, non-null value
+                                // is a no-op per spec.
+                                let proto_update = match set_val {
+                                    Value::Object(pid) => Some(Some(pid)),
+                                    Value::Null => Some(None),
+                                    _ => None,
+                                };
+                                if let Some(new_proto) = proto_update {
+                                    let idx = oid.0 as usize;
+                                    self.mutate_heap(|heap| {
+                                        if let Some(obj) = heap.get_mut(idx) {
+                                            obj.prototype = new_proto;
+                                        }
+                                    });
+                                }
+                            } else if !self.proxy_aware_set_property(
                                 Some(module),
                                 oid,
                                 &key_str,

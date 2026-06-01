@@ -711,6 +711,20 @@ pub enum BuiltinFunctionKind {
     /// comparator (sign of its result) or lexicographically by default; returns
     /// the array (bd-962ev.2).
     ArraySort,
+    /// `Array.prototype.concat` — receiver-aware: returns a new array of this
+    /// array's elements followed by each argument (array arguments spread one
+    /// level) (bd-962ev.1).
+    ArrayConcat,
+    /// `Array.prototype.slice` — receiver-aware: returns a new array for the
+    /// `[start, end)` range (negative indices count from the end) (bd-962ev.1).
+    ArraySliceMethod,
+    /// `Array.prototype.lastIndexOf` — receiver-aware: last index strictly
+    /// equal to the search element, scanning backward, else -1 (bd-962ev.1).
+    ArrayLastIndexOf,
+    /// `Array.prototype.splice` — receiver-aware: in-place remove `deleteCount`
+    /// elements at `start` and insert the given items, returning an array of
+    /// the removed elements (bd-962ev.1).
+    ArraySplice,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -1105,6 +1119,42 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_concat() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayConcat,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_slice_method() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArraySliceMethod,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_last_index_of() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayLastIndexOf,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_splice() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArraySplice,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn console_log() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleLog,
@@ -1199,6 +1249,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayReduce => "reduce",
             BuiltinFunctionKind::ArrayReduceRight => "reduceRight",
             BuiltinFunctionKind::ArraySort => "sort",
+            BuiltinFunctionKind::ArrayConcat => "concat",
+            BuiltinFunctionKind::ArraySliceMethod => "slice",
+            BuiltinFunctionKind::ArrayLastIndexOf => "lastIndexOf",
+            BuiltinFunctionKind::ArraySplice => "splice",
         }
     }
 }
@@ -5417,6 +5471,188 @@ impl InterpreterCore {
                     self.refresh_dense_length_cache(arr_id, len, was_dense);
                 }
                 Ok(Value::Object(arr_id))
+            }
+            BuiltinFunctionKind::ArrayConcat => {
+                // ES2020 23.1.3.1: new array of this array's elements followed
+                // by each argument; array arguments are spread one level.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.concat".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let result = self.alloc_array_with_prototype(None)?;
+                let mut out = 0usize;
+                let len = self.array_like_length(arr_id)?;
+                for i in 0..len {
+                    let element = self
+                        .array_index_value(arr_id, i)?
+                        .unwrap_or(Value::Undefined);
+                    self.set_object_property(result, out.to_string(), element)?;
+                    out += 1;
+                }
+                for k in 0..args.count {
+                    let arg = self.builtin_arg(args, k)?.unwrap_or(Value::Undefined);
+                    if let Value::Object(arg_id) = &arg
+                        && self
+                            .heap
+                            .get(arg_id.0 as usize)
+                            .map(|object| object.is_array)
+                            .unwrap_or(false)
+                    {
+                        let arg_id = *arg_id;
+                        let arg_len = self.array_like_length(arg_id)?;
+                        for i in 0..arg_len {
+                            let element = self
+                                .array_index_value(arg_id, i)?
+                                .unwrap_or(Value::Undefined);
+                            self.set_object_property(result, out.to_string(), element)?;
+                            out += 1;
+                        }
+                    } else {
+                        self.set_object_property(result, out.to_string(), arg)?;
+                        out += 1;
+                    }
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
+            }
+            BuiltinFunctionKind::ArraySliceMethod => {
+                // ES2020 23.1.3.25: new array for `[start, end)`; negative
+                // indices count from the end (start default 0, end default len).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.slice".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let start = match self.builtin_arg(args, 0)? {
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    None => 0,
+                };
+                let end = match self.builtin_arg(args, 1)? {
+                    None | Some(Value::Undefined) => len,
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                };
+                let result = self.alloc_array_with_prototype(None)?;
+                let mut out = 0usize;
+                let mut index = start;
+                while index < end {
+                    let element = self
+                        .array_index_value(arr_id, index)?
+                        .unwrap_or(Value::Undefined);
+                    self.set_object_property(result, out.to_string(), element)?;
+                    out += 1;
+                    index += 1;
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
+            }
+            BuiltinFunctionKind::ArrayLastIndexOf => {
+                // ES2020 23.1.3.16: last index strictly equal to the search
+                // element, scanning backward, else -1. (Explicit fromIndex is a
+                // bd-962ev.1 follow-up; the whole-array backward scan is the
+                // common case.)
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.lastIndexOf".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let mut found = -1i64;
+                for index in (0..len).rev() {
+                    let element = self
+                        .array_index_value(arr_id, index)?
+                        .unwrap_or(Value::Undefined);
+                    if Self::values_equal(&element, &search) {
+                        found = i64::try_from(index).unwrap_or(i64::MAX);
+                        break;
+                    }
+                }
+                Ok(Value::Int(found))
+            }
+            BuiltinFunctionKind::ArraySplice => {
+                // ES2020 23.1.3.28: in-place remove `deleteCount` elements at
+                // `start` and insert the given items; returns an array of the
+                // removed elements.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.splice".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let start = match self.builtin_arg(args, 0)? {
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    None => 0,
+                };
+                let delete_count = match self.builtin_arg(args, 1)? {
+                    None => len - start,
+                    Some(value) => {
+                        let raw = Self::value_as_integer(&value);
+                        if raw < 0 {
+                            0
+                        } else {
+                            (raw as usize).min(len - start)
+                        }
+                    }
+                };
+                let mut items = Vec::new();
+                let mut k = 2u32;
+                while k < args.count {
+                    items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
+                    k += 1;
+                }
+                let mut elements: Vec<Value> = Vec::with_capacity(len);
+                for i in 0..len {
+                    elements.push(
+                        self.array_index_value(arr_id, i)?
+                            .unwrap_or(Value::Undefined),
+                    );
+                }
+                let removed: Vec<Value> = elements
+                    .splice(start..start + delete_count, items)
+                    .collect();
+                let new_len = elements.len();
+                let was_dense = self.array_cache_is_dense(arr_id);
+                for (i, element) in elements.into_iter().enumerate() {
+                    self.set_object_property(arr_id, i.to_string(), element)?;
+                }
+                for i in new_len..len {
+                    self.remove_object_property(arr_id, &i.to_string())?;
+                }
+                self.set_object_property(
+                    arr_id,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX)),
+                )?;
+                self.refresh_dense_length_cache(arr_id, new_len, was_dense);
+                let removed_len = removed.len();
+                let removed_arr = self.alloc_array_with_prototype(None)?;
+                for (i, element) in removed.into_iter().enumerate() {
+                    self.set_object_property(removed_arr, i.to_string(), element)?;
+                }
+                self.set_object_property(
+                    removed_arr,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(removed_len).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(removed_arr))
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -9995,6 +10231,10 @@ impl InterpreterCore {
             "reduce" => Some(BuiltinFunction::array_reduce()),
             "reduceRight" => Some(BuiltinFunction::array_reduce_right()),
             "sort" => Some(BuiltinFunction::array_sort()),
+            "concat" => Some(BuiltinFunction::array_concat()),
+            "slice" => Some(BuiltinFunction::array_slice_method()),
+            "lastIndexOf" => Some(BuiltinFunction::array_last_index_of()),
+            "splice" => Some(BuiltinFunction::array_splice()),
             _ => None,
         }
     }

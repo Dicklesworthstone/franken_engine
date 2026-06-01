@@ -15017,43 +15017,35 @@ impl InterpreterCore {
                 Ok(Value::str(json_str))
             }
             "builtin:JsonParse" => {
-                // JSON.parse implementation - parses JSON string into JavaScript value
+                // JSON.parse: full recursive-descent parse of objects, arrays,
+                // strings (with escapes), numbers, booleans, and null into heap
+                // Values (bd-9a8cz.4 — previously only scalars parsed; {}/[]
+                // silently returned undefined). Invalid JSON or a non-string
+                // argument yields undefined, preserving the pre-existing
+                // simplified error policy (the spec throws SyntaxError).
                 if args.count == 0 {
                     return Ok(Value::Undefined);
                 }
-
                 let json_str_val = self.read_reg(args.start)?;
                 match json_str_val {
                     Value::Str(json_str) => {
-                        // Simple JSON parsing for basic cases
-                        match json_str.trim() {
-                            "null" => Ok(Value::Null),
-                            "true" => Ok(Value::Bool(true)),
-                            "false" => Ok(Value::Bool(false)),
-                            "undefined" => Ok(Value::Undefined),
-                            s if s.starts_with('"') && s.ends_with('"') => {
-                                // String value - remove quotes and handle basic escape sequences
-                                let content = &s[1..s.len() - 1];
-                                let unescaped = content.replace("\\\"", "\"").replace("\\\\", "\\");
-                                Ok(Value::str(unescaped))
-                            }
-                            s => {
-                                // Try to parse as number
-                                if let Ok(int_val) = s.parse::<i64>() {
-                                    Ok(Value::Int(int_val))
-                                } else if let Ok(float_val) = s.parse::<f64>() {
-                                    Ok(Value::Float(Float64::new(float_val)))
+                        let chars: Vec<char> = json_str.chars().collect();
+                        let mut pos = 0usize;
+                        Self::json_skip_ws(&chars, &mut pos);
+                        match self.json_parse_value(&chars, &mut pos, 0)? {
+                            Some(value) => {
+                                Self::json_skip_ws(&chars, &mut pos);
+                                // Reject trailing non-whitespace (invalid JSON).
+                                if pos == chars.len() {
+                                    Ok(value)
                                 } else {
-                                    // Invalid JSON - return undefined (simplified error handling)
                                     Ok(Value::Undefined)
                                 }
                             }
+                            None => Ok(Value::Undefined),
                         }
                     }
-                    _ => {
-                        // Non-string argument - return undefined
-                        Ok(Value::Undefined)
-                    }
+                    _ => Ok(Value::Undefined),
                 }
             }
             "builtin:isNaN" => {
@@ -22626,6 +22618,231 @@ impl InterpreterCore {
                 expected: "valid closure".to_string(),
                 got: format!("closure#{closure_id} not found"),
             })
+    }
+
+    // -- JSON.parse recursive-descent parser (bd-9a8cz.4) ------------------
+    // Parses the full JSON grammar into heap Values. `Option` distinguishes
+    // parse success/failure (None => invalid JSON => caller returns undefined);
+    // `Result` carries heap-allocation errors. Char-indexed for correct unicode
+    // handling.
+
+    fn json_skip_ws(chars: &[char], pos: &mut usize) {
+        while matches!(chars.get(*pos), Some(' ' | '\t' | '\n' | '\r')) {
+            *pos += 1;
+        }
+    }
+
+    /// Parse a JSON string token (the cursor must be at the opening `"`).
+    fn json_parse_string(chars: &[char], pos: &mut usize) -> Option<String> {
+        if chars.get(*pos) != Some(&'"') {
+            return None;
+        }
+        *pos += 1;
+        let mut out = String::new();
+        while let Some(&c) = chars.get(*pos) {
+            *pos += 1;
+            match c {
+                '"' => return Some(out),
+                '\\' => {
+                    let &esc = chars.get(*pos)?;
+                    *pos += 1;
+                    match esc {
+                        '"' => out.push('"'),
+                        '\\' => out.push('\\'),
+                        '/' => out.push('/'),
+                        'n' => out.push('\n'),
+                        't' => out.push('\t'),
+                        'r' => out.push('\r'),
+                        'b' => out.push('\u{08}'),
+                        'f' => out.push('\u{0C}'),
+                        'u' => {
+                            if *pos + 4 > chars.len() {
+                                return None;
+                            }
+                            let hex: String = chars[*pos..*pos + 4].iter().collect();
+                            *pos += 4;
+                            let code = u32::from_str_radix(&hex, 16).ok()?;
+                            out.push(char::from_u32(code)?);
+                        }
+                        _ => return None,
+                    }
+                }
+                _ => out.push(c),
+            }
+        }
+        None // unterminated string
+    }
+
+    /// Parse a JSON number token into an Int (when integral) or Float.
+    fn json_parse_number(chars: &[char], pos: &mut usize) -> Option<Value> {
+        let start = *pos;
+        if chars.get(*pos) == Some(&'-') {
+            *pos += 1;
+        }
+        while matches!(chars.get(*pos), Some(d) if d.is_ascii_digit()) {
+            *pos += 1;
+        }
+        let mut is_float = false;
+        if chars.get(*pos) == Some(&'.') {
+            is_float = true;
+            *pos += 1;
+            while matches!(chars.get(*pos), Some(d) if d.is_ascii_digit()) {
+                *pos += 1;
+            }
+        }
+        if matches!(chars.get(*pos), Some('e' | 'E')) {
+            is_float = true;
+            *pos += 1;
+            if matches!(chars.get(*pos), Some('+' | '-')) {
+                *pos += 1;
+            }
+            while matches!(chars.get(*pos), Some(d) if d.is_ascii_digit()) {
+                *pos += 1;
+            }
+        }
+        let slice: String = chars[start..*pos].iter().collect();
+        if slice.is_empty() || slice == "-" {
+            return None;
+        }
+        if !is_float {
+            if let Ok(int_val) = slice.parse::<i64>() {
+                return Some(Value::Int(int_val));
+            }
+        }
+        slice
+            .parse::<f64>()
+            .ok()
+            .map(|f| Value::Float(Float64::new(f)))
+    }
+
+    fn json_parse_value(
+        &mut self,
+        chars: &[char],
+        pos: &mut usize,
+        depth: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        if depth > 200 {
+            return Ok(None); // guard against stack exhaustion on deep nesting
+        }
+        Self::json_skip_ws(chars, pos);
+        let Some(&c) = chars.get(*pos) else {
+            return Ok(None);
+        };
+        match c {
+            '{' => self.json_parse_object(chars, pos, depth),
+            '[' => self.json_parse_array(chars, pos, depth),
+            '"' => Ok(Self::json_parse_string(chars, pos).map(|s| Value::str(s))),
+            't' => {
+                if chars[*pos..].starts_with(&['t', 'r', 'u', 'e']) {
+                    *pos += 4;
+                    Ok(Some(Value::Bool(true)))
+                } else {
+                    Ok(None)
+                }
+            }
+            'f' => {
+                if chars[*pos..].starts_with(&['f', 'a', 'l', 's', 'e']) {
+                    *pos += 5;
+                    Ok(Some(Value::Bool(false)))
+                } else {
+                    Ok(None)
+                }
+            }
+            'n' => {
+                if chars[*pos..].starts_with(&['n', 'u', 'l', 'l']) {
+                    *pos += 4;
+                    Ok(Some(Value::Null))
+                } else {
+                    Ok(None)
+                }
+            }
+            '-' | '0'..='9' => Ok(Self::json_parse_number(chars, pos)),
+            _ => Ok(None),
+        }
+    }
+
+    fn json_parse_object(
+        &mut self,
+        chars: &[char],
+        pos: &mut usize,
+        depth: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        *pos += 1; // consume '{'
+        let id = self.alloc_object_with_prototype(None)?;
+        Self::json_skip_ws(chars, pos);
+        if chars.get(*pos) == Some(&'}') {
+            *pos += 1;
+            return Ok(Some(Value::Object(id)));
+        }
+        loop {
+            Self::json_skip_ws(chars, pos);
+            let Some(key) = Self::json_parse_string(chars, pos) else {
+                return Ok(None);
+            };
+            Self::json_skip_ws(chars, pos);
+            if chars.get(*pos) != Some(&':') {
+                return Ok(None);
+            }
+            *pos += 1;
+            let Some(value) = self.json_parse_value(chars, pos, depth + 1)? else {
+                return Ok(None);
+            };
+            self.set_object_property(id, key, value)?;
+            Self::json_skip_ws(chars, pos);
+            match chars.get(*pos) {
+                Some(&',') => *pos += 1,
+                Some(&'}') => {
+                    *pos += 1;
+                    return Ok(Some(Value::Object(id)));
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    fn json_parse_array(
+        &mut self,
+        chars: &[char],
+        pos: &mut usize,
+        depth: usize,
+    ) -> Result<Option<Value>, InterpreterError> {
+        *pos += 1; // consume '['
+        let id = self.alloc_array_with_prototype(None)?;
+        Self::json_skip_ws(chars, pos);
+        if chars.get(*pos) == Some(&']') {
+            *pos += 1;
+            self.json_finalize_array_len(id, 0)?;
+            return Ok(Some(Value::Object(id)));
+        }
+        let mut len: u32 = 0;
+        loop {
+            let Some(value) = self.json_parse_value(chars, pos, depth + 1)? else {
+                return Ok(None);
+            };
+            self.set_object_property(id, len.to_string(), value)?;
+            len = len.saturating_add(1);
+            Self::json_skip_ws(chars, pos);
+            match chars.get(*pos) {
+                Some(&',') => *pos += 1,
+                Some(&']') => {
+                    *pos += 1;
+                    self.json_finalize_array_len(id, len)?;
+                    return Ok(Some(Value::Object(id)));
+                }
+                _ => return Ok(None),
+            }
+        }
+    }
+
+    fn json_finalize_array_len(&mut self, id: ObjectId, len: u32) -> Result<(), InterpreterError> {
+        self.set_object_property(id, "length".to_string(), Value::Int(i64::from(len)))?;
+        let idx = id.0 as usize;
+        self.mutate_heap(|heap| {
+            if let Some(obj) = heap.get_mut(idx) {
+                obj.cached_dense_length = Some(len);
+            }
+        });
+        Ok(())
     }
 
     /// Get the number of objects on the heap.

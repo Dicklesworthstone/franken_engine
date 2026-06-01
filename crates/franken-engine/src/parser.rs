@@ -4266,7 +4266,41 @@ fn parse_primary_expression(
         && let Some((inner, rest)) = extract_balanced(expression, '(', ')')
         && rest.trim().is_empty()
     {
-        return parse_expression(inner.trim(), span, context, recursion_depth + 1);
+        let inner = inner.trim();
+        // Comma/sequence operator (bd-wo6za, ES2020 §13.16): a parenthesized
+        // top-level comma sequence `(e0, e1, …, eN)` evaluates each operand
+        // left-to-right and yields the LAST. Desugar to an immediately-applied
+        // arrow `((__seq_0, …, __seq_N) => __seq_N)(e0, …, eN)` — call arguments
+        // are evaluated left-to-right (preserving every operand's side effects)
+        // and the arrow returns the final operand. This reuses the existing
+        // arrow + call lowering, so no dedicated SequenceExpression IR is needed.
+        // Arrow-parameter forms `(a, b) => …` are consumed earlier by
+        // `try_parse_arrow_function`, so reaching here with top-level commas is a
+        // genuine sequence expression. The synthetic `__seq_*` parameters cannot
+        // collide with the operands: operands are evaluated as arguments in the
+        // enclosing scope, never inside the arrow body.
+        if split_top_level_commas(inner).len() > 1 {
+            let operands =
+                parse_comma_separated_exprs(inner, span, context, recursion_depth + 1)?;
+            if operands.len() > 1 {
+                let params: Vec<FunctionParam> = (0..operands.len())
+                    .map(|i| FunctionParam {
+                        pattern: BindingPattern::Identifier(format!("__seq_{i}")),
+                        span: span.clone(),
+                    })
+                    .collect();
+                let last_param = format!("__seq_{}", operands.len() - 1);
+                return Ok(Expression::Call {
+                    callee: Box::new(Expression::ArrowFunction {
+                        params,
+                        body: ArrowBody::Expression(Box::new(Expression::Identifier(last_param))),
+                        is_async: false,
+                    }),
+                    arguments: operands,
+                });
+            }
+        }
+        return parse_expression(inner, span, context, recursion_depth + 1);
     }
 
     // Array literal: [a, b, c]

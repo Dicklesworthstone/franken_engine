@@ -9209,6 +9209,12 @@ fn global_function_call_capability(
         // Slot-0 description argument, no receiver — same convention as the other
         // global function builtins above (bd-bn1z7).
         "Symbol" => Some("builtin:Symbol"),
+        // `Number(value)` coercion function — the bare `Number` global has no
+        // eval-scope binding (only the `Number.is*`/`Number.parse*` static
+        // members were wired). Route the bare call to the existing `builtin:Number`
+        // coercion hostcall (`Number("42")`===42, `Number(true)`===1). Slot-0
+        // value argument, no receiver (bd-1trl5).
+        "Number" => Some("builtin:Number"),
         _ => None,
     }
 }

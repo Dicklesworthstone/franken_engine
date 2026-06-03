@@ -6972,6 +6972,76 @@ fn lower_expression_to_ir1(
                     label_counter,
                 )?;
                 ops.push(Ir1Op::SetProperty { key });
+            } else if let Expression::ArrayLiteral(elements) = left.as_ref() {
+                // Array destructuring assignment to existing lvalues (bd-umee4,
+                // ES2020 §13.15.5). Only `=` is valid — a compound op on a
+                // pattern is a syntax error. Evaluate the RHS exactly once into a
+                // temp so swaps like `[a, b] = [b, a]` read pre-assignment values,
+                // then assign each element target from `temp[index]`. Each element
+                // is lowered as an ordinary `target = temp[i]` assignment, so
+                // identifier and member targets reuse the existing paths and
+                // nested array patterns recurse here; unsupported element forms
+                // (rest `...`, defaults `=`, object sub-patterns) fall through to
+                // FE-LOWER-ASSIGN-0001 on the recursive call rather than being
+                // silently mishandled. The expression evaluates to the RHS value.
+                if *operator != AssignmentOperator::Assign {
+                    return Err(unsupported_frontier_expression_error(
+                        "assignment_target",
+                        "FE-LOWER-ASSIGN-0002",
+                        "lower_ir0_to_ir1.destructuring_assignment",
+                        "compound assignment to an array destructuring pattern is not valid; only `=` is allowed",
+                        None,
+                    ));
+                }
+                let temp_name = format!("<internal:destructure_rhs:{}>", *binding_index);
+                let temp_bid = alloc_internal_binding(
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    "destructure_rhs",
+                )?;
+                // temp = right  (RHS evaluated once, before any target is written)
+                lower_expression_to_ir1(
+                    right,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::StoreBinding {
+                    binding_id: temp_bid,
+                });
+                ops.push(Ir1Op::Pop);
+                for (index, element) in elements.iter().enumerate() {
+                    let Some(target) = element else {
+                        continue; // elision / hole: nothing to assign
+                    };
+                    let element_assign = Expression::Assignment {
+                        operator: AssignmentOperator::Assign,
+                        left: Box::new(target.clone()),
+                        right: Box::new(Expression::Member {
+                            object: Box::new(Expression::Identifier(temp_name.clone())),
+                            property: Box::new(Expression::NumericLiteral(index as i64)),
+                            computed: true,
+                        }),
+                    };
+                    lower_expression_to_ir1(
+                        &element_assign,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                    ops.push(Ir1Op::Pop);
+                }
+                ops.push(Ir1Op::LoadBinding {
+                    binding_id: temp_bid,
+                });
             } else {
                 return Err(unsupported_frontier_expression_error(
                     "assignment_target",
@@ -7075,7 +7145,8 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
-            if let Some(capability) = number_static_builtin_call_capability(callee, binding_lookup) {
+            if let Some(capability) = number_static_builtin_call_capability(callee, binding_lookup)
+            {
                 // `Number.isInteger/isFinite/isNaN/parseInt/parseFloat` — the
                 // `Number` global has no eval-scope binding, so (like the
                 // Object/JSON/Math interceptions) recognize the bare static
@@ -7141,7 +7212,8 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
-            if let Some(capability) = object_receiver_static_call_capability(callee, binding_lookup) {
+            if let Some(capability) = object_receiver_static_call_capability(callee, binding_lookup)
+            {
                 // `Object.is` / `Object.isExtensible` — their execution handlers
                 // read the meaningful arguments starting at `args.start + 1`
                 // (slot 0 is the function-call receiver slot) and guard on a

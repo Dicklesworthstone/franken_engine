@@ -24,12 +24,16 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+use frankenengine_engine::baseline_interpreter::{ExecutionResult, QuickJsLane};
 use frankenengine_engine::deterministic_replay::{
     ArtifactKind, DivergenceSeverity, FailoverController, FailoverError, FailoverReason,
     FailoverRecord, FailoverStrategy, IncidentArtifact, IncidentBundle, IncidentBundleBuilder,
     IncidentSeverity, NondeterminismSource, NondeterminismTrace, ReplayDivergence, ReplayEngine,
     ReplayError, ReplayMode, TraceEvent,
 };
+use frankenengine_engine::ir_contract::Ir3Module;
+use frankenengine_engine::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_engine::parser_api_stability::parse_script;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -102,6 +106,40 @@ fn run_frankenctl_report(source_path: &Path, report_path: &Path) -> Output {
         .arg(report_path)
         .output()
         .expect("frankenctl run should execute")
+}
+
+const REAL_TRACE_SOURCE: &str = r#"
+var config = { mode: 1, level: 2, name: 3 };
+var nested = { inner: config };
+var mode = config.mode;
+var level = config.level;
+var name = config.name;
+var missing = config.unknown;
+var deep = nested.inner;
+mode + level + name;
+"#;
+
+fn compile_real_trace_fixture() -> Ir3Module {
+    let tree = parse_script(REAL_TRACE_SOURCE).expect("real trace fixture should parse");
+    let ir0 = frankenengine_engine::ir_contract::Ir0Module::from_syntax_tree(
+        tree,
+        "deterministic_replay_real_trace.js",
+    );
+    let context = LoweringContext::new(
+        "deterministic-replay-real-trace",
+        "deterministic-replay-real-decision",
+        "deterministic-replay-real-policy",
+    );
+    lower_ir0_to_ir3(&ir0, &context)
+        .expect("real trace fixture should lower")
+        .ir3
+}
+
+fn execute_real_trace_fixture(trace_id: &str) -> ExecutionResult {
+    let module = compile_real_trace_fixture();
+    QuickJsLane::new()
+        .execute(&module, trace_id)
+        .expect("real trace fixture should execute")
 }
 
 #[test]
@@ -290,6 +328,56 @@ fn divergence_severity_ordering() {
 // =========================================================================
 // ReplayEngine — exact replay
 // =========================================================================
+
+#[test]
+fn replay_strict_validates_trace_captured_by_real_execution() {
+    let recorded = execute_real_trace_fixture("deterministic-replay-recorded");
+    let live = execute_real_trace_fixture("deterministic-replay-live");
+
+    let recorded_trace = &recorded.nondeterminism_trace;
+    let live_trace = &live.nondeterminism_trace;
+
+    assert!(
+        recorded_trace.event_count() > 0,
+        "real execution fixture must capture nondeterminism events"
+    );
+    assert!(
+        recorded_trace.is_finalised(),
+        "real execution trace must be finalised before replay"
+    );
+    assert!(
+        recorded_trace
+            .events
+            .iter()
+            .any(|event| event.source == NondeterminismSource::PropertyResolution),
+        "fixture should exercise real property-resolution trace capture"
+    );
+    assert_eq!(
+        recorded_trace.events.len(),
+        live_trace.events.len(),
+        "independent executions should capture the same number of replay events"
+    );
+
+    let mut engine = ReplayEngine::new(recorded_trace.clone(), ReplayMode::Strict);
+    for live_event in &live_trace.events {
+        let replayed = engine
+            .replay_next(live_event.source.clone(), &live_event.value)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "strict replay must accept the real re-execution trace at sequence {}: {err}",
+                    live_event.sequence
+                )
+            });
+        assert_eq!(
+            replayed, live_event.value,
+            "strict replay should return the recorded bytes for sequence {}",
+            live_event.sequence
+        );
+    }
+
+    assert!(engine.is_complete());
+    assert_eq!(engine.divergence_count(), 0);
+}
 
 #[test]
 fn replay_exact_match() {

@@ -45,6 +45,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac};
+use regex::{NoExpand, Regex, RegexBuilder};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
@@ -628,6 +629,12 @@ pub enum BuiltinFunctionKind {
     /// `String.prototype.replace` — receiver-aware; string search value,
     /// first-occurrence literal replacement (bd-9a8cz.1).
     StringReplace,
+    /// `String.prototype.match` — receiver-aware; supports RegExp objects
+    /// produced by literal/constructor lowering (bd-wni4m).
+    StringMatch,
+    /// `String.prototype.search` — receiver-aware; returns first match index
+    /// or -1 for string or RegExp search values (bd-wni4m).
+    StringSearch,
     /// `String.prototype.repeat` — receiver-aware; concatenates `count` copies
     /// (bd-9a8cz.1).
     StringRepeat,
@@ -753,6 +760,9 @@ pub enum BuiltinFunctionKind {
     /// internal `__timestamp` in milliseconds, or NaN for a non-Date receiver
     /// (bd-cseei).
     DateGetTime,
+    /// `RegExp.prototype.test` — receiver-aware; linear-time regex match via
+    /// Rust's `regex` crate for the supported ES-compatible subset (bd-wni4m).
+    RegExpTest,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -916,6 +926,24 @@ impl BuiltinFunction {
     fn string_replace() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringReplace,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_match() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringMatch,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_search() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringSearch,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -1318,6 +1346,15 @@ impl BuiltinFunction {
         }
     }
 
+    fn regexp_test() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::RegExpTest,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
@@ -1341,6 +1378,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringSlice => "slice",
             BuiltinFunctionKind::StringSubstring => "substring",
             BuiltinFunctionKind::StringReplace => "replace",
+            BuiltinFunctionKind::StringMatch => "match",
+            BuiltinFunctionKind::StringSearch => "search",
             BuiltinFunctionKind::StringRepeat => "repeat",
             BuiltinFunctionKind::StringPadStart => "padStart",
             BuiltinFunctionKind::StringPadEnd => "padEnd",
@@ -1381,6 +1420,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::MapClear => "clear",
             BuiltinFunctionKind::SetClear => "clear",
             BuiltinFunctionKind::DateGetTime => "getTime",
+            BuiltinFunctionKind::RegExpTest => "test",
         }
     }
 }
@@ -4991,25 +5031,26 @@ impl InterpreterCore {
                 Ok(Value::str(result))
             }
             BuiltinFunctionKind::StringReplace => {
-                // ES2020 21.1.3.17 for a string search value: replace only the
-                // FIRST occurrence with the literal replacement. Replacement
-                // pattern substitutions ($&, $1, ...) are not yet honored
-                // (bd-9a8cz follow-up). (bd-9a8cz.1)
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
-                let search = match self.builtin_arg(args, 0)? {
-                    Some(arg) => self.value_to_string(&arg),
-                    None => "undefined".to_string(),
-                };
+                let search = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 let replacement = match self.builtin_arg(args, 1)? {
                     Some(arg) => self.value_to_string(&arg),
                     None => "undefined".to_string(),
                 };
-                Ok(Value::str(value.replacen(
-                    search.as_str(),
-                    replacement.as_str(),
-                    1,
-                )))
+                self.string_replace_value(&value, &search, &replacement)
+            }
+            BuiltinFunctionKind::StringMatch => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.string_match_value(&value, &pattern)
+            }
+            BuiltinFunctionKind::StringSearch => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let pattern = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.string_search_value(&value, &pattern)
             }
             BuiltinFunctionKind::StringRepeat => {
                 // ES2020 21.1.3.16: concatenate `count` copies. A negative count
@@ -5891,6 +5932,11 @@ impl InterpreterCore {
                     }
                 }
                 Ok(Value::Float(f64::NAN.into()))
+            }
+            BuiltinFunctionKind::RegExpTest => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.regexp_test_value(&receiver, &input)
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -10398,11 +10444,182 @@ impl InterpreterCore {
             "slice" => Value::BuiltinFunction(BuiltinFunction::string_slice()),
             "substring" => Value::BuiltinFunction(BuiltinFunction::string_substring()),
             "replace" => Value::BuiltinFunction(BuiltinFunction::string_replace()),
+            "match" => Value::BuiltinFunction(BuiltinFunction::string_match()),
+            "search" => Value::BuiltinFunction(BuiltinFunction::string_search()),
             "repeat" => Value::BuiltinFunction(BuiltinFunction::string_repeat()),
             "padStart" => Value::BuiltinFunction(BuiltinFunction::string_pad_start()),
             "padEnd" => Value::BuiltinFunction(BuiltinFunction::string_pad_end()),
             _ => Value::Undefined,
         }
+    }
+
+    fn regexp_source_flags_from_value(&self, value: &Value) -> Option<(String, String)> {
+        match value {
+            Value::Object(object_id) => self.regexp_source_flags_from_object(*object_id),
+            _ => None,
+        }
+    }
+
+    fn regexp_source_flags_from_object(&self, object_id: ObjectId) -> Option<(String, String)> {
+        let object = self.heap.get(object_id.0 as usize)?;
+        if !matches!(
+            object.properties.get("__type"),
+            Some(Value::Str(kind)) if kind.as_ref() == "RegExp"
+        ) {
+            return None;
+        }
+
+        let source = match object.properties.get("source") {
+            Some(Value::Str(source)) => source.to_string(),
+            _ => String::new(),
+        };
+        let flags = match object.properties.get("flags") {
+            Some(Value::Str(flags)) => flags.to_string(),
+            _ => String::new(),
+        };
+        Some((source, flags))
+    }
+
+    fn compile_regexp_pattern(pattern: &str, flags: &str) -> Result<Regex, InterpreterError> {
+        let mut case_insensitive = false;
+        let mut multi_line = false;
+        let mut dot_matches_new_line = false;
+
+        for flag in flags.chars() {
+            match flag {
+                'i' => case_insensitive = true,
+                'm' => multi_line = true,
+                's' => dot_matches_new_line = true,
+                'g' | 'u' | 'y' | 'd' | 'v' => {}
+                other => {
+                    return Err(InterpreterError::TypeError {
+                        expected: "supported RegExp flag".to_string(),
+                        got: other.to_string(),
+                    });
+                }
+            }
+        }
+
+        RegexBuilder::new(pattern)
+            .case_insensitive(case_insensitive)
+            .multi_line(multi_line)
+            .dot_matches_new_line(dot_matches_new_line)
+            .unicode(true)
+            .build()
+            .map_err(|error| InterpreterError::TypeError {
+                expected: "valid RegExp pattern".to_string(),
+                got: error.to_string(),
+            })
+    }
+
+    fn regexp_test_value(
+        &self,
+        receiver: &Value,
+        input: &Value,
+    ) -> Result<Value, InterpreterError> {
+        let Some((source, flags)) = self.regexp_source_flags_from_value(receiver) else {
+            return Ok(Value::Bool(false));
+        };
+        let regex = Self::compile_regexp_pattern(&source, &flags)?;
+        let input = Self::value_to_primitive_string(input);
+        Ok(Value::Bool(regex.is_match(&input)))
+    }
+
+    fn string_match_value(
+        &mut self,
+        input: &str,
+        pattern: &Value,
+    ) -> Result<Value, InterpreterError> {
+        if let Some((source, flags)) = self.regexp_source_flags_from_value(pattern) {
+            let regex = Self::compile_regexp_pattern(&source, &flags)?;
+            if flags.contains('g') {
+                let result_id = self.alloc_array_with_prototype(None)?;
+                let mut count = 0usize;
+                for matched in regex.find_iter(input) {
+                    self.set_object_property(
+                        result_id,
+                        count.to_string(),
+                        Value::str(matched.as_str().to_string()),
+                    )?;
+                    count = count.saturating_add(1);
+                }
+                if count == 0 {
+                    return Ok(Value::Null);
+                }
+                self.set_object_property(
+                    result_id,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(count).unwrap_or(i64::MAX)),
+                )?;
+                return Ok(Value::Object(result_id));
+            }
+
+            if let Some(matched) = regex.find(input) {
+                return self.alloc_match_result_array(matched.as_str(), matched.start(), input);
+            }
+            return Ok(Value::Null);
+        }
+
+        let needle = self.value_to_string(pattern);
+        if let Some(index) = input.find(&needle) {
+            self.alloc_match_result_array(&needle, index, input)
+        } else {
+            Ok(Value::Null)
+        }
+    }
+
+    fn string_search_value(&self, input: &str, pattern: &Value) -> Result<Value, InterpreterError> {
+        if let Some((source, flags)) = self.regexp_source_flags_from_value(pattern) {
+            let regex = Self::compile_regexp_pattern(&source, &flags)?;
+            return Ok(Value::Int(
+                regex
+                    .find(input)
+                    .map_or(-1, |matched| matched.start() as i64),
+            ));
+        }
+
+        let needle = self.value_to_string(pattern);
+        Ok(Value::Int(
+            input.find(&needle).map_or(-1, |index| index as i64),
+        ))
+    }
+
+    fn string_replace_value(
+        &self,
+        input: &str,
+        search: &Value,
+        replacement: &str,
+    ) -> Result<Value, InterpreterError> {
+        if let Some((source, flags)) = self.regexp_source_flags_from_value(search) {
+            let regex = Self::compile_regexp_pattern(&source, &flags)?;
+            let replaced = if flags.contains('g') {
+                regex.replace_all(input, NoExpand(replacement)).into_owned()
+            } else {
+                regex.replace(input, NoExpand(replacement)).into_owned()
+            };
+            return Ok(Value::str(replaced));
+        }
+
+        let needle = self.value_to_string(search);
+        Ok(Value::str(input.replacen(needle.as_str(), replacement, 1)))
+    }
+
+    fn alloc_match_result_array(
+        &mut self,
+        matched: &str,
+        index: usize,
+        input: &str,
+    ) -> Result<Value, InterpreterError> {
+        let result_id = self.alloc_array_with_prototype(None)?;
+        self.set_object_property(result_id, "0".to_string(), Value::str(matched.to_string()))?;
+        self.set_object_property(result_id, "index".to_string(), Value::Int(index as i64))?;
+        self.set_object_property(
+            result_id,
+            "input".to_string(),
+            Value::str(input.to_string()),
+        )?;
+        self.set_object_property(result_id, "length".to_string(), Value::Int(1))?;
+        Ok(Value::Object(result_id))
     }
 
     /// Coerce a `Number.prototype` receiver to an `f64`, mirroring the
@@ -10657,6 +10874,7 @@ impl InterpreterCore {
             ("Map", "clear") => Some(BuiltinFunction::map_clear()),
             ("Set", "clear") => Some(BuiltinFunction::set_clear()),
             ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
+            ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
             _ => None,
         }
     }
@@ -16204,7 +16422,6 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(result)))
             }
             "builtin:StringPrototypeReplace" => {
-                // String.prototype.replace() implementation - simplified version
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
@@ -16222,17 +16439,6 @@ impl InterpreterCore {
                 }
 
                 let search_val = self.read_reg(args.start + 1)?;
-                let search_str = match search_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.to_string(),
-                    Value::Object(_) => "[object Object]".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
                 let replace_str = if args.count >= 3 {
                     let replace_val = self.read_reg(args.start + 2)?;
                     match replace_val {
@@ -16249,18 +16455,7 @@ impl InterpreterCore {
                     "undefined".to_string()
                 };
 
-                // Simple string replacement (only first occurrence)
-                let result = if let Some(index) = str_text.find(&search_str) {
-                    let mut result = String::new();
-                    result.push_str(&str_text[..index]);
-                    result.push_str(&replace_str);
-                    result.push_str(&str_text[index + search_str.len()..]);
-                    result
-                } else {
-                    str_text
-                };
-
-                Ok(Value::str(result))
+                self.string_replace_value(&str_text, &search_val, &replace_str)
             }
             "builtin:MathLog" => {
                 // Math.log(x) implementation - returns natural logarithm of x
@@ -16852,7 +17047,6 @@ impl InterpreterCore {
                 Ok(Value::Bool(result))
             }
             "builtin:StringPrototypeMatch" => {
-                // String.prototype.match(regexp) implementation (simplified - basic string search)
                 if args.count == 0 {
                     return Ok(Value::Null);
                 }
@@ -16869,41 +17063,8 @@ impl InterpreterCore {
                     _ => return Ok(Value::Null),
                 };
 
-                // Get pattern (simplified - treat as literal string)
                 let pattern_val = self.read_reg(args.start + 1)?;
-                let pattern_str = match pattern_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(i) => i.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => return Ok(Value::Null),
-                };
-
-                // Simple pattern matching - find first occurrence
-                if let Some(index) = this_str.find(&pattern_str) {
-                    // Create result array with match information
-                    let result_id = self.alloc_object_with_prototype(None)?;
-
-                    // Add the matched string
-                    self.set_object_property(
-                        result_id,
-                        "0".to_string(),
-                        Value::str(pattern_str.clone()),
-                    )?;
-                    self.set_object_property(
-                        result_id,
-                        "index".to_string(),
-                        Value::Int(index as i64),
-                    )?;
-                    self.set_object_property(result_id, "input".to_string(), Value::str(this_str))?;
-                    self.set_object_property(result_id, "length".to_string(), Value::Int(1))?;
-
-                    Ok(Value::Object(result_id))
-                } else {
-                    Ok(Value::Null)
-                }
+                self.string_match_value(&this_str, &pattern_val)
             }
             "builtin:Symbol" => {
                 // Symbol(description) implementation (simplified)
@@ -19305,35 +19466,13 @@ impl InterpreterCore {
 
             // Removed duplicate ArrayPrototypeLastIndexOf - implementation at line ~10742 is identical
             "builtin:RegExpPrototypeTest" => {
-                // RegExp.prototype.test(string) implementation (simplified)
                 let this_val = self.read_reg(args.start)?;
-
-                // For now, simplified implementation: return true if both arguments are strings and second contains first
                 if args.count < 2 {
                     return Ok(Value::Bool(false));
                 }
 
-                let test_string = match self.read_reg(args.start + 1)? {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Very simplified: if the regexp object has a "source" property, use it as a substring search
-                if let Value::Object(regexp_id) = this_val {
-                    if let Some(regexp_obj) = self.heap.get(regexp_id.0 as usize) {
-                        if let Some(Value::Str(pattern)) = regexp_obj.properties.get("source") {
-                            return Ok(Value::Bool(test_string.contains(pattern.as_ref())));
-                        }
-                    }
-                }
-
-                // Default: return false for non-regexp objects or missing pattern
-                Ok(Value::Bool(false))
+                let input = self.read_reg(args.start + 1)?;
+                self.regexp_test_value(&this_val, &input)
             }
 
             // Removed duplicate StringPrototypeCodePointAt - implementation at line ~11708 is identical
@@ -20335,7 +20474,6 @@ impl InterpreterCore {
             }
 
             "builtin:StringPrototypeSearch" => {
-                // String.prototype.search(regexp) implementation (simplified)
                 let this_val = self.read_reg(args.start)?;
                 let str_text = match this_val {
                     Value::Str(s) => s.to_string(),
@@ -20353,23 +20491,7 @@ impl InterpreterCore {
                     return Ok(Value::Int(-1));
                 };
 
-                // Simplified implementation: treat as string search
-                let pattern = match pattern_val {
-                    Value::Str(s) => s.to_string(),
-                    Value::Int(n) => n.to_string(),
-                    Value::Float(f) => f.inner().to_string(),
-                    Value::Bool(b) => b.to_string(),
-                    Value::Null => "null".to_string(),
-                    Value::Undefined => "undefined".to_string(),
-                    _ => "[object Object]".to_string(),
-                };
-
-                // Find first occurrence and return index
-                if let Some(index) = str_text.find(&pattern) {
-                    Ok(Value::Int(index as i64))
-                } else {
-                    Ok(Value::Int(-1))
-                }
+                self.string_search_value(&str_text, &pattern_val)
             }
 
             // Removed duplicate MathTrunc - implementation at line ~9554 is identical

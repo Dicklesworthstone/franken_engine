@@ -4075,9 +4075,18 @@ fn parse_expression(
     }
 
     // Regex literal must win before binary operator scanning or `/.../` gets
-    // misclassified as a divide expression.
-    if let Some((pattern, flags)) = parse_regexp_literal(expression) {
-        return Ok(Expression::RegExpLiteral { pattern, flags });
+    // misclassified as a divide expression. A leading regex literal may also
+    // be the receiver for a postfix chain, e.g. `/ab/.test("xabz")`.
+    if let Some((end, pattern, flags)) = leading_regexp_literal(expression) {
+        let tail = expression[end..].trim_start();
+        if tail.is_empty() {
+            return Ok(Expression::RegExpLiteral { pattern, flags });
+        }
+        if (tail.starts_with('.') || tail.starts_with('[') || tail.starts_with('('))
+            && let Some(result) = try_parse_postfix(expression, span, context, recursion_depth)
+        {
+            return result;
+        }
     }
 
     // Update expressions (`++x`, `--x`, `x++`, `x--`): must precede binary
@@ -6956,6 +6965,16 @@ fn unescape_string_literal(inner: &str) -> Option<String> {
 /// slashes (`[/]`). Flags are the standard ECMAScript regex flags: g, i, m, s, u, y.
 fn parse_regexp_literal(input: &str) -> Option<(String, String)> {
     let input = input.trim();
+    let (end, pattern, flags) = leading_regexp_literal(input)?;
+    if input[end..].trim().is_empty() {
+        Some((pattern, flags))
+    } else {
+        None
+    }
+}
+
+/// Return the byte end and components of a regex literal at the start of `input`.
+fn leading_regexp_literal(input: &str) -> Option<(usize, String, String)> {
     if !input.starts_with('/') {
         return None;
     }
@@ -6988,15 +7007,17 @@ fn parse_regexp_literal(input: &str) -> Option<(String, String)> {
             let rest = &input[i + 1..];
             // Parse flags (g, i, m, s, u, y, d)
             let mut flags = String::new();
-            for fc in rest.chars() {
+            let mut end = i + 1;
+            for (offset, fc) in rest.char_indices() {
                 if matches!(fc, 'g' | 'i' | 'm' | 's' | 'u' | 'y' | 'd') {
                     flags.push(fc);
+                    end = i + 1 + offset + fc.len_utf8();
                 } else {
                     // Stop at non-flag character (could be operator or whitespace)
                     break;
                 }
             }
-            return Some((pattern.to_string(), flags));
+            return Some((end, pattern.to_string(), flags));
         }
         i += 1;
     }
@@ -14520,6 +14541,7 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         assert_eq!(parse_regexp_literal("hello"), None);
         assert_eq!(parse_regexp_literal("42"), None);
         assert_eq!(parse_regexp_literal(""), None);
+        assert_eq!(parse_regexp_literal(r#"/ab/.test("xabz")"#), None);
     }
 
     #[test]
@@ -14536,6 +14558,36 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 assert_eq!(flags, "gi");
             }
             other => panic!("expected RegExpLiteral, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn regexp_literal_receiver_member_call_parses_bd_wni4m() {
+        let tree = parse_script(r#"/ab/.test("xabz");"#);
+        match first_expr(&tree) {
+            Expression::Call { callee, arguments } => {
+                assert_eq!(arguments.len(), 1);
+                match callee.as_ref() {
+                    Expression::Member {
+                        object,
+                        property,
+                        computed,
+                    } => {
+                        assert!(!computed);
+                        assert!(matches!(
+                            object.as_ref(),
+                            Expression::RegExpLiteral { pattern, flags }
+                                if pattern == "ab" && flags.is_empty()
+                        ));
+                        assert!(matches!(
+                            property.as_ref(),
+                            Expression::Identifier(name) if name == "test"
+                        ));
+                    }
+                    other => panic!("expected member callee, got {other:?}"),
+                }
+            }
+            other => panic!("expected Call, got {other:?}"),
         }
     }
 

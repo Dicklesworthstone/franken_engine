@@ -6402,7 +6402,6 @@ fn lower_expression_to_ir1(
         }
         Expression::RegExpLiteral { pattern, flags } => {
             // Load pattern and flags as string literals, then create RegExp.
-            // For now, emit a hostcall to regexp:create.
             ops.push(Ir1Op::LoadLiteral {
                 value: Ir1Literal::String(pattern.clone()),
             });
@@ -6410,7 +6409,7 @@ fn lower_expression_to_ir1(
                 value: Ir1Literal::String(flags.clone()),
             });
             ops.push(Ir1Op::HostCall {
-                capability: "regexp:create".to_string(),
+                capability: "builtin:RegExp".to_string(),
                 arg_count: 2,
             });
         }

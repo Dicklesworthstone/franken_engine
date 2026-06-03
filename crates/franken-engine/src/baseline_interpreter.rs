@@ -8937,13 +8937,41 @@ impl InterpreterCore {
                     // accumulated by prior PushCapture instructions but
                     // the scope chain snapshot already contains those
                     // bindings, so we just clear them.
-                    let captured_env = self.snapshot_scope_chain()?;
+                    let mut captured_env = self.snapshot_scope_chain()?;
                     let closure_id = u32::try_from(self.closures.len()).map_err(|_| {
                         InterpreterError::TypeError {
                             expected: "closure table capacity".into(),
                             got: format!("exceeded u32::MAX ({})", self.closures.len()),
                         }
                     })?;
+                    // bd-g0aok: a named function declaration/expression refers to
+                    // itself by name inside its own body, but the self-name's scope
+                    // binding is StoreScoped from the closure register BEFORE this
+                    // CreateClosure assigns it (module/closure prologue order), so the
+                    // captured snapshot records the name as `undefined`. The body
+                    // resolves the recursive callee via `LoadScoped(name)` against this
+                    // captured scope, sees `undefined`, and faults ("expected function,
+                    // got undefined"). Self-bind the function's own name in the captured
+                    // environment to this very closure so self-recursion and
+                    // named-function-expression recursion resolve. (A function's own
+                    // name resolving to the function is also correct ES semantics, so
+                    // this is a no-op for non-recursive functions.) Mutual recursion
+                    // between sibling declarations, and recursive generator/async
+                    // function values (other Create* arms), need by-reference capture
+                    // and are tracked separately.
+                    if let Some(self_name) = module
+                        .function_table
+                        .get(function_index as usize)
+                        .and_then(|desc| desc.name.clone())
+                    {
+                        for frame in captured_env.iter_mut().rev() {
+                            if let Some(binding) = frame.get_mut(&self_name) {
+                                binding.value = Value::Closure(closure_id);
+                                binding.initialized = true;
+                                break;
+                            }
+                        }
+                    }
                     self.closures.push(ClosureValue {
                         function_index,
                         captured_env,

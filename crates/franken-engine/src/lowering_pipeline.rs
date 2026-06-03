@@ -7092,6 +7092,60 @@ fn lower_expression_to_ir1(
             });
         }
         Expression::Call { callee, arguments } => {
+            // Spread in call arguments (bd-hsv77): `f(a, ...xs, b)` must expand
+            // the spread into positional args. Build the argument array (reusing
+            // the array-literal spread lowering) and dispatch via
+            // `builtin:ReflectApply(f, thisArg, argsArray)` (which already
+            // unpacks an array into a call). Scoped to FREE (non-member) callees,
+            // where thisArg is `undefined`; member-call spread needs the receiver
+            // as `this` (evaluated once) and is a follow-up. Placed before the
+            // builtin-capability checks: a builtin callee with spread (rare, e.g.
+            // `Math.max(...xs)`) falls through here and stays as-is — it was
+            // already broken, so no regression, while regular `f(...xs)` works.
+            let has_spread_argument = arguments
+                .iter()
+                .any(|arg| matches!(arg, Expression::SpreadElement(_)));
+            let callee_is_member = matches!(
+                callee.as_ref(),
+                Expression::Member { .. } | Expression::OptionalMember { .. }
+            );
+            if has_spread_argument && !callee_is_member {
+                // builtin:ReflectApply reads [target, thisArg, argsList].
+                lower_expression_to_ir1(
+                    callee,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                lower_expression_to_ir1(
+                    &Expression::UndefinedLiteral,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                let args_array =
+                    Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
+                lower_expression_to_ir1(
+                    &args_array,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ReflectApply".to_string(),
+                    arg_count: 3,
+                });
+                return Ok(());
+            }
             if let Some(capability) = math_builtin_call_capability(callee, binding_lookup) {
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {

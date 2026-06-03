@@ -9017,6 +9017,9 @@ fn object_json_builtin_call_capability(
         ("Array", "from") => Some("builtin:ArrayFrom"),
         ("Array", "of") => Some("builtin:ArrayOf"),
         ("String", "fromCharCode") => Some("builtin:StringFromCharCode"),
+        // Symbol global registry (bd-hitj1): Symbol.for(key)/Symbol.keyFor(sym).
+        ("Symbol", "for") => Some("builtin:SymbolFor"),
+        ("Symbol", "keyFor") => Some("builtin:SymbolKeyFor"),
         _ => None,
     }
 }

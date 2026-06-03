@@ -3420,6 +3420,10 @@ pub struct InterpreterCore {
     register_labels: Vec<Label>,
     /// WeakMap storage with weak reference semantics.
     weakmap_storage: BTreeMap<ObjectId, WeakMapStorage>,
+    /// Global Symbol registry for `Symbol.for(key)` / `Symbol.keyFor(sym)`
+    /// (bd-hitj1): interns one symbol per string key so `Symbol.for('x') ===
+    /// Symbol.for('x')`.
+    symbol_registry: BTreeMap<String, ObjectId>,
     /// GC remembered set for tracking old->young generation references.
     gc_remembered_set: BTreeSet<ObjectId>,
     /// JIT hot path detection counters for function calls.
@@ -3505,6 +3509,7 @@ impl InterpreterCore {
             nondeterminism_trace,
             register_labels: vec![Label::Public; max_regs],
             weakmap_storage: BTreeMap::new(),
+            symbol_registry: BTreeMap::new(),
             gc_remembered_set: BTreeSet::new(),
             jit_function_call_counts: BTreeMap::new(),
             jit_loop_iteration_counts: LoopIterationCounters::default(),
@@ -16851,6 +16856,65 @@ impl InterpreterCore {
                     Value::Int(symbol_id.0 as i64),
                 )?;
                 Ok(Value::Object(symbol_id))
+            }
+            "builtin:SymbolFor" => {
+                // Symbol.for(key): intern one symbol per string key in the global
+                // registry, so Symbol.for('x') === Symbol.for('x') (bd-hitj1).
+                // A fresh Symbol() is never registry-interned, so it is distinct.
+                let key_val = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                let key = match key_val {
+                    Value::Str(s) => s.to_string(),
+                    Value::Int(i) => i.to_string(),
+                    Value::Float(f) => f.inner().to_string(),
+                    Value::Bool(b) => b.to_string(),
+                    Value::Null => "null".to_string(),
+                    Value::Undefined => "undefined".to_string(),
+                    other => format!("{}", other.type_name()),
+                };
+                if let Some(existing) = self.symbol_registry.get(&key) {
+                    return Ok(Value::Object(*existing));
+                }
+                let symbol_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(symbol_id, "__type".to_string(), Value::str("symbol"))?;
+                self.set_object_property(
+                    symbol_id,
+                    "__description".to_string(),
+                    Value::str(key.clone()),
+                )?;
+                self.set_object_property(
+                    symbol_id,
+                    "__id".to_string(),
+                    Value::Int(symbol_id.0 as i64),
+                )?;
+                // Mark as a registry symbol + record its key for Symbol.keyFor.
+                self.set_object_property(
+                    symbol_id,
+                    "__registry_key".to_string(),
+                    Value::str(key.clone()),
+                )?;
+                self.symbol_registry.insert(key, symbol_id);
+                Ok(Value::Object(symbol_id))
+            }
+            "builtin:SymbolKeyFor" => {
+                // Symbol.keyFor(sym): the registry key for a registered symbol,
+                // else undefined (a non-registry Symbol() returns undefined).
+                let sym_val = if args.count > 0 {
+                    self.read_reg(args.start)?
+                } else {
+                    Value::Undefined
+                };
+                if let Value::Object(id) = sym_val
+                    && let Some(obj) = self.heap.get(id.0 as usize)
+                    && matches!(obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "symbol")
+                    && let Some(Value::Str(key)) = obj.properties.get("__registry_key")
+                {
+                    return Ok(Value::str(key.to_string()));
+                }
+                Ok(Value::Undefined)
             }
             "builtin:typeof" => {
                 // typeof operator implementation

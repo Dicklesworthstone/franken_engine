@@ -51,6 +51,7 @@ fn async_module(mut body: Vec<Ir3Instruction>, constant_pool: Vec<String>) -> Ir
         frame_size: 4,
         name: Some("async_promise_probe".to_string()),
         is_generator: false,
+        rest_param_index: None,
     }];
     module
 }

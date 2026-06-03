@@ -454,6 +454,10 @@ pub enum Ir1Op {
         free_var_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
+        /// Index into `param_names` of the rest parameter (`...xs`), if any.
+        /// The interpreter binds this slot to an Array of trailing args
+        /// instead of a single positional (bd-zs4d5).
+        rest_param_index: Option<u32>,
     },
     /// Create a function value (expression position — arrow functions and
     /// function expressions).  The resulting value is pushed onto the stack.
@@ -468,6 +472,9 @@ pub enum Ir1Op {
         free_var_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
+        /// Index into `param_names` of the rest parameter (`...xs`), if any
+        /// (bd-zs4d5).
+        rest_param_index: Option<u32>,
     },
     /// Begin a try block; on exception, jump to catch_label.
     /// If a finally block exists, `finally_label` points to its entry.
@@ -648,6 +655,7 @@ impl Ir1Op {
                 free_vars,
                 free_var_ids: _,
                 is_generator,
+                rest_param_index: _,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("declare_function")),
                 ("name", CanonicalValue::str(name.clone())),
@@ -683,6 +691,7 @@ impl Ir1Op {
                 free_vars,
                 free_var_ids: _,
                 is_generator,
+                rest_param_index: _,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("create_function")),
                 (
@@ -1895,6 +1904,12 @@ pub struct Ir3FunctionDesc {
     pub name: Option<String>,
     /// Whether this function is a generator (function*).
     pub is_generator: bool,
+    /// Index into the parameter list of the rest parameter (`...xs`), if any.
+    /// At call time the interpreter binds this slot to an Array of trailing
+    /// args (bd-zs4d5). Excluded from `canonical_value` and serialized only
+    /// when present, so non-rest functions keep byte-identical IR3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rest_param_index: Option<u32>,
 }
 
 impl Ir3FunctionDesc {
@@ -3035,6 +3050,7 @@ mod tests {
                 arity: 0,
                 frame_size: 3,
                 name: Some("main".to_string()),
+                rest_param_index: None,
             });
             ir3
         };
@@ -3853,6 +3869,7 @@ mod tests {
             frame_size: 8,
             name: Some("myFunc".to_string()),
             is_generator: false,
+            rest_param_index: None,
         };
         let json = serde_json::to_string(&desc).expect("serialize derived Serialize");
         let restored: Ir3FunctionDesc =
@@ -4598,6 +4615,7 @@ mod tests {
             frame_size: 8,
             name: Some("main".to_string()),
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -4623,6 +4641,7 @@ mod tests {
             frame_size: 4,
             name: None,
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -5077,6 +5096,7 @@ mod tests {
             frame_size: 8,
             name: Some("myFunc".to_string()),
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {
@@ -5100,6 +5120,7 @@ mod tests {
             frame_size: 1,
             name: None,
             is_generator: false,
+            rest_param_index: None,
         };
         let cv = desc.canonical_value();
         if let CanonicalValue::Map(m) = cv {

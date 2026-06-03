@@ -57,6 +57,7 @@ fn function_desc(entry: u32, name: &str) -> Ir3FunctionDesc {
         frame_size: 2,
         name: Some(name.to_string()),
         is_generator: false,
+        rest_param_index: None,
     }
 }
 

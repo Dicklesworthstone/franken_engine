@@ -124,6 +124,7 @@ fn make_ir3(source_hash: ContentHash) -> Ir3Module {
         frame_size: 3,
         name: Some("main".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
     ir3
 }
@@ -892,6 +893,7 @@ fn ir3_function_desc_with_name() {
         frame_size: 8,
         name: Some("factorial".to_string()),
         is_generator: false,
+        rest_param_index: None,
     };
     assert_eq!(desc.entry, 10);
     assert_eq!(desc.arity, 3);
@@ -910,6 +912,7 @@ fn ir3_function_desc_anonymous() {
         frame_size: 1,
         name: None,
         is_generator: false,
+        rest_param_index: None,
     };
     assert!(desc.name.is_none());
     let cv = desc.canonical_value();
@@ -926,6 +929,7 @@ fn ir3_function_desc_serde_roundtrip() {
             frame_size: 5,
             name: Some("add".to_string()),
             is_generator: false,
+            rest_param_index: None,
         },
         Ir3FunctionDesc {
             entry: 100,
@@ -933,6 +937,7 @@ fn ir3_function_desc_serde_roundtrip() {
             frame_size: 0,
             name: None,
             is_generator: false,
+            rest_param_index: None,
         },
     ] {
         let json = serde_json::to_string(&desc).unwrap();
@@ -2477,6 +2482,7 @@ fn ir3_multiple_functions_with_calls() {
         frame_size: 3,
         name: Some("add".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
     ir3.function_table.push(Ir3FunctionDesc {
         entry: 2,
@@ -2484,6 +2490,7 @@ fn ir3_multiple_functions_with_calls() {
         frame_size: 4,
         name: Some("main".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
 
     let json = serde_json::to_string(&ir3).unwrap();

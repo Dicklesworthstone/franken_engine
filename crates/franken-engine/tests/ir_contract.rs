@@ -117,6 +117,7 @@ fn make_ir3(ir2_hash: ContentHash) -> Ir3Module {
         frame_size: 4,
         name: Some("main".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
     ir3.required_capabilities
         .push(CapabilityTag("fs:read".to_string()));
@@ -1324,6 +1325,7 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
             body_ops: Vec::new(),
             free_vars: Vec::new(),
             is_generator: false,
+            rest_param_index: None,
         },
         Ir1Op::BeginTry {
             catch_label: 100,
@@ -1489,6 +1491,7 @@ fn enrichment_ir3_hash_changes_with_function_table() {
         frame_size: 4,
         name: Some("fn1".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
 
     let mut m2 = Ir3Module::new(h, "test.js");
@@ -1498,6 +1501,7 @@ fn enrichment_ir3_hash_changes_with_function_table() {
         frame_size: 4,
         name: Some("fn1".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
 
     assert_ne!(m1.content_hash(), m2.content_hash());
@@ -1943,6 +1947,7 @@ fn enrichment_ir3_function_desc_serde_roundtrip() {
         frame_size: 8,
         name: Some("myFunc".to_string()),
         is_generator: false,
+        rest_param_index: None,
     };
     let json = serde_json::to_string(&desc).unwrap();
     let recovered: FnDesc = serde_json::from_str(&json).unwrap();
@@ -1957,6 +1962,7 @@ fn enrichment_ir3_function_desc_anonymous_serde() {
         frame_size: 2,
         name: None,
         is_generator: false,
+        rest_param_index: None,
     };
     let json = serde_json::to_string(&desc).unwrap();
     let recovered: FnDesc = serde_json::from_str(&json).unwrap();

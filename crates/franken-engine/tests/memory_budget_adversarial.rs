@@ -53,6 +53,7 @@ fn test_module_with_instructions(instructions: Vec<Ir3Instruction>) -> Ir3Module
         frame_size: 16,
         name: Some("main".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
     m
 }

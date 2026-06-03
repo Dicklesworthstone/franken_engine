@@ -82,6 +82,7 @@ fn ir3(source_hash: ContentHash) -> Ir3Module {
         frame_size: 1,
         name: Some("main".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
     m
 }
@@ -553,7 +554,9 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
             param_names: Vec::new(),
             body_ops: Vec::new(),
             free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
             is_generator: false,
+            rest_param_index: None,
         },
         Ir1Op::BeginTry {
             catch_label: 5,
@@ -1034,6 +1037,7 @@ fn enrichment_ir3_function_desc_serde() {
         frame_size: 10,
         name: Some("compute".to_string()),
         is_generator: false,
+        rest_param_index: None,
     };
     let json = serde_json::to_string(&desc).unwrap();
     let restored: Ir3FunctionDesc = serde_json::from_str(&json).unwrap();
@@ -1048,6 +1052,7 @@ fn enrichment_ir3_function_desc_anonymous() {
         frame_size: 2,
         name: None,
         is_generator: false,
+        rest_param_index: None,
     };
     let json = serde_json::to_string(&desc).unwrap();
     let restored: Ir3FunctionDesc = serde_json::from_str(&json).unwrap();

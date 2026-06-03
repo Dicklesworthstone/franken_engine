@@ -57,6 +57,7 @@ fn callback_desc(entry: u32) -> Ir3FunctionDesc {
         frame_size: 4,
         name: Some("callback".to_string()),
         is_generator: false,
+        rest_param_index: None,
     }
 }
 

@@ -186,6 +186,7 @@ fn regular_closure_call_does_not_require_builtin_capability() {
         frame_size: 2,
         name: Some("regular".to_string()),
         is_generator: false,
+        rest_param_index: None,
     }];
 
     let mut core = interpreter_with_caps(&[], "regular-closure-call");

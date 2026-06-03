@@ -913,6 +913,7 @@ fn simple_function_call_add_ten() {
             frame_size: 3,
             name: Some("add_ten".into()),
             is_generator: false,
+            rest_param_index: None,
         }],
     );
 
@@ -2049,6 +2050,7 @@ fn instanceof_returns_false_for_primitive_lhs_across_lanes() {
             arity: 0,
             frame_size: 4,
             is_generator: false,
+            rest_param_index: None,
         }],
     );
 
@@ -2084,6 +2086,7 @@ fn constructed_object_is_instanceof_constructor_across_lanes() {
             arity: 1,
             frame_size: 8,
             is_generator: false,
+            rest_param_index: None,
         }],
     );
 

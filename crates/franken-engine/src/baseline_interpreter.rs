@@ -7368,6 +7368,7 @@ impl InterpreterCore {
                             )?;
                             arg_vals.push(self.read_reg(reg)?);
                         }
+                        self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -7550,6 +7551,7 @@ impl InterpreterCore {
                                 )?;
                                 arg_vals.push(self.read_reg(reg)?);
                             }
+                            self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -7762,6 +7764,7 @@ impl InterpreterCore {
                             )?;
                             arg_vals.push(self.read_reg(reg)?);
                         }
+                        self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
 
                         self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -7903,6 +7906,7 @@ impl InterpreterCore {
                         )?;
                         arg_vals.push(self.read_reg(reg)?);
                     }
+                    self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
 
                     self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -8665,6 +8669,7 @@ impl InterpreterCore {
                                 )?;
                                 arg_vals.push(self.read_reg(reg)?);
                             }
+                            self.apply_rest_param(&mut arg_vals, func.rest_param_index, args)?;
 
                             self.run_pre_call_hook(module, &callee_val, func_idx, &arg_vals)?;
 
@@ -23276,6 +23281,54 @@ impl InterpreterCore {
         }
     }
 
+    /// Rest-parameter binding (bd-zs4d5): if the callee declares a rest param at
+    /// `rest_param_index`, replace that positional slot in `arg_vals` with an
+    /// Array of ALL trailing args (`args[rest_idx..args.count]`). Called after
+    /// the per-call fixed-arity collection; the existing param-destructure path
+    /// then binds the rest name to that array register. Empty rest => `[]`.
+    fn apply_rest_param(
+        &mut self,
+        arg_vals: &mut Vec<Value>,
+        rest_param_index: Option<u32>,
+        args: RegRange,
+    ) -> Result<(), InterpreterError> {
+        let Some(rest_idx) = rest_param_index else {
+            return Ok(());
+        };
+        let mut elements = Vec::new();
+        let mut i = rest_idx;
+        while i < args.count {
+            let reg = args
+                .start
+                .checked_add(i)
+                .ok_or(InterpreterError::RegisterOutOfBounds {
+                    register: args.start,
+                    max: self.config.max_registers,
+                })?;
+            elements.push(self.read_reg(reg)?);
+            i = i.checked_add(1).unwrap_or(args.count);
+        }
+        let len = u32::try_from(elements.len()).unwrap_or(u32::MAX);
+        let array_id = self.alloc_array_with_prototype(None)?;
+        for (j, value) in elements.into_iter().enumerate() {
+            self.set_object_property(array_id, j.to_string(), value)?;
+        }
+        self.set_object_property(array_id, "length".to_string(), Value::Int(i64::from(len)))?;
+        let array_index = array_id.0 as usize;
+        self.mutate_heap(|heap| {
+            if let Some(obj) = heap.get_mut(array_index) {
+                obj.cached_dense_length = Some(len);
+            }
+        });
+        let rest_slot = rest_idx as usize;
+        while arg_vals.len() <= rest_slot {
+            arg_vals.push(Value::Undefined);
+        }
+        arg_vals.truncate(rest_slot + 1);
+        arg_vals[rest_slot] = Value::Object(array_id);
+        Ok(())
+    }
+
     /// Resolve a property read on a function value. Functions are objects whose
     /// `prototype` is the (lazily-created) object that `new`-constructed
     /// instances inherit from — and it is where class instance methods are
@@ -24849,6 +24902,7 @@ mod active_builtin_regressions {
             frame_size: 6,
             name: Some("iterator_return".to_string()),
             is_generator: false,
+            rest_param_index: None,
         }];
 
         let mut core = test_core();
@@ -25769,6 +25823,7 @@ mod async_runtime_tests_current {
                 frame_size: 1,
                 name: Some("proxy_get_trap".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         module.constant_pool.push("from-get-trap".to_string());
@@ -25831,6 +25886,7 @@ mod async_runtime_tests_current {
                 frame_size: 1,
                 name: Some("proxy_instruction_get_trap".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         module
@@ -25885,6 +25941,7 @@ mod async_runtime_tests_current {
                     frame_size: 1,
                     name: Some("call_target".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 },
                 Ir3FunctionDesc {
                     entry: 2,
@@ -25892,6 +25949,7 @@ mod async_runtime_tests_current {
                     frame_size: 1,
                     name: Some("construct_target".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 },
             ],
         );
@@ -25998,6 +26056,7 @@ mod async_runtime_tests_current {
                 frame_size: 1,
                 name: Some("async_value".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -26052,6 +26111,7 @@ mod async_runtime_tests_current {
                 frame_size: 1,
                 name: Some("async_throw".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         module.constant_pool.push("boom".to_string());
@@ -26102,6 +26162,7 @@ mod async_runtime_tests_current {
                 frame_size: 1,
                 name: Some("await_now".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -26285,6 +26346,7 @@ mod async_runtime_tests_current {
                 frame_size: 2,
                 name: Some("plus_five".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -26336,6 +26398,7 @@ mod async_runtime_tests_current {
                 frame_size: 1,
                 name: Some("recover".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         module.constant_pool.push("recovered".to_string());
@@ -26389,6 +26452,7 @@ mod async_runtime_tests_current {
                 frame_size: 1,
                 name: Some("throws".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         module.constant_pool.push("boom".to_string());
@@ -26569,6 +26633,7 @@ mod function_prototype_call_apply_tests_current {
                 frame_size: 5,
                 name: Some("add_this_offset".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         module.constant_pool.push("offset".to_string());
@@ -26625,6 +26690,7 @@ mod function_prototype_call_apply_tests_current {
                 frame_size: 7,
                 name: Some("sum_args_and_this_base".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         module.constant_pool.push("base".to_string());
@@ -26682,6 +26748,7 @@ mod function_prototype_call_apply_tests_current {
                 frame_size: 7,
                 name: Some("map_with_this_offset".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         module.constant_pool.push("offset".to_string());
@@ -26753,6 +26820,7 @@ mod function_prototype_call_apply_tests_current {
                 frame_size: 3,
                 name: Some("append_index".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -26807,6 +26875,7 @@ mod function_prototype_call_apply_tests_current {
                 frame_size: 7,
                 name: Some("reduce_right_digits".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -26980,6 +27049,7 @@ mod event_loop_timer_microtask_tests {
                 frame_size: 8,
                 name: Some("timer_cb".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
             specialization: None,
             required_capabilities: Vec::new(),
@@ -27305,6 +27375,7 @@ mod tests {
                 frame_size: 8,
                 name: Some("reduce_callback".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
         module.constant_pool = constant_pool;
@@ -28106,6 +28177,7 @@ mod tests {
                     frame_size: 2,
                     name: Some("identity".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .expect("operation should succeed for valid inputs");
@@ -28182,6 +28254,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("closure_target".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             ))
             .expect("operation should succeed for valid inputs");
@@ -28639,6 +28712,7 @@ mod tests {
                 frame_size: 3,
                 name: Some("add_ten".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -28991,6 +29065,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("custom_iterator".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 },
                 Ir3FunctionDesc {
                     entry: 2,
@@ -28998,6 +29073,7 @@ mod tests {
                     frame_size: 3,
                     name: Some("custom_next".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 },
             ],
         );
@@ -29286,6 +29362,7 @@ mod tests {
                 frame_size: 3,
                 name: Some("add_ten".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -29324,6 +29401,7 @@ mod tests {
                 frame_size: 1,
                 name: Some("recurse".to_string()),
                 is_generator: false,
+                rest_param_index: None,
             }],
         );
 
@@ -30630,6 +30708,7 @@ mod tests {
             frame_size: 4,
             name: Some("capturing_generator".to_string()),
             is_generator: true,
+            rest_param_index: None,
         });
 
         let mut core = InterpreterCore::new(InterpreterConfig::quickjs_defaults(), "generator");
@@ -30740,6 +30819,7 @@ mod tests {
             frame_size: 4,
             name: Some("increment".to_string()),
             is_generator: false,
+            rest_param_index: None,
         });
 
         let result = quickjs_execute(&module).expect("operation should succeed for valid inputs");
@@ -32535,6 +32615,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("async_value".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -32591,6 +32672,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("async_throw".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
             module.constant_pool.push("boom".to_string());
@@ -32641,6 +32723,7 @@ mod tests {
                     frame_size: 1,
                     name: Some("await_now".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -32814,6 +32897,7 @@ mod tests {
                     frame_size: 0,
                     name: Some("test_async_gen".to_string()),
                     is_generator: false,
+                    rest_param_index: None,
                 }],
             );
 
@@ -32874,6 +32958,7 @@ mod tests {
                         frame_size: 1,
                         name: Some("async_gen_1".to_string()),
                         is_generator: false,
+                        rest_param_index: None,
                     },
                     Ir3FunctionDesc {
                         entry: 3,
@@ -32881,6 +32966,7 @@ mod tests {
                         frame_size: 2,
                         name: Some("async_gen_2".to_string()),
                         is_generator: false,
+                        rest_param_index: None,
                     },
                 ],
             );

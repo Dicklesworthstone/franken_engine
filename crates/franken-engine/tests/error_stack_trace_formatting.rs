@@ -132,6 +132,7 @@ fn nested_error_stack_module(source_label: &str) -> Ir3Module {
         frame_size: 8,
         name: Some("nestedErrorFactory".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
     module.required_capabilities = vec![error_tag];
     module

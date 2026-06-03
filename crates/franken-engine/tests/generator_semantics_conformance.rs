@@ -194,6 +194,7 @@ fn calling_generator_function_returns_generator_object() {
             frame_size: 16,
             name: Some("main".to_string()),
             is_generator: false,
+            rest_param_index: None,
         },
         Ir3FunctionDesc {
             entry: 3,
@@ -201,6 +202,7 @@ fn calling_generator_function_returns_generator_object() {
             frame_size: 16,
             name: Some("gen".to_string()),
             is_generator: true,
+            rest_param_index: None,
         },
     ];
 

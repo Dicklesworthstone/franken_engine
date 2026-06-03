@@ -1681,6 +1681,44 @@ fn lower_destructuring_to_ir1(
     Ok(())
 }
 
+fn push_param_slot<'a>(
+    index: usize,
+    param: &'a crate::ast::FunctionParam,
+    param_names: &mut Vec<String>,
+    destructure_params: &mut Vec<(String, &'a BindingPattern)>,
+) {
+    match &param.pattern {
+        BindingPattern::Rest(inner) => {
+            if let Some(name) = inner.as_identifier() {
+                param_names.push(name.to_string());
+                return;
+            }
+        }
+        _ => {}
+    }
+
+    match param.name() {
+        Some(name) => param_names.push(name.to_string()),
+        None => {
+            let synthetic = format!("__param_{index}");
+            param_names.push(synthetic.clone());
+            destructure_params.push((synthetic, &param.pattern));
+        }
+    }
+}
+
+/// Index of the rest parameter (`...x`) in a parameter list, if present
+/// (bd-zs4d5). Valid ES2020 places it last. The interpreter binds this slot
+/// to an Array of the trailing positional args; `push_param_slot` keeps
+/// rest-identifier params in that direct slot so the rest name receives the
+/// collected Array.
+fn rest_param_index_of(params: &[crate::ast::FunctionParam]) -> Option<u32> {
+    params
+        .iter()
+        .position(|p| matches!(p.pattern, BindingPattern::Rest(_)))
+        .map(|i| i as u32)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn lower_statement_to_ir1(
     statement: &Statement,
@@ -2612,15 +2650,9 @@ fn lower_statement_to_ir1_with_flow(
             let mut destructure_params: Vec<(String, &BindingPattern)> =
                 Vec::with_capacity(func.params.len());
             for (index, param) in func.params.iter().enumerate() {
-                match param.name() {
-                    Some(name) => param_names.push(name.to_string()),
-                    None => {
-                        let synthetic = format!("__param_{index}");
-                        param_names.push(synthetic.clone());
-                        destructure_params.push((synthetic, &param.pattern));
-                    }
-                }
+                push_param_slot(index, param, &mut param_names, &mut destructure_params);
             }
+            let rest_param_index = rest_param_index_of(&func.params);
             // perf: pre-size body_ops Vec based on function body statement count
             let estimated_body_ops = func.body.body.len().saturating_mul(2).max(8);
             let mut body_ops = Vec::with_capacity(estimated_body_ops);
@@ -2700,7 +2732,8 @@ fn lower_statement_to_ir1_with_flow(
             // references that exist in the OUTER scope's lookup. Capture the
             // body binding-id alongside the name so the deferred IR3 pass can
             // resolve them exactly (bd-g0aok).
-            let (free_vars, free_var_ids) = collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
+            let (free_vars, free_var_ids) =
+                collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
 
             ops.push(Ir1Op::DeclareFunction {
                 name,
@@ -2710,6 +2743,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_vars,
                 free_var_ids,
                 is_generator: func.is_generator,
+                rest_param_index,
             });
             ops.push(Ir1Op::Pop);
         }
@@ -2727,16 +2761,10 @@ fn lower_statement_to_ir1_with_flow(
             let mut destructure_params: Vec<(String, &BindingPattern)> = Vec::new();
             if let Some(c) = constructor {
                 for (index, param) in c.params.iter().enumerate() {
-                    match param.name() {
-                        Some(name) => param_names.push(name.to_string()),
-                        None => {
-                            let synthetic = format!("__param_{index}");
-                            param_names.push(synthetic.clone());
-                            destructure_params.push((synthetic, &param.pattern));
-                        }
-                    }
+                    push_param_slot(index, param, &mut param_names, &mut destructure_params);
                 }
             }
+            let rest_param_index = constructor.and_then(|c| rest_param_index_of(&c.params));
             // perf: pre-size body_ops Vec based on constructor body statement count
             let estimated_body_ops = constructor
                 .map(|c| c.body.body.len().saturating_mul(2).max(8))
@@ -2822,6 +2850,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_vars: Vec::new(),
                 free_var_ids: Vec::new(),
                 is_generator: false,
+                rest_param_index,
             });
             // Discard (not Pop): the class binding is in r0 when the class is the
             // first top-level binding, but a SECOND class's DeclareFunction Pop
@@ -2881,15 +2910,9 @@ fn lower_statement_to_ir1_with_flow(
                 let mut m_destructure_params: Vec<(String, &BindingPattern)> =
                     Vec::with_capacity(method.params.len());
                 for (index, param) in method.params.iter().enumerate() {
-                    match param.name() {
-                        Some(name) => m_param_names.push(name.to_string()),
-                        None => {
-                            let synthetic = format!("__param_{index}");
-                            m_param_names.push(synthetic.clone());
-                            m_destructure_params.push((synthetic, &param.pattern));
-                        }
-                    }
+                    push_param_slot(index, param, &mut m_param_names, &mut m_destructure_params);
                 }
+                let m_rest_param_index = rest_param_index_of(&method.params);
                 let mut m_body_ops = Vec::new();
                 let mut m_bindings = Vec::new();
                 let mut m_lookup = BTreeMap::new();
@@ -2969,6 +2992,7 @@ fn lower_statement_to_ir1_with_flow(
                     free_vars: Vec::new(),
                     free_var_ids: Vec::new(),
                     is_generator: false,
+                    rest_param_index: m_rest_param_index,
                 });
 
                 // SetProperty pops value (top), then object (next).
@@ -3385,6 +3409,7 @@ pub fn lower_ir2_to_ir3(
         Vec<String>,
         Vec<BindingId>,
         bool,
+        Option<u32>, // rest_param_index (bd-zs4d5)
     )> = Vec::new();
 
     // Build name→BindingId lookup from the module's scope tree so the
@@ -4194,6 +4219,7 @@ pub fn lower_ir2_to_ir3(
                 free_vars,
                 free_var_ids,
                 is_generator,
+                rest_param_index,
             } => {
                 let dst = *binding_registers
                     .entry(*binding_id)
@@ -4229,6 +4255,7 @@ pub fn lower_ir2_to_ir3(
                         free_vars.clone(),
                         free_var_ids.clone(),
                         *is_generator,
+                        *rest_param_index,
                     ));
                     if *is_generator {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
@@ -4256,6 +4283,7 @@ pub fn lower_ir2_to_ir3(
                 free_vars,
                 free_var_ids,
                 is_generator,
+                rest_param_index,
             } => {
                 let dst = alloc_register(&mut register_cursor);
                 // If the function has free variables, put them on the
@@ -4286,6 +4314,7 @@ pub fn lower_ir2_to_ir3(
                     free_vars.clone(),
                     free_var_ids.clone(),
                     *is_generator,
+                    *rest_param_index,
                 ));
                 if *is_generator {
                     ir3.instructions.push(Ir3Instruction::CreateGenerator {
@@ -4608,6 +4637,7 @@ pub fn lower_ir2_to_ir3(
         frame_size: register_cursor.max(1),
         name: Some("main".to_string()),
         is_generator: false,
+        rest_param_index: None,
     });
 
     // ── Deferred function bodies ──────────────────────────────────────
@@ -4617,8 +4647,15 @@ pub fn lower_ir2_to_ir3(
     // body can push new entries without conflicting with the borrow.
     let mut deferred_idx = 0;
     while deferred_idx < deferred_functions.len() {
-        let (body_ops, param_names, fn_name, free_vars, free_var_ids, fn_is_generator) =
-            deferred_functions[deferred_idx].clone();
+        let (
+            body_ops,
+            param_names,
+            fn_name,
+            free_vars,
+            free_var_ids,
+            fn_is_generator,
+            fn_rest_param_index,
+        ) = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
         let (body_ops, param_names, fn_name, free_vars, free_var_ids) =
             (&body_ops, &param_names, &fn_name, &free_vars, &free_var_ids);
@@ -5177,6 +5214,7 @@ pub fn lower_ir2_to_ir3(
                     free_vars: inner_fv,
                     free_var_ids: inner_fv_ids,
                     is_generator: inner_gen,
+                    rest_param_index: inner_rest,
                 } => {
                     if inner_body.is_empty() {
                         unreachable!(
@@ -5194,6 +5232,7 @@ pub fn lower_ir2_to_ir3(
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
                         *inner_gen,
+                        *inner_rest,
                     ));
                     if *inner_gen {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
@@ -5217,6 +5256,7 @@ pub fn lower_ir2_to_ir3(
                     free_vars: inner_fv,
                     free_var_ids: inner_fv_ids,
                     is_generator: inner_gen,
+                    rest_param_index: inner_rest,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
                     let function_index = deferred_functions.len() as u32 + 1;
@@ -5227,6 +5267,7 @@ pub fn lower_ir2_to_ir3(
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
                         *inner_gen,
+                        *inner_rest,
                     ));
                     if *inner_gen {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
@@ -5632,6 +5673,7 @@ pub fn lower_ir2_to_ir3(
             frame_size: fn_reg.max(1),
             name: fn_name.clone(),
             is_generator: fn_is_generator,
+            rest_param_index: fn_rest_param_index,
         });
     }
 
@@ -8312,15 +8354,9 @@ fn lower_expression_to_ir1(
             let mut destructure_params: Vec<(String, &BindingPattern)> =
                 Vec::with_capacity(params.len());
             for (index, param) in params.iter().enumerate() {
-                match param.name() {
-                    Some(name) => param_names.push(name.to_string()),
-                    None => {
-                        let synthetic = format!("__param_{index}");
-                        param_names.push(synthetic.clone());
-                        destructure_params.push((synthetic, &param.pattern));
-                    }
-                }
+                push_param_slot(index, param, &mut param_names, &mut destructure_params);
             }
+            let rest_param_index = rest_param_index_of(params);
             // Allocate parameter bindings in the body scope.
             for pname in &param_names {
                 let _ = alloc_binding(
@@ -8407,6 +8443,7 @@ fn lower_expression_to_ir1(
                 free_vars: arrow_free_vars,
                 free_var_ids: arrow_free_var_ids,
                 is_generator: false,
+                rest_param_index,
             });
         }
         Expression::Function {
@@ -8432,15 +8469,9 @@ fn lower_expression_to_ir1(
             let mut destructure_params: Vec<(String, &BindingPattern)> =
                 Vec::with_capacity(params.len());
             for (index, param) in params.iter().enumerate() {
-                match param.name() {
-                    Some(name) => param_names.push(name.to_string()),
-                    None => {
-                        let synthetic = format!("__param_{index}");
-                        param_names.push(synthetic.clone());
-                        destructure_params.push((synthetic, &param.pattern));
-                    }
-                }
+                push_param_slot(index, param, &mut param_names, &mut destructure_params);
             }
+            let rest_param_index = rest_param_index_of(params);
             for pname in &param_names {
                 let _ = alloc_binding(
                     &mut body_bindings,
@@ -8505,6 +8536,7 @@ fn lower_expression_to_ir1(
                 free_vars: fn_free_vars,
                 free_var_ids: fn_free_var_ids,
                 is_generator: *is_generator,
+                rest_param_index,
             });
         }
         Expression::New { callee, arguments } => {
@@ -8709,16 +8741,10 @@ fn lower_expression_to_ir1(
             let mut destructure_params: Vec<(String, &BindingPattern)> = Vec::new();
             if let Some(c) = constructor {
                 for (index, param) in c.params.iter().enumerate() {
-                    match param.name() {
-                        Some(name) => param_names.push(name.to_string()),
-                        None => {
-                            let synthetic = format!("__param_{index}");
-                            param_names.push(synthetic.clone());
-                            destructure_params.push((synthetic, &param.pattern));
-                        }
-                    }
+                    push_param_slot(index, param, &mut param_names, &mut destructure_params);
                 }
             }
+            let rest_param_index = constructor.and_then(|c| rest_param_index_of(&c.params));
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
             let mut body_lookup = BTreeMap::new();
@@ -8791,6 +8817,7 @@ fn lower_expression_to_ir1(
                 free_vars: Vec::new(),
                 free_var_ids: Vec::new(),
                 is_generator: false,
+                rest_param_index,
             });
             // Discard (not Pop): the class binding is in r0 when the class is the
             // first top-level binding, but a SECOND class's DeclareFunction Pop
@@ -8836,15 +8863,9 @@ fn lower_expression_to_ir1(
                 let mut m_destructure_params: Vec<(String, &BindingPattern)> =
                     Vec::with_capacity(method.params.len());
                 for (index, param) in method.params.iter().enumerate() {
-                    match param.name() {
-                        Some(name) => m_param_names.push(name.to_string()),
-                        None => {
-                            let synthetic = format!("__param_{index}");
-                            m_param_names.push(synthetic.clone());
-                            m_destructure_params.push((synthetic, &param.pattern));
-                        }
-                    }
+                    push_param_slot(index, param, &mut m_param_names, &mut m_destructure_params);
                 }
+                let m_rest_param_index = rest_param_index_of(&method.params);
                 let mut m_body_ops = Vec::new();
                 let mut m_bindings = Vec::new();
                 let mut m_lookup = BTreeMap::new();
@@ -8920,6 +8941,7 @@ fn lower_expression_to_ir1(
                     free_vars: Vec::new(),
                     free_var_ids: Vec::new(),
                     is_generator: false,
+                    rest_param_index: m_rest_param_index,
                 });
                 ops.push(Ir1Op::SetProperty {
                     key: Ir1PropertyKey::Static(method_name),

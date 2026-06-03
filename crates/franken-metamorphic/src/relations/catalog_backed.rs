@@ -35,6 +35,9 @@ impl CatalogBackedRelation {
         })
     }
 
+    // Superseded by the real-engine `ir_oracle` (bd-x9t1n.3); retained for the
+    // historical toy-IR lowering reference until the toy model is fully retired.
+    #[allow(dead_code)]
     fn lower_or_diverge(source: &str, side: &str) -> Result<IrLowering, Equivalence> {
         lower_program(source).map_err(|error| Equivalence::Diverged {
             detail: format!("{side} lowering failure: {error}"),
@@ -97,93 +100,68 @@ impl CatalogBackedRelation {
     }
 
     fn ir_oracle(&self, pair: &GeneratedPair) -> Equivalence {
-        let left = match Self::lower_or_diverge(&pair.input_source, "input") {
-            Ok(lowering) => lowering,
-            Err(error) => return error,
-        };
-        let right = match Self::lower_or_diverge(&pair.variant_source, "variant") {
-            Ok(lowering) => lowering,
-            Err(error) => return error,
-        };
+        // bd-x9t1n.3: route the IR-subsystem relations through the REAL lowering
+        // pipeline (EngineEvalAdapter: CanonicalEs2020Parser ->
+        // Ir0Module::from_syntax_tree -> lower_ir0_to_ir3 -> HybridRouter),
+        // replacing the self-contained toy ir0..ir4 / optimizer / capability model
+        // that produced the bd-q90jg false assurance. Each IR relation here is a
+        // positive, value-preserving lowering transform (whitespace,
+        // parenthesization, constant folding, dead-code insertion, capability-free
+        // arithmetic), so the engine-observable invariant is: both sides must
+        // (a) reach the same parse outcome, (b) lower successfully under the real
+        // pipeline, and (c) execute to the same value.
+        //
+        // We compare `exec_value` rather than `ir_digest` because the real
+        // `ir_digest` legitimately encodes source spans (see `parser_oracle`) — the
+        // determinism relation perturbs whitespace and the folding/dead-code
+        // relations deliberately change IR structure while preserving the value, so
+        // a raw-digest comparison would false-DIVERGE. A span-stripped *structural*
+        // IR digest (to give the determinism relation a genuine IR-level check) is a
+        // follow-up refinement noted on bd-x9t1n.3/.6. A parse/lower failure on
+        // either side means the corpus is not engine-valid (a generator regression,
+        // bd-x9t1n.7) and is surfaced rather than masked.
+        let adapter = EngineEvalAdapter::new();
+        let input = adapter.evaluate(&pair.input_source);
+        let variant = adapter.evaluate(&pair.variant_source);
 
-        match self.relation_id() {
-            "ir_lowering_determinism" => {
-                if left.ir0 == right.ir0
-                    && left.ir1 == right.ir1
-                    && left.ir2 == right.ir2
-                    && left.ir3 == right.ir3
-                    && left.ir4 == right.ir4
-                {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
-                        detail: format!(
-                            "lowering artifacts diverged: left_ir4={} right_ir4={}",
-                            left.ir4, right.ir4
-                        ),
-                    }
-                }
-            }
-            "ir_optimization_idempotence" => {
-                let left_idempotent = left.optimized_once == left.optimized_twice;
-                let right_idempotent = right.optimized_once == right.optimized_twice;
-                if left_idempotent && right_idempotent {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
-                        detail: format!(
-                            "optimization is not idempotent: left={} right={}",
-                            left_idempotent, right_idempotent
-                        ),
-                    }
-                }
-            }
-            "ir_capability_preservation" => {
-                let left_ok = is_subset(&left.capabilities_ir2, &left.capabilities_ir3)
-                    && is_subset(&left.capabilities_ir3, &left.capabilities_ir4);
-                let right_ok = is_subset(&right.capabilities_ir2, &right.capabilities_ir3)
-                    && is_subset(&right.capabilities_ir3, &right.capabilities_ir4);
-                if left_ok && right_ok {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
-                        detail: format!(
-                            "capability closure violated: left_ok={} right_ok={}",
-                            left_ok, right_ok
-                        ),
-                    }
-                }
-            }
-            "ir_dead_code_insertion_invariance" => {
-                if left.observable_signature == right.observable_signature {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
-                        detail: format!(
-                            "dead-code insertion changed observable output: input={} variant={}",
-                            left.observable_signature, right.observable_signature
-                        ),
-                    }
-                }
-            }
-            "ir_constant_folding_equivalence" => {
-                if left.observable_signature == right.observable_signature
-                    && left.optimized_once == right.optimized_once
-                {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
-                        detail: format!(
-                            "constant folding equivalence violated: left={} right={}",
-                            left.observable_signature, right.observable_signature
-                        ),
-                    }
-                }
-            }
-            other => Equivalence::Diverged {
-                detail: format!("unknown ir relation id: {other}"),
-            },
+        if input.parse_outcome != variant.parse_outcome {
+            return Equivalence::Diverged {
+                detail: format!(
+                    "real-engine parse acceptance differs: input={:?} variant={:?}",
+                    input.parse_outcome, variant.parse_outcome
+                ),
+            };
         }
+        if input.parse_outcome == ParseOutcome::Rejected {
+            return Equivalence::Diverged {
+                detail:
+                    "real engine rejected both sources; IR relation corpus must be engine-valid (bd-x9t1n.7)"
+                        .to_string(),
+            };
+        }
+        // Route through the real lowering pipeline: both sides must lower to an
+        // Ir3Module. A `None` digest means `lower_ir0_to_ir3` failed.
+        if input.ir_digest.is_none() || variant.ir_digest.is_none() {
+            return Equivalence::Diverged {
+                detail: format!(
+                    "real lowering pipeline failed under a value-preserving transform ({}): input_lowered={} variant_lowered={}",
+                    self.relation_id(),
+                    input.ir_digest.is_some(),
+                    variant.ir_digest.is_some(),
+                ),
+            };
+        }
+        if input.exec_value != variant.exec_value {
+            return Equivalence::Diverged {
+                detail: format!(
+                    "real-engine execution value differs under a value-preserving lowering transform ({}): input={:?} variant={:?}",
+                    self.relation_id(),
+                    input.exec_value,
+                    variant.exec_value
+                ),
+            };
+        }
+        Equivalence::Equivalent
     }
 
     fn execution_oracle(&self, pair: &GeneratedPair) -> Equivalence {
@@ -549,7 +527,15 @@ fn generate_pair_for_relation(
         }
         "ir_capability_preservation" => {
             let name = pick_identifier(machine, "ir_capability_preservation.name")?;
-            let second = pick_identifier(machine, "ir_capability_preservation.second")?;
+            let second_pick = pick_identifier(machine, "ir_capability_preservation.second")?;
+            // Distinct binding names (see generate_arithmetic_program): a duplicate
+            // `let` fails real-engine lowering (bd-x9t1n.3).
+            let second = if second_pick == name {
+                let pos = IDENTIFIERS.iter().position(|&id| id == name).unwrap_or(0);
+                IDENTIFIERS[(pos + 1) % IDENTIFIERS.len()]
+            } else {
+                second_pick
+            };
             Some(GeneratedPair {
                 // Engine-valid ES2020 (bd-x9t1n.7): the toy `cap(...)` capability
                 // markers and the top-level `return` are dropped identically on
@@ -657,7 +643,20 @@ fn generate_pair_for_relation(
 
 fn generate_arithmetic_program(machine: &mut GeneratorMachine<'_>, prefix: &str) -> Option<String> {
     let left = pick_identifier(machine, &format!("{prefix}.left"))?;
-    let right = pick_identifier(machine, &format!("{prefix}.right"))?;
+    let right_pick = pick_identifier(machine, &format!("{prefix}.right"))?;
+    // The two `let` bindings MUST use distinct names: a duplicate lexical
+    // declaration (`let alpha = …; let alpha = …;`) parses in the toy parser but
+    // is a real-engine static error (duplicate `let`) that fails lowering, which
+    // the IR/execution oracles now exercise (bd-x9t1n.3). When the choice stream
+    // happens to pick the same identifier for both, disambiguate the second to the
+    // next name in the pool — deterministically, and WITHOUT consuming an extra
+    // choice (so replay stays stable).
+    let right = if right_pick == left {
+        let pos = IDENTIFIERS.iter().position(|&id| id == left).unwrap_or(0);
+        IDENTIFIERS[(pos + 1) % IDENTIFIERS.len()]
+    } else {
+        right_pick
+    };
     let first = machine.int_inclusive(&format!("{prefix}.first"), 1, 11)?;
     let second = machine.int_inclusive(&format!("{prefix}.second"), 1, 11)?;
     let multiplier = machine.int_inclusive(&format!("{prefix}.multiplier"), 2, 6)?;
@@ -1681,6 +1680,7 @@ fn eval_binary(op: BinaryOp, left: Value, right: Value) -> Result<Value, String>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[allow(dead_code)]
 struct IrLowering {
     ir0: String,
     ir1: String,
@@ -1695,6 +1695,7 @@ struct IrLowering {
     observable_signature: String,
 }
 
+#[allow(dead_code)]
 fn lower_program(source: &str) -> Result<IrLowering, String> {
     let parsed = parse_program(source)?;
     let ir0 = canonical_program_signature(&parsed);
@@ -1827,6 +1828,7 @@ fn stable_hash(value: &str) -> String {
     format!("sha256:{}", hex::encode(digest))
 }
 
+#[allow(dead_code)]
 fn is_subset(left: &BTreeSet<String>, right: &BTreeSet<String>) -> bool {
     left.iter().all(|item| right.contains(item))
 }
@@ -1904,6 +1906,34 @@ mod tests {
                         res.err()
                     );
                 }
+            }
+        }
+    }
+
+    /// bd-x9t1n.3: the IR oracle, now routed through the REAL lowering pipeline
+    /// (EngineEvalAdapter), must report Equivalent for every IR-relation pair — the
+    /// transforms are value-preserving, so a Diverged verdict here would be a false
+    /// RED (the bd-q90jg failure the epic exists to prevent), either from a
+    /// generator regression (bd-x9t1n.7) or a real-engine lower/exec defect.
+    #[test]
+    fn ir_oracle_equivalent_through_real_engine_bd_x9t1n_3() {
+        let ids = [
+            "ir_lowering_determinism",
+            "ir_optimization_idempotence",
+            "ir_capability_preservation",
+            "ir_dead_code_insertion_invariance",
+            "ir_constant_folding_equivalence",
+        ];
+        for id in ids {
+            let rel = relation(id, Subsystem::Ir, OracleKind::IrEquality);
+            for seed in 0u64..16 {
+                let pair = rel.generate_pair(seed);
+                let verdict = rel.oracle(&pair);
+                assert!(
+                    verdict.is_equivalent(),
+                    "IR relation `{id}` (seed {seed}) must be Equivalent through the real engine, \
+                     got {verdict:?} for pair={pair:?}",
+                );
             }
         }
     }

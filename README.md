@@ -393,6 +393,15 @@ Two contracts guard the pipeline shape:
 - **Lowering Gap Truth Invariant** (`docs/LOWERING_GAP_TRUTH_INVARIANT_V1.md`): the `status`, `parser_ready_syntax`, `execution_ready_semantics`, and prose fields of the lowering gap inventory cannot encode mutually incompatible states. Gate: `./scripts/run_lowering_gap_truth_invariant.sh ci`.
 - **Parser Phase0 Artifact Contract** (`docs/PARSER_PHASE0_ARTIFACT_CONTRACT_V1.md`): rejects placeholder performance artifacts and demands explicit degraded-mode receipts when real capture fails. Gate: `./scripts/run_parser_phase0_artifact_contract.sh ci`.
 
+## Lowering Gap Truth Invariant
+
+The Lowering Gap Truth Invariant is the runtime-backed contract that keeps
+lowering inventory status fields, parser-readiness flags, execution-readiness
+flags, and explanatory prose mutually consistent. Operators verify the live
+contract with `./scripts/run_lowering_gap_truth_invariant.sh ci`; replay of the
+generated artifact bundle is handled by
+`./scripts/e2e/lowering_gap_truth_invariant_replay.sh ci`.
+
 ---
 
 ## JavaScript Language Surface Coverage

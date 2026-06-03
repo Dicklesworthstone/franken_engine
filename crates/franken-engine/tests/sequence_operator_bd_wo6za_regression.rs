@@ -29,19 +29,16 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-wo6za: blocked on SequenceExpression (ast/parser/lowering); un-ignore when landed"]
 fn sequence_yields_last_operand() {
     assert_eq!(eval_value("let x = (1, 2, 3); x"), "3");
 }
 
 #[test]
-#[ignore = "bd-wo6za: blocked on SequenceExpression; un-ignore when landed"]
 fn sequence_result_equals_last() {
     assert_eq!(eval_value("let r = ((1, 2, 3) === 3); r"), "true");
 }
 
 #[test]
-#[ignore = "bd-wo6za: blocked on SequenceExpression; un-ignore when landed"]
 fn sequence_evaluates_earlier_operands_for_side_effects() {
     // The earlier operand `a = 5` runs (side effect), and the result is the
     // last operand `a + 1` == 6.
@@ -49,7 +46,6 @@ fn sequence_evaluates_earlier_operands_for_side_effects() {
 }
 
 #[test]
-#[ignore = "bd-wo6za: blocked on SequenceExpression; un-ignore when landed"]
 fn sequence_earlier_operand_side_effect_persists() {
     // After the sequence, the earlier operand's assignment is observable.
     assert_eq!(eval_value("let a = 0; (a = 5, a + 1); a"), "5");

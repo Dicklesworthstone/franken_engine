@@ -38,14 +38,12 @@ fn symbols_are_unique() {
 }
 
 #[test]
-#[ignore = "bd-bn1z7: Symbol.for global registry not yet implemented (33839ef8 added Symbol()/typeof/uniqueness only); un-ignore when Symbol.for lands"]
 fn symbol_for_interns_in_global_registry() {
     // `Symbol.for(key)` returns the same symbol for the same key.
     assert_eq!(eval_value("Symbol.for('x') === Symbol.for('x')"), "true");
 }
 
 #[test]
-#[ignore = "bd-bn1z7: Symbol.for global registry not yet implemented (33839ef8 added Symbol()/typeof/uniqueness only); un-ignore when Symbol.for lands"]
 fn symbol_for_differs_from_plain_symbol() {
     // A registry symbol is distinct from an un-registered one of the same desc.
     assert_eq!(eval_value("Symbol.for('y') === Symbol('y')"), "false");

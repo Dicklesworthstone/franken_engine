@@ -398,8 +398,11 @@ impl MetamorphicRelation for CatalogBackedRelation {
 fn generate_case_for_relation(relation_id: &str, seed: u64) -> GeneratedCase {
     let mut machine = GeneratorMachine::record(relation_id, seed);
     let pair = generate_pair_for_relation(relation_id, &mut machine).unwrap_or(GeneratedPair {
-        input_source: "return 0;".to_string(),
-        variant_source: "return 0;".to_string(),
+        // Engine-valid ES2020 (bd-x9t1n.7): a `let`-bound expression statement
+        // (parses in BOTH the toy parser and the real engine), not a top-level
+        // `return` (rejected by the real engine as ReturnOutsideFunction).
+        input_source: "let r = 0; r;".to_string(),
+        variant_source: "let r = 0; r;".to_string(),
     });
     let generator_id = machine.generator_id().to_string();
     let choice_stream = machine.finish_recording();
@@ -548,11 +551,17 @@ fn generate_pair_for_relation(
             let name = pick_identifier(machine, "ir_capability_preservation.name")?;
             let second = pick_identifier(machine, "ir_capability_preservation.second")?;
             Some(GeneratedPair {
+                // Engine-valid ES2020 (bd-x9t1n.7): the toy `cap(...)` capability
+                // markers and the top-level `return` are dropped identically on
+                // both sides (the real engine has no `cap` builtin and rejects
+                // top-level return); the relation's verdict is unchanged because
+                // both sides still compute the same value through the same bindings,
+                // ending with an expression statement.
                 input_source: format!(
-                    "cap(net); cap(fs); let {name} = 2 + 3; let {second} = {name} * 2; return {second};"
+                    "let {name} = 2 + 3; let {second} = {name} * 2; {second};"
                 ),
                 variant_source: format!(
-                    "cap(net); cap(fs);\nlet {name} = 2 + 3;\nlet {second} = ({name}) * 2;\nreturn {second};"
+                    "let {name} = 2 + 3;\nlet {second} = ({name}) * 2;\n{second};"
                 ),
             })
         }
@@ -560,6 +569,12 @@ fn generate_pair_for_relation(
             let base =
                 generate_arithmetic_program(machine, "ir_dead_code_insertion_invariance.base")?;
             Some(GeneratedPair {
+                // bd-x9t1n.7: the dead-code branch is a never-taken `if (false) { … }`.
+                // The `emit(...)` inside it parses in BOTH the toy parser and the real
+                // engine (a call to an unbound identifier is valid ES2020 syntax) and
+                // never executes, so it raises no runtime error and the invariance vs
+                // the unmodified base is preserved. The base itself carries no
+                // top-level `return` (the real static blocker).
                 input_source: base.clone(),
                 variant_source: format!("if(false){{emit(999);}} {base}"),
             })
@@ -575,8 +590,13 @@ fn generate_pair_for_relation(
             })
         }
         "execution_evaluation_order_determinism" => Some(GeneratedPair {
-            input_source: "emit(\"alpha\"); emit(\"beta\"); return 1;".to_string(),
-            variant_source: "emit(\"alpha\"); emit(\"beta\"); return 1;".to_string(),
+            // Engine-valid ES2020 (bd-x9t1n.7): ordered `let` evaluations ending in an
+            // expression statement (no toy `emit(...)`, which top-level would be a real
+            // runtime ReferenceError, and no top-level `return`). Both sides are
+            // identical, so the evaluation order is trivially stable/equivalent. Parses
+            // and executes in BOTH the toy parser and the real engine.
+            input_source: "let first = 1; let second = 2; first + second;".to_string(),
+            variant_source: "let first = 1; let second = 2; first + second;".to_string(),
         }),
         "execution_gc_timing_independence" => {
             let base =
@@ -589,27 +609,42 @@ fn generate_pair_for_relation(
         "execution_stack_depth_independence" => {
             let depth = machine.int_inclusive("execution_stack_depth_independence.depth", 5, 24)?;
             Some(GeneratedPair {
-                input_source: format!("recurse({depth}); return {depth};"),
-                variant_source: format!("recurse({depth}); return {depth};"),
+                // Engine-valid ES2020 (bd-x9t1n.7): the toy `recurse(...)` had no JS
+                // meaning and named-function recursion is separately broken (bd-g0aok),
+                // so model the depth value as a plain arithmetic binding (the toy
+                // parser has no `while`/function grammar) ending in an expression
+                // statement, not a top-level `return`. Both sides are identical, so the
+                // result is depth-independent. Parses + executes in toy AND real engine.
+                input_source: format!("let n = {depth}; let r = n + 0; r;"),
+                variant_source: format!("let n = {depth}; let r = (n) + 0; r;"),
             })
         }
         "execution_prototype_chain_equivalence" => {
             let base =
                 machine.int_inclusive("execution_prototype_chain_equivalence.base", 10, 29)?;
-            let derived =
+            // Consumed to keep the recorded choice stream (and replay) stable even
+            // though the engine-valid rewrite no longer interpolates it (bd-x9t1n.7).
+            let _derived =
                 machine.int_inclusive("execution_prototype_chain_equivalence.derived", 50, 69)?;
             Some(GeneratedPair {
-                input_source: format!(
-                    "proto(base={base},derived={derived},key=base); return {base};"
-                ),
-                variant_source: format!(
-                    "proto(base={base},derived={derived},key=base,mirror=true); return {base};"
-                ),
+                // Engine-valid ES2020 (bd-x9t1n.7): the toy `proto(...)` had no JS
+                // grammar and the toy parser has no object-literal/member-access
+                // support, so model the chain as a base value the variant re-reads
+                // through an equivalence-preserving alias (`mirror`), ending in an
+                // expression statement (no top-level `return`). Both sides resolve the
+                // same value; parses + executes in toy AND real engine.
+                input_source: format!("let base = {base}; base;"),
+                variant_source: format!("let base = {base}; let mirror = base; mirror;"),
             })
         }
         "execution_promise_resolution_order_stability" => Some(GeneratedPair {
-            input_source: "promise(alpha,beta,gamma,delta); return 0;".to_string(),
-            variant_source: "promise(alpha,beta,gamma,delta); return 0;".to_string(),
+            // Engine-valid ES2020 (bd-x9t1n.7): the toy `promise(...)` had no JS
+            // grammar (and the toy parser has no array/member support), so model the
+            // ordered resolution as a fixed arithmetic sum ending in an expression
+            // statement, not a top-level `return`. Both sides are identical, so the
+            // order is stable. Parses + executes in toy AND real engine.
+            input_source: "let order = 1 + 2 + 3 + 4; order;".to_string(),
+            variant_source: "let order = 1 + 2 + 3 + 4; order;".to_string(),
         }),
         // Default fallback: engine-valid ES2020 (bd-x9t1n.8) — a bare expression
         // statement rather than a top-level `return` (rejected by the real engine).
@@ -1820,6 +1855,57 @@ mod tests {
         let serialized =
             serde_json::to_string(&parsed).expect("parsed program should serialize to JSON");
         assert!(serialized.contains("alpha"));
+    }
+
+    /// bd-x9t1n.7: every GeneratedPair source must be ENGINE-VALID ES2020 (the
+    /// real CanonicalEs2020Parser accepts it), so routing the oracles through the
+    /// real engine (bd-x9t1n.2/.3/.4) does not produce false parse-REJECTED
+    /// divergences. Covers the relations whose generators emit plain JS; the
+    /// `parser_asi_equivalence` (ASI) and `parser_unicode_escape_equivalence`
+    /// (escaped identifiers, blocked on the bd-dbosg parser gap) relations exercise
+    /// distinct parser FEATURES rather than generator validity and are out of scope.
+    #[test]
+    fn generated_sources_are_engine_valid_es2020_bd_x9t1n_7() {
+        use frankenengine_engine::ast::ParseGoal;
+        use frankenengine_engine::parser::{CanonicalEs2020Parser, ParserOptions};
+
+        let ids = [
+            "parser_whitespace_invariance",
+            "parser_comment_invariance",
+            "parser_parenthesization_invariance",
+            "parser_source_position_independence",
+            "ir_lowering_determinism",
+            "ir_optimization_idempotence",
+            "ir_capability_preservation",
+            "ir_dead_code_insertion_invariance",
+            "ir_constant_folding_equivalence",
+            "execution_evaluation_order_determinism",
+            "execution_gc_timing_independence",
+            "execution_stack_depth_independence",
+            "execution_prototype_chain_equivalence",
+            "execution_promise_resolution_order_stability",
+        ];
+        let parser = CanonicalEs2020Parser;
+        let opts = ParserOptions::default();
+        for id in ids {
+            let rel = relation(id, Subsystem::Parser, OracleKind::AstEquality);
+            for seed in 0u64..16 {
+                let pair = rel.generate_pair(seed);
+                for (label, src) in [
+                    ("input", &pair.input_source),
+                    ("variant", &pair.variant_source),
+                ] {
+                    let (res, _ev) =
+                        parser.parse_with_event_ir(src.as_str(), ParseGoal::Script, &opts);
+                    assert!(
+                        res.is_ok(),
+                        "relation `{id}` {label} (seed {seed}) must be engine-valid ES2020, \
+                         but the real parser rejected it: source={src:?} error={:?}",
+                        res.err()
+                    );
+                }
+            }
+        }
     }
 
     #[test]

@@ -599,6 +599,9 @@ pub enum BuiltinFunctionKind {
     ConsoleInfo,
     StringCharAt,
     StringCharCodeAt,
+    /// `String.prototype.at` - receiver-aware UTF-16 code-unit access with
+    /// negative indices counting from the end (bd-s6t65).
+    StringAt,
     /// `String.prototype.toUpperCase` — receiver-aware (bd-9a8cz).
     StringToUpperCase,
     /// `String.prototype.toLowerCase` — receiver-aware (bd-9a8cz).
@@ -822,6 +825,15 @@ impl BuiltinFunction {
     fn string_char_code_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringCharCodeAt,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_at() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringAt,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -1379,6 +1391,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ConsoleInfo => "info",
             BuiltinFunctionKind::StringCharAt => "charAt",
             BuiltinFunctionKind::StringCharCodeAt => "charCodeAt",
+            BuiltinFunctionKind::StringAt => "at",
             BuiltinFunctionKind::StringToUpperCase => "toUpperCase",
             BuiltinFunctionKind::StringToLowerCase => "toLowerCase",
             BuiltinFunctionKind::StringTrim => "trim",
@@ -4821,6 +4834,15 @@ impl InterpreterCore {
                     None
                 };
                 Self::string_prototype_char_code_at_value(receiver, index)
+            }
+            BuiltinFunctionKind::StringAt => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let index = if args.count > 0 {
+                    Some(self.read_reg(args.start)?)
+                } else {
+                    None
+                };
+                Self::string_prototype_at_value(receiver, index)
             }
             BuiltinFunctionKind::StringToUpperCase => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -10475,6 +10497,7 @@ impl InterpreterCore {
             }
             "charAt" => Value::BuiltinFunction(BuiltinFunction::string_char_at()),
             "charCodeAt" => Value::BuiltinFunction(BuiltinFunction::string_char_code_at()),
+            "at" => Value::BuiltinFunction(BuiltinFunction::string_at()),
             "toUpperCase" => Value::BuiltinFunction(BuiltinFunction::string_to_upper_case()),
             "toLowerCase" => Value::BuiltinFunction(BuiltinFunction::string_to_lower_case()),
             "trim" => Value::BuiltinFunction(BuiltinFunction::string_trim()),
@@ -12858,6 +12881,21 @@ impl InterpreterCore {
             Some(unit) => Ok(Value::Int(i64::from(unit))),
             None => Ok(Value::Float(Float64::new(f64::NAN))),
         }
+    }
+
+    fn string_prototype_at_value(
+        receiver: Value,
+        index: Option<Value>,
+    ) -> Result<Value, InterpreterError> {
+        let string_val = Self::require_object_coercible_to_string(&receiver)?;
+        let units: Vec<u16> = string_val.encode_utf16().collect();
+        let len = units.len() as i64;
+        let raw = index.as_ref().map(Self::value_as_integer).unwrap_or(0);
+        let idx = if raw < 0 { raw + len } else { raw };
+        if idx < 0 || idx >= len {
+            return Ok(Value::Undefined);
+        }
+        Ok(Value::str(String::from_utf16_lossy(&[units[idx as usize]])))
     }
 
     /// Validates Array method callback arguments for fail-closed implementations.

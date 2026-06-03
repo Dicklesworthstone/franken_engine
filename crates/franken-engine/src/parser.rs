@@ -5793,8 +5793,63 @@ fn try_parse_postfix(
                     Some(Expression::StringLiteral(cooked))
                 })
                 .collect();
+            // `.raw` array (bd-vl55w): parse_template_literal keeps quasis raw
+            // (escapes included literally), so use them as-is for `.raw`.
+            let raw_strings: Vec<Option<Expression>> = quasis
+                .iter()
+                .map(|quasi| Some(Expression::StringLiteral(quasi.clone())))
+                .collect();
+            // ES2020 §12.2.9: the strings array carries a `.raw` sibling array
+            // (used by String.raw and `tag` functions reading `s.raw[i]`). An
+            // ArrayLiteral cannot carry an extra property, so wrap the cooked
+            // array in an immediately-applied arrow that sets `.raw` and returns
+            // it: `((__tt_strings) => { __tt_strings.raw = [<raw>]; return
+            // __tt_strings; })([<cooked>])`. `__tt_strings` is the cooked array
+            // passed by reference (a heap object), so the member assignment
+            // mutates the shared object — no closure-write-back concern (that bug
+            // is about reassigning OUTER let bindings, not mutating a param's
+            // object). CAVEAT: this allocates the strings object per evaluation;
+            // ES2020 §12.2.9 specifies per-call-site caching (same array identity
+            // across evaluations), which a parser desugar cannot provide — a
+            // memoized runtime template-strings intrinsic is the long-term fix
+            // (the cooked-only bd-1lrbw desugar already had this non-memoization).
+            let strings_param = "__tt_strings".to_string();
+            let raw_arrow = Expression::ArrowFunction {
+                params: vec![FunctionParam {
+                    pattern: BindingPattern::Identifier(strings_param.clone()),
+                    span: span.clone(),
+                }],
+                body: ArrowBody::Block(BlockStatement {
+                    body: vec![
+                        Statement::Expression(ExpressionStatement {
+                            expression: Expression::Assignment {
+                                operator: AssignmentOperator::Assign,
+                                left: Box::new(Expression::Member {
+                                    object: Box::new(Expression::Identifier(
+                                        strings_param.clone(),
+                                    )),
+                                    property: Box::new(Expression::Identifier("raw".to_string())),
+                                    computed: false,
+                                }),
+                                right: Box::new(Expression::ArrayLiteral(raw_strings)),
+                            },
+                            span: span.clone(),
+                        }),
+                        Statement::Return(ReturnStatement {
+                            argument: Some(Expression::Identifier(strings_param.clone())),
+                            span: span.clone(),
+                        }),
+                    ],
+                    span: span.clone(),
+                }),
+                is_async: false,
+            };
+            let strings_with_raw = Expression::Call {
+                callee: Box::new(raw_arrow),
+                arguments: vec![Expression::ArrayLiteral(cooked_strings)],
+            };
             let mut arguments = Vec::with_capacity(expressions.len() + 1);
-            arguments.push(Expression::ArrayLiteral(cooked_strings));
+            arguments.push(strings_with_raw);
             arguments.extend(expressions);
             return Some(Ok(Expression::Call {
                 callee: Box::new(callee),
@@ -14069,9 +14124,10 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 assert!(
                     matches!(callee.as_ref(), Expression::Identifier(name) if name == "render")
                 );
-                // tag(stringsArray, ...substitutions): ["hello ", ""], name
+                // tag(stringsObject, ...substitutions): arg0 is the
+                // `.raw`-attaching IIFE wrapping the cooked array; then `name`.
                 assert_eq!(arguments.len(), 2);
-                assert!(matches!(&arguments[0], Expression::ArrayLiteral(_)));
+                assert!(matches!(&arguments[0], Expression::Call { .. }));
                 assert!(matches!(&arguments[1], Expression::Identifier(n) if n == "name"));
             }
             other => panic!("expected tagged template call, got {other:?}"),
@@ -14084,9 +14140,9 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         match first_expr(&tree) {
             Expression::Call { callee, arguments } => {
                 assert!(matches!(callee.as_ref(), Expression::Member { .. }));
-                // tag(stringsArray): a single no-substitution cooked-strings array
+                // tag(stringsObject): the `.raw`-attaching IIFE, no substitutions
                 assert_eq!(arguments.len(), 1);
-                assert!(matches!(&arguments[0], Expression::ArrayLiteral(_)));
+                assert!(matches!(&arguments[0], Expression::Call { .. }));
             }
             other => panic!("expected tagged member template call, got {other:?}"),
         }

@@ -8439,7 +8439,25 @@ impl InterpreterCore {
                 }
                 Ir3Instruction::TypeOf { dst, src } => {
                     let val = self.read_reg(src)?;
-                    self.write_reg(dst, Value::str(val.typeof_name()))?;
+                    // A symbol value is represented as a heap object tagged
+                    // `__type:"symbol"` (builtin:Symbol); JS `typeof` of it must be
+                    // "symbol" (bd-bn1z7), which `val.typeof_name()` cannot determine
+                    // without heap access (it would report the generic "object").
+                    let name = match &val {
+                        Value::Object(id) => match self.heap.get(id.0 as usize) {
+                            Some(obj)
+                                if matches!(
+                                    obj.properties.get("__type"),
+                                    Some(Value::Str(t)) if t.as_ref() == "symbol"
+                                ) =>
+                            {
+                                "symbol"
+                            }
+                            _ => val.typeof_name(),
+                        },
+                        _ => val.typeof_name(),
+                    };
+                    self.write_reg(dst, Value::str(name))?;
                     self.propagate_unary_operation_label(src, dst)?;
                     self.ip += 1;
                 }

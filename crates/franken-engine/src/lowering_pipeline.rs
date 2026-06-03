@@ -8892,6 +8892,15 @@ fn global_function_call_capability(
         "parseFloat" => Some("builtin:parseFloat"),
         "isNaN" => Some("builtin:isNaN"),
         "isFinite" => Some("builtin:isFinite"),
+        // `Symbol([description])` — the bare `Symbol` global has no eval-scope
+        // binding, so route the call to the existing `builtin:Symbol` hostcall
+        // (which allocates a fresh, unique `__type:"symbol"` value; `typeof` of it
+        // already yields "symbol"). Member forms `Symbol.iterator`
+        // (`symbol_iterator_member`) and `Symbol.for` (a registry, bd-bn1z7
+        // follow-up) are handled elsewhere; this is the bare constructor call.
+        // Slot-0 description argument, no receiver — same convention as the other
+        // global function builtins above (bd-bn1z7).
+        "Symbol" => Some("builtin:Symbol"),
         _ => None,
     }
 }

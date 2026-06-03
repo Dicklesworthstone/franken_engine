@@ -683,6 +683,10 @@ pub enum BuiltinFunctionKind {
     /// value in place (negative indices count from the end), returns the array
     /// (bd-962ev.1).
     ArrayFill,
+    /// `Array.prototype.at` — receiver-aware: returns the element at `index`,
+    /// where a negative index counts from the end; out-of-range => `undefined`
+    /// (ES2022).
+    ArrayAt,
     /// `Array.prototype.join` — receiver-aware: concatenates elements with a
     /// separator (default `","`); `undefined`/`null` render as `""`
     /// (bd-962ev.1).
@@ -1076,6 +1080,15 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_at() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayAt,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn array_join() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayJoin,
@@ -1395,6 +1408,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayIncludes => "includes",
             BuiltinFunctionKind::ArrayReverse => "reverse",
             BuiltinFunctionKind::ArrayFill => "fill",
+            BuiltinFunctionKind::ArrayAt => "at",
             BuiltinFunctionKind::ArrayJoin => "join",
             BuiltinFunctionKind::ArrayForEach => "forEach",
             BuiltinFunctionKind::ArrayMap => "map",
@@ -5390,6 +5404,30 @@ impl InterpreterCore {
                     self.refresh_dense_length_cache(arr_id, len, was_dense);
                 }
                 Ok(Value::Object(arr_id))
+            }
+            BuiltinFunctionKind::ArrayAt => {
+                // ES2022 23.1.3.1: `at(index)` returns the element at `index`;
+                // a negative index counts from the end; out-of-range returns
+                // `undefined`. `index` is coerced to an integer (default 0).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.at".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)? as i64;
+                let raw = match self.builtin_arg(args, 0)? {
+                    Some(value) => Self::value_as_integer(&value),
+                    None => 0,
+                };
+                let idx = if raw < 0 { raw + len } else { raw };
+                if idx < 0 || idx >= len {
+                    return Ok(Value::Undefined);
+                }
+                Ok(self
+                    .array_index_value(arr_id, idx as usize)?
+                    .unwrap_or(Value::Undefined))
             }
             BuiltinFunctionKind::ArrayJoin => {
                 // ES2020 23.1.3.13(join): concatenate elements with `separator`
@@ -10846,6 +10884,7 @@ impl InterpreterCore {
             "includes" => Some(BuiltinFunction::array_includes()),
             "reverse" => Some(BuiltinFunction::array_reverse()),
             "fill" => Some(BuiltinFunction::array_fill()),
+            "at" => Some(BuiltinFunction::array_at()),
             "join" => Some(BuiltinFunction::array_join()),
             "forEach" => Some(BuiltinFunction::array_for_each()),
             "map" => Some(BuiltinFunction::array_map()),

@@ -40,14 +40,11 @@ fn generator_done_flag_before_exhaustion() {
     );
 }
 
-// The following cases exercise deeper generator-ENGINE bugs that are OUT OF
-// SCOPE for bd-v6cv1 (which fixed member-access reachability) and tracked under
-// bd-hoplz: (1) completion-via-return isn't detected so next() past the end
-// returns a raw value instead of {value:undefined, done:true}; (2) resuming
-// after a yield whose operand is a computed expression re-yields the first
-// value. Un-ignore when bd-hoplz lands.
+// bd-hoplz bug #1 (completion-via-return) — FIXED: `generator_next` now reads a
+// `generator_yielded` marker set by the `Yield` handler, so a `run_loop` exit
+// that was a function `Return` (not a yield) is wrapped as
+// `{value:<ret>, done:true}` and marks the generator Completed.
 #[test]
-#[ignore = "bd-hoplz: generator completion-via-return not detected (returns raw undefined)"]
 fn generator_done_after_exhaustion() {
     assert_eq!(
         eval("function* g(){ yield 1; } let it = g(); it.next(); it.next().done;"),
@@ -56,7 +53,6 @@ fn generator_done_after_exhaustion() {
 }
 
 #[test]
-#[ignore = "bd-hoplz: generator completion-via-return not detected"]
 fn generator_value_undefined_after_exhaustion() {
     assert_eq!(
         eval("function* g(){ yield 1; } let it = g(); it.next(); it.next().value;"),
@@ -64,8 +60,10 @@ fn generator_value_undefined_after_exhaustion() {
     );
 }
 
+// bd-hoplz bug #2 (yield-of-expression resume re-yields the first value) — still
+// OPEN; resuming after a COMPUTED yield operand re-runs the first yield.
 #[test]
-#[ignore = "bd-hoplz: yield-of-expression resume re-yields the first value"]
+#[ignore = "bd-hoplz bug #2: yield-of-expression resume re-yields the first value"]
 fn generator_yields_computed_values() {
     assert_eq!(
         eval("function* g(){ yield 1+1; yield 2*5; } let it = g(); it.next(); it.next().value;"),

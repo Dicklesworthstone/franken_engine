@@ -107,18 +107,18 @@ enabled = true
 [[relations]]
 id = "execution_gc_timing_independence"
 subsystem = "execution"
-description = "GC scheduling changes do not alter observable execution output."
+description = "DISABLED: historical toy gc_schedule relation; real-engine evaluation does not expose a configurable GC schedule yet (bd-x9t1n.5)."
 oracle = "canonical_output_equality"
 budget_pairs = 1000
-enabled = true
+enabled = false
 
 [[relations]]
 id = "execution_stack_depth_independence"
 subsystem = "execution"
-description = "Programs within both stack limits produce identical results."
+description = "DISABLED: historical toy stack_limit relation; real-engine evaluation does not expose a per-run stack-limit override yet (bd-x9t1n.5)."
 oracle = "canonical_output_equality"
 budget_pairs = 1000
-enabled = true
+enabled = false
 
 [[relations]]
 id = "execution_prototype_chain_equivalence"
@@ -131,7 +131,7 @@ enabled = true
 [[relations]]
 id = "execution_promise_resolution_order_stability"
 subsystem = "execution"
-description = "Promise resolution ordering remains stable across scheduling chunking."
+description = "DISABLED: historical toy promise_batch relation; real-engine evaluation does not expose promise batching or scheduler overrides yet (bd-x9t1n.5)."
 oracle = "side_effect_trace_equality"
 budget_pairs = 1000
-enabled = true
+enabled = false

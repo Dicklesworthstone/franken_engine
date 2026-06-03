@@ -77,4 +77,25 @@ mod tests {
         let right = RelationCatalog::load_default().expect("default catalog should load");
         assert_eq!(left.content_hash(), right.content_hash());
     }
+
+    #[test]
+    fn default_catalog_disables_unmapped_exec_options_relations() {
+        let catalog = RelationCatalog::load_default().expect("default catalog should load");
+
+        for relation_id in [
+            "execution_gc_timing_independence",
+            "execution_stack_depth_independence",
+            "execution_promise_resolution_order_stability",
+        ] {
+            let relation = catalog
+                .relations
+                .iter()
+                .find(|relation| relation.id == relation_id)
+                .unwrap_or_else(|| panic!("default catalog should include {relation_id}"));
+            assert!(
+                !relation.enabled,
+                "{relation_id} depends on toy-only ExecOptions and must stay disabled until bd-x9t1n.5 maps it to real engine configuration or retires it"
+            );
+        }
+    }
 }

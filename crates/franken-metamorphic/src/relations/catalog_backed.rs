@@ -87,6 +87,21 @@ impl CatalogBackedRelation {
         Ok(result)
     }
 
+    fn unsupported_real_engine_option_relation(relation_id: &str) -> Option<&'static str> {
+        match relation_id {
+            "execution_gc_timing_independence" => {
+                Some("real engine evaluation does not expose a configurable GC schedule")
+            }
+            "execution_stack_depth_independence" => {
+                Some("real engine evaluation does not expose a per-run stack-limit override")
+            }
+            "execution_promise_resolution_order_stability" => Some(
+                "real engine evaluation does not expose a promise batching or scheduler override",
+            ),
+            _ => None,
+        }
+    }
+
     fn parser_oracle(&self, pair: &GeneratedPair) -> Equivalence {
         // bd-x9t1n.2 / bd-q90jg: drive the REAL engine (CanonicalEs2020Parser +
         // HybridRouter), not the toy parser. Every Parser-subsystem relation is a
@@ -198,12 +213,20 @@ impl CatalogBackedRelation {
 
     fn execution_oracle(&self, pair: &GeneratedPair) -> Equivalence {
         match self.relation_id() {
-            "execution_evaluation_order_determinism"
-            | "execution_gc_timing_independence"
+            "execution_gc_timing_independence"
             | "execution_stack_depth_independence"
-            | "execution_prototype_chain_equivalence"
             | "execution_promise_resolution_order_stability" => {
-                // bd-x9t1n.4: execution relations must exercise the REAL engine,
+                let reason = Self::unsupported_real_engine_option_relation(self.relation_id())
+                    .expect("relation id matched unsupported option relation");
+                Equivalence::Diverged {
+                    detail: format!(
+                        "relation {} is disabled until its historical toy ExecOptions knob is mapped to real engine configuration or retired from the catalog: {reason} (bd-x9t1n.5)",
+                        self.relation_id()
+                    ),
+                }
+            }
+            "execution_evaluation_order_determinism" | "execution_prototype_chain_equivalence" => {
+                // bd-x9t1n.4/.5: execution relations must exercise the REAL engine,
                 // not the historical toy execute_program/eval_binary stack. The
                 // adapter runs CanonicalEs2020Parser -> real lowering ->
                 // HybridRouter::eval and returns normalized values. We require
@@ -211,11 +234,11 @@ impl CatalogBackedRelation {
                 // sides, and equal observable execution values for the generated
                 // value-preserving pair.
                 //
-                // Real-engine scheduling knobs for GC/stack/promise are not exposed
-                // yet; bd-x9t1n.5 tracks mapping or dropping those toy ExecOptions
-                // explicitly. This bead removes the false assurance from the oracle
-                // path by refusing to consult the toy executor for production
-                // verdicts.
+                // Relations whose historical meaning depended on toy ExecOptions
+                // (`gc_schedule`, `stack_limit`, `promise_batch`) fail closed above
+                // and are disabled in the default catalog until the real engine
+                // exposes matching configuration. Keeping them green here would
+                // recreate the bd-q90jg false-assurance class.
                 let adapter = EngineEvalAdapter::new();
                 let input =
                     match Self::real_execution_or_diverge(&adapter, &pair.input_source, "input") {
@@ -1420,13 +1443,12 @@ struct ExecutionResult {
     side_effect_trace: Vec<String>,
     /// Number of simulated GC collections performed during execution.
     ///
-    /// This is INTERNAL execution metadata, not observable program output: it is
-    /// `#[serde(skip)]` so it is excluded from [`ExecutionResult::observable_signature`]
-    /// (the value the metamorphic oracles compare). It exists so the
-    /// `execution_gc_timing_independence` relation is non-tautological — varying
-    /// `ExecOptions::gc_schedule` now drives a different `gc_events` count (the
-    /// knob is live), while the observable signature must stay invariant. See
-    /// [`execute_program`] for the observation-neutral GC simulation (bd-q90jg.1).
+    /// This is INTERNAL metadata for the historical toy executor only. It is
+    /// intentionally not a real-engine signal: `EngineEvalAdapter`/`HybridRouter`
+    /// do not expose a per-run GC schedule, so the production metamorphic catalog
+    /// disables `execution_gc_timing_independence` until that knob is mapped or the
+    /// relation is retired (bd-x9t1n.5). The toy executor remains only as a
+    /// reference model for legacy unit tests.
     #[serde(skip)]
     gc_events: u64,
 }
@@ -1464,21 +1486,10 @@ fn execute_program(program: &Program, options: ExecOptions) -> Result<ExecutionR
     let mut side_effect_trace = Vec::<String>::new();
     let mut return_value = Value::Int(0);
 
-    // Simulated garbage collector (bd-q90jg.1).
-    //
-    // Each executed statement "allocates" one scratch cell; the collector
-    // reclaims all live scratch cells every `gc_schedule` statements (and once
-    // more at program end if any remain). `gc_schedule == 0` disables GC.
-    //
-    // This is deliberately OBSERVATION-NEUTRAL: GC touches only `scratch_live`
-    // and the internal `gc_events` counter — never `env`, `side_effect_trace`,
-    // or `return_value`. That is the whole point of the
-    // `execution_gc_timing_independence` relation: changing the GC cadence must
-    // change internal collection activity (so `gc_schedule` is a live knob and
-    // the relation is NOT tautological — previously this was `let _ =
-    // options.gc_schedule;`, a no-op that made the relation always-Equivalent by
-    // construction) WITHOUT altering observable output. If a future change let
-    // GC perturb observable state, the relation would then diverge and catch it.
+    // Simulated garbage collector retained for the historical toy executor.
+    // Production execution oracles no longer consult this path; they route
+    // through `EngineEvalAdapter` and therefore cannot honestly claim that the
+    // toy `gc_schedule` knob maps to real engine behavior (bd-x9t1n.5).
     let mut scratch_live: u64 = 0;
     let mut gc_events: u64 = 0;
     let mut since_last_gc: u32 = 0;
@@ -1877,10 +1888,7 @@ mod tests {
     fn execution_oracle_equivalent_through_real_engine_bd_x9t1n_4() {
         let ids = [
             "execution_evaluation_order_determinism",
-            "execution_gc_timing_independence",
-            "execution_stack_depth_independence",
             "execution_prototype_chain_equivalence",
-            "execution_promise_resolution_order_stability",
         ];
         for id in ids {
             let rel = relation(
@@ -1977,14 +1985,18 @@ mod tests {
     }
 
     #[test]
-    fn execution_promise_relation_keeps_order_stable() {
+    fn execution_promise_relation_fails_closed_until_real_scheduler_mapping() {
         let relation = relation(
             "execution_promise_resolution_order_stability",
             Subsystem::Execution,
             OracleKind::SideEffectTraceEquality,
         );
         let pair = relation.generate_pair(0);
-        assert!(relation.oracle(&pair).is_equivalent());
+        let outcome = relation.oracle(&pair);
+        assert!(
+            matches!(&outcome, Equivalence::Diverged { detail } if detail.contains("bd-x9t1n.5")),
+            "promise scheduling relation must fail closed until mapped to real engine configuration: {outcome:?}"
+        );
     }
 
     #[test]
@@ -2008,17 +2020,19 @@ mod tests {
         assert_eq!(stable_hash("abc"), stable_hash("abc"));
     }
 
-    // ---- bd-q90jg.1: gc_schedule is a live, observation-neutral knob ----------
+    // ---- bd-q90jg.1 / bd-x9t1n.5: toy ExecOptions are not real-engine knobs ----
 
     /// A multi-statement program so the GC cadence has several statements to act
-    /// over (one scratch allocation per statement).
+    /// over (one scratch allocation per statement). This exercises only the
+    /// historical toy executor; the real execution oracle deliberately does not
+    /// use it for production verdicts.
     fn multi_statement_program() -> super::Program {
         parse_program("emit(1); emit(2); emit(3); emit(4); emit(5); return 6;")
             .expect("sample program should parse")
     }
 
     #[test]
-    fn gc_schedule_drives_internal_gc_events_but_not_observable_output() {
+    fn toy_gc_schedule_remains_live_but_not_catalog_evidence() {
         let program = multi_statement_program();
 
         let fast = execute_program(
@@ -2038,34 +2052,28 @@ mod tests {
         )
         .expect("slow gc run should execute");
 
-        // The knob is LIVE: a tighter cadence collects more often. This is what
-        // makes the relation non-tautological (was `let _ = options.gc_schedule`).
         assert!(
             fast.gc_events > slow.gc_events,
-            "gc_schedule=1 must collect more often than gc_schedule=17 \
-             (fast={}, slow={}) — otherwise the knob is dead",
+            "toy gc_schedule=1 must collect more often than toy gc_schedule=17 \
+             (fast={}, slow={})",
             fast.gc_events,
             slow.gc_events
         );
-
-        // ...yet GC is OBSERVATION-NEUTRAL: observable output is invariant under
-        // GC cadence. This is the property `execution_gc_timing_independence`
-        // asserts, and it now actually exercises real GC code.
         assert_eq!(
             fast.observable_signature(),
             slow.observable_signature(),
-            "GC cadence must not change observable output"
+            "toy GC cadence must not change observable output"
         );
     }
 
     #[test]
-    fn gc_disabled_performs_no_collections() {
+    fn toy_gc_disabled_performs_no_collections() {
         let program = multi_statement_program();
         let result = execute_program(&program, ExecOptions::default())
             .expect("default (gc_schedule=0) run should execute");
         assert_eq!(
             result.gc_events, 0,
-            "gc_schedule=0 disables GC, so no collections occur"
+            "toy gc_schedule=0 disables GC, so no collections occur"
         );
     }
 
@@ -2092,18 +2100,23 @@ mod tests {
     }
 
     #[test]
-    fn gc_timing_relation_holds_end_to_end() {
-        // Through the oracle: the execution_gc_timing_independence relation reports
-        // Equivalent for a real multi-statement program — and now does so by
-        // running genuine GC at two cadences, not by discarding the knob.
-        // The execution oracle dispatches on Subsystem::Execution + relation_id,
-        // not OracleKind; any execution OracleKind is fine here.
-        let relation = relation(
+    fn unmapped_exec_options_relations_fail_closed_if_invoked_directly() {
+        for relation_id in [
             "execution_gc_timing_independence",
-            Subsystem::Execution,
-            OracleKind::SideEffectTraceEquality,
-        );
-        let pair = relation.generate_pair(0);
-        assert!(relation.oracle(&pair).is_equivalent());
+            "execution_stack_depth_independence",
+            "execution_promise_resolution_order_stability",
+        ] {
+            let relation = relation(
+                relation_id,
+                Subsystem::Execution,
+                OracleKind::CanonicalOutputEquality,
+            );
+            let pair = relation.generate_pair(0);
+            let outcome = relation.oracle(&pair);
+            assert!(
+                matches!(&outcome, Equivalence::Diverged { detail } if detail.contains("bd-x9t1n.5")),
+                "{relation_id} must fail closed until its toy ExecOptions knob is mapped to real engine configuration: {outcome:?}"
+            );
+        }
     }
 }

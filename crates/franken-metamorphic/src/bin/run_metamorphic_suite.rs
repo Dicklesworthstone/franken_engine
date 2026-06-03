@@ -458,8 +458,8 @@ mod tests {
         let catalog = RelationCatalog::load_default().expect("catalog should load");
         let all_relations = build_enabled_relations(&catalog);
         let filters = vec![
-            "execution_gc_timing_independence".to_string(),
-            "execution_gc_timing_independence".to_string(),
+            "execution_evaluation_order_determinism".to_string(),
+            "execution_evaluation_order_determinism".to_string(),
             "parser_comment_invariance".to_string(),
         ];
 
@@ -472,7 +472,7 @@ mod tests {
         assert_eq!(
             selected_ids,
             vec![
-                "execution_gc_timing_independence",
+                "execution_evaluation_order_determinism",
                 "parser_comment_invariance"
             ]
         );

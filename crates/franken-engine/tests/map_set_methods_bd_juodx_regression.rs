@@ -30,13 +30,11 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-juodx: blocked on Map/Set member-access seam (baseline_interpreter.rs); un-ignore when landed"]
 fn map_set_then_get() {
     assert_eq!(eval_value("let m = new Map(); m.set('a', 1); m.get('a')"), "1");
 }
 
 #[test]
-#[ignore = "bd-juodx: blocked on Map/Set member-access seam; un-ignore when landed"]
 fn map_has_and_size() {
     assert_eq!(
         eval_value("let m = new Map(); m.set('a', 1); m.set('b', 2); m.has('a') ? m.size : -1"),
@@ -45,7 +43,6 @@ fn map_has_and_size() {
 }
 
 #[test]
-#[ignore = "bd-juodx: blocked on Map/Set member-access seam; un-ignore when landed"]
 fn set_add_dedups_and_has() {
     assert_eq!(
         eval_value("let s = new Set(); s.add(1); s.add(1); s.has(1) ? s.size : -1"),
@@ -54,7 +51,6 @@ fn set_add_dedups_and_has() {
 }
 
 #[test]
-#[ignore = "bd-juodx: blocked on Map/Set member-access seam; un-ignore when landed"]
 fn map_delete_removes_entry() {
     assert_eq!(
         eval_value("let m = new Map(); m.set('a', 1); m.delete('a'); m.has('a')"),

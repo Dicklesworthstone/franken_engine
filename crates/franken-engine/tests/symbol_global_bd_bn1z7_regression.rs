@@ -27,27 +27,25 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-bn1z7: blocked on Symbol builtin (interpreter + lowering); un-ignore when landed"]
 fn typeof_symbol_is_symbol() {
     assert_eq!(eval_value("typeof Symbol()"), "symbol");
 }
 
 #[test]
-#[ignore = "bd-bn1z7: blocked on Symbol builtin; un-ignore when landed"]
 fn symbols_are_unique() {
     // Two freshly-created symbols with the same description are NOT equal.
     assert_eq!(eval_value("Symbol('a') === Symbol('a')"), "false");
 }
 
 #[test]
-#[ignore = "bd-bn1z7: blocked on Symbol builtin; un-ignore when landed"]
+#[ignore = "bd-bn1z7: Symbol.for global registry not yet implemented (33839ef8 added Symbol()/typeof/uniqueness only); un-ignore when Symbol.for lands"]
 fn symbol_for_interns_in_global_registry() {
     // `Symbol.for(key)` returns the same symbol for the same key.
     assert_eq!(eval_value("Symbol.for('x') === Symbol.for('x')"), "true");
 }
 
 #[test]
-#[ignore = "bd-bn1z7: blocked on Symbol builtin; un-ignore when landed"]
+#[ignore = "bd-bn1z7: Symbol.for global registry not yet implemented (33839ef8 added Symbol()/typeof/uniqueness only); un-ignore when Symbol.for lands"]
 fn symbol_for_differs_from_plain_symbol() {
     // A registry symbol is distinct from an un-registered one of the same desc.
     assert_eq!(eval_value("Symbol.for('y') === Symbol('y')"), "false");

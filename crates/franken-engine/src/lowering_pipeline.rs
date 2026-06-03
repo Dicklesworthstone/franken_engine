@@ -41,8 +41,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::ast::{
     ArrowBody, AssignmentOperator, BinaryOperator, BindingPattern, ExportKind, Expression,
-    ImportClause, MethodKind, ParseGoal, SourceSpan, Statement, UnaryOperator,
-    VariableDeclarationKind,
+    ImportClause, MethodKind, ObjectPatternProperty, ParseGoal, SourceSpan, Statement,
+    UnaryOperator, VariableDeclarationKind,
 };
 use crate::effect_set::{EffectKind, EffectPolicy, EffectSet};
 use crate::flow_lattice::{
@@ -1392,6 +1392,15 @@ fn alloc_pattern_primary_binding(
     Ok(first_user_binding.unwrap_or(0))
 }
 
+fn object_pattern_static_key(prop: &ObjectPatternProperty, fallback_name: Option<&str>) -> String {
+    match &prop.key {
+        Expression::Identifier(name) => name.clone(),
+        Expression::StringLiteral(value) => value.clone(),
+        Expression::NumericLiteral(value) => value.to_string(),
+        _ => fallback_name.unwrap_or_default().to_string(),
+    }
+}
+
 /// Emit IR1 ops to destructure a value (already stored in `source_bid`) into
 /// the individual bindings declared by `pattern`. For object patterns this
 /// emits `LoadBinding(source) + GetProperty(key) + StoreBinding(target) + Pop`
@@ -1413,8 +1422,70 @@ fn lower_destructuring_to_ir1(
             // Simple binding — already handled by StoreBinding above.
         }
         BindingPattern::ObjectPattern(props) => {
+            let mut rest_excluded_keys: Vec<String> = Vec::new();
             for prop in props {
+                if let BindingPattern::Rest(inner) = &prop.value {
+                    let target_names = inner.binding_names();
+                    let target_name = match target_names.first() {
+                        Some(n) => *n,
+                        None => continue,
+                    };
+
+                    let rest_bid = if matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
+                        match binding_lookup.get(target_name) {
+                            Some(bid) => *bid,
+                            None => continue,
+                        }
+                    } else {
+                        alloc_internal_binding(
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            "destructure_rest",
+                        )?
+                    };
+
+                    ops.push(Ir1Op::NewObject { count: 0 });
+                    ops.push(Ir1Op::LoadBinding {
+                        binding_id: source_bid,
+                    });
+                    ops.push(Ir1Op::SpreadIntoObject);
+                    ops.push(Ir1Op::StoreBinding {
+                        binding_id: rest_bid,
+                    });
+                    ops.push(Ir1Op::Pop);
+
+                    for key in &rest_excluded_keys {
+                        ops.push(Ir1Op::LoadBinding {
+                            binding_id: rest_bid,
+                        });
+                        ops.push(Ir1Op::DeleteProperty {
+                            key: Ir1PropertyKey::Static(key.clone()),
+                        });
+                        ops.push(Ir1Op::Pop);
+                    }
+
+                    if !matches!(inner.as_ref(), BindingPattern::Identifier(_)) {
+                        lower_destructuring_to_ir1(
+                            inner,
+                            rest_bid,
+                            ops,
+                            bindings,
+                            binding_lookup,
+                            binding_index,
+                            scope_id,
+                            label_counter,
+                        )?;
+                    }
+
+                    continue;
+                }
+
                 let target_names = prop.value.binding_names();
+                let excluded_key = object_pattern_static_key(prop, target_names.first().copied());
+                rest_excluded_keys.push(excluded_key.clone());
+
                 let target_name = match target_names.first() {
                     Some(n) => *n,
                     None => continue,
@@ -1424,17 +1495,7 @@ fn lower_destructuring_to_ir1(
                     None => continue,
                 };
 
-                // Determine the property key string.
-                let key_str = if prop.shorthand {
-                    target_name.to_string()
-                } else {
-                    match &prop.key {
-                        Expression::Identifier(name) => name.clone(),
-                        Expression::StringLiteral(s) => s.clone(),
-                        Expression::NumericLiteral(n) => n.to_string(),
-                        _ => target_name.to_string(),
-                    }
-                };
+                let key_str = excluded_key;
 
                 // Load the source object, get the property, store to target binding.
                 ops.push(Ir1Op::LoadBinding {

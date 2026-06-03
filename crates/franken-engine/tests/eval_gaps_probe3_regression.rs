@@ -30,7 +30,6 @@ fn promise_all_is_function() {
 }
 
 #[test]
-#[ignore = "bd-7w22r: object destructuring rest unsupported; un-ignore when it lands"]
 fn object_rest_captures_remaining() {
     assert_eq!(
         eval_value("let {a, ...rest} = {a:1, b:2, c:3}; Object.keys(rest).length"),
@@ -39,9 +38,11 @@ fn object_rest_captures_remaining() {
 }
 
 #[test]
-#[ignore = "bd-7w22r: object destructuring rest unsupported; un-ignore when it lands"]
 fn object_rest_value() {
-    assert_eq!(eval_value("let {a, ...rest} = {a:1, b:2, c:3}; rest.b"), "2");
+    assert_eq!(
+        eval_value("let {a, ...rest} = {a:1, b:2, c:3}; rest.b"),
+        "2"
+    );
 }
 
 #[test]

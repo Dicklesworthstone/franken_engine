@@ -17322,6 +17322,24 @@ impl InterpreterCore {
                     self.proxy_aware_has_property(module, target, &key, 0)?,
                 ))
             }
+            "builtin:ReflectOwnKeys" => {
+                // Reflect.ownKeys(target) — returns an array of the target's own
+                // property keys (bd-v93ds). Mirrors Object.keys over the heap
+                // object's own-property map (the engine models keys as strings).
+                let target = self.read_object_argument(args, 0, "Reflect.ownKeys target object")?;
+                let keys: Vec<Value> = self
+                    .heap
+                    .get(target.0 as usize)
+                    .map(|obj| {
+                        obj.properties
+                            .keys()
+                            .map(|k| Value::str(k.as_str()))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let array_id = self.alloc_array_from_values(&keys)?;
+                Ok(Value::Object(array_id))
+            }
             "builtin:ReflectDeleteProperty" => {
                 let target =
                     self.read_object_argument(args, 0, "Reflect.deleteProperty target object")?;

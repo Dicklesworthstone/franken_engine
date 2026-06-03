@@ -10,6 +10,14 @@ The project ships a single `0.1.0` Cargo manifest across the workspace and has n
 
 ---
 
+## Post-Snapshot Update — Track H Exception Semantics (2026-06-03)
+
+- Promoted the README JavaScript surface coverage for `try` / `catch` / `finally` and `throw` / exception semantics to **Executed** after the Track H closure-capture work (`bd-cixqu.8.2`, `bd-cixqu.8.3`, `bd-cixqu.8.5`, `bd-cixqu.8.6`, `bd-cixqu.8.4`).
+- Recorded try/catch/finally as a resolved parser and lowering inventory site, retaining `FE-PARSER-GAP-TRY-CATCH-0001` only as historical fail-closed provenance.
+- Verified the exception semantics suite through `rch`: `cargo test -p frankenengine-engine --test exception_semantics_conformance` now covers 24 passing tests, including catch-binding closure capture and finally isolation.
+
+---
+
 ## Version Timeline
 
 `Kind` distinguishes a published release from a plain git tag.

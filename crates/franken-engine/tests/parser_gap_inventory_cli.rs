@@ -112,8 +112,8 @@ fn parser_gap_inventory_cli_help_exits_successfully() {
 }
 
 #[test]
-fn parser_gap_site_id_all_has_six_entries() {
-    assert_eq!(ParserGapSiteId::ALL.len(), 6);
+fn parser_gap_site_id_all_has_expected_entries() {
+    assert_eq!(ParserGapSiteId::ALL.len(), 7);
 }
 
 #[test]

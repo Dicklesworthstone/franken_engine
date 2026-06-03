@@ -71,16 +71,18 @@ pub enum ParserGapSiteId {
     TemplateLiteralRawPlaceholder,
     BinaryNonArithmeticAddPlaceholder,
     NonIdentifierAssignmentNopPlaceholder,
+    TryCatchFinallySemantics,
 }
 
 impl ParserGapSiteId {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::BinaryNonArithmeticAddPlaceholder,
         Self::ForInStatementPlaceholder,
         Self::ForOfStatementPlaceholder,
         Self::NewExpressionCallPlaceholder,
         Self::NonIdentifierAssignmentNopPlaceholder,
         Self::TemplateLiteralRawPlaceholder,
+        Self::TryCatchFinallySemantics,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -97,6 +99,7 @@ impl ParserGapSiteId {
             Self::NonIdentifierAssignmentNopPlaceholder => {
                 "lower_ir0_to_ir1.assignment_non_identifier_nop_placeholder"
             }
+            Self::TryCatchFinallySemantics => "lower_ir0_to_ir1.try_catch_finally_semantics",
         }
     }
 
@@ -108,6 +111,7 @@ impl ParserGapSiteId {
             Self::TemplateLiteralRawPlaceholder => "FE-PARSER-GAP-TEMPLATE-0001",
             Self::BinaryNonArithmeticAddPlaceholder => "FE-PARSER-GAP-BINARY-0001",
             Self::NonIdentifierAssignmentNopPlaceholder => "FE-PARSER-GAP-ASSIGN-0001",
+            Self::TryCatchFinallySemantics => "FE-PARSER-GAP-TRY-CATCH-0001",
         }
     }
 
@@ -118,7 +122,8 @@ impl ParserGapSiteId {
             | Self::ForOfStatementPlaceholder
             | Self::NewExpressionCallPlaceholder
             | Self::TemplateLiteralRawPlaceholder
-            | Self::NonIdentifierAssignmentNopPlaceholder => ParserGapStage::Ir0ToIr1,
+            | Self::NonIdentifierAssignmentNopPlaceholder
+            | Self::TryCatchFinallySemantics => ParserGapStage::Ir0ToIr1,
         }
     }
 
@@ -129,7 +134,8 @@ impl ParserGapSiteId {
             | Self::NewExpressionCallPlaceholder
             | Self::TemplateLiteralRawPlaceholder
             | Self::BinaryNonArithmeticAddPlaceholder
-            | Self::NonIdentifierAssignmentNopPlaceholder => ParserGapRemediationStatus::Resolved,
+            | Self::NonIdentifierAssignmentNopPlaceholder
+            | Self::TryCatchFinallySemantics => ParserGapRemediationStatus::Resolved,
         }
     }
 
@@ -145,6 +151,7 @@ impl ParserGapSiteId {
             Self::TemplateLiteralRawPlaceholder => "template_literal",
             Self::BinaryNonArithmeticAddPlaceholder => "binary_non_arithmetic_expression",
             Self::NonIdentifierAssignmentNopPlaceholder => "member_assignment_expression",
+            Self::TryCatchFinallySemantics => "try_catch_finally",
         }
     }
 
@@ -155,7 +162,8 @@ impl ParserGapSiteId {
             | Self::ForOfStatementPlaceholder
             | Self::NewExpressionCallPlaceholder
             | Self::TemplateLiteralRawPlaceholder
-            | Self::NonIdentifierAssignmentNopPlaceholder => "lower_ir0_to_ir1",
+            | Self::NonIdentifierAssignmentNopPlaceholder
+            | Self::TryCatchFinallySemantics => "lower_ir0_to_ir1",
         }
     }
 
@@ -167,6 +175,7 @@ impl ParserGapSiteId {
             Self::TemplateLiteralRawPlaceholder => "`hello ${name}`",
             Self::BinaryNonArithmeticAddPlaceholder => "a < b, a && b, a | b",
             Self::NonIdentifierAssignmentNopPlaceholder => "obj[prop] = value",
+            Self::TryCatchFinallySemantics => "try { ... } catch (e) { ... } finally { ... }",
         }
     }
 
@@ -189,6 +198,9 @@ impl ParserGapSiteId {
             }
             Self::NonIdentifierAssignmentNopPlaceholder => {
                 "historically lowered property and other non-identifier assignments to a Nop placeholder before member-target assignment was resolved to SetProperty"
+            }
+            Self::TryCatchFinallySemantics => {
+                "historically shipped try/catch/finally parsing before operator-facing coverage could mark catch/finally exception semantics fully executed"
             }
         }
     }
@@ -213,6 +225,9 @@ impl ParserGapSiteId {
             Self::NonIdentifierAssignmentNopPlaceholder => {
                 "resolved: FE-PARSER-GAP-ASSIGN-0001 is retained as the historical fail-closed contract reference, but shipped member-target assignment now lowers to SetProperty instead of emitting a Nop placeholder"
             }
+            Self::TryCatchFinallySemantics => {
+                "resolved: FE-PARSER-GAP-TRY-CATCH-0001 is retained as the historical fail-closed contract reference, but shipped try/catch/finally syntax now parses and routes to resolved lowering/runtime semantics"
+            }
         }
     }
 
@@ -236,6 +251,9 @@ impl ParserGapSiteId {
             Self::NonIdentifierAssignmentNopPlaceholder => {
                 "crates/franken-engine/src/lowering_pipeline.rs::lower_expression_to_ir1/Expression::Assignment"
             }
+            Self::TryCatchFinallySemantics => {
+                "crates/franken-engine/src/parser.rs::parse_try_catch_statement"
+            }
         }
     }
 
@@ -258,6 +276,9 @@ impl ParserGapSiteId {
             }
             Self::NonIdentifierAssignmentNopPlaceholder => {
                 "member-target assignment lowering is resolved; fail-closed parser-gap contract FE-PARSER-GAP-ASSIGN-0001 is retained only as historical provenance, not active shipped behavior"
+            }
+            Self::TryCatchFinallySemantics => {
+                "try/catch/finally semantics site is resolved; fail-closed parser-gap contract FE-PARSER-GAP-TRY-CATCH-0001 is retained only as historical provenance, not active shipped behavior"
             }
         }
     }
@@ -287,6 +308,10 @@ impl ParserGapSiteId {
             Self::NonIdentifierAssignmentNopPlaceholder => &[
                 "object mutation workloads that assign through member expressions",
                 "extension host compatibility probes that depend on property writes",
+            ],
+            Self::TryCatchFinallySemantics => &[
+                "exception-heavy JavaScript control flow that depends on catch/finally ordering",
+                "migration readiness probes that require thrown values to bind through catch handlers",
             ],
         }
     }
@@ -872,8 +897,8 @@ mod tests {
     }
 
     #[test]
-    fn parser_gap_site_id_all_has_six_variants() {
-        assert_eq!(ParserGapSiteId::ALL.len(), 6);
+    fn parser_gap_site_id_all_has_expected_variants() {
+        assert_eq!(ParserGapSiteId::ALL.len(), 7);
     }
 
     #[test]
@@ -886,7 +911,7 @@ mod tests {
             .iter()
             .filter(|site| site.stage() == ParserGapStage::Ir1ToIr3)
             .count();
-        assert_eq!(ir0_count, 5);
+        assert_eq!(ir0_count, ParserGapSiteId::ALL.len() - 1);
         assert_eq!(ir3_count, 1);
     }
 
@@ -1049,7 +1074,7 @@ mod tests {
             decision_id: "decision-test".to_string(),
             policy_id: PARSER_GAP_POLICY_ID.to_string(),
             inventory_hash: "abc123".to_string(),
-            site_count: 6,
+            site_count: ParserGapSiteId::ALL.len() as u64,
             fail_closed_site_count: 0,
             open_placeholder_site_count: 0,
             diagnostic_schema_version: UNSUPPORTED_SYNTAX_DIAGNOSTIC_SCHEMA_VERSION.to_string(),
@@ -1495,7 +1520,10 @@ mod tests {
 
         // Test with all sites as open placeholders
         let inventory_all = test_inventory_with_open_placeholders(&ParserGapSiteId::ALL);
-        assert_eq!(inventory_all.open_placeholder_site_count(), 6);
+        assert_eq!(
+            inventory_all.open_placeholder_site_count(),
+            ParserGapSiteId::ALL.len()
+        );
     }
 
     #[test]
@@ -1665,6 +1693,7 @@ mod tests {
                 "new_expression",
                 "binary_non_arithmetic_expression",
                 "member_assignment_expression",
+                "try_catch_finally",
             ];
             assert!(
                 valid_families.contains(&feature_family),
@@ -1688,7 +1717,7 @@ mod tests {
             serde_json::from_str(&json).expect("deserialize known-valid JSON");
 
         assert_eq!(deserialized.open_placeholder_site_count(), 2);
-        assert_eq!(deserialized.sites.len(), 6);
+        assert_eq!(deserialized.sites.len(), ParserGapSiteId::ALL.len());
 
         // Verify specific sites maintained their OpenPlaceholder status
         let open_sites: std::collections::BTreeSet<&str> = deserialized

@@ -79,16 +79,18 @@ pub enum LoweringGapSiteId {
     NewExpressionCallPlaceholder,
     NonIdentifierAssignmentNopPlaceholder,
     TemplateLiteralRawPlaceholder,
+    TryCatchFinallySemantics,
 }
 
 impl LoweringGapSiteId {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::BinaryNonArithmeticAddPlaceholder,
         Self::ForInStatementPlaceholder,
         Self::ForOfStatementPlaceholder,
         Self::NewExpressionCallPlaceholder,
         Self::NonIdentifierAssignmentNopPlaceholder,
         Self::TemplateLiteralRawPlaceholder,
+        Self::TryCatchFinallySemantics,
     ];
 
     pub const fn as_str(self) -> &'static str {
@@ -105,6 +107,7 @@ impl LoweringGapSiteId {
             Self::TemplateLiteralRawPlaceholder => {
                 "lower_ir0_to_ir1.template_literal_raw_placeholder"
             }
+            Self::TryCatchFinallySemantics => "lower_ir0_to_ir1.try_catch_finally_semantics",
         }
     }
 
@@ -116,6 +119,7 @@ impl LoweringGapSiteId {
             Self::NewExpressionCallPlaceholder => "FE-PARSER-GAP-NEW-0001",
             Self::NonIdentifierAssignmentNopPlaceholder => "FE-PARSER-GAP-ASSIGN-0001",
             Self::TemplateLiteralRawPlaceholder => "FE-PARSER-GAP-TEMPLATE-0001",
+            Self::TryCatchFinallySemantics => "FE-PARSER-GAP-TRY-CATCH-0001",
         }
     }
 
@@ -126,7 +130,8 @@ impl LoweringGapSiteId {
             | Self::ForOfStatementPlaceholder
             | Self::NewExpressionCallPlaceholder
             | Self::NonIdentifierAssignmentNopPlaceholder
-            | Self::TemplateLiteralRawPlaceholder => LoweringGapStage::Ir0ToIr1,
+            | Self::TemplateLiteralRawPlaceholder
+            | Self::TryCatchFinallySemantics => LoweringGapStage::Ir0ToIr1,
         }
     }
 
@@ -137,7 +142,8 @@ impl LoweringGapSiteId {
             | Self::ForInStatementPlaceholder
             | Self::ForOfStatementPlaceholder
             | Self::NewExpressionCallPlaceholder
-            | Self::TemplateLiteralRawPlaceholder => LoweringGapStatus::Resolved,
+            | Self::TemplateLiteralRawPlaceholder
+            | Self::TryCatchFinallySemantics => LoweringGapStatus::Resolved,
         }
     }
 
@@ -161,6 +167,7 @@ impl LoweringGapSiteId {
             Self::NewExpressionCallPlaceholder => "expression.new",
             Self::NonIdentifierAssignmentNopPlaceholder => "expression.assignment_member_target",
             Self::TemplateLiteralRawPlaceholder => "expression.template_literal",
+            Self::TryCatchFinallySemantics => "statement.try_catch_finally",
         }
     }
 
@@ -172,6 +179,7 @@ impl LoweringGapSiteId {
             Self::NewExpressionCallPlaceholder => "ir3.instruction.construct",
             Self::NonIdentifierAssignmentNopPlaceholder => "ir1.op.set_property",
             Self::TemplateLiteralRawPlaceholder => "ir3.instruction.template_literal",
+            Self::TryCatchFinallySemantics => "ir1.begin_try_enter_catch_enter_finally_end_finally",
         }
     }
 
@@ -194,6 +202,9 @@ impl LoweringGapSiteId {
             }
             Self::TemplateLiteralRawPlaceholder => {
                 "resolved: template literal lowers to TemplateLiteral IR3 instruction with type coercion"
+            }
+            Self::TryCatchFinallySemantics => {
+                "resolved: try/catch/finally lowers to BeginTry/EnterCatch/EnterFinally/EndFinally with isolated catch bindings and runtime unwinder semantics"
             }
         }
     }
@@ -218,6 +229,9 @@ impl LoweringGapSiteId {
             Self::TemplateLiteralRawPlaceholder => {
                 "resolved: template literals lower with interpolation-preserving type coercion semantics"
             }
+            Self::TryCatchFinallySemantics => {
+                "resolved: thrown values propagate through catch/finally and catch bindings remain scoped to their handlers"
+            }
         }
     }
 
@@ -240,6 +254,9 @@ impl LoweringGapSiteId {
             }
             Self::TemplateLiteralRawPlaceholder => {
                 "lower template quasis and expressions into concatenation/coercion-aware IR instead of raw-string fallback"
+            }
+            Self::TryCatchFinallySemantics => {
+                "resolved: Track H exception lowering emits real unwinder IR and is verified by exception_semantics_conformance"
             }
         }
     }
@@ -264,6 +281,9 @@ impl LoweringGapSiteId {
             Self::TemplateLiteralRawPlaceholder => {
                 "crates/franken-engine/src/lowering_pipeline.rs::lower_expression_to_ir1/Expression::TemplateLiteral"
             }
+            Self::TryCatchFinallySemantics => {
+                "crates/franken-engine/src/lowering_pipeline.rs::lower_statement_to_ir1_with_flow/Statement::TryCatch"
+            }
         }
     }
 
@@ -279,6 +299,9 @@ impl LoweringGapSiteId {
                 "lower_computed_member_assignment_uses_dynamic_key_without_nop"
             }
             Self::TemplateLiteralRawPlaceholder => "lower_template_literal_emits_template_op",
+            Self::TryCatchFinallySemantics => {
+                "conformance_source_catch_binding_inside_finally_must_not_escape_unwinder"
+            }
         }
     }
 }
@@ -928,8 +951,8 @@ mod tests {
     }
 
     #[test]
-    fn lowering_gap_site_id_all_has_six_variants() {
-        assert_eq!(LoweringGapSiteId::ALL.len(), 6);
+    fn lowering_gap_site_id_all_has_expected_variants() {
+        assert_eq!(LoweringGapSiteId::ALL.len(), 7);
     }
 
     #[test]
@@ -1024,11 +1047,11 @@ mod tests {
             decision_id: "decision-test".to_string(),
             policy_id: LOWERING_GAP_POLICY_ID.to_string(),
             inventory_hash: "abc123".to_string(),
-            site_count: 6,
+            site_count: LoweringGapSiteId::ALL.len() as u64,
             fail_closed_site_count: 0,
             open_placeholder_site_count: 0,
-            parser_ready_site_count: 6,
-            execution_ready_site_count: 6,
+            parser_ready_site_count: LoweringGapSiteId::ALL.len() as u64,
+            execution_ready_site_count: LoweringGapSiteId::ALL.len() as u64,
             artifact_paths: LoweringGapInventoryArtifactPaths {
                 lowering_gap_inventory: "inventory.json".to_string(),
                 trace_ids: "trace_ids.json".to_string(),
@@ -1832,13 +1855,13 @@ mod tests {
     }
 
     #[test]
-    fn ir0_to_ir1_sites_are_exactly_five() {
+    fn ir0_to_ir1_sites_include_all_but_binary_placeholder() {
         let ir0_sites: Vec<LoweringGapSiteId> = LoweringGapSiteId::ALL
             .iter()
             .copied()
             .filter(|s| s.stage() == LoweringGapStage::Ir0ToIr1)
             .collect();
-        assert_eq!(ir0_sites.len(), 5);
+        assert_eq!(ir0_sites.len(), LoweringGapSiteId::ALL.len() - 1);
     }
 
     #[test]
@@ -1935,11 +1958,11 @@ mod tests {
             .detail
             .as_ref()
             .expect("operation should succeed for valid inputs");
-        assert!(detail.contains("6 sites recorded"));
+        assert!(detail.contains(&format!("{} sites recorded", LoweringGapSiteId::ALL.len())));
         assert!(detail.contains("0 fail-closed"));
         assert!(detail.contains("0 open placeholders"));
-        assert!(detail.contains("6 parser-ready"));
-        assert!(detail.contains("6 execution-ready"));
+        assert!(detail.contains(&format!("{} parser-ready", LoweringGapSiteId::ALL.len())));
+        assert!(detail.contains(&format!("{} execution-ready", LoweringGapSiteId::ALL.len())));
     }
 
     #[test]

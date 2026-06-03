@@ -33,9 +33,9 @@ fn unique_temp_dir(label: &str) -> PathBuf {
 // --- Inventory construction tests ---
 
 #[test]
-fn inventory_has_all_six_sites() {
+fn inventory_has_all_expected_sites() {
     let inventory = lowering_gap_inventory();
-    assert_eq!(inventory.sites.len(), 6);
+    assert_eq!(inventory.sites.len(), LoweringGapSiteId::ALL.len());
 }
 
 #[test]
@@ -97,13 +97,19 @@ fn zero_open_placeholder_sites() {
 #[test]
 fn all_sites_are_parser_ready() {
     let inventory = lowering_gap_inventory();
-    assert_eq!(inventory.parser_ready_site_count(), 6);
+    assert_eq!(
+        inventory.parser_ready_site_count(),
+        LoweringGapSiteId::ALL.len()
+    );
 }
 
 #[test]
 fn all_sites_are_execution_ready() {
     let inventory = lowering_gap_inventory();
-    assert_eq!(inventory.execution_ready_site_count(), 6);
+    assert_eq!(
+        inventory.execution_ready_site_count(),
+        LoweringGapSiteId::ALL.len()
+    );
 }
 
 #[test]
@@ -154,6 +160,14 @@ fn assignment_nop_is_resolved() {
     );
 }
 
+#[test]
+fn try_catch_finally_is_resolved() {
+    assert_eq!(
+        LoweringGapSiteId::TryCatchFinallySemantics.status(),
+        LoweringGapStatus::Resolved
+    );
+}
+
 // --- Stage classification tests ---
 
 #[test]
@@ -172,6 +186,7 @@ fn all_other_sites_are_ir0_to_ir1_stage() {
         LoweringGapSiteId::NewExpressionCallPlaceholder,
         LoweringGapSiteId::NonIdentifierAssignmentNopPlaceholder,
         LoweringGapSiteId::TemplateLiteralRawPlaceholder,
+        LoweringGapSiteId::TryCatchFinallySemantics,
     ];
     for site in ir0_sites {
         assert_eq!(
@@ -330,7 +345,7 @@ fn bundle_inventory_is_valid_json() {
     let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let bytes = fs::read(&artifacts.inventory_path).expect("read");
     let inventory: LoweringGapInventory = serde_json::from_slice(&bytes).expect("parse json");
-    assert_eq!(inventory.sites.len(), 6);
+    assert_eq!(inventory.sites.len(), LoweringGapSiteId::ALL.len());
 }
 
 #[test]
@@ -341,11 +356,17 @@ fn bundle_manifest_has_correct_counts() {
     let bytes = fs::read(&artifacts.run_manifest_path).expect("read");
     let manifest: LoweringGapInventoryRunManifest =
         serde_json::from_slice(&bytes).expect("parse json");
-    assert_eq!(manifest.site_count, 6);
+    assert_eq!(manifest.site_count, LoweringGapSiteId::ALL.len() as u64);
     assert_eq!(manifest.fail_closed_site_count, 0);
     assert_eq!(manifest.open_placeholder_site_count, 0);
-    assert_eq!(manifest.parser_ready_site_count, 6);
-    assert_eq!(manifest.execution_ready_site_count, 6);
+    assert_eq!(
+        manifest.parser_ready_site_count,
+        LoweringGapSiteId::ALL.len() as u64
+    );
+    assert_eq!(
+        manifest.execution_ready_site_count,
+        LoweringGapSiteId::ALL.len() as u64
+    );
     assert_eq!(manifest.artifact_paths.trace_ids, "trace_ids.json");
     assert_eq!(manifest.artifact_paths.step_logs, "step_logs");
     assert_eq!(
@@ -360,8 +381,8 @@ fn bundle_events_has_correct_line_count() {
     let commands = vec!["run".to_string()];
     let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
     let events = fs::read_to_string(&artifacts.events_path).expect("read");
-    // 1 started + 6 gap_site_recorded + 12 consumer_truth_recorded + 1 completed = 20
-    assert_eq!(events.lines().count(), 20);
+    // 1 started + N gap_site_recorded + (N * 2) consumer_truth_recorded + 1 completed.
+    assert_eq!(events.lines().count(), LoweringGapSiteId::ALL.len() * 3 + 2);
 }
 
 #[test]
@@ -390,9 +411,9 @@ fn bundle_writes_truth_consumer_parity_report() {
     let report: LoweringGapTruthConsumerParityReport =
         serde_json::from_slice(&bytes).expect("parse parity report");
     assert!(report.all_consumers_agree);
-    assert_eq!(report.site_count, 6);
+    assert_eq!(report.site_count, LoweringGapSiteId::ALL.len() as u64);
     assert_eq!(report.consumer_count, 2);
-    assert_eq!(report.records.len(), 12);
+    assert_eq!(report.records.len(), LoweringGapSiteId::ALL.len() * 2);
     for record in report.records {
         assert_eq!(record.status, LoweringGapStatus::Resolved);
         assert!(record.parser_ready_syntax);
@@ -476,7 +497,7 @@ fn bundle_site_count_matches_inventory() {
     let out_dir = unique_temp_dir("bundle-site-count");
     let commands = vec!["count".to_string()];
     let artifacts = write_lowering_gap_inventory_bundle(&out_dir, &commands).expect("write bundle");
-    assert_eq!(artifacts.site_count, 6);
+    assert_eq!(artifacts.site_count, LoweringGapSiteId::ALL.len());
 }
 
 // --- Error display tests ---

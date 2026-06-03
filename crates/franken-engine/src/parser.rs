@@ -4087,6 +4087,27 @@ fn parse_expression(
         return result;
     }
 
+    // `yield` / `await` bind looser than every binary operator: their operand is
+    // a full AssignmentExpression, so `yield 1 + 1` is `yield (1 + 1)`, never
+    // `(yield 1) + 1`. Handle them before binary scanning, which would otherwise
+    // split `yield 1+1` at the `+` and leave the generator yielding the first
+    // operand (bd-hoplz bug #2). The prefix tests mirror the yield/await arms in
+    // `parse_primary_expression`, which performs the actual parse.
+    let yields_assignment_expr = expression.strip_prefix("yield").is_some_and(|rest| {
+        rest.is_empty()
+            || rest.starts_with(' ')
+            || rest.starts_with('*')
+            || rest.starts_with(';')
+            || rest.starts_with(')')
+            || rest.starts_with('}')
+    });
+    let awaits_unary_expr = expression
+        .strip_prefix("await")
+        .is_some_and(|rest| rest.starts_with(' ') || rest.starts_with('('));
+    if yields_assignment_expr || awaits_unary_expr {
+        return parse_primary_expression(expression, span, context, recursion_depth);
+    }
+
     // Try binary expression with precedence scanning.
     if let Some(result) = try_parse_binary(expression, span, context, recursion_depth) {
         return result;

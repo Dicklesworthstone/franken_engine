@@ -2438,16 +2438,19 @@ fn lower_statement_to_ir1_with_flow(
                     });
                 }
                 if let Some(handler) = &tc.handler {
+                    let catch_binding_restore = handler
+                        .parameter
+                        .as_ref()
+                        .map(|param| (param.clone(), binding_lookup.get(param.as_str()).copied()));
                     if let Some(param) = &handler.parameter {
-                        let bid = alloc_binding(
+                        let bid = alloc_shadow_binding(
                             bindings,
                             binding_lookup,
                             binding_index,
                             scope_id,
                             param,
                             BindingKind::Let,
-                        )
-                        .map_err(LoweringPipelineError::SemanticViolation)?;
+                        );
                         ops.push(Ir1Op::StoreBinding { binding_id: bid });
                         ops.push(Ir1Op::Pop);
                     } else {
@@ -2467,6 +2470,13 @@ fn lower_statement_to_ir1_with_flow(
                             inner_control_flow,
                             label_ctx,
                         )?;
+                    }
+                    if let Some((param, previous)) = catch_binding_restore {
+                        if let Some(previous) = previous {
+                            binding_lookup.insert(param, previous);
+                        } else {
+                            binding_lookup.remove(param.as_str());
+                        }
                     }
                 }
                 if catch_requires_finally_guard {
@@ -2788,6 +2798,12 @@ fn lower_statement_to_ir1_with_flow(
                 });
                 body_ops.push(Ir1Op::Return);
             }
+            rewrite_unresolved_function_body_loads(
+                &mut body_ops,
+                &body_lookup,
+                &pre_lower_names,
+                binding_lookup,
+            );
 
             // Identify free variables: bindings created as forward
             // references that exist in the OUTER scope's lookup. Capture the
@@ -6222,6 +6238,26 @@ fn alloc_binding(
     Ok(binding_id)
 }
 
+fn alloc_shadow_binding(
+    bindings: &mut Vec<ResolvedBinding>,
+    binding_lookup: &mut BTreeMap<String, BindingId>,
+    binding_index: &mut BindingId,
+    scope: ScopeId,
+    name: &str,
+    kind: BindingKind,
+) -> BindingId {
+    let binding_id = *binding_index;
+    *binding_index = binding_index.saturating_add(1);
+    bindings.push(ResolvedBinding {
+        name: name.to_string(),
+        binding_id,
+        scope,
+        kind,
+    });
+    binding_lookup.insert(name.to_string(), binding_id);
+    binding_id
+}
+
 /// Identify a function body's free variables (names referenced in the body that
 /// resolve to an enclosing-scope binding) together with their EXACT body
 /// binding-ids. Names and ids are produced from the same `body_lookup`
@@ -6243,6 +6279,69 @@ fn collect_free_vars(
         }
     }
     (names, ids)
+}
+
+fn emit_reference_error_throw(ops: &mut Vec<Ir1Op>, name: &str) {
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::String(format!("{name} is not defined")),
+    });
+    ops.push(Ir1Op::HostCall {
+        capability: "builtin:ReferenceError".to_string(),
+        arg_count: 1,
+    });
+    ops.push(Ir1Op::Throw);
+    ops.push(Ir1Op::LoadLiteral {
+        value: Ir1Literal::Undefined,
+    });
+}
+
+fn rewrite_unresolved_function_body_loads(
+    body_ops: &mut Vec<Ir1Op>,
+    body_lookup: &BTreeMap<String, BindingId>,
+    pre_lower_names: &BTreeSet<String>,
+    outer_lookup: &BTreeMap<String, BindingId>,
+) {
+    let mut locally_defined_ids = BTreeSet::new();
+    for op in body_ops.iter() {
+        match op {
+            Ir1Op::StoreBinding { binding_id } | Ir1Op::DeclareFunction { binding_id, .. } => {
+                locally_defined_ids.insert(*binding_id);
+            }
+            _ => {}
+        }
+    }
+
+    let unresolved_by_id: BTreeMap<BindingId, String> = body_lookup
+        .iter()
+        .filter(|(name, binding_id)| {
+            !pre_lower_names.contains(name.as_str())
+                && !outer_lookup.contains_key(name.as_str())
+                && !locally_defined_ids.contains(binding_id)
+        })
+        .map(|(name, binding_id)| (*binding_id, name.clone()))
+        .collect();
+
+    if unresolved_by_id.is_empty() {
+        return;
+    }
+
+    let mut rewritten = Vec::with_capacity(body_ops.len());
+    for index in 0..body_ops.len() {
+        if let Ir1Op::LoadBinding { binding_id } = &body_ops[index]
+            && let Some(name) = unresolved_by_id.get(binding_id)
+            && !matches!(
+                body_ops.get(index.saturating_add(1)),
+                Some(Ir1Op::UnaryOp {
+                    operator: UnaryOperator::Typeof
+                })
+            )
+        {
+            emit_reference_error_throw(&mut rewritten, name);
+            continue;
+        }
+        rewritten.push(body_ops[index].clone());
+    }
+    *body_ops = rewritten;
 }
 
 fn alloc_internal_binding(
@@ -8494,6 +8593,12 @@ fn lower_expression_to_ir1(
                 }
                 body_ops.push(Ir1Op::Return);
             }
+            rewrite_unresolved_function_body_loads(
+                &mut body_ops,
+                &body_lookup,
+                &pre_lower_names,
+                binding_lookup,
+            );
             let (arrow_free_vars, arrow_free_var_ids) =
                 collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
             ops.push(Ir1Op::CreateFunction {
@@ -8587,6 +8692,12 @@ fn lower_expression_to_ir1(
                 });
                 body_ops.push(Ir1Op::Return);
             }
+            rewrite_unresolved_function_body_loads(
+                &mut body_ops,
+                &body_lookup,
+                &pre_lower_names,
+                binding_lookup,
+            );
             let (fn_free_vars, fn_free_var_ids) =
                 collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
             ops.push(Ir1Op::CreateFunction {

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::engine_adapter::{EngineEvalAdapter, ParseOutcome};
+use crate::engine_adapter::{EngineEval, EngineEvalAdapter, ParseOutcome};
 use crate::relation::{
     ChoiceStream, Equivalence, GeneratedCase, GeneratedPair, GenerationChoice, MetamorphicRelation,
     PropertyContract, RelationSpec, default_generator_id,
@@ -29,6 +29,7 @@ impl CatalogBackedRelation {
         self.spec.id.as_str()
     }
 
+    #[allow(dead_code)]
     fn parse_or_diverge(source: &str, side: &str) -> Result<Program, Equivalence> {
         parse_program(source).map_err(|error| Equivalence::Diverged {
             detail: format!("{side} parse failure: {error}"),
@@ -44,6 +45,7 @@ impl CatalogBackedRelation {
         })
     }
 
+    #[allow(dead_code)]
     fn execution_or_diverge(
         source: &str,
         side: &str,
@@ -53,6 +55,36 @@ impl CatalogBackedRelation {
         execute_program(&program, options).map_err(|error| Equivalence::Diverged {
             detail: format!("{side} execution failure: {error}"),
         })
+    }
+
+    fn real_execution_or_diverge(
+        adapter: &EngineEvalAdapter,
+        source: &str,
+        side: &str,
+    ) -> Result<EngineEval, Equivalence> {
+        let result = adapter.evaluate(source);
+        if result.parse_outcome == ParseOutcome::Rejected {
+            return Err(Equivalence::Diverged {
+                detail: format!(
+                    "{side} real-engine parse rejected execution relation source; corpus must be engine-valid (bd-x9t1n.7)"
+                ),
+            });
+        }
+        if result.ir_digest.is_none() {
+            return Err(Equivalence::Diverged {
+                detail: format!(
+                    "{side} real lowering pipeline failed for execution relation source"
+                ),
+            });
+        }
+        if result.exec_value.is_none() {
+            return Err(Equivalence::Diverged {
+                detail: format!(
+                    "{side} real HybridRouter::eval failed for execution relation source"
+                ),
+            });
+        }
+        Ok(result)
     }
 
     fn parser_oracle(&self, pair: &GeneratedPair) -> Equivalence {
@@ -166,171 +198,68 @@ impl CatalogBackedRelation {
 
     fn execution_oracle(&self, pair: &GeneratedPair) -> Equivalence {
         match self.relation_id() {
-            "execution_evaluation_order_determinism" => {
-                let first = match Self::execution_or_diverge(
-                    &pair.input_source,
-                    "input",
-                    ExecOptions::default(),
-                ) {
-                    Ok(result) => result,
-                    Err(error) => return error,
-                };
-                let second = match Self::execution_or_diverge(
+            "execution_evaluation_order_determinism"
+            | "execution_gc_timing_independence"
+            | "execution_stack_depth_independence"
+            | "execution_prototype_chain_equivalence"
+            | "execution_promise_resolution_order_stability" => {
+                // bd-x9t1n.4: execution relations must exercise the REAL engine,
+                // not the historical toy execute_program/eval_binary stack. The
+                // adapter runs CanonicalEs2020Parser -> real lowering ->
+                // HybridRouter::eval and returns normalized values. We require
+                // input replay determinism, real parse/lower/exec success on both
+                // sides, and equal observable execution values for the generated
+                // value-preserving pair.
+                //
+                // Real-engine scheduling knobs for GC/stack/promise are not exposed
+                // yet; bd-x9t1n.5 tracks mapping or dropping those toy ExecOptions
+                // explicitly. This bead removes the false assurance from the oracle
+                // path by refusing to consult the toy executor for production
+                // verdicts.
+                let adapter = EngineEvalAdapter::new();
+                let input =
+                    match Self::real_execution_or_diverge(&adapter, &pair.input_source, "input") {
+                        Ok(result) => result,
+                        Err(error) => return error,
+                    };
+                let replay = match Self::real_execution_or_diverge(
+                    &adapter,
                     &pair.input_source,
                     "input_replay",
-                    ExecOptions::default(),
                 ) {
                     Ok(result) => result,
                     Err(error) => return error,
                 };
-                let variant = match Self::execution_or_diverge(
+                let variant = match Self::real_execution_or_diverge(
+                    &adapter,
                     &pair.variant_source,
                     "variant",
-                    ExecOptions::default(),
                 ) {
                     Ok(result) => result,
                     Err(error) => return error,
                 };
 
-                if first == second && first == variant {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
+                if input != replay {
+                    return Equivalence::Diverged {
                         detail: format!(
-                            "evaluation order instability: first={:?} second={:?} variant={:?}",
-                            first.side_effect_trace,
-                            second.side_effect_trace,
-                            variant.side_effect_trace
+                            "real-engine execution replay is nondeterministic ({}): first={:?} replay={:?}",
+                            self.relation_id(),
+                            input,
+                            replay,
                         ),
-                    }
+                    };
                 }
-            }
-            "execution_gc_timing_independence" => {
-                let fast = ExecOptions {
-                    gc_schedule: 1,
-                    ..ExecOptions::default()
-                };
-                let slow = ExecOptions {
-                    gc_schedule: 17,
-                    ..ExecOptions::default()
-                };
-
-                let left = match Self::execution_or_diverge(&pair.input_source, "input", fast) {
-                    Ok(result) => result,
-                    Err(error) => return error,
-                };
-                let right = match Self::execution_or_diverge(&pair.input_source, "input_gc", slow) {
-                    Ok(result) => result,
-                    Err(error) => return error,
-                };
-
-                if left.observable_signature() == right.observable_signature() {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
+                if input.exec_value != variant.exec_value {
+                    return Equivalence::Diverged {
                         detail: format!(
-                            "gc timing affected observable output: left={} right={}",
-                            left.observable_signature(),
-                            right.observable_signature()
+                            "real-engine execution value differs under relation ({}): input={:?} variant={:?}",
+                            self.relation_id(),
+                            input.exec_value,
+                            variant.exec_value,
                         ),
-                    }
+                    };
                 }
-            }
-            "execution_stack_depth_independence" => {
-                let shallow = ExecOptions {
-                    stack_limit: 100,
-                    ..ExecOptions::default()
-                };
-                let deep = ExecOptions {
-                    stack_limit: 10_000,
-                    ..ExecOptions::default()
-                };
-
-                let left = match Self::execution_or_diverge(&pair.input_source, "input", shallow) {
-                    Ok(result) => result,
-                    Err(error) => return error,
-                };
-                let right = match Self::execution_or_diverge(&pair.input_source, "input_deep", deep)
-                {
-                    Ok(result) => result,
-                    Err(error) => return error,
-                };
-
-                if left.observable_signature() == right.observable_signature() {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
-                        detail: format!(
-                            "stack depth changed observable output: left={} right={}",
-                            left.observable_signature(),
-                            right.observable_signature()
-                        ),
-                    }
-                }
-            }
-            "execution_prototype_chain_equivalence" => {
-                let left = match Self::execution_or_diverge(
-                    &pair.input_source,
-                    "input",
-                    ExecOptions::default(),
-                ) {
-                    Ok(result) => result,
-                    Err(error) => return error,
-                };
-                let right = match Self::execution_or_diverge(
-                    &pair.variant_source,
-                    "variant",
-                    ExecOptions::default(),
-                ) {
-                    Ok(result) => result,
-                    Err(error) => return error,
-                };
-
-                if left.observable_signature() == right.observable_signature() {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
-                        detail: format!(
-                            "prototype resolution diverged: left={} right={}",
-                            left.observable_signature(),
-                            right.observable_signature()
-                        ),
-                    }
-                }
-            }
-            "execution_promise_resolution_order_stability" => {
-                let single = ExecOptions {
-                    promise_batch: 1,
-                    ..ExecOptions::default()
-                };
-                let batched = ExecOptions {
-                    promise_batch: 3,
-                    ..ExecOptions::default()
-                };
-
-                let left = match Self::execution_or_diverge(&pair.input_source, "input", single) {
-                    Ok(result) => result,
-                    Err(error) => return error,
-                };
-                let right = match Self::execution_or_diverge(
-                    &pair.input_source,
-                    "input_batched",
-                    batched,
-                ) {
-                    Ok(result) => result,
-                    Err(error) => return error,
-                };
-
-                if left.observable_signature() == right.observable_signature() {
-                    Equivalence::Equivalent
-                } else {
-                    Equivalence::Diverged {
-                        detail: format!(
-                            "promise resolution order changed: left={:?} right={:?}",
-                            left.side_effect_trace, right.side_effect_trace
-                        ),
-                    }
-                }
+                Equivalence::Equivalent
             }
             other => Equivalence::Diverged {
                 detail: format!("unknown execution relation id: {other}"),
@@ -543,9 +472,7 @@ fn generate_pair_for_relation(
                 // top-level return); the relation's verdict is unchanged because
                 // both sides still compute the same value through the same bindings,
                 // ending with an expression statement.
-                input_source: format!(
-                    "let {name} = 2 + 3; let {second} = {name} * 2; {second};"
-                ),
+                input_source: format!("let {name} = 2 + 3; let {second} = {name} * 2; {second};"),
                 variant_source: format!(
                     "let {name} = 2 + 3;\nlet {second} = ({name}) * 2;\n{second};"
                 ),
@@ -576,20 +503,23 @@ fn generate_pair_for_relation(
             })
         }
         "execution_evaluation_order_determinism" => Some(GeneratedPair {
-            // Engine-valid ES2020 (bd-x9t1n.7): ordered `let` evaluations ending in an
-            // expression statement (no toy `emit(...)`, which top-level would be a real
-            // runtime ReferenceError, and no top-level `return`). Both sides are
-            // identical, so the evaluation order is trivially stable/equivalent. Parses
-            // and executes in BOTH the toy parser and the real engine.
+            // Engine-valid ES2020 (bd-x9t1n.7/.4): ordered independent `let`
+            // evaluations ending in an expression statement (no toy `emit(...)`,
+            // which top-level would be a real runtime ReferenceError, and no
+            // top-level `return`). The variant swaps independent declaration order
+            // but preserves the computed value, so the real-engine oracle compares a
+            // non-identical pair rather than a same-source replay.
             input_source: "let first = 1; let second = 2; first + second;".to_string(),
-            variant_source: "let first = 1; let second = 2; first + second;".to_string(),
+            variant_source: "let second = 2; let first = 1; first + second;".to_string(),
         }),
         "execution_gc_timing_independence" => {
             let base =
                 generate_arithmetic_program(machine, "execution_gc_timing_independence.base")?;
+            let variant =
+                inject_whitespace(&base, machine, "execution_gc_timing_independence.variant")?;
             Some(GeneratedPair {
                 input_source: base.clone(),
-                variant_source: base,
+                variant_source: variant,
             })
         }
         "execution_stack_depth_independence" => {
@@ -627,10 +557,10 @@ fn generate_pair_for_relation(
             // Engine-valid ES2020 (bd-x9t1n.7): the toy `promise(...)` had no JS
             // grammar (and the toy parser has no array/member support), so model the
             // ordered resolution as a fixed arithmetic sum ending in an expression
-            // statement, not a top-level `return`. Both sides are identical, so the
-            // order is stable. Parses + executes in toy AND real engine.
+            // statement, not a top-level `return`. The variant changes grouping but
+            // preserves value, so the real-engine oracle sees a non-identical pair.
             input_source: "let order = 1 + 2 + 3 + 4; order;".to_string(),
-            variant_source: "let order = 1 + 2 + 3 + 4; order;".to_string(),
+            variant_source: "let order = (1 + 2) + (3 + 4); order;".to_string(),
         }),
         // Default fallback: engine-valid ES2020 (bd-x9t1n.8) — a bare expression
         // statement rather than a top-level `return` (rejected by the real engine).
@@ -1936,6 +1866,78 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// bd-x9t1n.4: execution relations must now route through the REAL engine
+    /// (EngineEvalAdapter -> HybridRouter::eval), not the historical toy
+    /// execute_program/eval_binary stack. Every generated execution relation pair is
+    /// intended to preserve the final value, so any Diverged verdict here is either
+    /// a generator regression or a real engine parse/lower/exec defect.
+    #[test]
+    fn execution_oracle_equivalent_through_real_engine_bd_x9t1n_4() {
+        let ids = [
+            "execution_evaluation_order_determinism",
+            "execution_gc_timing_independence",
+            "execution_stack_depth_independence",
+            "execution_prototype_chain_equivalence",
+            "execution_promise_resolution_order_stability",
+        ];
+        for id in ids {
+            let rel = relation(
+                id,
+                Subsystem::Execution,
+                OracleKind::SideEffectTraceEquality,
+            );
+            for seed in 0u64..16 {
+                let pair = rel.generate_pair(seed);
+                let verdict = rel.oracle(&pair);
+                assert!(
+                    verdict.is_equivalent(),
+                    "execution relation `{id}` (seed {seed}) must be Equivalent through the real engine, \
+                     got {verdict:?} for pair={pair:?}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn execution_generators_do_not_collapse_to_same_source_bd_x9t1n_4() {
+        let ids = [
+            "execution_evaluation_order_determinism",
+            "execution_gc_timing_independence",
+            "execution_stack_depth_independence",
+            "execution_prototype_chain_equivalence",
+            "execution_promise_resolution_order_stability",
+        ];
+        for id in ids {
+            let rel = relation(
+                id,
+                Subsystem::Execution,
+                OracleKind::SideEffectTraceEquality,
+            );
+            let pair = rel.generate_pair(0);
+            assert_ne!(
+                pair.input_source, pair.variant_source,
+                "execution relation `{id}` should compare a non-identical value-preserving pair"
+            );
+        }
+    }
+
+    #[test]
+    fn execution_oracle_fails_closed_on_real_engine_rejection_bd_x9t1n_4() {
+        let rel = relation(
+            "execution_gc_timing_independence",
+            Subsystem::Execution,
+            OracleKind::CanonicalOutputEquality,
+        );
+        let verdict = rel.oracle(&crate::relation::GeneratedPair {
+            input_source: "const = = ;".to_string(),
+            variant_source: "const = = ;".to_string(),
+        });
+        assert!(
+            matches!(verdict, Equivalence::Diverged { .. }),
+            "real-engine parse rejection must not be reported as Equivalent"
+        );
     }
 
     #[test]

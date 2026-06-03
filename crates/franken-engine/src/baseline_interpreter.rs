@@ -7395,6 +7395,25 @@ impl InterpreterCore {
                     let receiver_val = self.read_reg(receiver)?;
                     let callee_val = self.read_reg(callee)?;
 
+                    // Generator `.next()` method-call: step the generator
+                    // (bd-v6cv1). The `next` member resolves to the generator
+                    // itself (see the Value::Generator arm in GetProperty), so a
+                    // `it.next()` method-call arrives here with the generator as
+                    // the callee — mirror the plain `Call` handler and resume it
+                    // via generator_next, yielding the {value, done} object.
+                    if let Value::Generator(gen_id) = &callee_val {
+                        let gen_id = *gen_id;
+                        let arg = if args.count > 0 {
+                            self.read_reg(args.start)?
+                        } else {
+                            Value::Undefined
+                        };
+                        let result = self.generator_next(module, gen_id, arg)?;
+                        self.write_reg(dst, result)?;
+                        self.ip += 1;
+                        continue;
+                    }
+
                     if let Value::BuiltinFunction(builtin) = &callee_val {
                         let result = self.dispatch_builtin_function(
                             module,
@@ -7838,6 +7857,24 @@ impl InterpreterCore {
                         }
                         Value::Function(idx) => {
                             let prop = self.function_property_value(idx, &key_str)?;
+                            self.write_reg(dst, prop)?;
+                        }
+                        Value::Generator(gen_id) => {
+                            // Generator iterator-protocol member access (bd-v6cv1).
+                            // Previously a generator had no arm here, so `it.next`
+                            // fell through to the `_` TypeError — and because
+                            // Generator's type_name() is "object", the message was
+                            // the misleading "expected object, got object". The
+                            // `Call` handler already steps a generator when it is
+                            // the callee (resuming it via `generator_next`, which
+                            // returns the `{value, done}` result object), so
+                            // exposing `.next` AS the generator itself routes
+                            // `it.next()` through that existing path. Unknown
+                            // members resolve to `undefined`.
+                            let prop = match key_str.as_str() {
+                                "next" => Value::Generator(gen_id),
+                                _ => Value::Undefined,
+                            };
                             self.write_reg(dst, prop)?;
                         }
                         _ => {

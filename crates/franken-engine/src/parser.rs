@@ -5766,9 +5766,39 @@ fn try_parse_postfix(
                     Ok(e) => e,
                     Err(e) => return Some(Err(e)),
                 };
+            // ES2020 §12.2.9: a tagged template `tag`q0${e0}q1…`` invokes
+            // `tag(stringsArray, e0, e1, …)` where `stringsArray` holds the
+            // COOKED quasis (bd-1lrbw). The previous desugar passed the whole
+            // template literal as a single argument, so the tag saw the
+            // concatenated string instead of the strings array and substitutions
+            // (→ `t`hello`` yielded undefined). `parse_template_literal` keeps
+            // quasis raw, so cook each via `unescape_string_literal`.
+            // (The strings array's `.raw` property — needed by `String.raw` — is
+            // a follow-up; basic cooked tagged templates work without it.)
+            let Expression::TemplateLiteral {
+                quasis,
+                expressions,
+            } = template
+            else {
+                return Some(Err(unsupported_expression_syntax_error(
+                    "tagged template did not parse to a template literal",
+                    span,
+                    context,
+                )));
+            };
+            let cooked_strings: Vec<Option<Expression>> = quasis
+                .iter()
+                .map(|quasi| {
+                    let cooked = unescape_string_literal(quasi).unwrap_or_else(|| quasi.clone());
+                    Some(Expression::StringLiteral(cooked))
+                })
+                .collect();
+            let mut arguments = Vec::with_capacity(expressions.len() + 1);
+            arguments.push(Expression::ArrayLiteral(cooked_strings));
+            arguments.extend(expressions);
             return Some(Ok(Expression::Call {
                 callee: Box::new(callee),
-                arguments: vec![template],
+                arguments,
             }));
         }
     }
@@ -14039,8 +14069,10 @@ process.exit(attackSucceeded ? 0 : 1);"#,
                 assert!(
                     matches!(callee.as_ref(), Expression::Identifier(name) if name == "render")
                 );
-                assert_eq!(arguments.len(), 1);
-                assert!(matches!(&arguments[0], Expression::TemplateLiteral { .. }));
+                // tag(stringsArray, ...substitutions): ["hello ", ""], name
+                assert_eq!(arguments.len(), 2);
+                assert!(matches!(&arguments[0], Expression::ArrayLiteral(_)));
+                assert!(matches!(&arguments[1], Expression::Identifier(n) if n == "name"));
             }
             other => panic!("expected tagged template call, got {other:?}"),
         }
@@ -14052,8 +14084,9 @@ process.exit(attackSucceeded ? 0 : 1);"#,
         match first_expr(&tree) {
             Expression::Call { callee, arguments } => {
                 assert!(matches!(callee.as_ref(), Expression::Member { .. }));
+                // tag(stringsArray): a single no-substitution cooked-strings array
                 assert_eq!(arguments.len(), 1);
-                assert!(matches!(&arguments[0], Expression::TemplateLiteral { .. }));
+                assert!(matches!(&arguments[0], Expression::ArrayLiteral(_)));
             }
             other => panic!("expected tagged member template call, got {other:?}"),
         }

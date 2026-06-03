@@ -725,6 +725,30 @@ pub enum BuiltinFunctionKind {
     /// elements at `start` and insert the given items, returning an array of
     /// the removed elements (bd-962ev.1).
     ArraySplice,
+    /// `Map.prototype.set(key, value)` — receiver-aware; inserts/overwrites and
+    /// returns the Map for chaining (bd-juodx).
+    MapSet,
+    /// `Map.prototype.get(key)` — receiver-aware; value or `undefined` (bd-juodx).
+    MapGet,
+    /// `Map.prototype.has(key)` — receiver-aware boolean (bd-juodx).
+    MapHas,
+    /// `Map.prototype.delete(key)` — receiver-aware; removes and returns whether
+    /// the key was present (bd-juodx).
+    MapDelete,
+    /// `Set.prototype.add(value)` — receiver-aware; inserts and returns the Set
+    /// for chaining (bd-juodx).
+    SetAdd,
+    /// `Set.prototype.has(value)` — receiver-aware boolean (bd-juodx).
+    SetHas,
+    /// `Set.prototype.delete(value)` — receiver-aware; removes and returns
+    /// whether the value was present (bd-juodx).
+    SetDelete,
+    /// `Map.prototype.clear()` — receiver-aware; empties the map, returns
+    /// `undefined` (bd-juodx).
+    MapClear,
+    /// `Set.prototype.clear()` — receiver-aware; empties the set, returns
+    /// `undefined` (bd-juodx).
+    SetClear,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -1155,6 +1179,87 @@ impl BuiltinFunction {
         }
     }
 
+    fn map_set() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::MapSet,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn map_get() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::MapGet,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn map_has() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::MapHas,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn map_delete() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::MapDelete,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn set_add() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::SetAdd,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn set_has() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::SetHas,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn set_delete() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::SetDelete,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn map_clear() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::MapClear,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn set_clear() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::SetClear,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn console_log() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleLog,
@@ -1253,6 +1358,15 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArraySliceMethod => "slice",
             BuiltinFunctionKind::ArrayLastIndexOf => "lastIndexOf",
             BuiltinFunctionKind::ArraySplice => "splice",
+            BuiltinFunctionKind::MapSet => "set",
+            BuiltinFunctionKind::MapGet => "get",
+            BuiltinFunctionKind::MapHas => "has",
+            BuiltinFunctionKind::MapDelete => "delete",
+            BuiltinFunctionKind::SetAdd => "add",
+            BuiltinFunctionKind::SetHas => "has",
+            BuiltinFunctionKind::SetDelete => "delete",
+            BuiltinFunctionKind::MapClear => "clear",
+            BuiltinFunctionKind::SetClear => "clear",
         }
     }
 }
@@ -5660,6 +5774,86 @@ impl InterpreterCore {
                     Value::Int(i64::try_from(removed_len).unwrap_or(i64::MAX)),
                 )?;
                 Ok(Value::Object(removed_arr))
+            }
+            // Map/Set receiver-aware methods (bd-juodx). The receiver is the
+            // collection object; `.size` is a plain data property handled by the
+            // normal property walk, so it is not a method here.
+            BuiltinFunctionKind::MapSet => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(map_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Map receiver for Map.prototype.set".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                self.map_collection_set(map_id, key, value)
+            }
+            BuiltinFunctionKind::MapGet => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(map_id) = receiver else {
+                    return Ok(Value::Undefined);
+                };
+                let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                Ok(self.collection_get(map_id, "Map", "__entries", &key))
+            }
+            BuiltinFunctionKind::MapHas => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(map_id) = receiver else {
+                    return Ok(Value::Bool(false));
+                };
+                let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                Ok(Value::Bool(self.collection_has(map_id, "Map", "__entries", &key)))
+            }
+            BuiltinFunctionKind::MapDelete => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(map_id) = receiver else {
+                    return Ok(Value::Bool(false));
+                };
+                let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                Ok(Value::Bool(self.collection_delete(map_id, "Map", "__entries", &key)))
+            }
+            BuiltinFunctionKind::SetAdd => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(set_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "Set receiver for Set.prototype.add".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                self.set_collection_add(set_id, value)
+            }
+            BuiltinFunctionKind::SetHas => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(set_id) = receiver else {
+                    return Ok(Value::Bool(false));
+                };
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                Ok(Value::Bool(self.collection_has(set_id, "Set", "__values", &value)))
+            }
+            BuiltinFunctionKind::SetDelete => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(set_id) = receiver else {
+                    return Ok(Value::Bool(false));
+                };
+                let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
+                Ok(Value::Bool(self.collection_delete(set_id, "Set", "__values", &value)))
+            }
+            BuiltinFunctionKind::MapClear => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(map_id) = receiver else {
+                    return Ok(Value::Undefined);
+                };
+                Ok(self.collection_clear(map_id, "Map", "__entries"))
+            }
+            BuiltinFunctionKind::SetClear => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(set_id) = receiver else {
+                    return Ok(Value::Undefined);
+                };
+                Ok(self.collection_clear(set_id, "Set", "__values"))
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -10302,6 +10496,22 @@ impl InterpreterCore {
             return Ok(Value::BuiltinFunction(builtin));
         }
 
+        // Map/Set exotic objects expose their prototype methods via member
+        // access (bd-juodx). Like arrays, own/inherited data properties walked
+        // above win first — so `m.size` resolves to the `size` data property,
+        // and a user-assigned `m.set = …` shadows the builtin.
+        let root_type_tag = self.heap.get(object_id.0 as usize).and_then(|object| {
+            match object.properties.get("__type") {
+                Some(Value::Str(s)) => Some(s.to_string()),
+                _ => None,
+            }
+        });
+        if let Some(tag) = root_type_tag.as_deref()
+            && let Some(builtin) = Self::collection_prototype_method(tag, key)
+        {
+            return Ok(Value::BuiltinFunction(builtin));
+        }
+
         // Capture property resolution failure for deterministic replay
         self.nondeterminism_trace.capture(
             NondeterminismSource::PropertyResolution,
@@ -10343,6 +10553,200 @@ impl InterpreterCore {
             "splice" => Some(BuiltinFunction::array_splice()),
             _ => None,
         }
+    }
+
+    /// Resolve a Map/Set prototype method name to its receiver-aware builtin
+    /// callable (bd-juodx). `.size` is a data property, not a method.
+    fn collection_prototype_method(type_tag: &str, key: &str) -> Option<BuiltinFunction> {
+        match (type_tag, key) {
+            ("Map", "set") => Some(BuiltinFunction::map_set()),
+            ("Map", "get") => Some(BuiltinFunction::map_get()),
+            ("Map", "has") => Some(BuiltinFunction::map_has()),
+            ("Map", "delete") => Some(BuiltinFunction::map_delete()),
+            ("Set", "add") => Some(BuiltinFunction::set_add()),
+            ("Set", "has") => Some(BuiltinFunction::set_has()),
+            ("Set", "delete") => Some(BuiltinFunction::set_delete()),
+            ("Map", "clear") => Some(BuiltinFunction::map_clear()),
+            ("Set", "clear") => Some(BuiltinFunction::set_clear()),
+            _ => None,
+        }
+    }
+
+    /// Canonical string key for a Map key / Set value (bd-juodx). Mirrors the
+    /// representation used by the `builtin:Map*`/`Set*` hostcall impls so the
+    /// member-access path and the detached hostcall path agree.
+    fn collection_key_repr(value: &Value) -> String {
+        match value {
+            Value::Str(s) => format!("s:{}", s),
+            Value::Int(i) => format!("n:{}", i),
+            Value::Float(f) => format!("n:{}", f.inner()),
+            Value::Bool(b) => format!("b:{}", b),
+            Value::Null => "null".to_string(),
+            Value::Undefined => "undefined".to_string(),
+            Value::Object(id) => format!("o:{}", id.0),
+            _ => "other".to_string(),
+        }
+    }
+
+    /// Internal storage object id (`__entries` for Map / `__values` for Set),
+    /// gated on the receiver actually being the matching collection type.
+    fn collection_storage_id(
+        &self,
+        obj_id: ObjectId,
+        type_tag: &str,
+        storage_prop: &str,
+    ) -> Option<ObjectId> {
+        let obj = self.heap.get(obj_id.0 as usize)?;
+        if !matches!(obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == type_tag) {
+            return None;
+        }
+        match obj.properties.get(storage_prop) {
+            Some(Value::Object(id)) => Some(*id),
+            _ => None,
+        }
+    }
+
+    fn map_collection_set(
+        &mut self,
+        map_id: ObjectId,
+        key: Value,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(entries_id) = self.collection_storage_id(map_id, "Map", "__entries") {
+            let repr = Self::collection_key_repr(&key);
+            let is_new = self
+                .heap
+                .get(entries_id.0 as usize)
+                .map(|e| !e.properties.contains_key(&repr))
+                .unwrap_or(false);
+            let entries_index = entries_id.0 as usize;
+            let map_index = map_id.0 as usize;
+            self.mutate_heap(|heap| {
+                if let Some(entries) = heap.get_mut(entries_index) {
+                    entries.properties.insert(repr, value);
+                }
+                if is_new
+                    && let Some(map_obj) = heap.get_mut(map_index)
+                    && let Some(Value::Int(size)) = map_obj.properties.get_mut("size")
+                {
+                    *size = size.saturating_add(1);
+                }
+            });
+        }
+        Ok(Value::Object(map_id))
+    }
+
+    fn set_collection_add(
+        &mut self,
+        set_id: ObjectId,
+        value: Value,
+    ) -> Result<Value, InterpreterError> {
+        if let Some(values_id) = self.collection_storage_id(set_id, "Set", "__values") {
+            let repr = Self::collection_key_repr(&value);
+            let is_new = self
+                .heap
+                .get(values_id.0 as usize)
+                .map(|v| !v.properties.contains_key(&repr))
+                .unwrap_or(false);
+            let values_index = values_id.0 as usize;
+            let set_index = set_id.0 as usize;
+            self.mutate_heap(|heap| {
+                if let Some(values) = heap.get_mut(values_index) {
+                    values.properties.insert(repr, value);
+                }
+                if is_new
+                    && let Some(set_obj) = heap.get_mut(set_index)
+                    && let Some(Value::Int(size)) = set_obj.properties.get_mut("size")
+                {
+                    *size = size.saturating_add(1);
+                }
+            });
+        }
+        Ok(Value::Object(set_id))
+    }
+
+    fn collection_get(
+        &self,
+        obj_id: ObjectId,
+        type_tag: &str,
+        storage_prop: &str,
+        key: &Value,
+    ) -> Value {
+        if let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop)
+            && let Some(storage) = self.heap.get(storage_id.0 as usize)
+            && let Some(v) = storage.properties.get(&Self::collection_key_repr(key))
+        {
+            return v.clone();
+        }
+        Value::Undefined
+    }
+
+    fn collection_has(
+        &self,
+        obj_id: ObjectId,
+        type_tag: &str,
+        storage_prop: &str,
+        key: &Value,
+    ) -> bool {
+        self.collection_storage_id(obj_id, type_tag, storage_prop)
+            .and_then(|sid| self.heap.get(sid.0 as usize))
+            .map(|storage| storage.properties.contains_key(&Self::collection_key_repr(key)))
+            .unwrap_or(false)
+    }
+
+    fn collection_delete(
+        &mut self,
+        obj_id: ObjectId,
+        type_tag: &str,
+        storage_prop: &str,
+        key: &Value,
+    ) -> bool {
+        let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop) else {
+            return false;
+        };
+        let repr = Self::collection_key_repr(key);
+        let existed = self
+            .heap
+            .get(storage_id.0 as usize)
+            .map(|s| s.properties.contains_key(&repr))
+            .unwrap_or(false);
+        if existed {
+            let storage_index = storage_id.0 as usize;
+            let obj_index = obj_id.0 as usize;
+            self.mutate_heap(|heap| {
+                if let Some(storage) = heap.get_mut(storage_index) {
+                    storage.properties.remove(&repr);
+                }
+                if let Some(obj) = heap.get_mut(obj_index)
+                    && let Some(Value::Int(size)) = obj.properties.get_mut("size")
+                {
+                    *size = size.saturating_sub(1);
+                }
+            });
+        }
+        existed
+    }
+
+    /// `Map.prototype.clear` / `Set.prototype.clear` (bd-juodx): empties the
+    /// internal storage object and resets `size` to 0; returns `undefined`. The
+    /// storage object holds only entries, so clearing all its properties is
+    /// exactly the contents reset.
+    fn collection_clear(&mut self, obj_id: ObjectId, type_tag: &str, storage_prop: &str) -> Value {
+        if let Some(storage_id) = self.collection_storage_id(obj_id, type_tag, storage_prop) {
+            let storage_index = storage_id.0 as usize;
+            let obj_index = obj_id.0 as usize;
+            self.mutate_heap(|heap| {
+                if let Some(storage) = heap.get_mut(storage_index) {
+                    storage.properties.clear();
+                }
+                if let Some(obj) = heap.get_mut(obj_index)
+                    && let Some(Value::Int(size)) = obj.properties.get_mut("size")
+                {
+                    *size = 0;
+                }
+            });
+        }
+        Value::Undefined
     }
 
     /// Walk the prototype chain to find a property descriptor.

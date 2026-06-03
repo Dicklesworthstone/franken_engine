@@ -8406,6 +8406,37 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            // `new Map()` / `new Set()` (and Weak variants) likewise have no eval
+            // binding; route to the `builtin:Map`/`builtin:Set` constructor
+            // hostcalls (which allocate the real collection object with its
+            // internal storage), mirroring the error-constructor interception
+            // (bd-juodx). The optional iterable arg lowers onto the stack at
+            // args.start, matching the constructor impls.
+            if let Some(capability) = collection_constructor_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             lower_expression_to_ir1(
                 callee,
                 ops,
@@ -8784,6 +8815,30 @@ fn error_constructor_capability(
         "SyntaxError" => Some("builtin:SyntaxError"),
         "EvalError" => Some("builtin:EvalError"),
         "URIError" => Some("builtin:URIError"),
+        _ => None,
+    }
+}
+
+/// Capability for a `new Map()` / `new Set()` (and Weak variants) collection
+/// constructor (bd-juodx). Like the error constructors, these have no binding on
+/// the eval scope, so recognize the bare-identifier callee and route to the
+/// `builtin:<Name>` constructor hostcall. Returns `None` when shadowed by a user
+/// binding in scope.
+fn collection_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "Map" => Some("builtin:Map"),
+        "Set" => Some("builtin:Set"),
+        "WeakMap" => Some("builtin:WeakMap"),
+        "WeakSet" => Some("builtin:WeakSet"),
         _ => None,
     }
 }

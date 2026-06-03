@@ -3246,6 +3246,12 @@ pub struct InterpreterCore {
     pending_captures: Vec<u32>,
     /// Generator object store.
     generators: Vec<GeneratorObject>,
+    /// bd-hoplz: set by the `Yield` instruction handler so `generator_next` can
+    /// distinguish a yield-suspension (`run_loop` exits `Ok(yield_obj)`) from a
+    /// completion-by-return (`run_loop` also exits `Ok(return_val)` when the
+    /// generator body runs off the end or hits `Return`). Reset to `false`
+    /// before each `run_loop` resume and consumed immediately after.
+    generator_yielded: bool,
     /// Async function object store.
     async_functions: Vec<AsyncFunctionObject>,
     /// Context information for async function resumption after await.
@@ -3360,6 +3366,7 @@ impl InterpreterCore {
             closures: Vec::new(),
             pending_captures: Vec::new(),
             generators: Vec::new(),
+            generator_yielded: false,
             async_functions: Vec::new(),
             async_resumption_contexts: BTreeMap::new(),
             async_generators: Vec::new(),
@@ -6613,10 +6620,36 @@ impl InterpreterCore {
             });
         }
 
+        // bd-hoplz: clear the yield marker; the `Yield` handler re-sets it on a
+        // genuine yield-suspension. A bare `Ok` with the marker still `false` means
+        // the generator body ran to completion via `Return` / falling off the end.
+        self.generator_yielded = false;
         let result = self.run_loop(module);
 
         match &result {
+            Ok(_) if !self.generator_yielded => {
+                // Completion-by-return: the body returned `return_val` (or
+                // `undefined` when it ran off the end). ES2020 wraps this as
+                // `{ value: return_val, done: true }` and marks the generator done.
+                let return_val = match &result {
+                    Ok(v) => v.clone(),
+                    _ => Value::Undefined,
+                };
+                let gobj = &mut self.generators[gen_id as usize];
+                gobj.phase = GeneratorPhase::Completed;
+
+                self.ip = caller_ip;
+                self.register_base = caller_register_base;
+                self.scope_chain.frames = caller_scope;
+                self.estimated_memory_bytes = self.recompute_estimated_memory_bytes();
+
+                let result_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(result_id, "value".to_string(), return_val)?;
+                self.set_object_property(result_id, "done".to_string(), Value::Bool(true))?;
+                Ok(Value::Object(result_id))
+            }
             Ok(yielded_val) => {
+                self.generator_yielded = false;
                 let max_regs = self.config.max_registers as usize;
                 let saved_regs: Vec<Value> =
                     self.registers[self.register_base..self.register_base + max_regs].to_vec();
@@ -8784,6 +8817,9 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                     self.write_reg(resume_dst, Value::Undefined)?;
+                    // bd-hoplz: mark this `run_loop` exit as a yield-suspension so
+                    // `generator_next` does not mistake it for a completion-by-return.
+                    self.generator_yielded = true;
                     return Ok(Value::Object(result_id));
                 }
                 Ir3Instruction::AwaitValue { promise_reg } => {

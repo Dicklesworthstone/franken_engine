@@ -3642,38 +3642,43 @@ impl InterpreterCore {
         &mut self,
         seed: &std::rc::Rc<std::cell::RefCell<ExecutionSeed>>,
     ) -> Result<(), InterpreterError> {
-        let snapshot = seed.borrow();
-        match &*snapshot {
-            ExecutionSeed::Lazy { epoch, .. } if *epoch == self.seed_epoch => {
-                // No writes between capture and reset — nothing to do.
+        let restore = {
+            let snapshot = seed.borrow();
+            match &*snapshot {
+                ExecutionSeed::Lazy { epoch, .. } if *epoch == self.seed_epoch => {
+                    // No writes between capture and reset — nothing to do.
+                    None
+                }
+                ExecutionSeed::Lazy { epoch, .. } => {
+                    // bd-ytaa7: previously this was a `panic!()` based on the
+                    // assumption that `before_seed_surface_write` is always
+                    // reached before any state mutation. A future regression
+                    // that adds a write site bypassing the chokepoint would
+                    // turn this into an attacker-reachable process abort
+                    // from any embedder that hosts extension code. Return a
+                    // fail-closed `InternalError` instead so the run loop
+                    // can emit a safe-mode witness and the host can recover
+                    // without losing every in-flight extension's state.
+                    return Err(InterpreterError::InternalError {
+                        details: format!(
+                            "lazy seed survived a write (seed_epoch={}, core_epoch={}); \
+                             the before_seed_surface_write chokepoint missed a write site",
+                            epoch, self.seed_epoch
+                        ),
+                    });
+                }
+                ExecutionSeed::Materialized {
+                    registers,
+                    heap,
+                    function_prototypes,
+                } => Some((registers.clone(), heap.clone(), function_prototypes.clone())),
             }
-            ExecutionSeed::Lazy { epoch, .. } => {
-                // bd-ytaa7: previously this was a `panic!()` based on the
-                // assumption that `before_seed_surface_write` is always
-                // reached before any state mutation. A future regression
-                // that adds a write site bypassing the chokepoint would
-                // turn this into an attacker-reachable process abort
-                // from any embedder that hosts extension code. Return a
-                // fail-closed `InternalError` instead so the run loop
-                // can emit a safe-mode witness and the host can recover
-                // without losing every in-flight extension's state.
-                return Err(InterpreterError::InternalError {
-                    details: format!(
-                        "lazy seed survived a write (seed_epoch={}, core_epoch={}); \
-                         the before_seed_surface_write chokepoint missed a write site",
-                        epoch, self.seed_epoch
-                    ),
-                });
-            }
-            ExecutionSeed::Materialized {
-                registers,
-                heap,
-                function_prototypes,
-            } => {
-                self.mutate_registers(|r| *r = registers.clone());
-                self.mutate_heap(|h| *h = heap.clone());
-                self.mutate_function_prototypes(|fp| *fp = function_prototypes.clone());
-            }
+        };
+
+        if let Some((registers, heap, function_prototypes)) = restore {
+            self.mutate_registers(|r| *r = registers);
+            self.mutate_heap(|h| *h = heap);
+            self.mutate_function_prototypes(|fp| *fp = function_prototypes);
         }
         Ok(())
     }
@@ -36543,6 +36548,16 @@ mod lazy_seed_tests {
         core
     }
 
+    fn capture_execution_seed_eager_for_test(
+        core: &InterpreterCore,
+    ) -> std::rc::Rc<std::cell::RefCell<ExecutionSeed>> {
+        std::rc::Rc::new(std::cell::RefCell::new(ExecutionSeed::Materialized {
+            registers: core.registers.value.clone(),
+            heap: core.heap.value.clone(),
+            function_prototypes: core.function_prototypes.value.clone(),
+        }))
+    }
+
     #[test]
     fn lazy_seed_remains_lazy_with_no_writes() {
         let mut core = test_core();
@@ -36576,7 +36591,7 @@ mod lazy_seed_tests {
         let mut eager = test_core_with_registers(initial_regs.clone());
         let mut lazy = test_core_with_registers(initial_regs);
 
-        // Capture seed for lazy core only (simulating eager baseline)
+        let seed_e = capture_execution_seed_eager_for_test(&eager);
         let seed_l = lazy.capture_execution_seed();
 
         // Apply same write sequence to both cores
@@ -36585,7 +36600,9 @@ mod lazy_seed_tests {
             lazy.mutate_registers(|r| r[0] = v);
         }
 
-        // Reset lazy core from seed
+        eager
+            .reset_execution_state_from_seed(&seed_e)
+            .expect("eager materialized seed must reset without invariant violation");
         lazy.reset_execution_state_from_seed(&seed_l)
             .expect("materialized seed must reset without invariant violation");
 

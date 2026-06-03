@@ -443,6 +443,15 @@ pub enum Ir1Op {
         /// the function body (free variables / upvalues).  The IR3
         /// lowering uses these to emit scope-chain capture instructions.
         free_vars: Vec<String>,
+        /// Body binding-ids of each free variable, aligned 1:1 with
+        /// `free_vars`. Captured at emission time (where the body lookup is
+        /// still available) so the IR3 deferred-body pass can resolve free-var
+        /// references to `LoadScoped`/`StoreScoped` EXACTLY, instead of the
+        /// former fragile `binding_id >= param_count` heuristic that
+        /// misclassified body-local scoped temps (e.g. a ternary result) and
+        /// the function's own name — breaking recursion and captured-var
+        /// write-back (bd-g0aok / bd-p89tp).
+        free_var_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
     },
@@ -454,6 +463,9 @@ pub enum Ir1Op {
         body_ops: Vec<Ir1Op>,
         /// Free variables from enclosing scope (see DeclareFunction).
         free_vars: Vec<String>,
+        /// Body binding-ids of each free variable, aligned 1:1 with `free_vars`
+        /// (see DeclareFunction).
+        free_var_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
     },
@@ -634,6 +646,7 @@ impl Ir1Op {
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids: _,
                 is_generator,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("declare_function")),
@@ -668,6 +681,7 @@ impl Ir1Op {
                 param_names,
                 body_ops,
                 free_vars,
+                free_var_ids: _,
                 is_generator,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("create_function")),

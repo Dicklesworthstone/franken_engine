@@ -1,0 +1,10 @@
+{
+  "value": {
+    "Map": {
+      "k": {
+        "String": "v"
+      }
+    }
+  },
+  "expected_sha256_hex": "2d63769078c4e479f7b49d53486e5e44a930eeee298898be9dec2401392a288c"
+}

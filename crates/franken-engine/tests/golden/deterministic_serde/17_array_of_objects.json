@@ -1,0 +1,27 @@
+{
+  "value": {
+    "Array": [
+      {
+        "Map": {
+          "n": {
+            "U64": 1
+          },
+          "name": {
+            "String": "a"
+          }
+        }
+      },
+      {
+        "Map": {
+          "n": {
+            "U64": 2
+          },
+          "name": {
+            "String": "b"
+          }
+        }
+      }
+    ]
+  },
+  "expected_sha256_hex": "ef893be596dfdf9876e39aebc040934e2b8d6d81b72d98a60175fcf95a63c3a9"
+}

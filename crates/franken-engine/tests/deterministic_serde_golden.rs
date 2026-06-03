@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::deterministic_serde::{
-    CanonicalF64, CanonicalValue, EncodeBufferPool, encode_value, encode_value_into,
+    encode_value, encode_value_into, CanonicalF64, CanonicalValue, EncodeBufferPool,
 };
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -202,7 +202,9 @@ fn run_golden(name: &str, value: &CanonicalValue) {
             path.display()
         )
     });
-    let pair: GoldenPair = serde_json::from_str(&content).expect("parse golden");
+    let mut deserializer = serde_json::Deserializer::from_str(&content);
+    deserializer.disable_recursion_limit();
+    let pair = GoldenPair::deserialize(&mut deserializer).expect("parse golden");
 
     // (a) Encoder stability: the *stored* value must still encode to the stored hash.
     let stored_hash = sha256_hex(&encode_value(&pair.value));

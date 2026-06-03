@@ -19,7 +19,6 @@ fn eval_ok(src: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-ppfds lowering half: class DeclareFunction Pop must be Discard (lowering_pipeline.rs:2829/8431) so the extends arm's LoadBinding{Parent} isn't clobbered — see bead. Interpreter __proto__ half is fixed/asserted below."]
 fn inherited_method_dispatch() {
     assert_eq!(
         eval_ok("class A{ m(){ return 1; } } class B extends A{} let b=new B(); b.m();"),
@@ -28,7 +27,6 @@ fn inherited_method_dispatch() {
 }
 
 #[test]
-#[ignore = "bd-ppfds lowering half: class DeclareFunction Pop->Discard (see bead)"]
 fn multi_level_inheritance() {
     assert_eq!(
         eval_ok("class A{ m(){ return 1; } } class B extends A{} class C extends B{} new C().m();"),
@@ -45,7 +43,6 @@ fn override_shadows_parent() {
 }
 
 #[test]
-#[ignore = "bd-ppfds lowering half: class DeclareFunction Pop->Discard (see bead)"]
 fn own_and_inherited_methods() {
     assert_eq!(
         eval_ok(

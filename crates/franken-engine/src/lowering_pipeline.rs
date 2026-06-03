@@ -2826,7 +2826,12 @@ fn lower_statement_to_ir1_with_flow(
                 free_vars: Vec::new(),
                 is_generator: false,
             });
-            ops.push(Ir1Op::Pop);
+            // Discard (not Pop): the class binding is in r0 when the class is the
+            // first top-level binding, but a SECOND class's DeclareFunction Pop
+            // would emit the completion Move dst:0 and clobber the first binding
+            // — corrupting the extends arm's LoadBinding{Parent} (bd-ppfds, same
+            // r0-completion-clobber as the bd-62un6 method-attach fix).
+            ops.push(Ir1Op::Discard);
 
             // Set up inheritance if this class extends another
             if let Some(super_class) = &cls.super_class {
@@ -8526,7 +8531,12 @@ fn lower_expression_to_ir1(
                 free_vars: Vec::new(),
                 is_generator: false,
             });
-            ops.push(Ir1Op::Pop);
+            // Discard (not Pop): the class binding is in r0 when the class is the
+            // first top-level binding, but a SECOND class's DeclareFunction Pop
+            // would emit the completion Move dst:0 and clobber the first binding
+            // — corrupting the extends arm's LoadBinding{Parent} (bd-ppfds, same
+            // r0-completion-clobber as the bd-62un6 method-attach fix).
+            ops.push(Ir1Op::Discard);
 
             if let Some(super_class) = super_class {
                 ops.push(Ir1Op::LoadBinding { binding_id: bid });

@@ -6523,6 +6523,23 @@ fn lower_expression_to_ir1(
                 return Ok(());
             }
 
+            // `typeof Date` — the bare `Date` global has no eval-scope binding, so
+            // it would otherwise lower to a `LoadScoped` miss → `undefined` and
+            // yield `typeof` => "undefined". Date is a callable global (its
+            // constructor / `Date.now()` are routed to `builtin:Date`/`DateNow`
+            // host calls below), so report `typeof Date` as "function" to match
+            // (bd-cseei). Only when unshadowed by a user binding in scope.
+            if *operator == UnaryOperator::Typeof
+                && let Expression::Identifier(name) = argument.as_ref()
+                && name == "Date"
+                && !binding_lookup.contains_key(name.as_str())
+            {
+                ops.push(Ir1Op::LoadLiteral {
+                    value: Ir1Literal::String("function".to_string()),
+                });
+                return Ok(());
+            }
+
             lower_expression_to_ir1(
                 argument,
                 ops,
@@ -7147,6 +7164,37 @@ fn lower_expression_to_ir1(
                 return Ok(());
             }
             if let Some(capability) = math_builtin_call_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            if let Some(capability) = date_builtin_call_capability(callee, binding_lookup) {
+                // `Date.now()` — the `Date` global has no eval-scope binding, so
+                // (like the Math-static interception) recognize the bare static
+                // member call and route to the `builtin:DateNow` hostcall, whose
+                // impl already exists in `dispatch_builtin_hostcall_inner`. No
+                // receiver placeholder; arg_count is exactly `arguments.len()`
+                // (bd-cseei).
                 let arg_count = arguments.len();
                 if arg_count > u32::MAX as usize {
                     return Err(LoweringPipelineError::TooManyArguments {
@@ -8491,6 +8539,36 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            // `new Date([ms])` likewise has no eval binding; route to the
+            // `builtin:Date` constructor hostcall (which allocates a Date object
+            // with its `__type`/`__timestamp` internals), mirroring the
+            // collection-constructor interception. The optional millisecond arg
+            // lowers onto the stack at args.start (bd-cseei).
+            if let Some(capability) = date_constructor_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             lower_expression_to_ir1(
                 callee,
                 ops,
@@ -8893,6 +8971,59 @@ fn collection_constructor_capability(
         "Set" => Some("builtin:Set"),
         "WeakMap" => Some("builtin:WeakMap"),
         "WeakSet" => Some("builtin:WeakSet"),
+        _ => None,
+    }
+}
+
+/// Capability for a `new Date([ms])` constructor (bd-cseei). Like the error and
+/// collection constructors, the bare `Date` global has no binding on the eval
+/// scope, so recognize the bare-identifier callee and route to the
+/// `builtin:Date` constructor hostcall. Returns `None` when shadowed by a user
+/// binding in scope (`let Date = …`).
+fn date_constructor_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Identifier(name) = callee else {
+        return None;
+    };
+    if binding_lookup.contains_key(name.as_str()) {
+        return None;
+    }
+    match name.as_str() {
+        "Date" => Some("builtin:Date"),
+        _ => None,
+    }
+}
+
+/// Capability for a `Date.now()` static member call (bd-cseei). Mirrors
+/// `math_builtin_call_capability`: the `Date` global has no eval-scope binding,
+/// so recognize the `Date.now` member callee and route to the `builtin:DateNow`
+/// hostcall. Returns `None` when `Date` is shadowed by a user binding in scope.
+fn date_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if name == "Date")
+        || binding_lookup.contains_key("Date")
+    {
+        return None;
+    }
+    let method = match (*computed, property.as_ref()) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    match method {
+        "now" => Some("builtin:DateNow"),
         _ => None,
     }
 }

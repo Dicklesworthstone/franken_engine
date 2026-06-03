@@ -749,6 +749,10 @@ pub enum BuiltinFunctionKind {
     /// `Set.prototype.clear()` — receiver-aware; empties the set, returns
     /// `undefined` (bd-juodx).
     SetClear,
+    /// `Date.prototype.getTime()` — receiver-aware; returns the Date object's
+    /// internal `__timestamp` in milliseconds, or NaN for a non-Date receiver
+    /// (bd-cseei).
+    DateGetTime,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -1260,6 +1264,15 @@ impl BuiltinFunction {
         }
     }
 
+    fn date_get_time() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::DateGetTime,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn console_log() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleLog,
@@ -1367,6 +1380,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::SetDelete => "delete",
             BuiltinFunctionKind::MapClear => "clear",
             BuiltinFunctionKind::SetClear => "clear",
+            BuiltinFunctionKind::DateGetTime => "getTime",
         }
     }
 }
@@ -5859,6 +5873,24 @@ impl InterpreterCore {
                     return Ok(Value::Undefined);
                 };
                 Ok(self.collection_clear(set_id, "Set", "__values"))
+            }
+            BuiltinFunctionKind::DateGetTime => {
+                // `Date.prototype.getTime()` — read the receiver Date object's
+                // internal `__timestamp`; NaN for a non-Date receiver (bd-cseei).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(date_id) = receiver else {
+                    return Ok(Value::Float(f64::NAN.into()));
+                };
+                if let Some(date_obj) = self.heap.get(date_id.0 as usize)
+                    && matches!(date_obj.properties.get("__type"), Some(Value::Str(s)) if s.as_ref() == "Date")
+                {
+                    match date_obj.properties.get("__timestamp") {
+                        Some(Value::Float(ts)) => return Ok(Value::Float(*ts)),
+                        Some(Value::Int(ts)) => return Ok(Value::Int(*ts)),
+                        _ => {}
+                    }
+                }
+                Ok(Value::Float(f64::NAN.into()))
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -10591,6 +10623,7 @@ impl InterpreterCore {
             ("Set", "delete") => Some(BuiltinFunction::set_delete()),
             ("Map", "clear") => Some(BuiltinFunction::map_clear()),
             ("Set", "clear") => Some(BuiltinFunction::set_clear()),
+            ("Date", "getTime") => Some(BuiltinFunction::date_get_time()),
             _ => None,
         }
     }
@@ -15746,16 +15779,34 @@ impl InterpreterCore {
                 Ok(Value::Float(Float64::new(DETERMINISTIC_EPOCH_MS as f64)))
             }
             "builtin:Date" => {
-                // Date() constructor - returns new Date object with deterministic timestamp
-                // Uses fixed epoch (2026-01-01T00:00:00Z) for deterministic replay
+                // Date() / new Date([ms]) constructor — returns a Date object.
+                // With no argument, uses a fixed epoch (2026-01-01T00:00:00Z) for
+                // deterministic replay. With an explicit millisecond argument
+                // (`new Date(0)`), honor it so `getTime()` round-trips (bd-cseei).
                 const DETERMINISTIC_EPOCH_MS: i64 = 1_767_225_600_000;
 
-                let millis = DETERMINISTIC_EPOCH_MS as f64;
+                let millis = if args.count > 0 {
+                    match self.read_reg(args.start)? {
+                        Value::Int(i) => i as f64,
+                        Value::Float(f) => f.inner(),
+                        Value::Bool(true) => 1.0,
+                        Value::Bool(false) => 0.0,
+                        Value::Null => 0.0,
+                        _ => f64::NAN,
+                    }
+                } else {
+                    DETERMINISTIC_EPOCH_MS as f64
+                };
 
-                // Create a new Date object with current timestamp. Use the
-                // capability-checked allocator rather than poking the heap
-                // Vec directly.
+                // Create a new Date object. Tag it with `__type:"Date"` so the
+                // `Date.prototype.*` host methods (getTime/toString/…) recognize
+                // it as a Date receiver. The timestamp stays a `Float` (matching
+                // the existing Date unit tests); `Float64`'s JS-style Display
+                // renders an integral value like `0` (not `0.0`), so
+                // `new Date(0).getTime()` stringifies to "0". Use the
+                // capability-checked allocator rather than poking the heap Vec.
                 let date_id = self.alloc_object_with_prototype(None)?;
+                self.set_object_property(date_id, "__type".to_string(), Value::str("Date"))?;
                 self.set_object_property(
                     date_id,
                     "__timestamp".to_string(),

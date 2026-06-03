@@ -21,19 +21,16 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-cseei: Date global unimplemented; un-ignore when it lands"]
 fn date_is_a_function() {
     assert_eq!(eval_value("typeof Date"), "function");
 }
 
 #[test]
-#[ignore = "bd-cseei: Date global unimplemented; un-ignore when it lands"]
 fn date_now_is_a_number() {
     assert_eq!(eval_value("typeof Date.now()"), "number");
 }
 
 #[test]
-#[ignore = "bd-cseei: Date global unimplemented; un-ignore when it lands"]
 fn new_date_from_millis_get_time() {
     assert_eq!(eval_value("new Date(0).getTime()"), "0");
 }

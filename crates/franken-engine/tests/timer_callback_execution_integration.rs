@@ -9,22 +9,22 @@
 //! member callees (`Math.abs`, `"s".toUpperCase()`), never bare-identifier
 //! globals. Lowering now dispatches these as host calls.
 //!
-//! NOTE: a timer callback that references a global (e.g. `console.log`) still
-//! cannot resolve that global inside the timer closure body — that is a
-//! separate gap in how closures executed off the event loop resolve the global
-//! environment (filed separately). These tests therefore use global-free
-//! callback bodies and assert callability + correct shadowing, which is exactly
-//! what bd-1lw7r.13 fixes.
+//! bd-1lw7r.14 extends this coverage to callbacks that reference globals from
+//! the off-event-loop timer closure body.
 
-use frankenengine_engine::HybridRouter;
+use frankenengine_engine::{EvalOutcome, HybridRouter};
 
-fn eval_ok(source: &str) {
+fn eval_outcome(source: &str) -> EvalOutcome {
     let mut engine = HybridRouter::default();
     engine.eval(source).unwrap_or_else(|err| {
         panic!(
             "`{source}` must eval without a fault (timer builtin must be callable), got: {err:?}"
         )
-    });
+    })
+}
+
+fn eval_ok(source: &str) {
+    let _ = eval_outcome(source);
 }
 
 #[test]
@@ -42,6 +42,17 @@ fn set_timeout_arrow_is_callable() {
 #[test]
 fn set_timeout_with_omitted_delay_is_callable() {
     eval_ok("setTimeout(function () {});");
+}
+
+#[test]
+fn set_timeout_callback_can_resolve_console_global() {
+    let outcome = eval_outcome("setTimeout(() => console.log('timer'), 0);");
+    let messages: Vec<_> = outcome
+        .console_output
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect();
+    assert_eq!(messages, ["timer"]);
 }
 
 #[test]

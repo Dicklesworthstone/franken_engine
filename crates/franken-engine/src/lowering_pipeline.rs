@@ -7558,6 +7558,56 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            if let Some(capability) = console_builtin_call_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
+            if let Some(capability) = promise_builtin_call_capability(callee, binding_lookup) {
+                let arg_count = arguments.len();
+                if arg_count > u32::MAX as usize {
+                    return Err(LoweringPipelineError::TooManyArguments {
+                        count: arg_count,
+                        max: u32::MAX as usize,
+                    });
+                }
+                for arg in arguments {
+                    lower_expression_to_ir1(
+                        arg,
+                        ops,
+                        bindings,
+                        binding_lookup,
+                        binding_index,
+                        root_scope_id,
+                        label_counter,
+                    )?;
+                }
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
+                    arg_count: arg_count as u32,
+                });
+                return Ok(());
+            }
             if let Some(capability) = reflect_builtin_call_capability(callee, binding_lookup) {
                 // `Reflect.has/get/set/deleteProperty/apply/construct/ownKeys(...)`
                 // — the `Reflect` global has no eval-scope binding; route the
@@ -8214,6 +8264,15 @@ fn lower_expression_to_ir1(
             {
                 ops.push(Ir1Op::HostCall {
                     capability: "builtin:MathPI".to_string(),
+                    arg_count: 0,
+                });
+                return Ok(());
+            }
+            if let Some(capability) =
+                promise_static_member_capability(object, property, *computed, binding_lookup)
+            {
+                ops.push(Ir1Op::HostCall {
+                    capability: capability.to_string(),
                     arg_count: 0,
                 });
                 return Ok(());
@@ -9454,6 +9513,106 @@ fn date_builtin_call_capability(
     };
     match method {
         "now" => Some("builtin:DateNow"),
+        _ => None,
+    }
+}
+
+/// Capability for `Promise.resolve/reject/all/race/allSettled/any(...)`
+/// static calls (bd-bpf76). These route directly to the internal `promise:*`
+/// model so source-level Promise APIs create real runtime promise handles
+/// rather than the older simplified `builtin:Promise*` objects.
+fn promise_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if name == "Promise")
+        || binding_lookup.contains_key("Promise")
+    {
+        return None;
+    }
+    let method = match (*computed, property.as_ref()) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    match method {
+        "resolve" => Some("promise:resolve"),
+        "reject" => Some("promise:reject"),
+        "all" => Some("promise:all"),
+        "race" => Some("promise:race"),
+        "allSettled" => Some("promise:allSettled"),
+        "any" => Some("promise:any"),
+        _ => None,
+    }
+}
+
+fn console_builtin_call_capability(
+    callee: &Expression,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    let Expression::Member {
+        object,
+        property,
+        computed,
+    } = callee
+    else {
+        return None;
+    };
+    if !matches!(object.as_ref(), Expression::Identifier(name) if name == "console")
+        || binding_lookup.contains_key("console")
+    {
+        return None;
+    }
+    let method = match (*computed, property.as_ref()) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    match method {
+        "log" => Some("console:log"),
+        "error" => Some("console:error"),
+        "warn" => Some("console:warn"),
+        "info" => Some("console:info"),
+        _ => None,
+    }
+}
+
+/// Capability for bare Promise static member reads (`Promise.all`,
+/// `Promise.resolve`, ...). Unbound globals are not runtime bindings in IR1, so
+/// a member read needs a lowering-time shim that returns the corresponding
+/// builtin function value. Static calls still use `promise_builtin_call_capability`
+/// above so they create real promise handles directly.
+fn promise_static_member_capability(
+    object: &Expression,
+    property: &Expression,
+    computed: bool,
+    binding_lookup: &BTreeMap<String, BindingId>,
+) -> Option<&'static str> {
+    if !matches!(object, Expression::Identifier(name) if name == "Promise")
+        || binding_lookup.contains_key("Promise")
+    {
+        return None;
+    }
+    let method = match (computed, property) {
+        (false, Expression::Identifier(name) | Expression::StringLiteral(name)) => name.as_str(),
+        (true, Expression::StringLiteral(name)) => name.as_str(),
+        _ => return None,
+    };
+    match method {
+        "resolve" => Some("builtin:PromiseResolveFunction"),
+        "reject" => Some("builtin:PromiseRejectFunction"),
+        "all" => Some("builtin:PromiseAllFunction"),
+        "race" => Some("builtin:PromiseRaceFunction"),
+        "allSettled" => Some("builtin:PromiseAllSettledFunction"),
+        "any" => Some("builtin:PromiseAnyFunction"),
         _ => None,
     }
 }

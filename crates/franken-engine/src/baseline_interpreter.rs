@@ -776,6 +776,33 @@ pub enum BuiltinFunctionKind {
     /// internal `__timestamp` in milliseconds, or NaN for a non-Date receiver
     /// (bd-cseei).
     DateGetTime,
+    /// `Promise.resolve(value)` — route the JS-visible static method to the
+    /// internal promise model, yielding a real promise handle (bd-bpf76).
+    PromiseResolve,
+    /// `Promise.reject(reason)` — route to the internal promise model
+    /// (bd-bpf76).
+    PromiseReject,
+    /// `Promise.all(iterable)` — route to the internal promise combinator
+    /// (bd-bpf76).
+    PromiseAll,
+    /// `Promise.race(iterable)` — route to the internal promise combinator
+    /// (bd-bpf76).
+    PromiseRace,
+    /// `Promise.allSettled(iterable)` — route to the internal promise
+    /// combinator (bd-bpf76).
+    PromiseAllSettled,
+    /// `Promise.any(iterable)` — route to the internal promise combinator
+    /// (bd-bpf76).
+    PromiseAny,
+    /// `Promise.prototype.then` — receiver-aware reaction registration
+    /// (bd-bpf76).
+    PromiseThen,
+    /// `Promise.prototype.catch` — receiver-aware rejection reaction
+    /// registration (bd-bpf76).
+    PromiseCatch,
+    /// `Promise.prototype.finally` — receiver-aware finally reaction
+    /// registration (bd-bpf76).
+    PromiseFinally,
     /// `RegExp.prototype.test` — receiver-aware; linear-time regex match via
     /// Rust's `regex` crate for the supported ES-compatible subset (bd-wni4m).
     RegExpTest,
@@ -1335,6 +1362,87 @@ impl BuiltinFunction {
         }
     }
 
+    fn promise_resolve() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseResolve,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn promise_reject() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseReject,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn promise_all() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseAll,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn promise_race() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseRace,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn promise_all_settled() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseAllSettled,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn promise_any() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseAny,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn promise_then() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseThen,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn promise_catch() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseCatch,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn promise_finally() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::PromiseFinally,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn console_log() -> Self {
         Self {
             kind: BuiltinFunctionKind::ConsoleLog,
@@ -1456,6 +1564,15 @@ impl BuiltinFunction {
             BuiltinFunctionKind::MapClear => "clear",
             BuiltinFunctionKind::SetClear => "clear",
             BuiltinFunctionKind::DateGetTime => "getTime",
+            BuiltinFunctionKind::PromiseResolve => "resolve",
+            BuiltinFunctionKind::PromiseReject => "reject",
+            BuiltinFunctionKind::PromiseAll => "all",
+            BuiltinFunctionKind::PromiseRace => "race",
+            BuiltinFunctionKind::PromiseAllSettled => "allSettled",
+            BuiltinFunctionKind::PromiseAny => "any",
+            BuiltinFunctionKind::PromiseThen => "then",
+            BuiltinFunctionKind::PromiseCatch => "catch",
+            BuiltinFunctionKind::PromiseFinally => "finally",
             BuiltinFunctionKind::RegExpTest => "test",
         }
     }
@@ -3205,6 +3322,13 @@ enum PromiseCombinatorKind {
     Any,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum PromiseReactionKind {
+    Then,
+    Catch,
+    Finally,
+}
+
 #[derive(Debug, Clone)]
 struct PromiseCombinatorWatcher {
     combinator_id: u64,
@@ -4276,9 +4400,36 @@ impl InterpreterCore {
                 Value::BuiltinFunction(BuiltinFunction::console_info()),
             ),
         ])?);
+        let promise = Value::Object(self.alloc_object_with_properties(&[
+            (
+                "resolve",
+                Value::BuiltinFunction(BuiltinFunction::promise_resolve()),
+            ),
+            (
+                "reject",
+                Value::BuiltinFunction(BuiltinFunction::promise_reject()),
+            ),
+            (
+                "all",
+                Value::BuiltinFunction(BuiltinFunction::promise_all()),
+            ),
+            (
+                "race",
+                Value::BuiltinFunction(BuiltinFunction::promise_race()),
+            ),
+            (
+                "allSettled",
+                Value::BuiltinFunction(BuiltinFunction::promise_all_settled()),
+            ),
+            (
+                "any",
+                Value::BuiltinFunction(BuiltinFunction::promise_any()),
+            ),
+        ])?);
 
         self.inject_runtime_global_binding("process", process)?;
         self.inject_runtime_global_binding("console", console)?;
+        self.inject_runtime_global_binding("Promise", promise)?;
 
         Ok(())
     }
@@ -6093,6 +6244,33 @@ impl InterpreterCore {
                     }
                 }
                 Ok(Value::Float(f64::NAN.into()))
+            }
+            BuiltinFunctionKind::PromiseResolve => {
+                self.dispatch_promise_hostcall("promise:resolve", args, Some(module))
+            }
+            BuiltinFunctionKind::PromiseReject => {
+                self.dispatch_promise_hostcall("promise:reject", args, Some(module))
+            }
+            BuiltinFunctionKind::PromiseAll => {
+                self.dispatch_promise_hostcall("promise:all", args, Some(module))
+            }
+            BuiltinFunctionKind::PromiseRace => {
+                self.dispatch_promise_hostcall("promise:race", args, Some(module))
+            }
+            BuiltinFunctionKind::PromiseAllSettled => {
+                self.dispatch_promise_hostcall("promise:allSettled", args, Some(module))
+            }
+            BuiltinFunctionKind::PromiseAny => {
+                self.dispatch_promise_hostcall("promise:any", args, Some(module))
+            }
+            BuiltinFunctionKind::PromiseThen => {
+                self.dispatch_promise_reaction_builtin(args, receiver, PromiseReactionKind::Then)
+            }
+            BuiltinFunctionKind::PromiseCatch => {
+                self.dispatch_promise_reaction_builtin(args, receiver, PromiseReactionKind::Catch)
+            }
+            BuiltinFunctionKind::PromiseFinally => {
+                self.dispatch_promise_reaction_builtin(args, receiver, PromiseReactionKind::Finally)
             }
             BuiltinFunctionKind::RegExpTest => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -8376,6 +8554,10 @@ impl InterpreterCore {
                                 "next" => Value::Generator(gen_id),
                                 _ => Value::Undefined,
                             };
+                            self.write_reg(dst, prop)?;
+                        }
+                        Value::Promise(_) => {
+                            let prop = Self::promise_property_value(&key_str);
                             self.write_reg(dst, prop)?;
                         }
                         _ => {
@@ -10857,6 +11039,15 @@ impl InterpreterCore {
         }
     }
 
+    fn promise_property_value(key: &str) -> Value {
+        match key {
+            "then" => Value::BuiltinFunction(BuiltinFunction::promise_then()),
+            "catch" => Value::BuiltinFunction(BuiltinFunction::promise_catch()),
+            "finally" => Value::BuiltinFunction(BuiltinFunction::promise_finally()),
+            _ => Value::Undefined,
+        }
+    }
+
     fn close_iterator(
         &mut self,
         module: &Ir3Module,
@@ -12308,6 +12499,73 @@ impl InterpreterCore {
                     max: self.config.max_registers,
                 })?;
         Ok(Some(self.read_reg(register)?))
+    }
+
+    fn dispatch_promise_reaction_builtin(
+        &mut self,
+        args: RegRange,
+        receiver: Option<Value>,
+        kind: PromiseReactionKind,
+    ) -> Result<Value, InterpreterError> {
+        let receiver = receiver.unwrap_or(Value::Undefined);
+        let handle = match receiver {
+            Value::Promise(h) => crate::promise_model::PromiseHandle(h),
+            other => {
+                let method = match kind {
+                    PromiseReactionKind::Then => "then",
+                    PromiseReactionKind::Catch => "catch",
+                    PromiseReactionKind::Finally => "finally",
+                };
+                return Err(InterpreterError::TypeError {
+                    expected: format!("promise receiver for Promise.prototype.{method}"),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let label = crate::ifc_artifacts::Label::Public;
+        let (on_fulfilled, on_rejected) = match kind {
+            PromiseReactionKind::Then => {
+                let on_fulfilled = match self.builtin_arg(args, 0)? {
+                    Some(value) => {
+                        self.promise_reaction_handler_from_value(value, "onFulfilled")?
+                    }
+                    None => None,
+                };
+                let on_rejected = match self.builtin_arg(args, 1)? {
+                    Some(value) => self.promise_reaction_handler_from_value(value, "onRejected")?,
+                    None => None,
+                };
+                (on_fulfilled, on_rejected)
+            }
+            PromiseReactionKind::Catch => {
+                let on_rejected = match self.builtin_arg(args, 0)? {
+                    Some(value) => self.promise_reaction_handler_from_value(value, "onRejected")?,
+                    None => None,
+                };
+                (None, on_rejected)
+            }
+            PromiseReactionKind::Finally => {
+                let on_finally = match self.builtin_arg(args, 0)? {
+                    Some(value) => self.promise_reaction_handler_from_value(value, "onFinally")?,
+                    None => None,
+                };
+                (on_finally, on_finally)
+            }
+        };
+        let result = self
+            .promise_store
+            .then(
+                handle,
+                on_fulfilled,
+                on_rejected,
+                label,
+                &mut self.event_loop.microtasks,
+            )
+            .map_err(|e| InterpreterError::TypeError {
+                expected: "valid promise handle".to_string(),
+                got: e.to_string(),
+            })?;
+        Ok(Value::Promise(result.0))
     }
 
     /// Dispatch a `promise:*` hostcall to the internal promise subsystem.
@@ -17034,6 +17292,24 @@ impl InterpreterCore {
 
                 let result = this_str.repeat(count);
                 Ok(Value::str(result))
+            }
+            "builtin:PromiseResolveFunction" => {
+                Ok(Value::BuiltinFunction(BuiltinFunction::promise_resolve()))
+            }
+            "builtin:PromiseRejectFunction" => {
+                Ok(Value::BuiltinFunction(BuiltinFunction::promise_reject()))
+            }
+            "builtin:PromiseAllFunction" => {
+                Ok(Value::BuiltinFunction(BuiltinFunction::promise_all()))
+            }
+            "builtin:PromiseRaceFunction" => {
+                Ok(Value::BuiltinFunction(BuiltinFunction::promise_race()))
+            }
+            "builtin:PromiseAllSettledFunction" => Ok(Value::BuiltinFunction(
+                BuiltinFunction::promise_all_settled(),
+            )),
+            "builtin:PromiseAnyFunction" => {
+                Ok(Value::BuiltinFunction(BuiltinFunction::promise_any()))
             }
             "builtin:PromiseResolve" => {
                 // Promise.resolve(value) implementation (simplified)

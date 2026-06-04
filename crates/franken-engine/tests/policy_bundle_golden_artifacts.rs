@@ -6,20 +6,17 @@
 //! snapshots, ensuring no non-deterministic fields (timestamps, random IDs)
 //! break reproducible builds and proof artifacts.
 //!
-//! Schema-shape coverage is enforced by *real* golden files in
-//! `tests/golden/policy_bundle_{default,minimal,comprehensive}.golden`
-//! (see [`assert_golden`]) — the substring-only asserts that used to live
-//! here let silent schema renames slip through (bd-ub6x8.4); the golden
-//! files are now the load-bearing check. Run
-//! `UPDATE_GOLDENS=1 cargo test --test policy_bundle_golden_artifacts` to
-//! refresh them when the `PolicyBundle` schema legitimately changes; the
-//! diff has to be reviewed and committed.
+//! Schema-shape coverage is enforced by committed insta snapshots under
+//! `tests/snapshots/policy_bundle_golden_artifacts__*.snap` — the
+//! substring-only asserts that used to live here let silent schema renames
+//! slip through (bd-ub6x8.4). Run
+//! `INSTA_UPDATE=always cargo test --test policy_bundle_golden_artifacts`
+//! to refresh snapshots when the `PolicyBundle` schema legitimately changes;
+//! the diff has to be reviewed and committed.
 //!
 //! Uses real engine components without mocks to validate production behavior.
 
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::Path;
 
 use frankenengine_engine::runtime_decision_theory::{
     BudgetConfig, ConformalConfig, CvarConfig, DecisionContext, DecisionContextConfig, DriftConfig,
@@ -28,80 +25,28 @@ use frankenengine_engine::runtime_decision_theory::{
 use frankenengine_engine::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
-// Golden assertion helper (mirrors benchmark_evidence_bundle_golden.rs:24)
-// ---------------------------------------------------------------------------
-
-/// Assert golden output matches expected, with `UPDATE_GOLDENS=1` support.
-/// Mirrors the canonical helper in `benchmark_evidence_bundle_golden.rs` so
-/// the regen workflow (`UPDATE_GOLDENS=1`) and the `.actual` sweep behave
-/// identically across goldens in `tests/golden/` (bd-ub6x8.2/bd-ub6x8.7).
-fn assert_golden(test_name: &str, actual: &str) {
-    let golden_path = Path::new("tests/golden").join(format!("{test_name}.golden"));
-
-    if std::env::var("UPDATE_GOLDENS").is_ok() {
-        fs::create_dir_all(
-            golden_path
-                .parent()
-                .expect("Golden path must have parent directory"),
-        )
-        .expect("Failed to create golden artifacts directory");
-        fs::write(&golden_path, actual).expect("Failed to write golden artifact file");
-        eprintln!("[GOLDEN] Updated: {}", golden_path.display());
-        return;
-    }
-
-    let expected = fs::read_to_string(&golden_path).unwrap_or_else(|_| {
-        panic!(
-            "Golden file missing: {}\n\
-             Run with UPDATE_GOLDENS=1 to create it\n\
-             Then review and commit: git diff tests/golden/",
-            golden_path.display()
-        )
-    });
-
-    if actual != expected {
-        let actual_path = golden_path.with_extension("actual");
-        fs::write(&actual_path, actual)
-            .expect("Failed to write actual artifact file for comparison");
-        panic!(
-            "GOLDEN MISMATCH: {test_name}\n\n\
-             Expected length: {} bytes\n\
-             Actual length:   {} bytes\n\n\
-             To update: UPDATE_GOLDENS=1 cargo test --test policy_bundle_golden_artifacts -- {test_name}\n\
-             To review: diff {} {}",
-            expected.len(),
-            actual.len(),
-            golden_path.display(),
-            actual_path.display()
-        );
-    }
-
-    let _ = fs::remove_file(golden_path.with_extension("actual"));
-}
-
-// ---------------------------------------------------------------------------
-// Real golden snapshot tests (bd-ub6x8.4)
+// Real golden snapshot tests (bd-ub6x8.4, bd-ub6x8.21.1)
 // ---------------------------------------------------------------------------
 
 #[test]
 fn golden_policy_bundle_default() {
     let bundle = create_test_policy_bundle();
     let actual = serde_json::to_string_pretty(&bundle).expect("PolicyBundle should serialize");
-    assert_golden("policy_bundle_default", &actual);
+    insta::assert_snapshot!("policy_bundle_default", actual);
 }
 
 #[test]
 fn golden_policy_bundle_minimal() {
     let bundle = create_minimal_policy_bundle();
     let actual = serde_json::to_string_pretty(&bundle).expect("PolicyBundle should serialize");
-    assert_golden("policy_bundle_minimal", &actual);
+    insta::assert_snapshot!("policy_bundle_minimal", actual);
 }
 
 #[test]
 fn golden_policy_bundle_comprehensive() {
     let bundle = create_comprehensive_policy_bundle();
     let actual = serde_json::to_string_pretty(&bundle).expect("PolicyBundle should serialize");
-    assert_golden("policy_bundle_comprehensive", &actual);
+    insta::assert_snapshot!("policy_bundle_comprehensive", actual);
 }
 
 // ---------------------------------------------------------------------------

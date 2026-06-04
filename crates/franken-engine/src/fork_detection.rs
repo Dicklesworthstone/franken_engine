@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::engine_object_id::EngineObjectId;
 use crate::policy_checkpoint::PolicyCheckpoint;
+use crate::runtime_observability::{
+    CheckpointViolationType, RuntimeSecurityObservability, SecurityEventContext,
+};
 use crate::security_epoch::SecurityEpoch;
 
 // ---------------------------------------------------------------------------
@@ -732,6 +735,46 @@ impl ForkDetector {
         Ok(())
     }
 
+    /// Observability-aware [`record_checkpoint`](Self::record_checkpoint).
+    ///
+    /// Delegates unchanged to the existing fork detector and records a
+    /// `checkpoint_violation_total{violation_type="fork_detected"}` event only
+    /// when the existing detector rejects a same-sequence divergent checkpoint.
+    /// The loop-density [`crate::checkpoint::CheckpointGuard`] drain/abort path
+    /// is intentionally not mapped here: this wrapper records the forensic
+    /// checkpoint-fork violation represented by [`ForkIncidentReport`].
+    pub fn record_checkpoint_observed(
+        &mut self,
+        input: &RecordCheckpointInput<'_>,
+        decision_id: Option<&str>,
+        policy_id: Option<&str>,
+        observability: &mut RuntimeSecurityObservability,
+    ) -> Result<(), Box<ForkIncidentReport>> {
+        let result = self.record_checkpoint(input);
+
+        if let Err(ref report) = result {
+            let context = SecurityEventContext {
+                timestamp_ns: report.detected_at_tick,
+                trace_id: report.trace_id.clone(),
+                principal_id: report.divergent_checkpoint_id.to_string(),
+                decision_id: decision_id
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("fork-detection:{}", report.incident_id)),
+                policy_id: policy_id.unwrap_or_default().to_string(),
+                zone_id: report.zone.clone(),
+                component: "fork_detection".to_string(),
+            };
+            observability.record_checkpoint_violation(
+                context,
+                CheckpointViolationType::ForkDetected,
+                report.fork_seq,
+                report.frontier_seq_at_detection,
+            );
+        }
+
+        result
+    }
+
     /// Check if a zone is in safe mode.
     pub fn is_safe_mode(&self, zone: &str) -> bool {
         self.zones.get(zone).is_some_and(|z| z.safe_mode.active)
@@ -1103,6 +1146,182 @@ mod tests {
         assert_eq!(report.divergent_checkpoint_id, cp1_b.checkpoint_id);
         assert!(report.existing_was_accepted);
         assert!(!report.acknowledged);
+    }
+
+    #[test]
+    fn record_checkpoint_observed_records_fork_detected_violation() {
+        let sk = make_sk(1);
+        let genesis = build_genesis(std::slice::from_ref(&sk), "zone-a");
+        let cp1_a = build_after(
+            &genesis,
+            1,
+            SecurityEpoch::GENESIS,
+            200,
+            std::slice::from_ref(&sk),
+            "zone-a",
+        );
+        let cp1_b = build_divergent_at_seq(
+            &genesis,
+            1,
+            SecurityEpoch::GENESIS,
+            250,
+            &[sk],
+            "zone-a",
+            100,
+        );
+
+        let mut detector = ForkDetector::with_defaults();
+        let mut observability = RuntimeSecurityObservability::new();
+        detector
+            .record_checkpoint_observed(
+                &RecordCheckpointInput {
+                    zone: "zone-a",
+                    checkpoint: &genesis,
+                    accepted: true,
+                    frontier_seq: 0,
+                    frontier_epoch: SecurityEpoch::GENESIS,
+                    tick: 100,
+                    trace_id: "t-0",
+                },
+                Some("decision-0"),
+                Some("policy-a"),
+                &mut observability,
+            )
+            .expect("genesis checkpoint should not fork");
+        detector
+            .record_checkpoint_observed(
+                &RecordCheckpointInput {
+                    zone: "zone-a",
+                    checkpoint: &cp1_a,
+                    accepted: true,
+                    frontier_seq: 1,
+                    frontier_epoch: SecurityEpoch::GENESIS,
+                    tick: 200,
+                    trace_id: "t-1a",
+                },
+                Some("decision-1a"),
+                Some("policy-a"),
+                &mut observability,
+            )
+            .expect("first checkpoint at seq should not fork");
+
+        let report = detector
+            .record_checkpoint_observed(
+                &RecordCheckpointInput {
+                    zone: "zone-a",
+                    checkpoint: &cp1_b,
+                    accepted: false,
+                    frontier_seq: 1,
+                    frontier_epoch: SecurityEpoch::GENESIS,
+                    tick: 250,
+                    trace_id: "t-1b",
+                },
+                Some("decision-fork"),
+                Some("policy-a"),
+                &mut observability,
+            )
+            .unwrap_err();
+
+        assert_eq!(report.fork_seq, 1);
+        assert_eq!(
+            observability
+                .metrics()
+                .checkpoint_violation_total
+                .get(&CheckpointViolationType::ForkDetected),
+            Some(&1)
+        );
+        assert_eq!(
+            observability
+                .metrics()
+                .checkpoint_violation_total
+                .get(&CheckpointViolationType::RollbackAttempt),
+            Some(&0)
+        );
+        let event = observability.logs().last().expect("security log event");
+        assert_eq!(event.timestamp_ns, 250);
+        assert_eq!(event.trace_id, "t-1b");
+        assert_eq!(event.decision_id, "decision-fork");
+        assert_eq!(event.policy_id, "policy-a");
+        assert_eq!(event.zone_id, "zone-a");
+        assert_eq!(
+            event.metadata.get("attempted_seq").map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            event.metadata.get("current_seq").map(String::as_str),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn record_checkpoint_observed_does_not_record_non_fork_checkpoints() {
+        let sk = make_sk(1);
+        let genesis = build_genesis(&[sk], "zone-a");
+
+        let mut detector = ForkDetector::with_defaults();
+        let mut observability = RuntimeSecurityObservability::new();
+        detector
+            .record_checkpoint_observed(
+                &RecordCheckpointInput {
+                    zone: "zone-a",
+                    checkpoint: &genesis,
+                    accepted: true,
+                    frontier_seq: 0,
+                    frontier_epoch: SecurityEpoch::GENESIS,
+                    tick: 100,
+                    trace_id: "t-0",
+                },
+                None,
+                None,
+                &mut observability,
+            )
+            .expect("initial checkpoint should not fork");
+
+        assert_eq!(
+            observability
+                .metrics()
+                .checkpoint_violation_total
+                .get(&CheckpointViolationType::ForkDetected),
+            Some(&0)
+        );
+        assert!(observability.logs().is_empty());
+    }
+
+    #[test]
+    fn record_checkpoint_observed_does_not_record_duplicate_same_checkpoint() {
+        let sk = make_sk(1);
+        let genesis = build_genesis(&[sk], "zone-a");
+
+        let mut detector = ForkDetector::with_defaults();
+        let mut observability = RuntimeSecurityObservability::new();
+        for tick in [100, 200] {
+            detector
+                .record_checkpoint_observed(
+                    &RecordCheckpointInput {
+                        zone: "zone-a",
+                        checkpoint: &genesis,
+                        accepted: tick == 100,
+                        frontier_seq: 0,
+                        frontier_epoch: SecurityEpoch::GENESIS,
+                        tick,
+                        trace_id: if tick == 100 { "t-0" } else { "t-duplicate" },
+                    },
+                    None,
+                    None,
+                    &mut observability,
+                )
+                .expect("duplicate same checkpoint should not fork");
+        }
+
+        assert_eq!(detector.history_size("zone-a"), 1);
+        assert_eq!(
+            observability
+                .metrics()
+                .checkpoint_violation_total
+                .get(&CheckpointViolationType::ForkDetected),
+            Some(&0)
+        );
+        assert!(observability.logs().is_empty());
     }
 
     #[test]

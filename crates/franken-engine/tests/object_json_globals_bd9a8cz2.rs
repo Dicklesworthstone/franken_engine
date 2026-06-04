@@ -9,6 +9,11 @@
 //! Value-asserting through HybridRouter::eval. (Note: `typeof Object/JSON`
 //! stays `undefined` — there is still no scope binding, matching how `Math`
 //! behaves; this wires the method calls, which is the actual fault.)
+//!
+//! Also covers bd-ck8ui's `Array` RHS for `instanceof`: the bare global is not
+//! scope-bound, so unshadowed `lhs instanceof Array` lowers through the existing
+//! `Array.isArray` hostcall while shadowed user constructors keep normal
+//! `instanceof` semantics.
 
 use frankenengine_engine::HybridRouter;
 
@@ -55,4 +60,22 @@ fn json_round_trips_a_primitive() {
     // follow-up — so the object round-trip is deliberately not asserted here.)
     assert_eq!(eval_value("JSON.parse(JSON.stringify(42));"), "42");
     assert_eq!(eval_value("JSON.parse(JSON.stringify(true));"), "true");
+}
+
+#[test]
+fn bare_array_rhs_supports_instanceof_arrays() {
+    assert_eq!(eval_value("[] instanceof Array;"), "true");
+}
+
+#[test]
+fn bare_array_rhs_rejects_non_arrays_for_instanceof() {
+    assert_eq!(eval_value("let o = {}; o instanceof Array;"), "false");
+}
+
+#[test]
+fn shadowed_array_rhs_keeps_user_constructor_instanceof() {
+    assert_eq!(
+        eval_value("let Array = function () {}; [] instanceof Array;"),
+        "false"
+    );
 }

@@ -6790,6 +6790,30 @@ fn lower_expression_to_ir1(
                 return Ok(());
             }
 
+            if *operator == BinaryOperator::Instanceof
+                && matches!(right.as_ref(), Expression::Identifier(name) if name == "Array")
+                && !binding_lookup.contains_key("Array")
+            {
+                // `Array` is not a scope binding on the eval path, but the
+                // runtime already has the canonical `Array.isArray` predicate.
+                // Route the unshadowed built-in RHS through that predicate
+                // while preserving normal `instanceof` for user-shadowed Array.
+                lower_expression_to_ir1(
+                    left,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ArrayIsArray".to_string(),
+                    arg_count: 1,
+                });
+                return Ok(());
+            }
+
             lower_expression_to_ir1(
                 left,
                 ops,

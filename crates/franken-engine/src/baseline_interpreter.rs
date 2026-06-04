@@ -33115,125 +33115,6 @@ mod tests {
         }
     }
 
-    #[test]
-    #[ignore = "stub: super() call lowering not exercised; needs SuperCall IR3 path and real parent-state assertion (bd-8yjxf)"]
-    fn super_call_invokes_parent_constructor() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "super-constructor-test");
-
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    #[ignore = "stub: super.method() dispatch not exercised; IR3 has LoadSuper but no super-method-call lowering wired here (bd-8yjxf)"]
-    fn super_method_calls_parent_method() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "super-method-test");
-
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    #[ignore = "stub: static method dispatch on constructor not exercised; needs DefineConstructor + CallMethod path with observable assertion (bd-8yjxf)"]
-    fn static_method_on_constructor() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "static-method-test");
-
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    #[ignore = "stub: computed method name `[expr]()` lowering not exercised; needs DefineComputedMethod-style IR3 flow (bd-8yjxf)"]
-    fn computed_method_name() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "computed-method-test");
-
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    #[ignore = "stub: accessor descriptor (get/set) invocation not exercised; no DefineAccessor IR3 op wired here (bd-8yjxf)"]
-    fn getter_setter() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "getter-setter-test");
-
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    #[ignore = "stub: class-as-expression evaluation not exercised; needs callable-constructor Value assertion (bd-8yjxf)"]
-    fn class_expression() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "class-expression-test");
-
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    #[ignore = "stub: new.target meta-property read not exercised; no IR3 op resolving NewTarget in constructor frame (bd-8yjxf)"]
-    fn new_target_in_constructor() {
-        let mut config = InterpreterConfig::quickjs_defaults();
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::VmDispatch);
-        config
-            .granted_capabilities
-            .insert(RuntimeCapability::HeapAllocate);
-        let mut core = InterpreterCore::new(config, "new-target-test");
-
-        let module = test_module(vec![Ir3Instruction::Halt]);
-        let result = core.execute(&module);
-        assert!(result.is_ok());
-    }
-
     // -----------------------------------------------------------------------
     // Timer substrate tests
     // -----------------------------------------------------------------------
@@ -37831,6 +37712,103 @@ mod tests {
             interp.recompute_estimated_memory_bytes(),
             interp.estimated_memory_bytes,
             "burst writes must not introduce drift"
+        );
+    }
+}
+
+#[cfg(test)]
+mod class_feature_bd_bg9l1_16_tests {
+    fn eval_class_source(source: &str) -> Result<String, String> {
+        let mut engine = crate::HybridRouter::default();
+        engine
+            .eval(source)
+            .map(|outcome| outcome.value)
+            .map_err(|error| error.to_string())
+    }
+
+    #[test]
+    fn super_call_fails_closed_until_lowered() {
+        let err = eval_class_source(concat!(
+            "class Parent { constructor(){ this.base = 41; } }\n",
+            "class Child extends Parent { constructor(){ super(); this.answer = this.base + 1; } }\n",
+            "let child = new Child(); child.answer;\n",
+        ))
+        .expect_err("super() source must fail closed until super-call lowering is implemented");
+        assert!(
+            err.contains("super expressions are not supported") || err.contains("super"),
+            "super() rejection should name the unsupported feature, got: {err}"
+        );
+    }
+
+    #[test]
+    fn super_method_fails_closed_until_lowered() {
+        let err = eval_class_source(concat!(
+            "class Parent { value(){ return 40; } }\n",
+            "class Child extends Parent { value(){ return super.value() + 2; } }\n",
+            "let child = new Child(); child.value();\n",
+        ))
+        .expect_err("super.method() source must fail closed until super lowering is implemented");
+        assert!(
+            err.contains("super expressions are not supported") || err.contains("super"),
+            "super.method() rejection should name the unsupported feature, got: {err}"
+        );
+    }
+
+    #[test]
+    fn static_method_on_constructor_fails_closed_on_function_receiver_property_access() {
+        let err = eval_class_source(concat!(
+            "class TestClass { static staticMethod(){ return \"static called\"; } }\n",
+            "TestClass.staticMethod();\n",
+        ))
+        .expect_err("static method dispatch should fail closed until constructor properties work");
+        assert!(
+            err.contains("expected object, got function")
+                || (err.contains("type error") && err.contains("function")),
+            "static method dispatch must fail closed on constructor-function property access, got: {err}"
+        );
+    }
+
+    #[test]
+    fn computed_method_name_fails_closed_until_lowered() {
+        let err = eval_class_source(concat!(
+            "class WithComputed { [\"answer\"](){ return 42; } }\n",
+            "let value = new WithComputed(); value.answer();\n",
+        ))
+        .expect_err("computed method names must fail closed until computed class methods lower");
+        assert!(
+            err.contains("computed") || err.contains("Unsupported") || err.contains("expected"),
+            "computed method rejection should be explicit, got: {err}"
+        );
+    }
+
+    #[test]
+    fn getter_setter_invokes_accessors_and_preserves_instance_state() {
+        let value = eval_class_source(concat!(
+            "class Box { set value(next){ this.raw = next; } get value(){ return this.raw + 1; } }\n",
+            "let box = new Box(); box.value = 42; box.value;\n",
+        ))
+        .expect("class getter/setter accessors must invoke functions from real source");
+        assert_eq!(value, "43");
+    }
+
+    #[test]
+    fn class_expression_constructs_and_preserves_instance_state() {
+        let value = eval_class_source(concat!(
+            "let Widget = class { constructor(){ this.answer = 42; } };\n",
+            "let widget = new Widget(); widget.answer;\n",
+        ))
+        .expect("class expressions must construct instances from real source");
+        assert_eq!(value, "42");
+    }
+
+    #[test]
+    fn new_target_fails_closed_until_supported() {
+        let err =
+            eval_class_source("class TargetProbe { constructor(){ this.target = new.target; } }\n")
+                .expect_err("new.target must fail closed until the meta-property is implemented");
+        assert!(
+            err.contains("new.target meta-property is not supported") || err.contains("new.target"),
+            "new.target rejection should name the unsupported meta-property, got: {err}"
         );
     }
 }

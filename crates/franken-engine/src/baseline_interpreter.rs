@@ -6416,18 +6416,8 @@ impl InterpreterCore {
             (self.register_base + self.config.max_registers as usize).min(self.registers.len());
         async_function.saved_registers = self.registers[reg_start..reg_end].to_vec();
 
-        // Store metadata about the resumption context
-        let resumption_data = AsyncResumptionContext {
-            async_function_id,
-            result_register: result_reg,
-        };
-
-        // Store resumption context in a special map for later retrieval
-        self.async_resumption_contexts
-            .insert(promise_handle.0, resumption_data);
-
         // Register the reactions with the awaited promise using the public then method
-        let _result_promise = self
+        let result_promise = self
             .promise_store
             .then(
                 promise_handle,
@@ -6441,14 +6431,22 @@ impl InterpreterCore {
                 got: e.to_string(),
             })?;
 
+        // Promise reactions resume through the promise returned by `.then()`.
+        self.async_resumption_contexts.insert(
+            result_promise.0,
+            AsyncResumptionContext {
+                async_function_id,
+                result_register: result_reg,
+            },
+        );
+
         Ok(())
     }
 
     fn resume_async_function_after_await(
         &mut self,
         resumption_context: AsyncResumptionContext,
-        _settled_value: crate::object_model::JsValue,
-        microtask: &crate::promise_model::Microtask,
+        settled: Result<crate::object_model::JsValue, crate::object_model::JsValue>,
     ) -> Result<(), InterpreterError> {
         let async_function_id = resumption_context.async_function_id;
         let result_register = resumption_context.result_register;
@@ -6500,23 +6498,6 @@ impl InterpreterCore {
             }
         });
 
-        // Store the settled value in the result register
-        let resolved_value = match microtask {
-            crate::promise_model::Microtask::PromiseReaction {
-                handler: None,
-                argument,
-                ..
-            } => {
-                // Determine if this was a fulfillment or rejection based on the task type
-                // For now, we assume fulfillment. A proper implementation would need
-                // to track the reaction type (fulfill vs reject)
-                Self::js_value_to_value(argument)
-            }
-            _ => Value::Undefined,
-        };
-
-        self.write_reg(result_register, resolved_value)?;
-
         // Resume execution - now we can safely get the mutable reference
         let async_function = self
             .async_functions
@@ -6527,7 +6508,47 @@ impl InterpreterCore {
             })?;
         async_function.phase = AsyncFunctionPhase::Executing;
 
+        match settled {
+            Ok(argument) => {
+                self.write_reg(result_register, Self::js_value_to_value(&argument))?;
+            }
+            Err(reason) => {
+                let error_value = Self::js_value_to_value(&reason);
+                let _ = self.raise_await_rejection(error_value)?;
+            }
+        }
+
         Ok(())
+    }
+
+    fn continue_resumed_async_function(
+        &mut self,
+        module: Option<&Ir3Module>,
+    ) -> Result<(), InterpreterError> {
+        let module = module.ok_or_else(|| InterpreterError::TypeError {
+            expected: "module context for async function resumption".to_string(),
+            got: "missing module context".to_string(),
+        })?;
+        match self.run_loop(module) {
+            Ok(_) | Err(InterpreterError::Halted) => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn raise_await_rejection(&mut self, error_value: Value) -> Result<bool, InterpreterError> {
+        self.suspend_current_abrupt_completion();
+        self.pending_return = None;
+        self.pending_exception = Some(error_value.clone());
+        if let Some(frame) = self.pop_exception_target_frame() {
+            self.ip = frame.catch_target;
+            Ok(false)
+        } else if self.reject_nearest_async_boundary(error_value.clone())? {
+            Ok(true)
+        } else {
+            Err(InterpreterError::UncaughtException {
+                value: Self::uncaught_exception_description(&error_value),
+            })
+        }
     }
 
     fn uncaught_exception_description(value: &Value) -> String {
@@ -9379,17 +9400,8 @@ impl InterpreterCore {
                             }
                             crate::promise_model::PromiseState::Rejected(js_reason) => {
                                 let error_value = Self::js_value_to_value(&js_reason);
-                                self.suspend_current_abrupt_completion();
-                                self.pending_return = None;
-                                self.pending_exception = Some(error_value.clone());
-                                if let Some(frame) = self.pop_exception_target_frame() {
-                                    self.ip = frame.catch_target;
-                                } else if self.reject_nearest_async_boundary(error_value.clone())? {
+                                if self.raise_await_rejection(error_value.clone())? {
                                     continue;
-                                } else {
-                                    return Err(InterpreterError::UncaughtException {
-                                        value: Self::uncaught_exception_description(&error_value),
-                                    });
                                 }
                             }
                             crate::promise_model::PromiseState::Pending => {
@@ -12640,18 +12652,17 @@ impl InterpreterCore {
                             self.async_resumption_contexts.remove(&result_promise.0)
                         {
                             // Resume the async function
-                            if self
+                            if let Err(err) = self
                                 .resume_async_function_after_await(
                                     resumption_context,
-                                    argument.clone(),
-                                    &task,
+                                    Ok(argument.clone()),
                                 )
-                                .is_err()
+                                .and_then(|()| self.continue_resumed_async_function(module))
                             {
-                                // If resumption fails, just fulfill the result promise
-                                let _ = self.fulfill_promise(
+                                let reason = Self::promise_rejection_from_error(&err);
+                                let _ = self.reject_promise(
                                     *result_promise,
-                                    argument.clone(),
+                                    reason,
                                     task_label.clone(),
                                 );
                             }
@@ -12696,8 +12707,27 @@ impl InterpreterCore {
                     result_promise,
                     label: task_label,
                 } => {
-                    let _ =
-                        self.reject_promise(*result_promise, reason.clone(), task_label.clone());
+                    if let Some(resumption_context) =
+                        self.async_resumption_contexts.remove(&result_promise.0)
+                    {
+                        if let Err(err) = self
+                            .resume_async_function_after_await(
+                                resumption_context,
+                                Err(reason.clone()),
+                            )
+                            .and_then(|()| self.continue_resumed_async_function(module))
+                        {
+                            let reason = Self::promise_rejection_from_error(&err);
+                            let _ =
+                                self.reject_promise(*result_promise, reason, task_label.clone());
+                        }
+                    } else {
+                        let _ = self.reject_promise(
+                            *result_promise,
+                            reason.clone(),
+                            task_label.clone(),
+                        );
+                    }
                 }
                 crate::promise_model::Microtask::ResolveThenable {
                     promise,
@@ -26770,6 +26800,191 @@ mod async_runtime_tests_current {
         assert_eq!(
             promise.state,
             crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(99))
+        );
+    }
+
+    #[test]
+    fn pending_await_fulfillment_resumes_async_result_promise_bd_oswo2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("await_pending_then_return".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        let awaited = core.promise_store.create();
+        core.mutate_registers(|r| {
+            r[1] = Value::Promise(awaited.0);
+            r[3] = Value::AsyncFunction(0);
+        });
+
+        let result = core
+            .execute(&module)
+            .expect("pending await should suspend without aborting");
+        assert_eq!(result.value, Value::Undefined);
+        let async_result_promise = core.async_functions[0].result_promise;
+
+        core.fulfill_promise(
+            awaited,
+            crate::object_model::JsValue::Int(42),
+            crate::ifc_artifacts::Label::Public,
+        )
+        .expect("awaited promise should be fulfillable");
+        core.drain_microtasks(Some(&module));
+
+        let promise = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(async_result_promise))
+            .expect("async result promise should exist");
+        assert_eq!(
+            promise.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Int(42))
+        );
+    }
+
+    #[test]
+    fn pending_await_rejection_rejects_async_result_promise_bd_oswo2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("await_pending_then_reject".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        let awaited = core.promise_store.create();
+        core.mutate_registers(|r| {
+            r[1] = Value::Promise(awaited.0);
+            r[3] = Value::AsyncFunction(0);
+        });
+
+        let result = core
+            .execute(&module)
+            .expect("pending await should suspend without aborting");
+        assert_eq!(result.value, Value::Undefined);
+        let async_result_promise = core.async_functions[0].result_promise;
+
+        core.reject_promise(
+            awaited,
+            crate::object_model::JsValue::Str("boom".to_string()),
+            crate::ifc_artifacts::Label::Public,
+        )
+        .expect("awaited promise should be rejectable");
+        core.drain_microtasks(Some(&module));
+
+        let promise = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(async_result_promise))
+            .expect("async result promise should exist");
+        assert_eq!(
+            promise.state,
+            crate::promise_model::PromiseState::Rejected(crate::object_model::JsValue::Str(
+                "boom".to_string()
+            ))
+        );
+    }
+
+    #[test]
+    fn pending_await_rejection_enters_async_catch_bd_oswo2() {
+        let module = test_module_with_functions(
+            vec![
+                Ir3Instruction::Call {
+                    callee: 3,
+                    args: RegRange { start: 1, count: 1 },
+                    dst: 0,
+                },
+                Ir3Instruction::Halt,
+                Ir3Instruction::BeginTry {
+                    catch_target: 6,
+                    finally_target: None,
+                },
+                Ir3Instruction::AwaitValue { promise_reg: 0 },
+                Ir3Instruction::EndTry,
+                Ir3Instruction::Return { value: 0 },
+                Ir3Instruction::EnterCatch { dst: 0 },
+                Ir3Instruction::Return { value: 0 },
+            ],
+            vec![Ir3FunctionDesc {
+                entry: 2,
+                arity: 1,
+                frame_size: 1,
+                name: Some("await_pending_then_catch".to_string()),
+                is_generator: false,
+                rest_param_index: None,
+            }],
+        );
+
+        let mut core = test_interpreter();
+        core.closures.push(ClosureValue {
+            function_index: 0,
+            captured_env: Vec::new(),
+        });
+        let awaited = core.promise_store.create();
+        core.mutate_registers(|r| {
+            r[1] = Value::Promise(awaited.0);
+            r[3] = Value::AsyncFunction(0);
+        });
+
+        let result = core
+            .execute(&module)
+            .expect("pending await should suspend without aborting");
+        assert_eq!(result.value, Value::Undefined);
+        let async_result_promise = core.async_functions[0].result_promise;
+
+        core.reject_promise(
+            awaited,
+            crate::object_model::JsValue::Str("caught".to_string()),
+            crate::ifc_artifacts::Label::Public,
+        )
+        .expect("awaited promise should be rejectable");
+        core.drain_microtasks(Some(&module));
+
+        let promise = core
+            .promise_store
+            .get(crate::promise_model::PromiseHandle(async_result_promise))
+            .expect("async result promise should exist");
+        assert_eq!(
+            promise.state,
+            crate::promise_model::PromiseState::Fulfilled(crate::object_model::JsValue::Str(
+                "caught".to_string()
+            ))
         );
     }
 

@@ -734,6 +734,21 @@ pub enum BuiltinFunctionKind {
     /// `Array.prototype.findIndex` — receiver-aware: returns the index of the
     /// first element for which the callback is truthy, else -1 (bd-962ev.2).
     ArrayFindIndex,
+    /// `Array.prototype.findLast` — receiver-aware: the LAST element for which
+    /// the callback is truthy (iterates in reverse), else `undefined` (ES2023)
+    /// (bd-isqzc).
+    ArrayFindLast,
+    /// `Array.prototype.findLastIndex` — receiver-aware: index of the last
+    /// element for which the callback is truthy (reverse), else -1 (ES2023)
+    /// (bd-isqzc).
+    ArrayFindLastIndex,
+    /// `Array.prototype.flatMap` — receiver-aware: maps each element then
+    /// flattens the result one level (ES2019) (bd-isqzc).
+    ArrayFlatMap,
+    /// `Array.prototype.copyWithin` — receiver-aware: copies the subsequence
+    /// `[start, end)` to `target` in place; negative indices count from the end;
+    /// returns the array (ES2015) (bd-xjkup).
+    ArrayCopyWithin,
     /// `Array.prototype.some` — receiver-aware: true if the callback is truthy
     /// for any element (bd-962ev.2).
     ArraySome,
@@ -1252,6 +1267,42 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_find_last() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayFindLast,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_find_last_index() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayFindLastIndex,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_flat_map() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayFlatMap,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_copy_within() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayCopyWithin,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn array_some() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArraySome,
@@ -1611,6 +1662,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayFilter => "filter",
             BuiltinFunctionKind::ArrayFind => "find",
             BuiltinFunctionKind::ArrayFindIndex => "findIndex",
+            BuiltinFunctionKind::ArrayFindLast => "findLast",
+            BuiltinFunctionKind::ArrayFindLastIndex => "findLastIndex",
+            BuiltinFunctionKind::ArrayFlatMap => "flatMap",
+            BuiltinFunctionKind::ArrayCopyWithin => "copyWithin",
             BuiltinFunctionKind::ArraySome => "some",
             BuiltinFunctionKind::ArrayEvery => "every",
             BuiltinFunctionKind::ArrayReduce => "reduce",
@@ -5977,6 +6032,141 @@ impl InterpreterCore {
                     }
                 }
                 Ok(Value::Int(-1))
+            }
+            BuiltinFunctionKind::ArrayFindLast => {
+                // ES2023 23.1.3.9: the LAST element for which the callback is
+                // truthy (iterating in reverse), else undefined.
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.findLast")?;
+                for index in (0..len).rev() {
+                    let element = self
+                        .array_index_value(arr_id, index)?
+                        .unwrap_or(Value::Undefined);
+                    let hit = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element.clone(),
+                        index,
+                        arr_id,
+                    )?;
+                    if hit.is_truthy() {
+                        return Ok(element);
+                    }
+                }
+                Ok(Value::Undefined)
+            }
+            BuiltinFunctionKind::ArrayFindLastIndex => {
+                // ES2023 23.1.3.10: index of the last element for which the
+                // callback is truthy (reverse), else -1.
+                let (arr_id, callback, this_arg, len) = self.array_callback_receiver(
+                    receiver,
+                    args,
+                    "Array.prototype.findLastIndex",
+                )?;
+                for index in (0..len).rev() {
+                    let element = self
+                        .array_index_value(arr_id, index)?
+                        .unwrap_or(Value::Undefined);
+                    let hit = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        arr_id,
+                    )?;
+                    if hit.is_truthy() {
+                        return Ok(Value::Int(i64::try_from(index).unwrap_or(i64::MAX)));
+                    }
+                }
+                Ok(Value::Int(-1))
+            }
+            BuiltinFunctionKind::ArrayFlatMap => {
+                // ES2019 23.1.3.11: map each element through the callback, then
+                // flatten the result one level (a returned array's elements are
+                // spread; a non-array result is appended as-is).
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.flatMap")?;
+                let result = self.alloc_array_with_prototype(None)?;
+                let mut out = 0usize;
+                for index in 0..len {
+                    let Some(element) = self.array_index_value(arr_id, index)? else {
+                        continue;
+                    };
+                    let mapped = self.invoke_array_callback(
+                        Some(module),
+                        &callback,
+                        this_arg.clone(),
+                        element,
+                        index,
+                        arr_id,
+                    )?;
+                    let nested = if let Value::Object(eid) = &mapped {
+                        self.heap
+                            .get(eid.0 as usize)
+                            .map(|object| object.is_array)
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    };
+                    if nested {
+                        if let Value::Object(eid) = mapped {
+                            // depth 0 => copy the mapped array's elements one
+                            // level without recursing further.
+                            self.array_flatten_into(eid, 0, result, &mut out)?;
+                        }
+                    } else {
+                        self.set_object_property(result, out.to_string(), mapped)?;
+                        out += 1;
+                    }
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
+            }
+            BuiltinFunctionKind::ArrayCopyWithin => {
+                // ES2015 23.1.3.3: copy the subsequence `[start, end)` to
+                // `target`, in place; negative indices count from the end;
+                // returns the array. The source slice is snapshotted first so
+                // overlapping ranges copy correctly.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.copyWithin".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let target = match self.builtin_arg(args, 0)? {
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    None => 0,
+                };
+                let start = match self.builtin_arg(args, 1)? {
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    None => 0,
+                };
+                let end = match self.builtin_arg(args, 2)? {
+                    None | Some(Value::Undefined) => len,
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                };
+                let count = end
+                    .saturating_sub(start)
+                    .min(len.saturating_sub(target));
+                let mut buf = Vec::with_capacity(count);
+                for i in 0..count {
+                    buf.push(
+                        self.array_index_value(arr_id, start + i)?
+                            .unwrap_or(Value::Undefined),
+                    );
+                }
+                for (i, value) in buf.into_iter().enumerate() {
+                    self.set_object_property(arr_id, (target + i).to_string(), value)?;
+                }
+                Ok(Value::Object(arr_id))
             }
             BuiltinFunctionKind::ArraySome => {
                 // ES2020 23.1.3.24: true if the callback is truthy for any
@@ -11406,6 +11596,10 @@ impl InterpreterCore {
             "filter" => Some(BuiltinFunction::array_filter()),
             "find" => Some(BuiltinFunction::array_find()),
             "findIndex" => Some(BuiltinFunction::array_find_index()),
+            "findLast" => Some(BuiltinFunction::array_find_last()),
+            "findLastIndex" => Some(BuiltinFunction::array_find_last_index()),
+            "flatMap" => Some(BuiltinFunction::array_flat_map()),
+            "copyWithin" => Some(BuiltinFunction::array_copy_within()),
             "some" => Some(BuiltinFunction::array_some()),
             "every" => Some(BuiltinFunction::array_every()),
             "reduce" => Some(BuiltinFunction::array_reduce()),

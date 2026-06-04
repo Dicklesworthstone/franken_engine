@@ -64,7 +64,7 @@ use crate::hostcall_telemetry::{
 };
 use crate::ifc_artifacts::Label;
 use crate::ir_contract::{
-    CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
+    AccessorKind, CapabilityTag, HostcallDecisionRecord, Ir0Module, Ir3Instruction, Ir3Module,
     IteratorCloseReason, RegRange, WitnessEvent, WitnessEventKind,
 };
 use crate::iterator_protocol::{
@@ -568,6 +568,11 @@ pub enum Value {
     Promise(u32),
     /// Builtin callable bound into the runtime environment.
     BuiltinFunction(BuiltinFunction),
+    /// Internal accessor descriptor installed by class/object getter/setter definitions.
+    Accessor {
+        get: Option<Box<Value>>,
+        set: Option<Box<Value>>,
+    },
 }
 
 mod arc_str_serde {
@@ -1481,7 +1486,8 @@ impl Value {
             | Self::AsyncGeneratorFunction(_)
             | Self::AsyncGeneratorObject(_)
             | Self::Promise(_)
-            | Self::BuiltinFunction(_) => true,
+            | Self::BuiltinFunction(_)
+            | Self::Accessor { .. } => true,
         }
     }
 
@@ -1521,7 +1527,8 @@ impl Value {
             | Self::Generator(_)
             | Self::AsyncFunctionObject(_)
             | Self::AsyncGeneratorObject(_)
-            | Self::Promise(_) => "object",
+            | Self::Promise(_)
+            | Self::Accessor { .. } => "object",
         }
     }
 
@@ -1543,7 +1550,8 @@ impl Value {
             | Self::Generator(_)
             | Self::AsyncFunctionObject(_)
             | Self::AsyncGeneratorObject(_)
-            | Self::Promise(_) => "object",
+            | Self::Promise(_)
+            | Self::Accessor { .. } => "object",
         }
     }
 }
@@ -1570,6 +1578,7 @@ impl fmt::Display for Value {
             Self::AsyncGeneratorObject(idx) => write!(f, "[asyncgeneratorobject#{idx}]"),
             Self::Promise(idx) => write!(f, "[promise#{idx}]"),
             Self::BuiltinFunction(builtin) => write!(f, "[builtin:{}]", builtin.display_name()),
+            Self::Accessor { .. } => write!(f, "[accessor]"),
         }
     }
 }
@@ -2412,11 +2421,69 @@ impl EvidenceLog {
                         + bf.iterator_handle.map(u64::from).unwrap_or(0)
                         + bf.bound_object.map(u64::from).unwrap_or(0)
                 }
+                Value::Accessor { get, set } => {
+                    let get_hash = get
+                        .as_deref()
+                        .map(Self::hash_register_value_seed)
+                        .unwrap_or(0);
+                    let set_hash = set
+                        .as_deref()
+                        .map(Self::hash_register_value_seed)
+                        .unwrap_or(0);
+                    19u64
+                        .wrapping_add(get_hash.wrapping_mul(31))
+                        .wrapping_add(set_hash)
+                }
             };
             hasher_state = hasher_state.wrapping_mul(31).wrapping_add(value_hash);
         }
 
         format!("reghash-{:016x}", hasher_state)
+    }
+
+    fn hash_register_value_seed(value: &Value) -> u64 {
+        match value {
+            Value::Undefined => 0,
+            Value::Null => 1,
+            Value::Bool(b) => 2 + (*b as u64),
+            Value::Int(i) => 4 + (*i as u64),
+            Value::Float(f) => 4 + f.0.to_bits(),
+            Value::BigInt(n) => n.bytes().fold(18u64, |acc, byte| {
+                acc.wrapping_mul(31).wrapping_add(byte as u64)
+            }),
+            Value::Str(s) => s.bytes().fold(5u64, |acc, byte| {
+                acc.wrapping_mul(31).wrapping_add(byte as u64)
+            }),
+            Value::Object(id) => 6 + (id.0 as u64),
+            Value::Function(id) => 7 + (*id as u64),
+            Value::Closure(id) => 8 + (*id as u64),
+            Value::Iterator(id) => 9 + (*id as u64),
+            Value::GeneratorFunction(id) => 10 + (*id as u64),
+            Value::Generator(id) => 11 + (*id as u64),
+            Value::AsyncFunction(id) => 12 + (*id as u64),
+            Value::AsyncFunctionObject(id) => 13 + (*id as u64),
+            Value::AsyncGeneratorFunction(id) => 14 + (*id as u64),
+            Value::AsyncGeneratorObject(id) => 15 + (*id as u64),
+            Value::Promise(id) => 16 + (*id as u64),
+            Value::BuiltinFunction(bf) => {
+                17 + (bf.kind as u64)
+                    + bf.iterator_handle.map(u64::from).unwrap_or(0)
+                    + bf.bound_object.map(u64::from).unwrap_or(0)
+            }
+            Value::Accessor { get, set } => {
+                let get_hash = get
+                    .as_deref()
+                    .map(Self::hash_register_value_seed)
+                    .unwrap_or(0);
+                let set_hash = set
+                    .as_deref()
+                    .map(Self::hash_register_value_seed)
+                    .unwrap_or(0);
+                19u64
+                    .wrapping_add(get_hash.wrapping_mul(31))
+                    .wrapping_add(set_hash)
+            }
+        }
     }
 }
 
@@ -8351,6 +8418,30 @@ impl InterpreterCore {
                     }
                     self.ip += 1;
                 }
+                Ir3Instruction::DefineAccessor {
+                    obj,
+                    key,
+                    func,
+                    kind,
+                } => {
+                    let obj_val = self.read_reg(obj)?;
+                    let key_val = self.read_reg(key)?;
+                    let func_val = self.read_reg(func)?;
+                    let key_str = self.property_key_from_value(&key_val);
+
+                    match obj_val {
+                        Value::Object(oid) => {
+                            self.define_accessor_property(oid, key_str, func_val, kind)?;
+                        }
+                        _ => {
+                            return Err(InterpreterError::TypeError {
+                                expected: "object".to_string(),
+                                got: obj_val.type_name().to_string(),
+                            });
+                        }
+                    }
+                    self.ip += 1;
+                }
                 Ir3Instruction::DeleteProperty { obj, key, dst } => {
                     let obj_val = self.read_reg(obj)?;
                     let key_val = self.read_reg(key)?;
@@ -8923,9 +9014,10 @@ impl InterpreterCore {
                             Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
                             Value::Null => "null".to_string(),
                             Value::Undefined => "undefined".to_string(),
-                            Value::Object(_) | Value::Iterator(_) | Value::Generator(_) => {
-                                "[object Object]".to_string()
-                            }
+                            Value::Object(_)
+                            | Value::Iterator(_)
+                            | Value::Generator(_)
+                            | Value::Accessor { .. } => "[object Object]".to_string(),
                             Value::Promise(_) => "[object Promise]".to_string(),
                             Value::Function(_)
                             | Value::Closure(_)
@@ -10854,6 +10946,16 @@ impl InterpreterCore {
         object_id: ObjectId,
         key: &str,
     ) -> Result<Value, InterpreterError> {
+        self.prototype_chain_get_with_receiver(None, object_id, key, Value::Object(object_id))
+    }
+
+    fn prototype_chain_get_with_receiver(
+        &mut self,
+        module: Option<&Ir3Module>,
+        object_id: ObjectId,
+        key: &str,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
         let mut current = Some(object_id);
         let mut depth = 0u32;
         let mut visited = BTreeSet::new();
@@ -10869,11 +10971,14 @@ impl InterpreterCore {
                 );
                 return Ok(Value::Undefined);
             }
-            let object = self
-                .heap
-                .get(id.0 as usize)
-                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
-            if let Some(val) = object.properties.get(key) {
+            let (property_value, next_prototype) = {
+                let object = self
+                    .heap
+                    .get(id.0 as usize)
+                    .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+                (object.properties.get(key).cloned(), object.prototype)
+            };
+            if let Some(val) = property_value {
                 // Capture property resolution success for deterministic replay
                 self.nondeterminism_trace.capture(
                     NondeterminismSource::PropertyResolution,
@@ -10885,9 +10990,9 @@ impl InterpreterCore {
                     self.instructions_executed,
                     "baseline_interpreter",
                 );
-                return Ok(val.clone());
+                return self.resolve_accessor_get(module, val, receiver);
             }
-            current = object.prototype;
+            current = next_prototype;
             depth += 1;
         }
 
@@ -11482,7 +11587,7 @@ impl InterpreterCore {
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
-            return self.prototype_chain_get(object_id, key);
+            return self.prototype_chain_get_with_receiver(module, object_id, key, receiver);
         };
 
         if let Some(value) = self.invoke_proxy_trap(
@@ -11513,6 +11618,11 @@ impl InterpreterCore {
             });
         }
         let Some((target, handler)) = self.active_proxy_record(object_id)? else {
+            if let Some(accessor) = self.prototype_chain_find_property(object_id, key)?
+                && self.resolve_accessor_set(module, accessor, receiver, value.clone())?
+            {
+                return Ok(true);
+            }
             self.set_object_property(object_id, key.to_string(), value)?;
             return Ok(true);
         };
@@ -12753,7 +12863,8 @@ impl InterpreterCore {
             | Value::AsyncFunction(_)
             | Value::AsyncFunctionObject(_)
             | Value::AsyncGeneratorFunction(_)
-            | Value::AsyncGeneratorObject(_) => None,
+            | Value::AsyncGeneratorObject(_)
+            | Value::Accessor { .. } => None,
         }
     }
 
@@ -12791,7 +12902,8 @@ impl InterpreterCore {
             | Value::AsyncFunction(_)
             | Value::AsyncFunctionObject(_)
             | Value::AsyncGeneratorFunction(_)
-            | Value::AsyncGeneratorObject(_) => Some(f64::NAN),
+            | Value::AsyncGeneratorObject(_)
+            | Value::Accessor { .. } => Some(f64::NAN),
         }
     }
 
@@ -12808,6 +12920,7 @@ impl InterpreterCore {
             Value::BigInt(n) => n.clone(),
             Value::Float(f) => f.to_string(),
             Value::Object(_) => "[object Object]".to_string(),
+            Value::Accessor { .. } => "[object Object]".to_string(),
             Value::Function(_) => "[object Function]".to_string(),
             Value::Closure(_) => "[object Function]".to_string(),
             Value::Iterator(_) => "[object Iterator]".to_string(),
@@ -12831,6 +12944,7 @@ impl InterpreterCore {
             Value::BigInt(_) => "[object BigInt]".to_string(),
             Value::Str(_) => "[object String]".to_string(),
             Value::Object(_) => "[object Object]".to_string(),
+            Value::Accessor { .. } => "[object Object]".to_string(),
             Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => {
                 "[object Function]".to_string()
             }
@@ -14601,6 +14715,96 @@ impl InterpreterCore {
         Ok(Value::Undefined)
     }
 
+    fn prototype_chain_find_property(
+        &self,
+        object_id: ObjectId,
+        key: &str,
+    ) -> Result<Option<Value>, InterpreterError> {
+        let mut current = Some(object_id);
+        let mut depth = 0u32;
+        let mut visited = BTreeSet::new();
+
+        while let Some(id) = current {
+            if depth >= MAX_PROTOTYPE_CHAIN_DEPTH || !visited.insert(id) {
+                return Ok(None);
+            }
+            let object = self
+                .heap
+                .get(id.0 as usize)
+                .ok_or(InterpreterError::ObjectNotFound { id: id.0 })?;
+            if let Some(value) = object.properties.get(key) {
+                return Ok(Some(value.clone()));
+            }
+            current = object.prototype;
+            depth += 1;
+        }
+
+        Ok(None)
+    }
+
+    fn resolve_accessor_get(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+        receiver: Value,
+    ) -> Result<Value, InterpreterError> {
+        match value {
+            Value::Accessor { get: Some(get), .. } => {
+                self.invoke_inline_method_call(module, *get, receiver, Vec::new())
+            }
+            Value::Accessor { get: None, .. } => Ok(Value::Undefined),
+            other => Ok(other),
+        }
+    }
+
+    fn resolve_accessor_set(
+        &mut self,
+        module: Option<&Ir3Module>,
+        value: Value,
+        receiver: Value,
+        assigned: Value,
+    ) -> Result<bool, InterpreterError> {
+        match value {
+            Value::Accessor { set: Some(set), .. } => {
+                self.invoke_inline_method_call(module, *set, receiver, vec![assigned])?;
+                Ok(true)
+            }
+            Value::Accessor { set: None, .. } => Ok(true),
+            _ => Ok(false),
+        }
+    }
+
+    fn define_accessor_property(
+        &mut self,
+        object_id: ObjectId,
+        key: String,
+        func: Value,
+        kind: AccessorKind,
+    ) -> Result<(), InterpreterError> {
+        let existing = self
+            .heap
+            .get(object_id.0 as usize)
+            .ok_or(InterpreterError::ObjectNotFound { id: object_id.0 })?
+            .properties
+            .get(&key)
+            .cloned();
+        let (get, set) = match existing {
+            Some(Value::Accessor { get, set }) => (get, set),
+            _ => (None, None),
+        };
+        let accessor = match kind {
+            AccessorKind::Get => Value::Accessor {
+                get: Some(Box::new(func)),
+                set,
+            },
+            AccessorKind::Set => Value::Accessor {
+                get,
+                set: Some(Box::new(func)),
+            },
+        };
+        self.set_object_property(object_id, key, accessor)
+    }
+
     fn dispatch_timer_hostcall(
         &mut self,
         cap: &str,
@@ -14832,7 +15036,8 @@ impl InterpreterCore {
             | Value::Promise(_)
             | Value::Generator(_)
             | Value::AsyncFunctionObject(_)
-            | Value::AsyncGeneratorObject(_) => "{}".to_string(),
+            | Value::AsyncGeneratorObject(_)
+            | Value::Accessor { .. } => "{}".to_string(),
         };
         Some(rendered)
     }
@@ -23060,6 +23265,7 @@ impl InterpreterCore {
             Value::BuiltinFunction(builtin) => {
                 format!("[Function: builtin {}]", builtin.display_name())
             }
+            Value::Accessor { .. } => "[object Object]".to_string(),
         }
     }
 

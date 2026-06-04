@@ -40,16 +40,19 @@ fn bigint_typeof() {
 }
 
 #[test]
-#[ignore = "bd-phzab: class accessor getter not invoked; un-ignore when it lands"]
 fn class_getter_returns_value() {
-    assert_eq!(eval_value("class C { get v() { return 7; } } new C().v"), "7");
+    assert_eq!(
+        eval_value("class C { get v() { return 7; } } new C().v"),
+        "7"
+    );
 }
 
 #[test]
-#[ignore = "bd-phzab: class accessor setter not invoked; un-ignore when it lands"]
 fn class_setter_side_effect() {
     assert_eq!(
-        eval_value("class C { set v(x){ this._x = x; } get v(){ return this._x; } } let c = new C(); c.v = 5; c.v"),
+        eval_value(
+            "class C { set v(x){ this._x = x; } get v(){ return this._x; } } let c = new C(); c.v = 5; c.v"
+        ),
         "5"
     );
 }

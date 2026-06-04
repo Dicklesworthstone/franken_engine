@@ -52,10 +52,10 @@ use crate::flow_lattice::{
 use crate::hash_tiers::ContentHash;
 use crate::ifc_artifacts::{Label, ProofMethod};
 use crate::ir_contract::{
-    BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module, Ir1Literal,
-    Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc, Ir3Instruction, Ir3Module,
-    IrError, IrLevel, IteratorCloseReason, Reg, RegRange, ResolvedBinding, ScopeId, ScopeKind,
-    ScopeNode, verify_ir1_source, verify_ir3_specialization,
+    AccessorKind, BindingId, BindingKind, CapabilityTag, EffectBoundary, FlowAnnotation, Ir0Module,
+    Ir1Literal, Ir1Module, Ir1Op, Ir1PropertyKey, Ir2Module, Ir2Op, Ir3FunctionDesc,
+    Ir3Instruction, Ir3Module, IrError, IrLevel, IteratorCloseReason, Reg, RegRange,
+    ResolvedBinding, ScopeId, ScopeKind, ScopeNode, verify_ir1_source, verify_ir3_specialization,
 };
 use crate::parser::{
     PARSER_DIAGNOSTIC_HASH_ALGORITHM, PARSER_DIAGNOSTIC_HASH_PREFIX,
@@ -3073,14 +3073,25 @@ fn lower_statement_to_ir1_with_flow(
                     rest_param_index: m_rest_param_index,
                 });
 
-                // SetProperty pops value (top), then object (next).
-                // Stack is now: [target_obj, method_fn]
-                ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static(method_name),
-                });
+                let property_key = Ir1PropertyKey::Static(method_name);
+                match method.kind {
+                    MethodKind::Get => ops.push(Ir1Op::DefineAccessor {
+                        key: property_key,
+                        kind: AccessorKind::Get,
+                    }),
+                    MethodKind::Set => ops.push(Ir1Op::DefineAccessor {
+                        key: property_key,
+                        kind: AccessorKind::Set,
+                    }),
+                    _ => {
+                        // SetProperty pops value (top), then object (next).
+                        // Stack is now: [target_obj, method_fn]
+                        ops.push(Ir1Op::SetProperty { key: property_key });
+                    }
+                }
                 // Discard (not Pop): SetProperty leaves the method value on the
-                // stack; discarding it as a module completion would Move it into
-                // r0 and clobber the constructor's binding (bd-62un6).
+                // stack; DefineAccessor mirrors that completion discipline so
+                // discarding it cannot clobber the constructor binding (bd-62un6).
                 ops.push(Ir1Op::Discard);
             }
         }
@@ -4153,6 +4164,33 @@ pub fn lower_ir2_to_ir3(
                 });
                 value_stack.push(val);
             }
+            Ir1Op::DefineAccessor { key, kind } => {
+                let func = pop_lowering_value(&mut value_stack)?;
+                let (obj, key_reg) = match key {
+                    Ir1PropertyKey::Static(key) => {
+                        let obj = pop_lowering_value(&mut value_stack)?;
+                        let key_reg = alloc_register(&mut register_cursor);
+                        let pool_index = push_constant_optimized(&mut constant_pool, key);
+                        ir3.instructions.push(Ir3Instruction::LoadStr {
+                            dst: key_reg,
+                            pool_index,
+                        });
+                        (obj, key_reg)
+                    }
+                    Ir1PropertyKey::Dynamic => {
+                        let key_reg = pop_lowering_value(&mut value_stack)?;
+                        let obj = pop_lowering_value(&mut value_stack)?;
+                        (obj, key_reg)
+                    }
+                };
+                ir3.instructions.push(Ir3Instruction::DefineAccessor {
+                    obj,
+                    key: key_reg,
+                    func,
+                    kind: *kind,
+                });
+                value_stack.push(func);
+            }
             Ir1Op::DeleteProperty { key } => {
                 let (obj, key_reg) = match key {
                     Ir1PropertyKey::Static(key) => {
@@ -5183,6 +5221,33 @@ pub fn lower_ir2_to_ir3(
                         val: value,
                     });
                     fn_value_stack.push(value);
+                }
+                Ir1Op::DefineAccessor { key, kind } => {
+                    let func = pop_lowering_value(&mut fn_value_stack)?;
+                    let (obj, key_reg) = match key {
+                        Ir1PropertyKey::Static(k) => {
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
+                            let kr = alloc_register(&mut fn_reg);
+                            let pool_index = push_constant_optimized(&mut constant_pool, k);
+                            ir3.instructions.push(Ir3Instruction::LoadStr {
+                                dst: kr,
+                                pool_index,
+                            });
+                            (obj, kr)
+                        }
+                        Ir1PropertyKey::Dynamic => {
+                            let kr = pop_lowering_value(&mut fn_value_stack)?;
+                            let obj = pop_lowering_value(&mut fn_value_stack)?;
+                            (obj, kr)
+                        }
+                    };
+                    ir3.instructions.push(Ir3Instruction::DefineAccessor {
+                        obj,
+                        key: key_reg,
+                        func,
+                        kind: *kind,
+                    });
+                    fn_value_stack.push(func);
                 }
                 Ir1Op::LoadThis => {
                     let dst = alloc_register(&mut fn_reg);
@@ -9147,12 +9212,21 @@ fn lower_expression_to_ir1(
                     is_generator: false,
                     rest_param_index: m_rest_param_index,
                 });
-                ops.push(Ir1Op::SetProperty {
-                    key: Ir1PropertyKey::Static(method_name),
-                });
+                let property_key = Ir1PropertyKey::Static(method_name);
+                match method.kind {
+                    MethodKind::Get => ops.push(Ir1Op::DefineAccessor {
+                        key: property_key,
+                        kind: AccessorKind::Get,
+                    }),
+                    MethodKind::Set => ops.push(Ir1Op::DefineAccessor {
+                        key: property_key,
+                        kind: AccessorKind::Set,
+                    }),
+                    _ => ops.push(Ir1Op::SetProperty { key: property_key }),
+                }
                 // Discard (not Pop): SetProperty leaves the method value on the
-                // stack; discarding it as a module completion would Move it into
-                // r0 and clobber the constructor's binding (bd-62un6).
+                // stack; DefineAccessor mirrors that completion discipline so
+                // discarding it cannot clobber the constructor binding (bd-62un6).
                 ops.push(Ir1Op::Discard);
             }
 

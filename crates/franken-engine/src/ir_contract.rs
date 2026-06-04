@@ -332,6 +332,26 @@ impl Ir1PropertyKey {
     }
 }
 
+/// Accessor half installed by class/object getter and setter definitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AccessorKind {
+    Get,
+    Set,
+}
+
+impl AccessorKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "get",
+            Self::Set => "set",
+        }
+    }
+
+    pub fn canonical_value(self) -> CanonicalValue {
+        CanonicalValue::str(self.as_str())
+    }
+}
+
 /// Why an iterator is being closed (replay-visible).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IteratorCloseReason {
@@ -407,6 +427,12 @@ pub enum Ir1Op {
     /// Object property write. Value is always on top-of-stack; dynamic keys sit
     /// below it, while static keys are carried directly in the op.
     SetProperty { key: Ir1PropertyKey },
+    /// Object accessor definition. Function value is on top-of-stack; dynamic
+    /// keys sit below it, while static keys are carried directly in the op.
+    DefineAccessor {
+        key: Ir1PropertyKey,
+        kind: AccessorKind,
+    },
     /// Delete an object property. Dynamic keys remain on top-of-stack; static
     /// keys are carried directly in the op.
     DeleteProperty { key: Ir1PropertyKey },
@@ -614,6 +640,11 @@ impl Ir1Op {
             Self::SetProperty { key } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("set_property")),
                 ("key", key.canonical_value()),
+            ]),
+            Self::DefineAccessor { key, kind } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("define_accessor")),
+                ("key", key.canonical_value()),
+                ("kind", kind.canonical_value()),
             ]),
             Self::DeleteProperty { key } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("delete_property")),
@@ -1224,6 +1255,13 @@ pub enum Ir3Instruction {
     GetProperty { obj: Reg, key: Reg, dst: Reg },
     /// Object property write: obj[key] = val.
     SetProperty { obj: Reg, key: Reg, val: Reg },
+    /// Object accessor definition: define get/set function for obj[key].
+    DefineAccessor {
+        obj: Reg,
+        key: Reg,
+        func: Reg,
+        kind: AccessorKind,
+    },
     /// Object property deletion: delete obj[key].
     DeleteProperty { obj: Reg, key: Reg, dst: Reg },
     /// Allocate a new object on the heap.
@@ -1513,6 +1551,18 @@ impl Ir3Instruction {
                 ("key", CanonicalValue::U64(u64::from(*key))),
                 ("obj", CanonicalValue::U64(u64::from(*obj))),
                 ("val", CanonicalValue::U64(u64::from(*val))),
+            ]),
+            Self::DefineAccessor {
+                obj,
+                key,
+                func,
+                kind,
+            } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("define_accessor")),
+                ("func", CanonicalValue::U64(u64::from(*func))),
+                ("key", CanonicalValue::U64(u64::from(*key))),
+                ("kind", kind.canonical_value()),
+                ("obj", CanonicalValue::U64(u64::from(*obj))),
             ]),
             Self::DeleteProperty { obj, key, dst } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("delete_property")),
@@ -3170,6 +3220,12 @@ mod tests {
                 key: 1,
                 val: 2,
             },
+            Ir3Instruction::DefineAccessor {
+                obj: 0,
+                key: 1,
+                func: 2,
+                kind: AccessorKind::Get,
+            },
             Ir3Instruction::DeleteProperty {
                 obj: 0,
                 key: 1,
@@ -4260,6 +4316,12 @@ mod tests {
                 key: 1,
                 val: 2,
             },
+            Ir3Instruction::DefineAccessor {
+                obj: 0,
+                key: 1,
+                func: 2,
+                kind: AccessorKind::Set,
+            },
             Ir3Instruction::DeleteProperty {
                 obj: 0,
                 key: 1,
@@ -4848,6 +4910,15 @@ mod tests {
                     val: 2,
                 },
                 "set_property",
+            ),
+            (
+                Ir3Instruction::DefineAccessor {
+                    obj: 0,
+                    key: 1,
+                    func: 2,
+                    kind: AccessorKind::Get,
+                },
+                "define_accessor",
             ),
             (
                 Ir3Instruction::DeleteProperty {

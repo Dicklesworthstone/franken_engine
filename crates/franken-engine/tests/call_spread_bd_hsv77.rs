@@ -18,7 +18,10 @@ fn eval(source: &str) -> String {
 
 #[test]
 fn spread_array_literal_into_call() {
-    assert_eq!(eval("let f = (a, b, c) => a + b + c; f(...[1, 2, 3]);"), "6");
+    assert_eq!(
+        eval("let f = (a, b, c) => a + b + c; f(...[1, 2, 3]);"),
+        "6"
+    );
 }
 
 #[test]
@@ -31,7 +34,10 @@ fn spread_variable_into_call() {
 
 #[test]
 fn leading_fixed_arg_then_spread() {
-    assert_eq!(eval("let f = (a, b, c) => a + b + c; f(0, ...[1, 2]);"), "3");
+    assert_eq!(
+        eval("let f = (a, b, c) => a + b + c; f(0, ...[1, 2]);"),
+        "3"
+    );
 }
 
 #[test]

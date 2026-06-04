@@ -20,7 +20,10 @@ fn eval(source: &str) -> String {
 #[test]
 fn raw_array_present_no_escape() {
     // No escapes: raw[0] == cooked[0] == "hello".
-    assert_eq!(eval(r#"function t(s) { return s.raw[0]; } t`hello`;"#), "hello");
+    assert_eq!(
+        eval(r#"function t(s) { return s.raw[0]; } t`hello`;"#),
+        "hello"
+    );
 }
 
 #[test]

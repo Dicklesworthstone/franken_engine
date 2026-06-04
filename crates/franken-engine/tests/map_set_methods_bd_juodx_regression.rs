@@ -31,7 +31,10 @@ fn eval_value(source: &str) -> String {
 
 #[test]
 fn map_set_then_get() {
-    assert_eq!(eval_value("let m = new Map(); m.set('a', 1); m.get('a')"), "1");
+    assert_eq!(
+        eval_value("let m = new Map(); m.set('a', 1); m.get('a')"),
+        "1"
+    );
 }
 
 #[test]

@@ -17,7 +17,10 @@ fn eval(src: &str) -> String {
 
 #[test]
 fn object_assign() {
-    assert_eq!(eval("let o = Object.assign({}, {a:1}, {b:2}); o.a + o.b;"), "3");
+    assert_eq!(
+        eval("let o = Object.assign({}, {a:1}, {b:2}); o.a + o.b;"),
+        "3"
+    );
     assert_eq!(eval("Object.assign({x:1}, {x:9}).x;"), "9"); // later sources win
 }
 
@@ -49,14 +52,20 @@ fn object_get_own_property_names() {
 
 #[test]
 fn object_freeze_and_is_frozen() {
-    assert_eq!(eval("let o = {a:1}; Object.freeze(o); Object.isFrozen(o);"), "true");
+    assert_eq!(
+        eval("let o = {a:1}; Object.freeze(o); Object.isFrozen(o);"),
+        "true"
+    );
     assert_eq!(eval("Object.isFrozen({});"), "false");
 }
 
 #[test]
 fn object_create_and_keys() {
     // Object.create(null) yields an object with no inherited keys.
-    assert_eq!(eval("Object.keys(Object.assign(Object.create(null), {a:1,b:2})).length;"), "2");
+    assert_eq!(
+        eval("Object.keys(Object.assign(Object.create(null), {a:1,b:2})).length;"),
+        "2"
+    );
 }
 
 #[test]
@@ -89,8 +98,5 @@ fn static_globals_are_shadowable() {
 
 #[test]
 fn statics_compose_in_expressions() {
-    assert_eq!(
-        eval("Array.isArray([1]) && Object.is(2, 2);"),
-        "true"
-    );
+    assert_eq!(eval("Array.isArray([1]) && Object.is(2, 2);"), "true");
 }

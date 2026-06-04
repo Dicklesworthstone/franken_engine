@@ -97,9 +97,8 @@ pub fn create_healthy_journal_fixture() -> ShadowEvidenceJournalExport {
 /// `compute_expected_decision_hash`'s deliberate mismatch to exercise drift
 /// detection, so the verifier never goes vacuous.
 fn embed_replay_decision_hashes(export: &mut ShadowEvidenceJournalExport) {
-    let mut verifier =
-        crate::shadow_replay_verifier::ShadowReplayVerifier::with_default_config()
-            .expect("default replay verifier config is valid");
+    let mut verifier = crate::shadow_replay_verifier::ShadowReplayVerifier::with_default_config()
+        .expect("default replay verifier config is valid");
     let hashes = verifier
         .expected_decision_hashes(export)
         .expect("healthy fixture replays cleanly through the decision composer");

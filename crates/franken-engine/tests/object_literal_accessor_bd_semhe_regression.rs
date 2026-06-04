@@ -34,10 +34,7 @@ fn eval_value(source: &str) -> String {
 #[test]
 #[ignore = "bd-semhe: blocked on accessor feature (parser/ast/lowering/interpreter); un-ignore when landed"]
 fn object_literal_getter_returns_computed_value() {
-    assert_eq!(
-        eval_value("let o = { get v() { return 11; } }; o.v"),
-        "11"
-    );
+    assert_eq!(eval_value("let o = { get v() { return 11; } }; o.v"), "11");
 }
 
 #[test]

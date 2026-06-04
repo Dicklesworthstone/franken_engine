@@ -24,7 +24,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use frankenengine_engine::deterministic_serde::{
-    encode_value, encode_value_into, CanonicalF64, CanonicalValue, EncodeBufferPool,
+    CanonicalF64, CanonicalValue, EncodeBufferPool, encode_value, encode_value_into,
 };
 use proptest::prelude::*;
 use serde::{Deserialize, Serialize};

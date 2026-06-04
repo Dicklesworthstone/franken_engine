@@ -45,7 +45,10 @@ fn substitution_is_passed_to_tag() {
 #[test]
 fn strings_array_length_counts_quasis() {
     // `a${1}b${2}c` -> quasis ["a","b","c"]
-    assert_eq!(eval("function t(s) { return s.length; } t`a${1}b${2}c`;"), "3");
+    assert_eq!(
+        eval("function t(s) { return s.length; } t`a${1}b${2}c`;"),
+        "3"
+    );
 }
 
 // ---- member-expression tag ----------------------------------------------

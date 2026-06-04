@@ -48,7 +48,10 @@ fn computed_key_numeric_expr_is_evaluated() {
 #[ignore = "bd-rjxpx: blocked on parser.rs computed-key bracket-strip fix; un-ignore when landed"]
 fn computed_key_identifier_expr_is_evaluated() {
     // An identifier-expression key `[k]` uses the runtime value of `k`.
-    assert_eq!(eval_value(r#"let k = "key"; let o = { [k]: 5 }; o.key"#), "5");
+    assert_eq!(
+        eval_value(r#"let k = "key"; let o = { [k]: 5 }; o.key"#),
+        "5"
+    );
 }
 
 #[test]

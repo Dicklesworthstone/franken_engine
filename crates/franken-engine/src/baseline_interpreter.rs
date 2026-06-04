@@ -852,6 +852,19 @@ pub enum BuiltinFunctionKind {
     /// `RegExp.prototype.test` — receiver-aware; linear-time regex match via
     /// Rust's `regex` crate for the supported ES-compatible subset (bd-wni4m).
     RegExpTest,
+    /// `Object.prototype.hasOwnProperty` — receiver-aware own-property test
+    /// resolved through the object prototype fallback (bd-9a8cz.5).
+    ObjectHasOwnProperty,
+    /// `Object.prototype.propertyIsEnumerable` — receiver-aware own enumerable
+    /// property test; heap data/accessor properties are enumerable today
+    /// (bd-9a8cz.5).
+    ObjectPrototypePropertyIsEnumerable,
+    /// `Object.prototype.valueOf` — receiver-aware object/primitive identity
+    /// result (bd-9a8cz.5).
+    ObjectPrototypeValueOf,
+    /// `Object.prototype.toString` — receiver-aware object tag string
+    /// (bd-9a8cz.5).
+    ObjectPrototypeToString,
 }
 
 /// First-class builtin callable value with the module provenance needed for
@@ -1669,6 +1682,42 @@ impl BuiltinFunction {
         }
     }
 
+    fn object_has_own_property() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ObjectHasOwnProperty,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn object_property_is_enumerable() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn object_value_of() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ObjectPrototypeValueOf,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn object_to_string() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ObjectPrototypeToString,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn display_name(&self) -> &'static str {
         match self.kind {
             BuiltinFunctionKind::Require => "require",
@@ -1760,6 +1809,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::PromiseCatch => "catch",
             BuiltinFunctionKind::PromiseFinally => "finally",
             BuiltinFunctionKind::RegExpTest => "test",
+            BuiltinFunctionKind::ObjectHasOwnProperty => "hasOwnProperty",
+            BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable => "propertyIsEnumerable",
+            BuiltinFunctionKind::ObjectPrototypeValueOf => "valueOf",
+            BuiltinFunctionKind::ObjectPrototypeToString => "toString",
         }
     }
 }
@@ -6706,6 +6759,32 @@ impl InterpreterCore {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let input = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
                 self.regexp_test_value(&receiver, &input)
+            }
+            BuiltinFunctionKind::ObjectHasOwnProperty => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Some(property) = self.builtin_arg(args, 0)? else {
+                    return Ok(Value::Bool(false));
+                };
+                Ok(Value::Bool(
+                    self.object_own_property_contains(&receiver, &property),
+                ))
+            }
+            BuiltinFunctionKind::ObjectPrototypePropertyIsEnumerable => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Some(property) = self.builtin_arg(args, 0)? else {
+                    return Ok(Value::Bool(false));
+                };
+                Ok(Value::Bool(
+                    self.object_own_property_contains(&receiver, &property),
+                ))
+            }
+            BuiltinFunctionKind::ObjectPrototypeValueOf => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                Ok(self.object_prototype_value_of_value(receiver))
+            }
+            BuiltinFunctionKind::ObjectPrototypeToString => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                Ok(self.object_prototype_to_string_value(&receiver))
             }
             BuiltinFunctionKind::ConsoleLog => self.dispatch_console_hostcall("console:log", args),
             BuiltinFunctionKind::ConsoleError => {
@@ -11665,6 +11744,10 @@ impl InterpreterCore {
             return Ok(Value::BuiltinFunction(builtin));
         }
 
+        if let Some(builtin) = Self::object_prototype_method(key) {
+            return Ok(Value::BuiltinFunction(builtin));
+        }
+
         // Capture property resolution failure for deterministic replay
         self.nondeterminism_trace.capture(
             NondeterminismSource::PropertyResolution,
@@ -11734,6 +11817,63 @@ impl InterpreterCore {
             ("RegExp", "test") => Some(BuiltinFunction::regexp_test()),
             _ => None,
         }
+    }
+
+    fn object_prototype_method(key: &str) -> Option<BuiltinFunction> {
+        match key {
+            "hasOwnProperty" => Some(BuiltinFunction::object_has_own_property()),
+            "propertyIsEnumerable" => Some(BuiltinFunction::object_property_is_enumerable()),
+            "valueOf" => Some(BuiltinFunction::object_value_of()),
+            "toString" => Some(BuiltinFunction::object_to_string()),
+            _ => None,
+        }
+    }
+
+    fn object_own_property_contains(&self, receiver: &Value, property: &Value) -> bool {
+        let Value::Object(object_id) = receiver else {
+            return false;
+        };
+        let property_key = self.property_key_from_value(property);
+        self.heap
+            .get(object_id.0 as usize)
+            .map(|object| object.properties.contains_key(&property_key))
+            .unwrap_or(false)
+    }
+
+    fn object_prototype_value_of_value(&self, receiver: Value) -> Value {
+        match receiver {
+            Value::Object(object_id) => {
+                if let Some(object) = self.heap.get(object_id.0 as usize)
+                    && let Some(Value::Str(type_value)) = object.properties.get("__type")
+                    && matches!(type_value.as_ref(), "Number" | "String" | "Boolean")
+                    && let Some(value) = object.properties.get("__value")
+                {
+                    return value.clone();
+                }
+
+                Value::Object(object_id)
+            }
+            other => other,
+        }
+    }
+
+    fn object_prototype_to_string_value(&self, receiver: &Value) -> Value {
+        let Value::Object(object_id) = receiver else {
+            return Value::str(Self::value_to_object_to_string_tag(receiver));
+        };
+
+        let tag = self
+            .heap
+            .get(object_id.0 as usize)
+            .map(|object| {
+                if object.is_array {
+                    "[object Array]"
+                } else {
+                    "[object Object]"
+                }
+            })
+            .unwrap_or("[object Object]");
+        Value::str(tag)
     }
 
     /// Canonical string key for a Map key / Set value (bd-juodx). Mirrors the

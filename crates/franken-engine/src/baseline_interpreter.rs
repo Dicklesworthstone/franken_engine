@@ -668,6 +668,12 @@ pub enum BuiltinFunctionKind {
     /// `String.prototype.codePointAt` — receiver-aware; the Unicode code point at
     /// a (scalar) index, else `undefined` (ES2015) (bd-9hw6q).
     StringCodePointAt,
+    /// `String.prototype.localeCompare` — receiver-aware lexicographic compare
+    /// using the existing simplified localeCompare builtin (bd-n9oxa).
+    StringLocaleCompare,
+    /// `String.prototype.normalize` — receiver-aware Unicode normalization using
+    /// the existing normalize builtin (bd-n9oxa).
+    StringNormalize,
     /// `Number.prototype.toFixed` — receiver-aware; fixed-point notation with a
     /// given number of digits after the decimal point (bd-i08nh).
     NumberToFixed,
@@ -779,6 +785,15 @@ pub enum BuiltinFunctionKind {
     /// elements at `start` and insert the given items, returning an array of
     /// the removed elements (bd-962ev.1).
     ArraySplice,
+    /// `Array.prototype.entries` — receiver-aware runtime iterator over
+    /// `[index, value]` pairs (bd-n9oxa).
+    ArrayEntries,
+    /// `Array.prototype.keys` — receiver-aware runtime iterator over indexes
+    /// (bd-n9oxa).
+    ArrayKeys,
+    /// `Array.prototype.values` — receiver-aware runtime iterator over values
+    /// (bd-n9oxa).
+    ArrayValues,
     /// `Map.prototype.set(key, value)` — receiver-aware; inserts/overwrites and
     /// returns the Map for chaining (bd-juodx).
     MapSet,
@@ -1072,6 +1087,24 @@ impl BuiltinFunction {
     fn string_code_point_at() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringCodePointAt,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_locale_compare() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringLocaleCompare,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_normalize() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringNormalize,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -1384,6 +1417,33 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_entries() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayEntries,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_keys() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayKeys,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_values() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayValues,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn map_set() -> Self {
         Self {
             kind: BuiltinFunctionKind::MapSet,
@@ -1642,6 +1702,8 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringTrimEnd => "trimEnd",
             BuiltinFunctionKind::StringReplaceAll => "replaceAll",
             BuiltinFunctionKind::StringCodePointAt => "codePointAt",
+            BuiltinFunctionKind::StringLocaleCompare => "localeCompare",
+            BuiltinFunctionKind::StringNormalize => "normalize",
             BuiltinFunctionKind::NumberToFixed => "toFixed",
             BuiltinFunctionKind::NumberToString => "toString",
             BuiltinFunctionKind::NumberValueOf => "valueOf",
@@ -1675,6 +1737,9 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArraySliceMethod => "slice",
             BuiltinFunctionKind::ArrayLastIndexOf => "lastIndexOf",
             BuiltinFunctionKind::ArraySplice => "splice",
+            BuiltinFunctionKind::ArrayEntries => "entries",
+            BuiltinFunctionKind::ArrayKeys => "keys",
+            BuiltinFunctionKind::ArrayValues => "values",
             BuiltinFunctionKind::MapSet => "set",
             BuiltinFunctionKind::MapGet => "get",
             BuiltinFunctionKind::MapHas => "has",
@@ -5240,7 +5305,9 @@ impl InterpreterCore {
                     Some(arg) => self.value_to_string(&arg),
                     None => "undefined".to_string(),
                 };
-                Ok(Value::str(value.replace(search.as_str(), replacement.as_str())))
+                Ok(Value::str(
+                    value.replace(search.as_str(), replacement.as_str()),
+                ))
             }
             BuiltinFunctionKind::StringCodePointAt => {
                 // ES2015 21.1.3.3: the Unicode code point at a (scalar) index;
@@ -5260,6 +5327,31 @@ impl InterpreterCore {
                     Some(ch) => Value::Int(ch as i64),
                     None => Value::Undefined,
                 })
+            }
+            BuiltinFunctionKind::StringLocaleCompare => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let this_string = Self::require_object_coercible_to_string(&receiver)?;
+                let that_string = match self.builtin_arg(args, 0)? {
+                    Some(value) => self.value_to_string(&value),
+                    None => "undefined".to_string(),
+                };
+                let comparison = match this_string.cmp(&that_string) {
+                    std::cmp::Ordering::Less => -1,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
+                };
+                Ok(Value::Int(comparison))
+            }
+            BuiltinFunctionKind::StringNormalize => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let form = match self.builtin_arg(args, 0)? {
+                    Some(Value::Undefined) | None => "NFC".to_string(),
+                    Some(value) => self.value_to_string(&value),
+                };
+                let normalized = normalize_unicode_string(&value, &form)
+                    .map_err(|message| InterpreterError::RangeError { message })?;
+                Ok(Value::str(normalized))
             }
             BuiltinFunctionKind::StringIncludes => {
                 // ES2020 21.1.3.7: substring containment from an optional start
@@ -5908,6 +6000,18 @@ impl InterpreterCore {
                 }
                 Ok(Value::str(parts.join(&separator)))
             }
+            BuiltinFunctionKind::ArrayEntries => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                self.array_prototype_iterator_for_receiver(receiver, "entries")
+            }
+            BuiltinFunctionKind::ArrayKeys => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                self.array_prototype_iterator_for_receiver(receiver, "keys")
+            }
+            BuiltinFunctionKind::ArrayValues => {
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                self.array_prototype_iterator_for_receiver(receiver, "values")
+            }
             BuiltinFunctionKind::ArrayForEach => {
                 // ES2020 23.1.3.12: call the callback for each element (holes
                 // skipped); returns undefined. Callback receives
@@ -6059,11 +6163,8 @@ impl InterpreterCore {
             BuiltinFunctionKind::ArrayFindLastIndex => {
                 // ES2023 23.1.3.10: index of the last element for which the
                 // callback is truthy (reverse), else -1.
-                let (arr_id, callback, this_arg, len) = self.array_callback_receiver(
-                    receiver,
-                    args,
-                    "Array.prototype.findLastIndex",
-                )?;
+                let (arr_id, callback, this_arg, len) =
+                    self.array_callback_receiver(receiver, args, "Array.prototype.findLastIndex")?;
                 for index in (0..len).rev() {
                     let element = self
                         .array_index_value(arr_id, index)?
@@ -6153,9 +6254,7 @@ impl InterpreterCore {
                     None | Some(Value::Undefined) => len,
                     Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
                 };
-                let count = end
-                    .saturating_sub(start)
-                    .min(len.saturating_sub(target));
+                let count = end.saturating_sub(start).min(len.saturating_sub(target));
                 let mut buf = Vec::with_capacity(count);
                 for i in 0..count {
                     buf.push(
@@ -11160,6 +11259,8 @@ impl InterpreterCore {
             "trimEnd" => Value::BuiltinFunction(BuiltinFunction::string_trim_end()),
             "replaceAll" => Value::BuiltinFunction(BuiltinFunction::string_replace_all()),
             "codePointAt" => Value::BuiltinFunction(BuiltinFunction::string_code_point_at()),
+            "localeCompare" => Value::BuiltinFunction(BuiltinFunction::string_locale_compare()),
+            "normalize" => Value::BuiltinFunction(BuiltinFunction::string_normalize()),
             "split" => Value::BuiltinFunction(BuiltinFunction::string_split()),
             "includes" => Value::BuiltinFunction(BuiltinFunction::string_includes()),
             "startsWith" => Value::BuiltinFunction(BuiltinFunction::string_starts_with()),
@@ -11609,6 +11710,9 @@ impl InterpreterCore {
             "slice" => Some(BuiltinFunction::array_slice_method()),
             "lastIndexOf" => Some(BuiltinFunction::array_last_index_of()),
             "splice" => Some(BuiltinFunction::array_splice()),
+            "entries" => Some(BuiltinFunction::array_entries()),
+            "keys" => Some(BuiltinFunction::array_keys()),
+            "values" => Some(BuiltinFunction::array_values()),
             _ => None,
         }
     }
@@ -13926,6 +14030,62 @@ impl InterpreterCore {
         Ok(object.properties.get(&element_index.to_string()).cloned())
     }
 
+    fn set_object_from_entry_pair(
+        &mut self,
+        target_id: ObjectId,
+        entry: Value,
+    ) -> Result<(), InterpreterError> {
+        let entry_id = match entry {
+            Value::Object(entry_id) => entry_id,
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "Object.fromEntries entry object".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        };
+        let key_value = self
+            .array_index_value(entry_id, 0)?
+            .unwrap_or(Value::Undefined);
+        let value = self
+            .array_index_value(entry_id, 1)?
+            .unwrap_or(Value::Undefined);
+        let key = self.property_key_from_value(&key_value);
+        self.set_object_property(target_id, key, value)
+    }
+
+    fn object_from_entries_value(
+        &mut self,
+        module: Option<&Ir3Module>,
+        source: Value,
+    ) -> Result<Value, InterpreterError> {
+        let target_id = self.alloc_object_with_prototype(None)?;
+        match source {
+            Value::Object(entries_id) => {
+                let length = self.array_like_length(entries_id)?;
+                for index in 0..length {
+                    if let Some(entry) = self.array_index_value(entries_id, index)? {
+                        self.set_object_from_entry_pair(target_id, entry)?;
+                    }
+                }
+            }
+            Value::Iterator(handle) => {
+                while let Some(entry) =
+                    self.advance_for_of_iterator(module, Value::Iterator(handle))?
+                {
+                    self.set_object_from_entry_pair(target_id, entry)?;
+                }
+            }
+            other => {
+                return Err(InterpreterError::TypeError {
+                    expected: "iterable entries object".to_string(),
+                    got: other.type_name().to_string(),
+                });
+            }
+        }
+        Ok(Value::Object(target_id))
+    }
+
     /// Append the elements of `src_id` into `result` (an already-allocated
     /// array), recursively flattening any element that is itself an array up to
     /// `depth` further levels (ES2019 `FlattenIntoArray`). `out` tracks the next
@@ -13940,7 +14100,9 @@ impl InterpreterCore {
     ) -> Result<(), InterpreterError> {
         let len = self.array_like_length(src_id)?;
         for i in 0..len {
-            let element = self.array_index_value(src_id, i)?.unwrap_or(Value::Undefined);
+            let element = self
+                .array_index_value(src_id, i)?
+                .unwrap_or(Value::Undefined);
             let nested = if let Value::Object(eid) = &element {
                 self.heap
                     .get(eid.0 as usize)
@@ -14202,7 +14364,20 @@ impl InterpreterCore {
         args: RegRange,
         kind: &'static str,
     ) -> Result<Value, InterpreterError> {
-        let array_id = match self.read_reg(args.start)? {
+        let receiver = if args.count > 0 {
+            self.read_reg(args.start)?
+        } else {
+            Value::Undefined
+        };
+        self.array_prototype_iterator_for_receiver(receiver, kind)
+    }
+
+    fn array_prototype_iterator_for_receiver(
+        &mut self,
+        receiver: Value,
+        kind: &'static str,
+    ) -> Result<Value, InterpreterError> {
+        let array_id = match receiver {
             Value::Object(object_id) => Some(object_id),
             _ => None,
         };
@@ -16417,6 +16592,13 @@ impl InterpreterCore {
                         Ok(Value::Object(array_id))
                     }
                 }
+            }
+            "builtin:ObjectFromEntries" => {
+                if args.count == 0 {
+                    return Ok(Value::Undefined);
+                }
+                let source = self.read_reg(args.start)?;
+                self.object_from_entries_value(module, source)
             }
             "builtin:ObjectAssign" => {
                 // Object.assign implementation - copies properties from source objects to target

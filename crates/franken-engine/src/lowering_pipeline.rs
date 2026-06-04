@@ -9871,6 +9871,7 @@ fn object_json_builtin_call_capability(
         ("Object", "defineProperty") => Some("builtin:ObjectDefineProperty"),
         ("Object", "getOwnPropertyNames") => Some("builtin:ObjectGetOwnPropertyNames"),
         ("Object", "getOwnPropertyDescriptor") => Some("builtin:ObjectGetOwnPropertyDescriptor"),
+        ("Object", "fromEntries") => Some("builtin:ObjectFromEntries"),
         // NOTE: Object.is / Object.isExtensible use the RECEIVER-PLACEHOLDER
         // calling convention (handler reads args.start+1.., guards count<N
         // counting a slot-0 receiver) — they are wired via

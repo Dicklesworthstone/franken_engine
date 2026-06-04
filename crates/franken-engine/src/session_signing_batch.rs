@@ -851,6 +851,64 @@ mod tests {
     }
 
     #[test]
+    fn reordering_entries_changes_the_root() {
+        // Merkle order matters (RFC 6962 trees are order-sensitive): the SAME
+        // entries in a different order must produce a DIFFERENT root. This is
+        // a sanity check, not an equivalence (bd-o4cbn.9.3 test 4). `batch_of`
+        // fixes the key/batch_id/schema/timestamp, so entry order is the only
+        // variable here.
+        let forward = batch_of(4).finalize().expect("finalize")[0].merkle_root;
+
+        let mut reversed = SessionSigningBatch::new(
+            "producer-1",
+            test_key(0x11),
+            BatchId::new(42),
+            ContentHash::compute(b"test-schema"),
+            1_700_000_000,
+        );
+        for i in (0..4u64).rev() {
+            reversed.add_entry(entry(i));
+        }
+        let reversed_root = reversed.finalize().expect("finalize")[0].merkle_root;
+
+        assert_ne!(
+            forward, reversed_root,
+            "re-ordering the same entries must change the Merkle root"
+        );
+    }
+
+    #[test]
+    fn large_batch_all_entries_verify_and_share_one_root() {
+        // Edge case N=100 (bd-o4cbn.9.3 test 5): a large, non-power-of-two
+        // batch. Every envelope carries a correct inclusion proof, all share
+        // one root + signature, proof depth stays logarithmic, and the root is
+        // deterministic across rebuilds at scale.
+        let envs = batch_of(100).finalize().expect("finalize");
+        assert_eq!(envs.len(), 100);
+        let root = envs[0].merkle_root;
+        let sig = envs[0].root_signature.clone();
+        for (i, env) in envs.iter().enumerate() {
+            assert_eq!(env.merkle_root, root, "shared root at index {i}");
+            assert_eq!(env.root_signature, sig, "shared signature at index {i}");
+            assert_eq!(env.inclusion_proof.leaf_index, i as u64);
+            assert_eq!(env.inclusion_proof.tree_size, 100);
+            env.verify()
+                .unwrap_or_else(|e| panic!("index {i} must verify: {e}"));
+            // ceil(log2(100)) == 7, so no audit path may exceed 7 steps.
+            assert!(
+                env.inclusion_proof.path.len() <= 7,
+                "audit path for N=100 must be <= 7 (index {i} got {})",
+                env.inclusion_proof.path.len()
+            );
+        }
+        let again = batch_of(100).finalize().expect("finalize")[0].merkle_root;
+        assert_eq!(
+            root, again,
+            "N=100 root must be deterministic across builds"
+        );
+    }
+
+    #[test]
     fn batch_id_round_trips_through_be_bytes() {
         let id = BatchId::new(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10);
         assert_eq!(u128::from_be_bytes(id.to_be_bytes()), id.as_u128());

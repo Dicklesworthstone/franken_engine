@@ -19,19 +19,16 @@ fn eval_value(source: &str) -> String {
 }
 
 #[test]
-#[ignore = "bd-v93ds: Reflect unimplemented; un-ignore when it lands"]
 fn reflect_has() {
     assert_eq!(eval_value(r#"Reflect.has({a:1}, "a")"#), "true");
 }
 
 #[test]
-#[ignore = "bd-v93ds: Reflect unimplemented; un-ignore when it lands"]
 fn reflect_own_keys_count() {
     assert_eq!(eval_value("Reflect.ownKeys({a:1, b:2}).length"), "2");
 }
 
 #[test]
-#[ignore = "bd-v93ds: Proxy unimplemented; un-ignore when it lands"]
 fn proxy_empty_handler_passthrough() {
     assert_eq!(eval_value("let p = new Proxy({x:5}, {}); p.x"), "5");
 }

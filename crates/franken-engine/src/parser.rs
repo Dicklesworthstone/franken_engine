@@ -3064,7 +3064,11 @@ fn parse_statement_inner(
         }
     }
 
-    let expression = parse_expression(statement, &span, context, 1)?;
+    // A bare expression statement may be a top-level comma sequence (`a, b`);
+    // ES2020 §14.5 ExpressionStatement is an Expression, which includes the
+    // comma operator. Declarations (`let a = 1, b = 2`) are handled earlier, so
+    // any comma reaching here is a genuine sequence (bd-j4l7k).
+    let expression = parse_expression_allowing_sequence(statement, &span, context)?;
     Ok(Statement::Expression(ExpressionStatement {
         expression,
         span,
@@ -8346,25 +8350,28 @@ fn build_sequence_expression(operands: Vec<Expression>, span: &SourceSpan) -> Ex
     }
 }
 
-/// Parse a C-style `for`-header clause (condition or update) that may be a bare,
-/// unparenthesized comma sequence such as `i++, j--`. Outside parentheses the
-/// sequence operator does not reach the paren-handling desugar in
-/// `parse_primary_expression`, so a comma'd clause would otherwise fall through
-/// to `Expression::Raw` (a string) and fault at runtime (bd-qxkli). Here we
-/// detect a top-level comma and apply the same `build_sequence_expression`
-/// desugar; a single-expression clause parses unchanged.
-fn parse_for_clause_expression(
-    clause_src: &str,
+/// Parse an expression that may be a bare, unparenthesized comma sequence such
+/// as `i++, j--` or `a, b`. Outside parentheses the sequence operator does not
+/// reach the paren-handling desugar in `parse_primary_expression`, so a comma'd
+/// expression would otherwise fall through to `Expression::Raw` (a string) and
+/// fault at runtime (bd-qxkli / bd-j4l7k). Here we detect a top-level comma and
+/// apply the same `build_sequence_expression` desugar; a single-expression input
+/// parses unchanged. Used for the contexts where ES2020 permits a top-level
+/// sequence: C-style `for`-header condition/update clauses and bare expression
+/// statements. (Comma-separated list contexts — call arguments, array/object
+/// literals, variable declarators — split on their commas before reaching here.)
+fn parse_expression_allowing_sequence(
+    src: &str,
     span: &SourceSpan,
     context: &mut ParseExecutionContext<'_>,
 ) -> ParseResult<Expression> {
-    if split_top_level_commas(clause_src).len() > 1 {
-        let operands = parse_comma_separated_exprs(clause_src, span, context, 1)?;
+    if split_top_level_commas(src).len() > 1 {
+        let operands = parse_comma_separated_exprs(src, span, context, 1)?;
         if operands.len() > 1 {
             return Ok(build_sequence_expression(operands, span));
         }
     }
-    parse_expression(clause_src, span, context, 1)
+    parse_expression(src, span, context, 1)
 }
 
 fn parse_for_statement(
@@ -8418,12 +8425,12 @@ fn parse_for_statement(
     let condition = if cond_src.is_empty() {
         None
     } else {
-        Some(parse_for_clause_expression(cond_src, &span, context)?)
+        Some(parse_expression_allowing_sequence(cond_src, &span, context)?)
     };
     let update = if update_src.is_empty() {
         None
     } else {
-        Some(parse_for_clause_expression(update_src, &span, context)?)
+        Some(parse_expression_allowing_sequence(update_src, &span, context)?)
     };
 
     let body_src = rest.trim();

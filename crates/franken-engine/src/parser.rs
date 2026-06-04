@@ -2833,6 +2833,10 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                     // `rest` (bd-t7txt / bd-bg9l1.27.4).
                     let seg_body = strip_leading_labels(seg);
                     let starts_with_block = starts_with_keyword(seg_body, "function")
+                        // `async function f(){…}` is a block-terminated declaration
+                        // too; without this the closing brace doesn't split it and
+                        // the following statement is swallowed/dropped (bd-ws5wz).
+                        || seg_body.starts_with("async function")
                         || starts_with_keyword(seg_body, "if")
                         || starts_with_keyword(seg_body, "for")
                         || starts_with_keyword(seg_body, "while")

@@ -2821,6 +2821,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_vars,
                 free_var_ids,
                 is_generator: func.is_generator,
+                is_async: func.is_async,
                 rest_param_index,
             });
             ops.push(Ir1Op::Pop);
@@ -2928,6 +2929,7 @@ fn lower_statement_to_ir1_with_flow(
                 free_vars: Vec::new(),
                 free_var_ids: Vec::new(),
                 is_generator: false,
+                is_async: false,
                 rest_param_index,
             });
             // Discard (not Pop): the class binding is in r0 when the class is the
@@ -3070,6 +3072,7 @@ fn lower_statement_to_ir1_with_flow(
                     free_vars: Vec::new(),
                     free_var_ids: Vec::new(),
                     is_generator: false,
+                    is_async: false,
                     rest_param_index: m_rest_param_index,
                 });
 
@@ -3487,7 +3490,7 @@ pub fn lower_ir2_to_ir3(
     let mut pending_jumps = Vec::<PendingJump>::new();
     let mut catch_entry_labels = BTreeSet::<u32>::new();
     // Deferred function bodies:
-    // (body_ir1_ops, param_names, name, free_vars, free_var_ids, is_generator).
+    // (body_ir1_ops, param_names, name, free_vars, free_var_ids, is_generator, is_async).
     // After the main code + Halt, each body is lowered into the instruction
     // stream and registered in function_table.  Index 0 is reserved for main.
     #[allow(clippy::type_complexity)]
@@ -3497,6 +3500,7 @@ pub fn lower_ir2_to_ir3(
         Option<String>,
         Vec<String>,
         Vec<BindingId>,
+        bool,
         bool,
         Option<u32>, // rest_param_index (bd-zs4d5)
     )> = Vec::new();
@@ -4335,6 +4339,7 @@ pub fn lower_ir2_to_ir3(
                 free_vars,
                 free_var_ids,
                 is_generator,
+                is_async,
                 rest_param_index,
             } => {
                 let dst = *binding_registers
@@ -4371,10 +4376,23 @@ pub fn lower_ir2_to_ir3(
                         free_vars.clone(),
                         free_var_ids.clone(),
                         *is_generator,
+                        *is_async,
                         *rest_param_index,
                     ));
-                    if *is_generator {
+                    if *is_generator && *is_async {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
+                            dst,
+                            function_index,
+                            capture_count: free_vars.len() as u32,
+                        });
+                    } else if *is_generator {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
+                            dst,
+                            function_index,
+                            capture_count: free_vars.len() as u32,
+                        });
+                    } else if *is_async {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
                             dst,
                             function_index,
                             capture_count: free_vars.len() as u32,
@@ -4399,6 +4417,7 @@ pub fn lower_ir2_to_ir3(
                 free_vars,
                 free_var_ids,
                 is_generator,
+                is_async,
                 rest_param_index,
             } => {
                 let dst = alloc_register(&mut register_cursor);
@@ -4430,10 +4449,23 @@ pub fn lower_ir2_to_ir3(
                     free_vars.clone(),
                     free_var_ids.clone(),
                     *is_generator,
+                    *is_async,
                     *rest_param_index,
                 ));
-                if *is_generator {
+                if *is_generator && *is_async {
+                    ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
+                        dst,
+                        function_index,
+                        capture_count: free_vars.len() as u32,
+                    });
+                } else if *is_generator {
                     ir3.instructions.push(Ir3Instruction::CreateGenerator {
+                        dst,
+                        function_index,
+                        capture_count: free_vars.len() as u32,
+                    });
+                } else if *is_async {
+                    ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
                         dst,
                         function_index,
                         capture_count: free_vars.len() as u32,
@@ -4770,6 +4802,7 @@ pub fn lower_ir2_to_ir3(
             free_vars,
             free_var_ids,
             fn_is_generator,
+            _fn_is_async,
             fn_rest_param_index,
         ) = deferred_functions[deferred_idx].clone();
         deferred_idx += 1;
@@ -5363,6 +5396,7 @@ pub fn lower_ir2_to_ir3(
                     free_vars: inner_fv,
                     free_var_ids: inner_fv_ids,
                     is_generator: inner_gen,
+                    is_async: inner_async,
                     rest_param_index: inner_rest,
                 } => {
                     if inner_body.is_empty() {
@@ -5381,10 +5415,23 @@ pub fn lower_ir2_to_ir3(
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
                         *inner_gen,
+                        *inner_async,
                         *inner_rest,
                     ));
-                    if *inner_gen {
+                    if *inner_gen && *inner_async {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    } else if *inner_gen {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    } else if *inner_async {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
                             dst,
                             function_index,
                             capture_count: inner_fv.len() as u32,
@@ -5405,6 +5452,7 @@ pub fn lower_ir2_to_ir3(
                     free_vars: inner_fv,
                     free_var_ids: inner_fv_ids,
                     is_generator: inner_gen,
+                    is_async: inner_async,
                     rest_param_index: inner_rest,
                 } => {
                     let dst = alloc_register(&mut fn_reg);
@@ -5416,10 +5464,23 @@ pub fn lower_ir2_to_ir3(
                         inner_fv.clone(),
                         inner_fv_ids.clone(),
                         *inner_gen,
+                        *inner_async,
                         *inner_rest,
                     ));
-                    if *inner_gen {
+                    if *inner_gen && *inner_async {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncGenerator {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    } else if *inner_gen {
                         ir3.instructions.push(Ir3Instruction::CreateGenerator {
+                            dst,
+                            function_index,
+                            capture_count: inner_fv.len() as u32,
+                        });
+                    } else if *inner_async {
+                        ir3.instructions.push(Ir3Instruction::CreateAsyncFunction {
                             dst,
                             function_index,
                             capture_count: inner_fv.len() as u32,
@@ -8574,7 +8635,11 @@ fn lower_expression_to_ir1(
                 });
             }
         }
-        Expression::ArrowFunction { params, body, .. } => {
+        Expression::ArrowFunction {
+            params,
+            body,
+            is_async,
+        } => {
             // Lower arrow function body with its own fresh scope.
             let mut body_ops = Vec::new();
             let mut body_bindings = Vec::new();
@@ -8687,6 +8752,7 @@ fn lower_expression_to_ir1(
                 free_vars: arrow_free_vars,
                 free_var_ids: arrow_free_var_ids,
                 is_generator: false,
+                is_async: *is_async,
                 rest_param_index,
             });
         }
@@ -8694,8 +8760,8 @@ fn lower_expression_to_ir1(
             name,
             params,
             body,
+            is_async,
             is_generator,
-            ..
         } => {
             // Same as ArrowFunction but with a BlockStatement body and optional name.
             let mut body_ops = Vec::new();
@@ -8805,6 +8871,7 @@ fn lower_expression_to_ir1(
                 free_vars: fn_free_vars,
                 free_var_ids: fn_free_var_ids,
                 is_generator: *is_generator,
+                is_async: *is_async,
                 rest_param_index,
             });
         }
@@ -9086,6 +9153,7 @@ fn lower_expression_to_ir1(
                 free_vars: Vec::new(),
                 free_var_ids: Vec::new(),
                 is_generator: false,
+                is_async: false,
                 rest_param_index,
             });
             // Discard (not Pop): the class binding is in r0 when the class is the
@@ -9210,6 +9278,7 @@ fn lower_expression_to_ir1(
                     free_vars: Vec::new(),
                     free_var_ids: Vec::new(),
                     is_generator: false,
+                    is_async: false,
                     rest_param_index: m_rest_param_index,
                 });
                 let property_key = Ir1PropertyKey::Static(method_name);

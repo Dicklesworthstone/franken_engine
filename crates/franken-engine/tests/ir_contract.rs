@@ -1324,7 +1324,9 @@ fn enrichment_ir1_all_ops_serde_roundtrip() {
             param_names: Vec::new(),
             body_ops: Vec::new(),
             free_vars: Vec::new(),
+            free_var_ids: Vec::new(),
             is_generator: false,
+            is_async: false,
             rest_param_index: None,
         },
         Ir1Op::BeginTry {

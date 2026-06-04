@@ -556,6 +556,7 @@ fn enrichment_ir1_op_all_variants_serde_sample() {
             free_vars: Vec::new(),
             free_var_ids: Vec::new(),
             is_generator: false,
+            is_async: false,
             rest_param_index: None,
         },
         Ir1Op::BeginTry {

@@ -480,6 +480,9 @@ pub enum Ir1Op {
         free_var_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
+        /// True when the source function is async (`async function`).
+        #[serde(default)]
+        is_async: bool,
         /// Index into `param_names` of the rest parameter (`...xs`), if any.
         /// The interpreter binds this slot to an Array of trailing args
         /// instead of a single positional (bd-zs4d5).
@@ -498,6 +501,9 @@ pub enum Ir1Op {
         free_var_ids: Vec<BindingId>,
         /// True when the source function is a generator (`function*`).
         is_generator: bool,
+        /// True when the source function is async (`async function` or `async () =>`).
+        #[serde(default)]
+        is_async: bool,
         /// Index into `param_names` of the rest parameter (`...xs`), if any
         /// (bd-zs4d5).
         rest_param_index: Option<u32>,
@@ -686,6 +692,7 @@ impl Ir1Op {
                 free_vars,
                 free_var_ids: _,
                 is_generator,
+                is_async,
                 rest_param_index: _,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("declare_function")),
@@ -714,6 +721,7 @@ impl Ir1Op {
                     ),
                 ),
                 ("is_generator", CanonicalValue::Bool(*is_generator)),
+                ("is_async", CanonicalValue::Bool(*is_async)),
             ]),
             Self::CreateFunction {
                 name,
@@ -722,6 +730,7 @@ impl Ir1Op {
                 free_vars,
                 free_var_ids: _,
                 is_generator,
+                is_async,
                 rest_param_index: _,
             } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("create_function")),
@@ -753,6 +762,7 @@ impl Ir1Op {
                     ),
                 ),
                 ("is_generator", CanonicalValue::Bool(*is_generator)),
+                ("is_async", CanonicalValue::Bool(*is_async)),
             ]),
             Self::BeginTry {
                 catch_label,

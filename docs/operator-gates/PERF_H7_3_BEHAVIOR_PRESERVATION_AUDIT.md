@@ -7,6 +7,14 @@ no test result, replay outcome, or decision artifact should change.
 Run on a clean worktree off `55845b8b` (`CARGO_INCREMENTAL=0`,
 `RUSTFLAGS="-C linker=cc"`), 2026-05-26.
 
+Current status note (bd-x9t1n.6): this audit predates the full real-engine
+metamorphic relabel. At current HEAD, enabled parser, IR, and execution
+relations route through `EngineEvalAdapter` into the real engine
+(`CanonicalEs2020Parser` -> real lowering -> `HybridRouter`); historical
+ExecOptions-only relations are disabled/fail-closed until mapped to real engine
+configuration or retired. The counts below remain the 2026-05-26 audit record,
+not a claim that current IR/execution relations still use a reference model.
+
 ## Verdict: observation-equivalence SUPPORTED; literal all-green criteria BLOCKED by pre-existing tree debt
 
 ### Where mimalloc actually lives (scope)
@@ -36,7 +44,10 @@ without the H7.1 change.
 ### Behavior-preservation evidence (the meaningful signal)
 
 - **Metamorphic suite: 0 violations across 16,000 pairs** (16 relations) — the
-  strongest available observation-equivalence signal, green.
+  strongest available observation-equivalence signal from this historical run,
+  green. Current suite runs the enabled parser, IR, and execution relations
+  through the real engine; ExecOptions-only historical relations remain disabled
+  rather than toy-backed.
 - **Replay-coverage gate: exit 0.**
 - The lib unit tests do **not** link mimalloc, so any pass/fail there is
   unchanged by the allocator swap. None of the failures (below) represent a

@@ -321,15 +321,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let governance_actions = repro_governance_actions_from_triage(&triage_report);
     write_repro_governance_actions_json(&governance_actions_path, &governance_actions)?;
 
-    // bd-q90jg / bd-x9t1n: PARTIAL real-engine wiring. Parser-subsystem relations
-    // now run through the REAL engine (CanonicalEs2020Parser + HybridRouter via
-    // EngineEvalAdapter, bd-x9t1n.2) — for those, a 0-violation result IS genuine
-    // behavior-preservation evidence (and it already caught bd-dbosg, a real
-    // parser gap). IR and execution relations still run the self-contained
-    // reference model in relations/catalog_backed.rs (bd-x9t1n.3 / bd-x9t1n.4
-    // pending), so their verdicts are NOT yet engine evidence.
+    // bd-q90jg / bd-x9t1n: enabled Parser, IR, and Execution relations now run
+    // through the REAL engine (CanonicalEs2020Parser -> real lowering ->
+    // HybridRouter via EngineEvalAdapter; bd-x9t1n.2/.3/.4). A zero-violation
+    // result is genuine engine behavior-preservation evidence for those enabled
+    // relations. Historical toy ExecOptions-only relations are disabled/fail
+    // closed until each knob is mapped to real engine configuration or retired
+    // honestly (bd-x9t1n.5), so they contribute no toy-backed evidence.
     println!(
-        "NOTICE [bd-q90jg]: PARTIAL real-engine wiring — PARSER relations run through franken-engine (bd-x9t1n.2; real evidence); IR/EXECUTION relations still use the reference model (bd-x9t1n.3/.4 pending, NOT engine evidence). violations={}",
+        "NOTICE [bd-q90jg]: Parser/IR/Execution relations run through franken-engine (bd-x9t1n.2/.3/.4; real engine evidence); ExecOptions-dependent relations are disabled/fail-closed (bd-x9t1n.5). violations={}",
         suite.total_violations
     );
 

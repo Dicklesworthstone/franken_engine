@@ -1019,7 +1019,7 @@ Cross-platform determinism survives only with disciplined numeric handling. The 
 
 Cross-platform reproducibility for the reproducibility-bundle contract requires that two builds on different hardware produce identical content hashes. The numeric discipline above is *load-bearing* for that property, not a stylistic preference.
 
-The clippy gate at `cargo clippy --all-targets -- -D warnings` enforces the relevant Rust-2024 lints. The metamorphic suite (`crates/franken-metamorphic/`) is the differential check that catches violations the lint can't see.
+The clippy gate at `cargo clippy --all-targets -- -D warnings` enforces the relevant Rust-2024 lints. The metamorphic suite (`crates/franken-metamorphic/`) is the engine-backed differential check that catches violations the lint can't see; enabled parser, IR, and execution relations run through `EngineEvalAdapter` into the real engine, while historical ExecOptions-only relations are disabled/fail-closed until mapped or retired.
 
 ---
 
@@ -1697,7 +1697,7 @@ The project ships a layered test stack; each layer answers a different question.
 | **RGC gate tests** | `crates/franken-engine/tests/rgc_*.rs` (37 files) | Each major RGC gate has a matching `cargo test` target plus a `scripts/run_*.sh` operator runner. |
 | **Test262 conformance** | `frankenctl test test262`, `crates/franken-engine/tests/test262_*` | Real Test262 conformance (since April 2026, when `21b485a0` replaced the hardcoded fake test data with real JS execution). |
 | **Golden artifacts** | `crates/franken-engine/tests/**/*_golden*.rs`, `tests/**/goldens/*.json` | Byte-equality tests against committed canonical outputs. `669b6319 feat(ast-parser): Add comprehensive golden test infrastructure` is the load-bearing commit. |
-| **Metamorphic relations** | `crates/franken-metamorphic/` | Whitespace invariance, source/AST roundtrip, semantic equivalence under refactor. Run via `cargo run -p frankenengine-metamorphic --bin run_metamorphic_suite`. |
+| **Metamorphic relations** | `crates/franken-metamorphic/` | Engine-backed parser, IR, and execution equivalence checks for whitespace invariance, source/AST roundtrip, and semantic-preserving refactors. Enabled relations run through `EngineEvalAdapter` into the real parser/lowering/interpreter; historical ExecOptions-only relations are disabled/fail-closed. Run via `cargo run -p frankenengine-metamorphic --bin run_metamorphic_suite`. |
 | **Lockstep oracle** | `frankenctl test lockstep`, `frx_lockstep_oracle.rs` | OBSERVED differential execution against Node and Bun with divergence classification taxonomy. |
 | **Fuzz harnesses** | top-level `fuzz/fuzz_targets/` + `crates/franken-engine/fuzz/fuzz_targets/` | Coverage-guided fuzz over parser, proof-artifact JSON validation, shadow panel bundles, TS module resolution, parallel parser. `cargo +nightly fuzz run <target>`. |
 | **Mock-leak audit** | `scripts/run_rgc_zero_placeholder_gate.sh ci` + `mock-code-finder` skill | Refuses release if protected surfaces contain placeholder/mock/stub code that is not explicitly waived. |
@@ -2243,7 +2243,7 @@ Project-specific jargon, defined once.
 | **IR0 / IR1 / IR2 / IR3 / IR4** | The five-level IR contract: four lowering/execution stages (raw AST, scope-normalized, simplified control-flow / SSA-ish, register-allocated executable) plus IR4/WitnessIR post-execution evidence artifacts. |
 | **Lockstep oracle** | `frx_lockstep_oracle.rs`, the differential execution oracle that compares FrankenEngine output against Node and Bun on the same input. OBSERVED with divergence classification taxonomy. |
 | **Lowering gap inventory** | Catalogue of syntactic constructs and their lowering status. Bound by the `LOWERING_GAP_TRUTH_INVARIANT_V1` contract. |
-| **Metamorphic relations** | Equivalence properties that should be preserved by a transformation (whitespace invariance, AST roundtrip, semantic equivalence under refactor). `crates/franken-metamorphic/`. |
+| **Metamorphic relations** | Equivalence properties that should be preserved by a transformation (whitespace invariance, AST roundtrip, semantic equivalence under refactor). In `crates/franken-metamorphic/`, enabled parser, IR, and execution relations route through the real engine; historical ExecOptions-only relations are disabled/fail-closed until mapped or retired. |
 | **OBSERVED** | A matrix state meaning evidence is attached and a verification command is linked. The strongest permitted wording. |
 | **OCAP** | Object-capability security model. Authority is held in unforgeable references; FrankenEngine's `CapabilityProfile` algebra implements the canonical OCAP discipline. |
 | **`PearlTower`** | Project-internal codename for the agent persona that owns this engine's bead queue. Mentioned in `memory/MEMORY.md`. |

@@ -656,6 +656,18 @@ pub enum BuiltinFunctionKind {
     /// `String.prototype.padEnd` — receiver-aware; right-pads to a target
     /// length (bd-9a8cz.1).
     StringPadEnd,
+    /// `String.prototype.trimStart` — receiver-aware; trims leading whitespace
+    /// (ES2019) (bd-9hw6q).
+    StringTrimStart,
+    /// `String.prototype.trimEnd` — receiver-aware; trims trailing whitespace
+    /// (ES2019) (bd-9hw6q).
+    StringTrimEnd,
+    /// `String.prototype.replaceAll` — receiver-aware; replaces every occurrence
+    /// of a string search value (ES2021) (bd-9hw6q).
+    StringReplaceAll,
+    /// `String.prototype.codePointAt` — receiver-aware; the Unicode code point at
+    /// a (scalar) index, else `undefined` (ES2015) (bd-9hw6q).
+    StringCodePointAt,
     /// `Number.prototype.toFixed` — receiver-aware; fixed-point notation with a
     /// given number of digits after the decimal point (bd-i08nh).
     NumberToFixed,
@@ -1009,6 +1021,42 @@ impl BuiltinFunction {
     fn string_repeat() -> Self {
         Self {
             kind: BuiltinFunctionKind::StringRepeat,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_trim_start() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringTrimStart,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_trim_end() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringTrimEnd,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_replace_all() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringReplaceAll,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn string_code_point_at() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::StringCodePointAt,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -1539,6 +1587,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::StringRepeat => "repeat",
             BuiltinFunctionKind::StringPadStart => "padStart",
             BuiltinFunctionKind::StringPadEnd => "padEnd",
+            BuiltinFunctionKind::StringTrimStart => "trimStart",
+            BuiltinFunctionKind::StringTrimEnd => "trimEnd",
+            BuiltinFunctionKind::StringReplaceAll => "replaceAll",
+            BuiltinFunctionKind::StringCodePointAt => "codePointAt",
             BuiltinFunctionKind::NumberToFixed => "toFixed",
             BuiltinFunctionKind::NumberToString => "toString",
             BuiltinFunctionKind::NumberValueOf => "valueOf",
@@ -5105,6 +5157,54 @@ impl InterpreterCore {
                 let receiver = receiver.unwrap_or(Value::Undefined);
                 let value = Self::require_object_coercible_to_string(&receiver)?;
                 Ok(Value::str(value.trim().to_string()))
+            }
+            BuiltinFunctionKind::StringTrimStart => {
+                // ES2019 21.1.3.27: trim leading whitespace only.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                Ok(Value::str(value.trim_start().to_string()))
+            }
+            BuiltinFunctionKind::StringTrimEnd => {
+                // ES2019 21.1.3.26: trim trailing whitespace only.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                Ok(Value::str(value.trim_end().to_string()))
+            }
+            BuiltinFunctionKind::StringReplaceAll => {
+                // ES2021 21.1.3.18: replace EVERY occurrence of a string search
+                // value. (Rust's `str::replace` replaces all occurrences.)
+                // Regex search values are not handled here (string patterns only,
+                // the common case); see bd-9hw6q follow-up.
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let search = match self.builtin_arg(args, 0)? {
+                    Some(arg) => self.value_to_string(&arg),
+                    None => "undefined".to_string(),
+                };
+                let replacement = match self.builtin_arg(args, 1)? {
+                    Some(arg) => self.value_to_string(&arg),
+                    None => "undefined".to_string(),
+                };
+                Ok(Value::str(value.replace(search.as_str(), replacement.as_str())))
+            }
+            BuiltinFunctionKind::StringCodePointAt => {
+                // ES2015 21.1.3.3: the Unicode code point at a (scalar) index;
+                // out-of-range / negative => `undefined`. Indices are Unicode
+                // scalar offsets, consistent with this engine's other string
+                // methods (charCodeAt/at/includes).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let value = Self::require_object_coercible_to_string(&receiver)?;
+                let index = match self.builtin_arg(args, 0)? {
+                    Some(arg) => Self::coerce_to_number(&arg).unwrap_or(0),
+                    None => 0,
+                };
+                if index < 0 {
+                    return Ok(Value::Undefined);
+                }
+                Ok(match value.chars().nth(index as usize) {
+                    Some(ch) => Value::Int(ch as i64),
+                    None => Value::Undefined,
+                })
             }
             BuiltinFunctionKind::StringIncludes => {
                 // ES2020 21.1.3.7: substring containment from an optional start
@@ -10866,6 +10966,10 @@ impl InterpreterCore {
             "toUpperCase" => Value::BuiltinFunction(BuiltinFunction::string_to_upper_case()),
             "toLowerCase" => Value::BuiltinFunction(BuiltinFunction::string_to_lower_case()),
             "trim" => Value::BuiltinFunction(BuiltinFunction::string_trim()),
+            "trimStart" => Value::BuiltinFunction(BuiltinFunction::string_trim_start()),
+            "trimEnd" => Value::BuiltinFunction(BuiltinFunction::string_trim_end()),
+            "replaceAll" => Value::BuiltinFunction(BuiltinFunction::string_replace_all()),
+            "codePointAt" => Value::BuiltinFunction(BuiltinFunction::string_code_point_at()),
             "split" => Value::BuiltinFunction(BuiltinFunction::string_split()),
             "includes" => Value::BuiltinFunction(BuiltinFunction::string_includes()),
             "startsWith" => Value::BuiltinFunction(BuiltinFunction::string_starts_with()),

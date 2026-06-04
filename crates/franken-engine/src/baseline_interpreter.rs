@@ -699,6 +699,10 @@ pub enum BuiltinFunctionKind {
     /// where a negative index counts from the end; out-of-range => `undefined`
     /// (ES2022).
     ArrayAt,
+    /// `Array.prototype.flat` — receiver-aware: returns a new array with
+    /// sub-array elements concatenated into it recursively up to `depth`
+    /// (default 1; `Infinity` flattens fully) (ES2019).
+    ArrayFlat,
     /// `Array.prototype.join` — receiver-aware: concatenates elements with a
     /// separator (default `","`); `undefined`/`null` render as `""`
     /// (bd-962ev.1).
@@ -1137,6 +1141,15 @@ impl BuiltinFunction {
         }
     }
 
+    fn array_flat() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayFlat,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
     fn array_join() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayJoin,
@@ -1539,6 +1552,7 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArrayReverse => "reverse",
             BuiltinFunctionKind::ArrayFill => "fill",
             BuiltinFunctionKind::ArrayAt => "at",
+            BuiltinFunctionKind::ArrayFlat => "flat",
             BuiltinFunctionKind::ArrayJoin => "join",
             BuiltinFunctionKind::ArrayForEach => "forEach",
             BuiltinFunctionKind::ArrayMap => "map",
@@ -5683,6 +5697,33 @@ impl InterpreterCore {
                 Ok(self
                     .array_index_value(arr_id, idx as usize)?
                     .unwrap_or(Value::Undefined))
+            }
+            BuiltinFunctionKind::ArrayFlat => {
+                // ES2019 23.1.3.10: `flat(depth)` returns a new array with
+                // sub-array elements concatenated into it recursively up to
+                // `depth` levels (default 1; `Infinity` => fully flatten, which
+                // falls out of the saturating `inf as i64` cast). A negative or
+                // NaN depth flattens zero levels (a shallow copy).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.flat".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let depth = match self.builtin_arg(args, 0)? {
+                    None | Some(Value::Undefined) => 1,
+                    Some(value) => Self::value_as_integer(&value).max(0),
+                };
+                let result = self.alloc_array_with_prototype(None)?;
+                let mut out = 0usize;
+                self.array_flatten_into(arr_id, depth, result, &mut out)?;
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(out).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
             }
             BuiltinFunctionKind::ArrayJoin => {
                 // ES2020 23.1.3.13(join): concatenate elements with `separator`
@@ -11254,6 +11295,7 @@ impl InterpreterCore {
             "reverse" => Some(BuiltinFunction::array_reverse()),
             "fill" => Some(BuiltinFunction::array_fill()),
             "at" => Some(BuiltinFunction::array_at()),
+            "flat" => Some(BuiltinFunction::array_flat()),
             "join" => Some(BuiltinFunction::array_join()),
             "forEach" => Some(BuiltinFunction::array_for_each()),
             "map" => Some(BuiltinFunction::array_map()),
@@ -13584,6 +13626,41 @@ impl InterpreterCore {
             .get(array_id.0 as usize)
             .ok_or(InterpreterError::ObjectNotFound { id: array_id.0 })?;
         Ok(object.properties.get(&element_index.to_string()).cloned())
+    }
+
+    /// Append the elements of `src_id` into `result` (an already-allocated
+    /// array), recursively flattening any element that is itself an array up to
+    /// `depth` further levels (ES2019 `FlattenIntoArray`). `out` tracks the next
+    /// write index. Mirrors `Array.prototype.concat`'s one-level spread but
+    /// recurses while `depth > 0`.
+    fn array_flatten_into(
+        &mut self,
+        src_id: ObjectId,
+        depth: i64,
+        result: ObjectId,
+        out: &mut usize,
+    ) -> Result<(), InterpreterError> {
+        let len = self.array_like_length(src_id)?;
+        for i in 0..len {
+            let element = self.array_index_value(src_id, i)?.unwrap_or(Value::Undefined);
+            let nested = if let Value::Object(eid) = &element {
+                self.heap
+                    .get(eid.0 as usize)
+                    .map(|object| object.is_array)
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if depth > 0 && nested {
+                if let Value::Object(eid) = element {
+                    self.array_flatten_into(eid, depth - 1, result, out)?;
+                }
+            } else {
+                self.set_object_property(result, out.to_string(), element)?;
+                *out += 1;
+            }
+        }
+        Ok(())
     }
 
     /// Whether the array's dense-length fast-path cache is currently populated.

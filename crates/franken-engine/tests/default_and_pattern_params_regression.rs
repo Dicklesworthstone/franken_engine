@@ -72,3 +72,16 @@ fn arrow_array_destructuring_param() {
 fn arrow_object_destructuring_param() {
     assert_eq!(eval_value("let f = ({ x }) => x; f({ x: 9 });"), "9");
 }
+
+#[test]
+fn function_declaration_whole_object_pattern_default_applies_before_destructuring() {
+    assert_eq!(
+        eval_value("function f({a = 5} = {}) { return a; } f();"),
+        "5"
+    );
+}
+
+#[test]
+fn arrow_whole_array_pattern_default_applies_before_destructuring() {
+    assert_eq!(eval_value("let f = ([a = 7] = []) => a; f();"), "7");
+}

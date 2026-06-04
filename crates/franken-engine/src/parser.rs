@@ -3488,18 +3488,6 @@ fn parse_binding_pattern(
         return Ok(BindingPattern::Rest(Box::new(inner)));
     }
 
-    // Object pattern: `{ ... }`
-    if trimmed.starts_with('{') && trimmed.ends_with('}') {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        return parse_object_binding_pattern(inner.trim(), span, context);
-    }
-
-    // Array pattern: `[ ... ]`
-    if trimmed.starts_with('[') && trimmed.ends_with(']') {
-        let inner = &trimmed[1..trimmed.len() - 1];
-        return parse_array_binding_pattern(inner.trim(), span, context);
-    }
-
     // Default value: `pattern = expr` (only at top level of a pattern element)
     // We need to be careful not to match `=` inside nested patterns.
     if let Some(eq_pos) = find_top_level_eq(trimmed) {
@@ -3513,6 +3501,18 @@ fn parse_binding_pattern(
                 right,
             });
         }
+    }
+
+    // Object pattern: `{ ... }`
+    if trimmed.starts_with('{') && trimmed.ends_with('}') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        return parse_object_binding_pattern(inner.trim(), span, context);
+    }
+
+    // Array pattern: `[ ... ]`
+    if trimmed.starts_with('[') && trimmed.ends_with(']') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        return parse_array_binding_pattern(inner.trim(), span, context);
     }
 
     // Simple identifier binding. Reject reserved words like `return`, `function`,
@@ -10134,6 +10134,27 @@ mod tests {
             }
         } else {
             panic!("expected variable declaration");
+        }
+    }
+
+    #[test]
+    fn whole_object_pattern_default_param_parses_as_assignment_pattern() {
+        let parser = CanonicalEs2020Parser;
+        let tree = parser
+            .parse("function f({a = 5} = {}) { return a; }", ParseGoal::Script)
+            .expect("function param with whole-object-pattern default should parse");
+        if let Statement::FunctionDeclaration(func) = &tree.body[0] {
+            assert!(
+                matches!(
+                    &func.params[0].pattern,
+                    BindingPattern::AssignmentPattern { left, .. }
+                        if matches!(left.as_ref(), BindingPattern::ObjectPattern(_))
+                ),
+                "expected assignment pattern with object-pattern left side, got {:?}",
+                func.params[0].pattern
+            );
+        } else {
+            panic!("expected function declaration");
         }
     }
 

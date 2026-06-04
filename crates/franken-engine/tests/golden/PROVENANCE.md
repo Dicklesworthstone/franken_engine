@@ -210,6 +210,22 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
   followed by `cargo insta review` for interactive blessing. The legacy
   `UPDATE_GOLDENS=1` regen flow no longer applies to this suite.
 
+### `policy_bundle_golden_artifacts__{policy_bundle_default,policy_bundle_minimal,policy_bundle_comprehensive}.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21.1)*
+
+- **Owning test:** `tests/policy_bundle_golden_artifacts.rs`. Migrated from
+  the local `assert_golden` helper to `insta::assert_snapshot!` in commit
+  `96526935` (bd-ub6x8.21 child bead `bd-ub6x8.21.1`). The load-bearing
+  fixtures now live at
+  `tests/snapshots/policy_bundle_golden_artifacts__<name>.snap` with the
+  canonical insta YAML header.
+- **Subject under test:** deterministic `PolicyBundle` JSON serialization for
+  the default, minimal, and comprehensive policy-bundle shapes.
+- **Regen:**
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test policy_bundle_golden_artifacts`,
+  followed by `cargo insta review` for interactive blessing. The legacy
+  `tests/golden/policy_bundle_*.golden` files are retained for audit history
+  until an explicit deletion/move approval is given.
+
 ### `deterministic_formatting.golden`, `error_message_formatting.golden`
 
 - **Owning test:** `tests/simple_golden_demo.rs` (helper

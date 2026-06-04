@@ -243,6 +243,7 @@ pub enum ArenaExpression {
     Identifier(String),
     StringLiteral(String),
     NumericLiteral(i64),
+    BigIntLiteral(String),
     FloatLiteral(u64),
     BooleanLiteral(bool),
     NullLiteral,
@@ -563,6 +564,11 @@ impl ParserArena {
                 self.charge_bytes(EXPR_BASE_ESTIMATED_BYTES)?;
                 ArenaExpression::NumericLiteral(*value)
             }
+            Expression::BigIntLiteral(value) => {
+                self.charge_bytes(EXPR_BASE_ESTIMATED_BYTES)?;
+                self.charge_bytes(string_bytes(value))?;
+                ArenaExpression::BigIntLiteral(value.clone())
+            }
             Expression::FloatLiteral(bits) => {
                 self.charge_bytes(EXPR_BASE_ESTIMATED_BYTES)?;
                 ArenaExpression::FloatLiteral(*bits)
@@ -754,6 +760,7 @@ impl ParserArena {
             ArenaExpression::Identifier(value) => Ok(Expression::Identifier(value)),
             ArenaExpression::StringLiteral(value) => Ok(Expression::StringLiteral(value)),
             ArenaExpression::NumericLiteral(value) => Ok(Expression::NumericLiteral(value)),
+            ArenaExpression::BigIntLiteral(value) => Ok(Expression::BigIntLiteral(value)),
             ArenaExpression::FloatLiteral(bits) => Ok(Expression::FloatLiteral(bits)),
             ArenaExpression::BooleanLiteral(value) => Ok(Expression::BooleanLiteral(value)),
             ArenaExpression::NullLiteral => Ok(Expression::NullLiteral),
@@ -815,6 +822,7 @@ fn estimate_expression_slots(expression: &Expression) -> usize {
         Expression::Identifier(_)
         | Expression::StringLiteral(_)
         | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
         | Expression::FloatLiteral(_)
         | Expression::BooleanLiteral(_)
         | Expression::NullLiteral
@@ -860,6 +868,7 @@ fn expression_kind_name(expression: &Expression) -> &'static str {
         Expression::Identifier(_) => "identifier",
         Expression::StringLiteral(_) => "string",
         Expression::NumericLiteral(_) => "numeric",
+        Expression::BigIntLiteral(_) => "bigint",
         Expression::FloatLiteral(_) => "float",
         Expression::BooleanLiteral(_) => "boolean",
         Expression::NullLiteral => "null",
@@ -936,6 +945,7 @@ fn expression_audit_descriptor(expression: &ArenaExpression) -> String {
         ArenaExpression::Identifier(value) => format!("identifier {}", value),
         ArenaExpression::StringLiteral(value) => format!("string {}", value),
         ArenaExpression::NumericLiteral(value) => format!("number {}", value),
+        ArenaExpression::BigIntLiteral(value) => format!("bigint {}", value),
         ArenaExpression::FloatLiteral(bits) => format!("float bits:{}", bits),
         ArenaExpression::BooleanLiteral(value) => format!("boolean {}", value),
         ArenaExpression::NullLiteral => "null".to_string(),

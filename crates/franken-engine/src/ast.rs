@@ -1353,6 +1353,9 @@ pub enum Expression {
     Identifier(String),
     StringLiteral(String),
     NumericLiteral(i64),
+    /// BigInt literal payload stored as canonical decimal digits without the
+    /// trailing `n` suffix.
+    BigIntLiteral(String),
     /// Floating-point literal stored as IEEE 754 bits (u64) for deterministic
     /// replay and Eq derivation. Use `f64::from_bits()` to recover the value.
     FloatLiteral(u64),
@@ -1461,6 +1464,10 @@ impl Expression {
             Self::NumericLiteral(value) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("numeric")),
                 ("value", CanonicalValue::I64(*value)),
+            ]),
+            Self::BigIntLiteral(value) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("bigint")),
+                ("value", CanonicalValue::str(value.clone())),
             ]),
             Self::FloatLiteral(value) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("float")),
@@ -1690,6 +1697,7 @@ impl std::fmt::Display for Expression {
             Self::Identifier(value) => write!(f, "{value}"),
             Self::StringLiteral(value) => write!(f, "\"{value}\""),
             Self::NumericLiteral(value) => write!(f, "{value}"),
+            Self::BigIntLiteral(value) => write!(f, "{value}n"),
             Self::FloatLiteral(bits) => {
                 let value = f64::from_bits(*bits);
                 if value.is_nan() {

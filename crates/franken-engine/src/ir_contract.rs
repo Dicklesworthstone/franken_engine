@@ -793,6 +793,7 @@ impl Ir1Op {
 pub enum Ir1Literal {
     String(String),
     Integer(i64),
+    BigInt(String),
     /// Floating-point literal stored as IEEE 754 bits for deterministic serde.
     Float(u64),
     Boolean(bool),
@@ -810,6 +811,10 @@ impl Ir1Literal {
             Self::Integer(value) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("integer")),
                 ("value", CanonicalValue::I64(*value)),
+            ]),
+            Self::BigInt(value) => CanonicalValue::map_from_entries([
+                ("kind", CanonicalValue::str("bigint")),
+                ("value", CanonicalValue::str(value.clone())),
             ]),
             Self::Float(bits) => CanonicalValue::map_from_entries([
                 ("kind", CanonicalValue::str("float")),
@@ -1088,6 +1093,9 @@ impl RegRange {
 pub enum Ir3Instruction {
     /// Load an integer constant into a register.
     LoadInt { dst: Reg, value: i64 },
+    /// Load a BigInt constant into a register. The value is canonical decimal
+    /// digits without the JavaScript literal `n` suffix.
+    LoadBigInt { dst: Reg, value: String },
     /// Load a floating-point constant into a register. The value is stored as
     /// its IEEE 754 bit representation (u64) for deterministic serialization.
     LoadFloat { dst: Reg, bits: u64 },
@@ -1355,6 +1363,11 @@ impl Ir3Instruction {
                 ("op", CanonicalValue::str("load_int")),
                 ("dst", CanonicalValue::U64(u64::from(*dst))),
                 ("value", CanonicalValue::I64(*value)),
+            ]),
+            Self::LoadBigInt { dst, value } => CanonicalValue::map_from_entries([
+                ("op", CanonicalValue::str("load_bigint")),
+                ("dst", CanonicalValue::U64(u64::from(*dst))),
+                ("value", CanonicalValue::str(value.clone())),
             ]),
             Self::LoadFloat { dst, bits } => CanonicalValue::map_from_entries([
                 ("op", CanonicalValue::str("load_float")),
@@ -3801,6 +3814,7 @@ mod tests {
             Ir1Literal::String("hello".to_string()),
             Ir1Literal::Integer(i64::MIN),
             Ir1Literal::Integer(0),
+            Ir1Literal::BigInt("12345678901234567890".to_string()),
             Ir1Literal::Boolean(true),
             Ir1Literal::Boolean(false),
             Ir1Literal::Null,
@@ -4710,6 +4724,13 @@ mod tests {
         let cases: Vec<(Ir3Instruction, &str)> = vec![
             (Ir3Instruction::LoadInt { dst: 0, value: 1 }, "load_int"),
             (
+                Ir3Instruction::LoadBigInt {
+                    dst: 0,
+                    value: "1".to_string(),
+                },
+                "load_bigint",
+            ),
+            (
                 Ir3Instruction::LoadStr {
                     dst: 0,
                     pool_index: 0,
@@ -5019,6 +5040,7 @@ mod tests {
         let cases: Vec<(Ir1Literal, &str)> = vec![
             (Ir1Literal::String("hello".to_string()), "string"),
             (Ir1Literal::Integer(42), "integer"),
+            (Ir1Literal::BigInt("42".to_string()), "bigint"),
             (Ir1Literal::Boolean(false), "boolean"),
             (Ir1Literal::Null, "null"),
             (Ir1Literal::Undefined, "undefined"),

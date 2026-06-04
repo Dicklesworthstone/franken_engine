@@ -1909,6 +1909,7 @@ fn patch_eval_completion_value(ir3: &mut Ir3Module) {
 fn ir3_destination_register(instr: &Ir3Instruction) -> Option<u32> {
     match instr {
         Ir3Instruction::LoadInt { dst, .. }
+        | Ir3Instruction::LoadBigInt { dst, .. }
         | Ir3Instruction::LoadStr { dst, .. }
         | Ir3Instruction::LoadBool { dst, .. }
         | Ir3Instruction::LoadFloat { dst, .. }

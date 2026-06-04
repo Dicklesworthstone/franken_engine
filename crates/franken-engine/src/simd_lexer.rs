@@ -632,6 +632,9 @@ impl ScalarLexer {
                 while index < input.len() && input[index].is_ascii_digit() {
                     index = index.saturating_add(1);
                 }
+                if index < input.len() && input[index] == b'n' {
+                    index = index.saturating_add(1);
+                }
                 token_count = token_count.saturating_add(1);
                 push_emitted_token(
                     &mut token_storage,
@@ -830,6 +833,9 @@ impl SwarLexer {
                 }
 
                 while index < len && input[index].is_ascii_digit() {
+                    index = index.saturating_add(1);
+                }
+                if index < len && input[index] == b'n' {
                     index = index.saturating_add(1);
                 }
 

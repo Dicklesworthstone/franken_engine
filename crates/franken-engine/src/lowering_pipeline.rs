@@ -1397,6 +1397,7 @@ fn object_pattern_static_key(prop: &ObjectPatternProperty, fallback_name: Option
         Expression::Identifier(name) => name.clone(),
         Expression::StringLiteral(value) => value.clone(),
         Expression::NumericLiteral(value) => value.to_string(),
+        Expression::BigIntLiteral(value) => value.clone(),
         _ => fallback_name.unwrap_or_default().to_string(),
     }
 }
@@ -4851,6 +4852,12 @@ pub fn lower_ir2_to_ir3(
                             ir3.instructions
                                 .push(Ir3Instruction::LoadInt { dst, value: *n });
                         }
+                        Ir1Literal::BigInt(value) => {
+                            ir3.instructions.push(Ir3Instruction::LoadBigInt {
+                                dst,
+                                value: value.clone(),
+                            });
+                        }
                         Ir1Literal::Float(bits) => {
                             ir3.instructions
                                 .push(Ir3Instruction::LoadFloat { dst, bits: *bits });
@@ -6483,6 +6490,11 @@ fn lower_expression_to_ir1(
         Expression::NumericLiteral(value) => {
             ops.push(Ir1Op::LoadLiteral {
                 value: Ir1Literal::Integer(*value),
+            });
+        }
+        Expression::BigIntLiteral(value) => {
+            ops.push(Ir1Op::LoadLiteral {
+                value: Ir1Literal::BigInt(value.clone()),
             });
         }
         Expression::FloatLiteral(bits) => {
@@ -8425,6 +8437,7 @@ fn lower_expression_to_ir1(
                                 Expression::Identifier(name) => name.clone(),
                                 Expression::StringLiteral(s) => s.clone(),
                                 Expression::NumericLiteral(n) => n.to_string(),
+                                Expression::BigIntLiteral(n) => n.clone(),
                                 other => format!("{other:?}"),
                             };
                             ops.push(Ir1Op::LoadLiteral {
@@ -8474,6 +8487,7 @@ fn lower_expression_to_ir1(
                             Expression::Identifier(name) => name.clone(),
                             Expression::StringLiteral(s) => s.clone(),
                             Expression::NumericLiteral(n) => n.to_string(),
+                            Expression::BigIntLiteral(n) => n.clone(),
                             other => format!("{other:?}"),
                         };
                         ops.push(Ir1Op::LoadLiteral {
@@ -9701,6 +9715,7 @@ fn lower_member_property_key_to_ir1(
         Expression::Identifier(name) => name.clone(),
         Expression::StringLiteral(value) => value.clone(),
         Expression::NumericLiteral(value) => value.to_string(),
+        Expression::BigIntLiteral(value) => value.clone(),
         _ => "unknown".to_string(),
     };
     Ok(Ir1PropertyKey::Static(key))
@@ -10012,6 +10027,10 @@ fn lower_literal_to_ir3_optimized(
         Ir1Literal::Integer(value) => {
             instructions.push(Ir3Instruction::LoadInt { dst, value: *value })
         }
+        Ir1Literal::BigInt(value) => instructions.push(Ir3Instruction::LoadBigInt {
+            dst,
+            value: value.clone(),
+        }),
         Ir1Literal::Float(bits) => {
             instructions.push(Ir3Instruction::LoadFloat { dst, bits: *bits })
         }

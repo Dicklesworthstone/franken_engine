@@ -4178,6 +4178,10 @@ fn parse_primary_expression(
         return Ok(Expression::RegExpLiteral { pattern, flags });
     }
 
+    if let Some(value) = parse_bigint_numeric_literal(expression) {
+        return Ok(Expression::BigIntLiteral(value));
+    }
+
     if let Some(value) = parse_i64_numeric_literal(expression) {
         return Ok(Expression::NumericLiteral(value));
     }
@@ -4310,8 +4314,7 @@ fn parse_primary_expression(
         // collide with the operands: operands are evaluated as arguments in the
         // enclosing scope, never inside the arrow body.
         if split_top_level_commas(inner).len() > 1 {
-            let operands =
-                parse_comma_separated_exprs(inner, span, context, recursion_depth + 1)?;
+            let operands = parse_comma_separated_exprs(inner, span, context, recursion_depth + 1)?;
             if operands.len() > 1 {
                 let params: Vec<FunctionParam> = (0..operands.len())
                     .map(|i| FunctionParam {
@@ -4413,6 +4416,7 @@ fn is_unseparated_expression_sequence(expression: &str) -> bool {
         return false;
     };
     if !is_identifier(first)
+        && parse_bigint_numeric_literal(first).is_none()
         && parse_i64_numeric_literal(first).is_none()
         && parse_f64_numeric_literal(first).is_none()
     {
@@ -4422,6 +4426,7 @@ fn is_unseparated_expression_sequence(expression: &str) -> bool {
     let mut count = 1usize;
     for part in parts {
         if !is_identifier(part)
+            && parse_bigint_numeric_literal(part).is_none()
             && parse_i64_numeric_literal(part).is_none()
             && parse_f64_numeric_literal(part).is_none()
         {
@@ -5855,9 +5860,7 @@ fn try_parse_postfix(
                             expression: Expression::Assignment {
                                 operator: AssignmentOperator::Assign,
                                 left: Box::new(Expression::Member {
-                                    object: Box::new(Expression::Identifier(
-                                        strings_param.clone(),
-                                    )),
+                                    object: Box::new(Expression::Identifier(strings_param.clone())),
                                     property: Box::new(Expression::Identifier("raw".to_string())),
                                     computed: false,
                                 }),
@@ -6129,6 +6132,7 @@ fn contains_optional_chain(expression: &Expression) -> bool {
         Expression::Identifier(_)
         | Expression::StringLiteral(_)
         | Expression::NumericLiteral(_)
+        | Expression::BigIntLiteral(_)
         | Expression::FloatLiteral(_)
         | Expression::BooleanLiteral(_)
         | Expression::NullLiteral
@@ -6795,6 +6799,70 @@ fn parse_i64_numeric_literal(input: &str) -> Option<i64> {
     }
 }
 
+fn parse_bigint_numeric_literal(input: &str) -> Option<String> {
+    let (is_neg, digits) = if let Some(rest) = input.strip_prefix('-') {
+        (true, rest)
+    } else if let Some(rest) = input.strip_prefix('+') {
+        (false, rest)
+    } else {
+        (false, input)
+    };
+
+    let digits = digits.strip_suffix('n')?;
+    if digits.is_empty() || digits.contains('.') || digits.contains('e') || digits.contains('E') {
+        return None;
+    }
+
+    let cleaned: String;
+    let digits_ref = if digits.contains('_') {
+        cleaned = digits.replace('_', "");
+        cleaned.as_str()
+    } else {
+        digits
+    };
+
+    let unsigned = if let Some(hex) = digits_ref
+        .strip_prefix("0x")
+        .or_else(|| digits_ref.strip_prefix("0X"))
+    {
+        if hex.is_empty() || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        u128::from_str_radix(hex, 16).ok()?.to_string()
+    } else if let Some(oct) = digits_ref
+        .strip_prefix("0o")
+        .or_else(|| digits_ref.strip_prefix("0O"))
+    {
+        if oct.is_empty() || !oct.chars().all(|c| matches!(c, '0'..='7')) {
+            return None;
+        }
+        u128::from_str_radix(oct, 8).ok()?.to_string()
+    } else if let Some(bin) = digits_ref
+        .strip_prefix("0b")
+        .or_else(|| digits_ref.strip_prefix("0B"))
+    {
+        if bin.is_empty() || !bin.chars().all(|c| c == '0' || c == '1') {
+            return None;
+        }
+        u128::from_str_radix(bin, 2).ok()?.to_string()
+    } else if digits_ref.chars().all(|c| c.is_ascii_digit()) {
+        let trimmed = digits_ref.trim_start_matches('0');
+        if trimmed.is_empty() {
+            "0".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    } else {
+        return None;
+    };
+
+    if is_neg && unsigned != "0" {
+        Some(format!("-{unsigned}"))
+    } else {
+        Some(unsigned)
+    }
+}
+
 /// Parse a floating-point numeric literal: decimal (1.5), leading dot (.5),
 /// trailing dot (1.), or scientific notation (1e10, 1.5e-3).
 fn parse_f64_numeric_literal(input: &str) -> Option<f64> {
@@ -7226,6 +7294,9 @@ impl<'a> Utf8BoundarySafeScanner<'a> {
         {
             self.index = self.index.saturating_add(1);
         }
+        if self.index < self.bytes.len() && self.bytes[self.index] == b'n' {
+            self.index = self.index.saturating_add(1);
+        }
     }
 
     fn scan_string_literal(&mut self, quote: u8) {
@@ -7356,6 +7427,9 @@ fn count_lexical_tokens_scalar_reference(input: &str) -> u64 {
         if byte.is_ascii_digit() {
             index = index.saturating_add(1);
             while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index = index.saturating_add(1);
+            }
+            if index < bytes.len() && bytes[index] == b'n' {
                 index = index.saturating_add(1);
             }
             token_count = token_count.saturating_add(1);

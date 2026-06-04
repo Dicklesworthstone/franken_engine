@@ -533,6 +533,10 @@ pub enum Value {
     /// Integer (i64). Fixed-point integers avoid floating-point
     /// non-determinism; fractional values use millionths when needed.
     Int(i64),
+    /// BigInt primitive stored as canonical decimal digits without an `n`
+    /// suffix. The string representation keeps serde deterministic without
+    /// constraining literal size to the host integer width.
+    BigInt(String),
     /// IEEE 754 floating-point (f64). Used for fractional values, NaN,
     /// Infinity, and -0. Wrapped in Float64 for deterministic ordering.
     Float(Float64),
@@ -1463,6 +1467,7 @@ impl Value {
             Self::Undefined | Self::Null => false,
             Self::Bool(b) => *b,
             Self::Int(n) => *n != 0,
+            Self::BigInt(n) => n != "0",
             Self::Float(f) => !f.is_nan() && f.inner() != 0.0,
             Self::Str(s) => !s.is_empty(),
             Self::Object(_)
@@ -1503,6 +1508,7 @@ impl Value {
             Self::Null => "null",
             Self::Bool(_) => "boolean",
             Self::Int(_) | Self::Float(_) => "number",
+            Self::BigInt(_) => "bigint",
             Self::Str(_) => "string",
             Self::Object(_) => "object",
             Self::Function(_)
@@ -1525,6 +1531,7 @@ impl Value {
             Self::Null | Self::Object(_) => "object",
             Self::Bool(_) => "boolean",
             Self::Int(_) | Self::Float(_) => "number",
+            Self::BigInt(_) => "bigint",
             Self::Str(_) => "string",
             Self::Function(_)
             | Self::Closure(_)
@@ -1548,6 +1555,7 @@ impl fmt::Display for Value {
             Self::Null => write!(f, "null"),
             Self::Bool(b) => write!(f, "{b}"),
             Self::Int(n) => write!(f, "{n}"),
+            Self::BigInt(n) => write!(f, "{n}"),
             Self::Float(fv) => write!(f, "{fv}"),
             Self::Str(s) => write!(f, "{s}"),
             Self::Object(id) => write!(f, "[object#{}]", id.0),
@@ -2374,6 +2382,13 @@ impl EvidenceLog {
                 Value::Bool(b) => 2 + (*b as u64),
                 Value::Int(i) => 4 + (*i as u64),
                 Value::Float(f) => 4 + f.0.to_bits(),
+                Value::BigInt(n) => {
+                    let mut bigint_hash = 18u64;
+                    for byte in n.bytes() {
+                        bigint_hash = bigint_hash.wrapping_mul(31).wrapping_add(byte as u64);
+                    }
+                    bigint_hash
+                }
                 Value::Str(s) => {
                     let mut string_hash = 5u64;
                     for byte in s.bytes() {
@@ -5929,7 +5944,12 @@ impl InterpreterCore {
                     return Ok(Value::Bool(false));
                 };
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                Ok(Value::Bool(self.collection_has(map_id, "Map", "__entries", &key)))
+                Ok(Value::Bool(self.collection_has(
+                    map_id,
+                    "Map",
+                    "__entries",
+                    &key,
+                )))
             }
             BuiltinFunctionKind::MapDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -5937,7 +5957,12 @@ impl InterpreterCore {
                     return Ok(Value::Bool(false));
                 };
                 let key = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                Ok(Value::Bool(self.collection_delete(map_id, "Map", "__entries", &key)))
+                Ok(Value::Bool(self.collection_delete(
+                    map_id,
+                    "Map",
+                    "__entries",
+                    &key,
+                )))
             }
             BuiltinFunctionKind::SetAdd => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -5956,7 +5981,9 @@ impl InterpreterCore {
                     return Ok(Value::Bool(false));
                 };
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                Ok(Value::Bool(self.collection_has(set_id, "Set", "__values", &value)))
+                Ok(Value::Bool(
+                    self.collection_has(set_id, "Set", "__values", &value),
+                ))
             }
             BuiltinFunctionKind::SetDelete => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -5964,7 +5991,9 @@ impl InterpreterCore {
                     return Ok(Value::Bool(false));
                 };
                 let value = self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined);
-                Ok(Value::Bool(self.collection_delete(set_id, "Set", "__values", &value)))
+                Ok(Value::Bool(
+                    self.collection_delete(set_id, "Set", "__values", &value),
+                ))
             }
             BuiltinFunctionKind::MapClear => {
                 let receiver = receiver.unwrap_or(Value::Undefined);
@@ -6438,6 +6467,7 @@ impl InterpreterCore {
         match value {
             Value::Str(s) => s.to_string(),
             Value::Int(n) => n.to_string(),
+            Value::BigInt(n) => n.clone(),
             Value::Bool(b) => b.to_string(),
             Value::Undefined => "undefined".to_string(),
             Value::Null => "null".to_string(),
@@ -7180,6 +7210,10 @@ impl InterpreterCore {
             match instr {
                 Ir3Instruction::LoadInt { dst, value } => {
                     self.write_reg(dst, Value::Int(value))?;
+                    self.ip += 1;
+                }
+                Ir3Instruction::LoadBigInt { dst, value } => {
+                    self.write_reg(dst, Value::BigInt(value))?;
                     self.ip += 1;
                 }
                 Ir3Instruction::LoadFloat { dst, bits } => {
@@ -8884,6 +8918,7 @@ impl InterpreterCore {
                         let part_str = match val {
                             Value::Str(s) => s.to_string(),
                             Value::Int(n) => n.to_string(),
+                            Value::BigInt(n) => n,
                             Value::Float(f) => f.to_string(),
                             Value::Bool(b) => (if b { "true" } else { "false" }).to_string(),
                             Value::Null => "null".to_string(),
@@ -9460,6 +9495,9 @@ impl InterpreterCore {
         match (&a, &b) {
             // Int + Int: stay in integer domain
             (Value::Int(x), Value::Int(y)) => Ok(Value::Int(x.wrapping_add(*y))),
+            (Value::BigInt(x), Value::BigInt(y)) => {
+                Ok(Value::BigInt(Self::add_bigint_decimal(x, y)))
+            }
             // Float + Float: float arithmetic
             (Value::Float(x), Value::Float(y)) => {
                 Ok(Value::Float(Float64::new(x.inner() + y.inner())))
@@ -11064,7 +11102,11 @@ impl InterpreterCore {
     ) -> bool {
         self.collection_storage_id(obj_id, type_tag, storage_prop)
             .and_then(|sid| self.heap.get(sid.0 as usize))
-            .map(|storage| storage.properties.contains_key(&Self::collection_key_repr(key)))
+            .map(|storage| {
+                storage
+                    .properties
+                    .contains_key(&Self::collection_key_repr(key))
+            })
             .unwrap_or(false)
     }
 
@@ -12678,6 +12720,7 @@ impl InterpreterCore {
     fn coerce_to_number(value: &Value) -> Option<i64> {
         match value {
             Value::Int(n) => Some(*n),
+            Value::BigInt(_) => None,
             Value::Float(f) => {
                 let v = f.inner();
                 if v.is_nan() || v.is_infinite() {
@@ -12718,6 +12761,7 @@ impl InterpreterCore {
     fn coerce_to_float(value: &Value) -> Option<f64> {
         match value {
             Value::Int(n) => Some(*n as f64),
+            Value::BigInt(_) => None,
             Value::Float(f) => Some(f.inner()),
             Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
             Value::Null => Some(0.0),
@@ -12761,6 +12805,7 @@ impl InterpreterCore {
             Value::Undefined => "undefined".to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Int(n) => n.to_string(),
+            Value::BigInt(n) => n.clone(),
             Value::Float(f) => f.to_string(),
             Value::Object(_) => "[object Object]".to_string(),
             Value::Function(_) => "[object Function]".to_string(),
@@ -12783,6 +12828,7 @@ impl InterpreterCore {
             Value::Null => "[object Null]".to_string(),
             Value::Bool(_) => "[object Boolean]".to_string(),
             Value::Int(_) | Value::Float(_) => "[object Number]".to_string(),
+            Value::BigInt(_) => "[object BigInt]".to_string(),
             Value::Str(_) => "[object String]".to_string(),
             Value::Object(_) => "[object Object]".to_string(),
             Value::Function(_) | Value::Closure(_) | Value::BuiltinFunction(_) => {
@@ -13521,6 +13567,10 @@ impl InterpreterCore {
                     Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
                     instruction_pointer += 1;
                 }
+                Ir3Instruction::LoadBigInt { dst, value } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::BigInt(value))?;
+                    instruction_pointer += 1;
+                }
                 Ir3Instruction::LoadFloat { dst, bits } => {
                     Self::write_local_register(
                         &mut local_registers,
@@ -13726,6 +13776,10 @@ impl InterpreterCore {
             match instruction {
                 Ir3Instruction::LoadInt { dst, value } => {
                     Self::write_local_register(&mut local_registers, dst, Value::Int(value))?;
+                    instruction_pointer += 1;
+                }
+                Ir3Instruction::LoadBigInt { dst, value } => {
+                    Self::write_local_register(&mut local_registers, dst, Value::BigInt(value))?;
                     instruction_pointer += 1;
                 }
                 Ir3Instruction::LoadFloat { dst, bits } => {
@@ -14127,6 +14181,9 @@ impl InterpreterCore {
             (Value::Int(left_int), Value::Int(right_int)) => {
                 Ok(Value::Int(left_int.wrapping_add(*right_int)))
             }
+            (Value::BigInt(left_bigint), Value::BigInt(right_bigint)) => Ok(Value::BigInt(
+                Self::add_bigint_decimal(left_bigint, right_bigint),
+            )),
             (Value::Float(left_float), Value::Float(right_float)) => Ok(Value::Float(
                 Float64::new(left_float.inner() + right_float.inner()),
             )),
@@ -14233,12 +14290,108 @@ impl InterpreterCore {
         }
     }
 
+    fn add_bigint_decimal(lhs: &str, rhs: &str) -> String {
+        let (lhs_neg, lhs_abs) = lhs
+            .strip_prefix('-')
+            .map_or((false, lhs), |rest| (true, rest));
+        let (rhs_neg, rhs_abs) = rhs
+            .strip_prefix('-')
+            .map_or((false, rhs), |rest| (true, rest));
+
+        if lhs_neg == rhs_neg {
+            let sum = Self::add_unsigned_decimal(lhs_abs, rhs_abs);
+            if lhs_neg && sum != "0" {
+                format!("-{sum}")
+            } else {
+                sum
+            }
+        } else {
+            match Self::cmp_unsigned_decimal(lhs_abs, rhs_abs) {
+                std::cmp::Ordering::Equal => "0".to_string(),
+                std::cmp::Ordering::Greater => {
+                    let diff = Self::sub_unsigned_decimal(lhs_abs, rhs_abs);
+                    if lhs_neg && diff != "0" {
+                        format!("-{diff}")
+                    } else {
+                        diff
+                    }
+                }
+                std::cmp::Ordering::Less => {
+                    let diff = Self::sub_unsigned_decimal(rhs_abs, lhs_abs);
+                    if rhs_neg && diff != "0" {
+                        format!("-{diff}")
+                    } else {
+                        diff
+                    }
+                }
+            }
+        }
+    }
+
+    fn add_unsigned_decimal(lhs: &str, rhs: &str) -> String {
+        let mut carry = 0u8;
+        let mut out = Vec::with_capacity(lhs.len().max(rhs.len()) + 1);
+        let mut left = lhs.as_bytes().iter().rev();
+        let mut right = rhs.as_bytes().iter().rev();
+
+        loop {
+            let l = left.next().map(|b| b.saturating_sub(b'0'));
+            let r = right.next().map(|b| b.saturating_sub(b'0'));
+            if l.is_none() && r.is_none() && carry == 0 {
+                break;
+            }
+            let sum = l.unwrap_or(0) + r.unwrap_or(0) + carry;
+            out.push(b'0' + (sum % 10));
+            carry = sum / 10;
+        }
+
+        out.reverse();
+        String::from_utf8(out).unwrap_or_else(|_| "0".to_string())
+    }
+
+    fn sub_unsigned_decimal(lhs: &str, rhs: &str) -> String {
+        let mut borrow = 0i16;
+        let mut out = Vec::with_capacity(lhs.len());
+        let mut left = lhs.as_bytes().iter().rev();
+        let mut right = rhs.as_bytes().iter().rev();
+
+        while let Some(l) = left.next() {
+            let mut digit = i16::from(l.saturating_sub(b'0')) - borrow;
+            let r = right
+                .next()
+                .map(|b| i16::from(b.saturating_sub(b'0')))
+                .unwrap_or(0);
+            if digit < r {
+                digit += 10;
+                borrow = 1;
+            } else {
+                borrow = 0;
+            }
+            out.push(b'0' + u8::try_from(digit - r).unwrap_or(0));
+        }
+
+        while out.len() > 1 && out.last() == Some(&b'0') {
+            out.pop();
+        }
+        out.reverse();
+        String::from_utf8(out).unwrap_or_else(|_| "0".to_string())
+    }
+
+    fn cmp_unsigned_decimal(lhs: &str, rhs: &str) -> std::cmp::Ordering {
+        let lhs = lhs.trim_start_matches('0');
+        let rhs = rhs.trim_start_matches('0');
+        let lhs = if lhs.is_empty() { "0" } else { lhs };
+        let rhs = if rhs.is_empty() { "0" } else { rhs };
+        lhs.len().cmp(&rhs.len()).then_with(|| lhs.cmp(rhs))
+    }
+
     fn abstract_eq_values(a: &Value, b: &Value) -> bool {
         match (a, b) {
             (Value::Undefined, Value::Undefined)
             | (Value::Null, Value::Null)
             | (Value::Bool(_), Value::Bool(_))
             | (Value::Int(_), Value::Int(_))
+            | (Value::BigInt(_), Value::BigInt(_))
             | (Value::Str(_), Value::Str(_))
             | (Value::Object(_), Value::Object(_))
             | (Value::Function(_), Value::Function(_))
@@ -14608,6 +14761,7 @@ impl InterpreterCore {
                 }
             }
             Value::Int(n) => n.to_string(),
+            Value::BigInt(n) => n.clone(),
             Value::Float(f) => {
                 let val = f.inner();
                 if val.is_nan() || val.is_infinite() {
@@ -17255,6 +17409,7 @@ impl InterpreterCore {
                     Value::Undefined => "undefined",
                     Value::Bool(_) => "boolean",
                     Value::Int(_) | Value::Float(_) => "number",
+                    Value::BigInt(_) => "bigint",
                     Value::Str(_) => "string",
                     Value::Object(id) => {
                         // Check if it's a function-like object
@@ -20621,6 +20776,7 @@ impl InterpreterCore {
                                 Value::Str(_) => "string",
                                 Value::Int(_) => "number",
                                 Value::Float(_) => "number",
+                                Value::BigInt(_) => "bigint",
                                 Value::Bool(_) => "boolean",
                                 Value::Null => "null",
                                 Value::Undefined => "undefined",
@@ -22850,6 +23006,7 @@ impl InterpreterCore {
                 }
             }
             (Value::Str(a), Value::Str(b)) => a == b,
+            (Value::BigInt(a), Value::BigInt(b)) => a == b,
             (Value::Object(a), Value::Object(b)) => a.0 == b.0, // Object identity comparison
             _ => false,                                         // Different types are not equal
         }
@@ -22862,6 +23019,7 @@ impl InterpreterCore {
             Value::Null => "null".to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Int(n) => n.to_string(),
+            Value::BigInt(n) => n.clone(),
             Value::Float(f) => {
                 let v = f.inner();
                 if v.is_nan() {

@@ -670,7 +670,7 @@ fn advanced_composition_cost_decreases_with_more_ops() {
 }
 
 #[test]
-fn renyi_composition_80_percent() {
+fn renyi_composition_tracks_curve_and_eventually_beats_basic() {
     let mut acc = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::Renyi,
         now_ns: 0,
@@ -678,13 +678,26 @@ fn renyi_composition_80_percent() {
     })
     .unwrap();
 
-    let r = acc.consume(100_000, 10_000, "op", 1_000_000_000).unwrap();
-    assert_eq!(r.composed_epsilon_millionths, 80_000); // 80% of 100K
-    assert_eq!(r.composed_delta_millionths, 10_000); // delta unchanged
+    for i in 0..10 {
+        acc.consume(
+            100_000,
+            10_000,
+            &format!("rdp-op-{i}"),
+            (i as u64 + 1) * 1_000_000_000,
+        )
+        .unwrap();
+    }
+
+    assert_eq!(
+        acc.rdp_epsilon_spent_by_order_millionths().get(&8),
+        Some(&400_000)
+    );
+    assert!(acc.current_budget.epsilon_spent_millionths < 1_000_000);
+    assert_eq!(acc.current_budget.delta_spent_millionths, 100_000);
 }
 
 #[test]
-fn zcdp_composition_70_percent() {
+fn zcdp_composition_tracks_rho_and_eventually_beats_basic() {
     let mut acc = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::ZeroCdp,
         now_ns: 0,
@@ -692,14 +705,23 @@ fn zcdp_composition_70_percent() {
     })
     .unwrap();
 
-    let r = acc.consume(100_000, 10_000, "op", 1_000_000_000).unwrap();
-    assert_eq!(r.composed_epsilon_millionths, 70_000); // 70% of 100K
-    assert_eq!(r.composed_delta_millionths, 10_000); // delta unchanged
+    for i in 0..10 {
+        acc.consume(
+            100_000,
+            10_000,
+            &format!("zcdp-op-{i}"),
+            (i as u64 + 1) * 1_000_000_000,
+        )
+        .unwrap();
+    }
+
+    assert_eq!(acc.zcdp_rho_spent_millionths(), 50_000);
+    assert!(acc.current_budget.epsilon_spent_millionths < 1_000_000);
+    assert_eq!(acc.current_budget.delta_spent_millionths, 100_000);
 }
 
 #[test]
-fn composition_minimum_floor_of_1() {
-    // Renyi with very small epsilon: 80% of 1 = 0, but should clamp to 1.
+fn renyi_tiny_epsilon_still_charges_positive_budget() {
     let mut acc = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::Renyi,
         now_ns: 0,
@@ -708,11 +730,12 @@ fn composition_minimum_floor_of_1() {
     .unwrap();
 
     let r = acc.consume(1, 0, "tiny", 1_000_000_000).unwrap();
-    assert_eq!(r.composed_epsilon_millionths, 1); // clamped to 1
+    assert!(r.composed_epsilon_millionths >= 1);
+    assert_eq!(r.composed_delta_millionths, 0);
 }
 
 #[test]
-fn zcdp_minimum_floor_of_1() {
+fn zcdp_tiny_epsilon_still_charges_positive_budget() {
     let mut acc = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::ZeroCdp,
         now_ns: 0,
@@ -721,7 +744,8 @@ fn zcdp_minimum_floor_of_1() {
     .unwrap();
 
     let r = acc.consume(1, 0, "tiny", 1_000_000_000).unwrap();
-    assert_eq!(r.composed_epsilon_millionths, 1); // clamped to 1
+    assert!(r.composed_epsilon_millionths >= 1);
+    assert_eq!(r.composed_delta_millionths, 0);
 }
 
 // ---------------------------------------------------------------------------

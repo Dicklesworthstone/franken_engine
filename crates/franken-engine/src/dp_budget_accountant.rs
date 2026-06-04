@@ -12,12 +12,19 @@
 //! Plan references: Section 10.15, subsection 9I.2 (Privacy-Preserving
 //! Fleet Learning Layer), item 2 of 4.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
 use crate::privacy_learning_contract::CompositionMethod;
 use crate::security_epoch::SecurityEpoch;
+
+const MILLION: i64 = 1_000_000;
+const MILLION_I128: i128 = MILLION as i128;
+const LN_SCALE: i128 = 1_000_000_000;
+const LN2_NANOS_UP: i128 = 693_147_181;
+const RDP_ORDERS: [u32; 7] = [2, 3, 4, 8, 16, 32, 64];
 
 // ---------------------------------------------------------------------------
 // EpochBudget — per-epoch budget tracking
@@ -203,6 +210,12 @@ pub struct BudgetAccountant {
     epoch_delta_allocation_millionths: i64,
     /// Composition method.
     composition_method: CompositionMethod,
+    /// Current epoch zCDP native rho spend (millionths).
+    #[serde(default)]
+    zcdp_rho_spent_millionths: i64,
+    /// Current epoch RDP native epsilon curve by Renyi order (millionths).
+    #[serde(default)]
+    rdp_epsilon_spent_by_order_millionths: BTreeMap<u32, i64>,
     /// Monotonic operation counter.
     operation_counter: u64,
     /// Consumption log for replay/audit.
@@ -257,6 +270,8 @@ impl BudgetAccountant {
             epoch_epsilon_allocation_millionths: cfg.epsilon_per_epoch_millionths,
             epoch_delta_allocation_millionths: cfg.delta_per_epoch_millionths,
             composition_method: cfg.composition_method,
+            zcdp_rho_spent_millionths: 0,
+            rdp_epsilon_spent_by_order_millionths: BTreeMap::new(),
             operation_counter: 0,
             consumption_log: Vec::new(),
         })
@@ -292,9 +307,12 @@ impl BudgetAccountant {
             });
         }
 
-        // Apply composition method to compute actual budget impact.
-        let (composed_epsilon, composed_delta) =
-            self.apply_composition(epsilon_millionths, delta_millionths);
+        // Apply composition method to compute actual budget impact. Native-space
+        // state is returned as a pending update so failed budget checks cannot
+        // partially mutate the accountant.
+        let composition = self.apply_composition(epsilon_millionths, delta_millionths);
+        let composed_epsilon = composition.epsilon_millionths;
+        let composed_delta = composition.delta_millionths;
 
         // Check if this would exhaust the epoch budget.
         if self
@@ -331,6 +349,12 @@ impl BudgetAccountant {
         self.current_budget.operations_count += 1;
         self.lifetime_epsilon_spent_millionths += composed_epsilon;
         self.lifetime_delta_spent_millionths += composed_delta;
+        if let Some(rho) = composition.next_zcdp_rho_spent_millionths {
+            self.zcdp_rho_spent_millionths = rho;
+        }
+        if let Some(curve) = composition.next_rdp_epsilon_spent_by_order_millionths {
+            self.rdp_epsilon_spent_by_order_millionths = curve;
+        }
         self.operation_counter += 1;
 
         let record = BudgetConsumption {
@@ -449,6 +473,8 @@ impl BudgetAccountant {
             created_at_ns: now_ns,
             exhausted: false,
         };
+        self.zcdp_rho_spent_millionths = 0;
+        self.rdp_epsilon_spent_by_order_millionths.clear();
 
         // Check lifetime exhaustion for new epoch.
         if self.lifetime_epsilon_spent_millionths >= self.lifetime_epsilon_budget_millionths
@@ -475,6 +501,16 @@ impl BudgetAccountant {
         &self.consumption_log
     }
 
+    /// Current epoch zCDP native rho spend (millionths).
+    pub fn zcdp_rho_spent_millionths(&self) -> i64 {
+        self.zcdp_rho_spent_millionths
+    }
+
+    /// Current epoch RDP native epsilon curve by Renyi order (millionths).
+    pub fn rdp_epsilon_spent_by_order_millionths(&self) -> &BTreeMap<u32, i64> {
+        &self.rdp_epsilon_spent_by_order_millionths
+    }
+
     // -- Internal helpers --
 
     /// Apply composition method to compute actual budget impact.
@@ -482,44 +518,206 @@ impl BudgetAccountant {
     /// - Basic: straightforward addition (epsilon + delta add linearly).
     /// - Advanced: uses sqrt(2 * k * ln(1/delta)) * eps for k queries.
     ///   Approximated as eps * sqrt(k+1) / sqrt(k) for incremental.
-    /// - Renyi / ZeroCdp: a sound tighter-than-basic bound requires accumulating
-    ///   in the method's native space (an order-indexed RDP curve for Rényi; a
-    ///   running rho with `eps = rho + 2*sqrt(rho*ln(1/delta))` for zCDP), which
-    ///   this accountant does not yet track. Until that infrastructure exists
-    ///   (bd-a83kd) these FALL BACK TO BASIC (linear) composition — a conservative
-    ///   upper bound that never under-charges. (They previously applied arbitrary
-    ///   `eps * 0.8` / `eps * 0.7` multipliers, which UNDER-charged epsilon with no
-    ///   mathematical justification — unsound for a privacy budget, since it would
-    ///   report more remaining budget than is actually safe and permit more
-    ///   queries than the privacy guarantee allows.)
-    fn apply_composition(&self, epsilon: i64, delta: i64) -> (i64, i64) {
+    /// - Renyi: converts each raw pure-DP epsilon charge into an RDP curve via
+    ///   rho = eps^2 / 2 and RDP(alpha) = alpha * rho, adds the curve in native
+    ///   space, then charges the incremental best-order conversion to
+    ///   (epsilon, delta)-DP.
+    /// - ZeroCdp: converts each raw pure-DP epsilon charge into rho = eps^2 / 2,
+    ///   adds rho in native space, then charges the incremental zCDP conversion
+    ///   `eps = rho + 2*sqrt(rho*ln(1/delta))`.
+    fn apply_composition(&self, epsilon: i64, delta: i64) -> CompositionImpact {
         let k = self.current_budget.operations_count;
         match self.composition_method {
-            CompositionMethod::Basic => (epsilon, delta),
+            CompositionMethod::Basic => CompositionImpact::new(epsilon, delta),
             CompositionMethod::Advanced => {
                 // Advanced composition gives better bounds for many queries.
                 // Simplified: for k > 0, scale by 1/sqrt(k+1) in millionths.
                 let kp1 = (k + 1) as i64;
                 let scale = if kp1 <= 1 {
-                    1_000_000i64 // 1.0
+                    MILLION // 1.0
                 } else {
                     // 1_000_000 / sqrt(kp1) = isqrt(1_000_000^2 / kp1)
-                    isqrt_millionths(1_000_000_000_000i64 / kp1)
+                    isqrt_millionths((MILLION_I128 * MILLION_I128 / kp1 as i128) as i64)
                 };
-                let composed_eps = epsilon * scale / 1_000_000;
-                (composed_eps.max(1), delta)
+                let composed_eps = epsilon * scale / MILLION;
+                CompositionImpact::new(composed_eps.max(1), delta)
             }
-            CompositionMethod::Renyi | CompositionMethod::ZeroCdp => {
-                // Fail-closed to BASIC (linear) composition: a sound RDP/zCDP
-                // bound needs native-space accumulation (RDP order curve / running
-                // rho + ln(1/delta) conversion) that this accountant does not yet
-                // track. Charging basic is always a valid upper bound and never
-                // under-accounts privacy loss; the real tighter-but-sound bound is
-                // tracked in bd-a83kd. (Replaces the prior unsound eps*0.8 / eps*0.7
-                // multipliers, which silently under-charged epsilon.)
-                (epsilon, delta)
+            CompositionMethod::ZeroCdp => {
+                let rho_increment = zcdp_rho_from_epsilon_millionths(epsilon);
+                let next_rho =
+                    saturating_i128_to_i64(self.zcdp_rho_spent_millionths as i128 + rho_increment);
+                let previous_epsilon = zcdp_epsilon_from_rho_millionths(
+                    self.zcdp_rho_spent_millionths,
+                    self.current_budget.delta_budget_millionths,
+                );
+                let next_epsilon = zcdp_epsilon_from_rho_millionths(
+                    next_rho,
+                    self.current_budget.delta_budget_millionths,
+                );
+                CompositionImpact {
+                    epsilon_millionths: incremental_native_epsilon(
+                        epsilon,
+                        previous_epsilon,
+                        next_epsilon,
+                    ),
+                    delta_millionths: delta,
+                    next_zcdp_rho_spent_millionths: Some(next_rho),
+                    next_rdp_epsilon_spent_by_order_millionths: None,
+                }
+            }
+            CompositionMethod::Renyi => {
+                let rho_increment = zcdp_rho_from_epsilon_millionths(epsilon);
+                let mut next_curve = self.rdp_epsilon_spent_by_order_millionths.clone();
+                for order in RDP_ORDERS {
+                    let increment = saturating_i128_to_i64(rho_increment * order as i128);
+                    let current = next_curve.get(&order).copied().unwrap_or(0);
+                    next_curve.insert(
+                        order,
+                        saturating_i128_to_i64(current as i128 + increment as i128),
+                    );
+                }
+                let previous_epsilon = rdp_epsilon_from_curve_millionths(
+                    &self.rdp_epsilon_spent_by_order_millionths,
+                    self.current_budget.delta_budget_millionths,
+                );
+                let next_epsilon = rdp_epsilon_from_curve_millionths(
+                    &next_curve,
+                    self.current_budget.delta_budget_millionths,
+                );
+                CompositionImpact {
+                    epsilon_millionths: incremental_native_epsilon(
+                        epsilon,
+                        previous_epsilon,
+                        next_epsilon,
+                    ),
+                    delta_millionths: delta,
+                    next_zcdp_rho_spent_millionths: None,
+                    next_rdp_epsilon_spent_by_order_millionths: Some(next_curve),
+                }
             }
         }
+    }
+}
+
+struct CompositionImpact {
+    epsilon_millionths: i64,
+    delta_millionths: i64,
+    next_zcdp_rho_spent_millionths: Option<i64>,
+    next_rdp_epsilon_spent_by_order_millionths: Option<BTreeMap<u32, i64>>,
+}
+
+impl CompositionImpact {
+    fn new(epsilon_millionths: i64, delta_millionths: i64) -> Self {
+        Self {
+            epsilon_millionths,
+            delta_millionths,
+            next_zcdp_rho_spent_millionths: None,
+            next_rdp_epsilon_spent_by_order_millionths: None,
+        }
+    }
+}
+
+fn incremental_native_epsilon(raw_epsilon: i64, previous_epsilon: i64, next_epsilon: i64) -> i64 {
+    let incremental = next_epsilon.saturating_sub(previous_epsilon).max(0);
+    if raw_epsilon > 0 {
+        incremental.max(1)
+    } else {
+        incremental
+    }
+}
+
+fn zcdp_rho_from_epsilon_millionths(epsilon: i64) -> i128 {
+    if epsilon <= 0 {
+        0
+    } else {
+        div_ceil_positive(epsilon as i128 * epsilon as i128, 2 * MILLION_I128)
+    }
+}
+
+fn zcdp_epsilon_from_rho_millionths(rho_millionths: i64, delta_millionths: i64) -> i64 {
+    if rho_millionths <= 0 {
+        return 0;
+    }
+
+    let ln_delta = ln_one_over_delta_millionths_up(delta_millionths);
+    let sqrt_term = isqrt_ceil_i128(rho_millionths as i128 * ln_delta as i128);
+    saturating_i128_to_i64(rho_millionths as i128 + 2 * sqrt_term as i128)
+}
+
+fn rdp_epsilon_from_curve_millionths(curve: &BTreeMap<u32, i64>, delta_millionths: i64) -> i64 {
+    if curve.is_empty() {
+        return 0;
+    }
+
+    let ln_delta = ln_one_over_delta_millionths_up(delta_millionths) as i128;
+    let mut best = i128::MAX;
+    for (&order, &rdp_epsilon) in curve {
+        if order <= 1 {
+            continue;
+        }
+        let converted = rdp_epsilon as i128 + div_ceil_positive(ln_delta, (order - 1) as i128);
+        best = best.min(converted);
+    }
+
+    if best == i128::MAX {
+        0
+    } else {
+        saturating_i128_to_i64(best)
+    }
+}
+
+fn ln_one_over_delta_millionths_up(delta_millionths: i64) -> i64 {
+    if delta_millionths <= 0 {
+        return i64::MAX / 4;
+    }
+    if delta_millionths >= MILLION {
+        return 0;
+    }
+
+    let mut x = div_ceil_positive(MILLION_I128 * LN_SCALE, delta_millionths as i128);
+    let mut powers_of_two = 0i128;
+    while x > 2 * LN_SCALE {
+        x = div_ceil_positive(x, 2);
+        powers_of_two += 1;
+    }
+
+    let y = div_ceil_positive((x - LN_SCALE) * LN_SCALE, x + LN_SCALE);
+    let y2 = div_ceil_positive(y * y, LN_SCALE);
+    let mut term = y;
+    let mut sum = y;
+    for n in 1..24 {
+        term = div_ceil_positive(term * y2, LN_SCALE);
+        sum += div_ceil_positive(term, (2 * n + 1) as i128);
+    }
+
+    let ln_scaled = powers_of_two * LN2_NANOS_UP + 2 * sum;
+    saturating_i128_to_i64(div_ceil_positive(ln_scaled, LN_SCALE / MILLION_I128) + 1)
+}
+
+fn div_ceil_positive(numerator: i128, denominator: i128) -> i128 {
+    if numerator <= 0 {
+        0
+    } else {
+        (numerator + denominator - 1) / denominator
+    }
+}
+
+fn isqrt_ceil_i128(n: i128) -> i64 {
+    if n <= 0 {
+        return 0;
+    }
+    let root = (n as u128).isqrt() as i128;
+    let ceil = if root * root == n { root } else { root + 1 };
+    saturating_i128_to_i64(ceil)
+}
+
+fn saturating_i128_to_i64(value: i128) -> i64 {
+    if value > i64::MAX as i128 {
+        i64::MAX
+    } else if value < i64::MIN as i128 {
+        i64::MIN
+    } else {
+        value as i64
     }
 }
 
@@ -894,47 +1092,141 @@ mod tests {
         assert!(r2.composed_epsilon_millionths < 100_000); // k=1, scale < 1.0
     }
 
-    // bd-a83kd: Renyi/zCDP previously applied unsound eps*0.8 / eps*0.7
-    // multipliers (under-charging epsilon with no mathematical basis). Until a
-    // sound RDP/zCDP accounting model exists, both fall back to BASIC (linear)
-    // composition — a conservative bound that never under-charges. These tests
-    // pin the conservative behaviour and the no-under-charge security invariant.
     #[test]
-    fn renyi_composition_is_conservative_basic_until_rdp_curve() {
+    fn renyi_composition_tracks_native_curve_and_beats_basic_over_sequence() {
         let mut acc = BudgetAccountant::new(AccountantConfig {
             composition_method: CompositionMethod::Renyi,
             now_ns: 0,
             ..test_config()
         })
         .expect("operation should succeed for valid inputs");
-        let r = acc
-            .consume(100_000, 10_000, "op", 1_000_000_000)
-            .expect("operation should succeed for valid inputs");
-        // Charges the full epsilon (basic), NOT the old unsound 0.8 discount.
-        assert_eq!(r.composed_epsilon_millionths, 100_000);
-        assert!(
-            r.composed_epsilon_millionths >= 100_000,
-            "bd-a83kd: Renyi must not under-charge below basic composition"
+
+        let mut total_composed = 0;
+        for i in 0..10 {
+            let r = acc
+                .consume(
+                    100_000,
+                    10_000,
+                    &format!("rdp-op-{i}"),
+                    (i + 1) * 1_000_000_000,
+                )
+                .expect("operation should succeed for valid inputs");
+            total_composed += r.composed_epsilon_millionths;
+        }
+
+        assert_eq!(
+            acc.rdp_epsilon_spent_by_order_millionths().get(&8),
+            Some(&400_000)
         );
+        assert!(total_composed < 1_000_000);
+        assert_eq!(acc.current_budget.epsilon_spent_millionths, total_composed);
+        assert_eq!(acc.current_budget.delta_spent_millionths, 100_000);
     }
 
     #[test]
-    fn zcdp_composition_is_conservative_basic_until_rho_accounting() {
+    fn zcdp_composition_tracks_native_rho_and_beats_basic_over_sequence() {
         let mut acc = BudgetAccountant::new(AccountantConfig {
             composition_method: CompositionMethod::ZeroCdp,
             now_ns: 0,
             ..test_config()
         })
         .expect("operation should succeed for valid inputs");
-        let r = acc
-            .consume(100_000, 10_000, "op", 1_000_000_000)
-            .expect("operation should succeed for valid inputs");
-        // Charges the full epsilon (basic), NOT the old unsound 0.7 discount.
-        assert_eq!(r.composed_epsilon_millionths, 100_000);
-        assert!(
-            r.composed_epsilon_millionths >= 100_000,
-            "bd-a83kd: zCDP must not under-charge below basic composition"
-        );
+
+        let mut total_composed = 0;
+        for i in 0..10 {
+            let r = acc
+                .consume(
+                    100_000,
+                    10_000,
+                    &format!("zcdp-op-{i}"),
+                    (i + 1) * 1_000_000_000,
+                )
+                .expect("operation should succeed for valid inputs");
+            total_composed += r.composed_epsilon_millionths;
+        }
+
+        assert_eq!(acc.zcdp_rho_spent_millionths(), 50_000);
+        assert!(total_composed < 1_000_000);
+        assert_eq!(acc.current_budget.epsilon_spent_millionths, total_composed);
+        assert_eq!(acc.current_budget.delta_spent_millionths, 100_000);
+    }
+
+    fn f64_epsilon_millionths_up(value: f64) -> i64 {
+        (value * MILLION as f64).ceil() as i64
+    }
+
+    #[test]
+    fn fixed_point_ln_is_conservative_against_f64_reference() {
+        for delta_millionths in [1, 10, 1_000, 100_000, 500_000, 999_999] {
+            let actual = ln_one_over_delta_millionths_up(delta_millionths);
+            let delta = delta_millionths as f64 / MILLION as f64;
+            let reference = f64_epsilon_millionths_up(-delta.ln());
+            assert!(
+                actual >= reference,
+                "ln conversion must round upward for delta={delta_millionths}: actual={actual} reference={reference}"
+            );
+            assert!(
+                actual - reference <= 32,
+                "ln conversion should stay close to f64 reference for delta={delta_millionths}: actual={actual} reference={reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn zcdp_fixed_point_conversion_matches_f64_reference_conservatively() {
+        for (rho_millionths, delta_millionths) in [
+            (5_000, 100_000),
+            (50_000, 100_000),
+            (125_000, 10_000),
+            (500_000, 1_000),
+        ] {
+            let actual = zcdp_epsilon_from_rho_millionths(rho_millionths, delta_millionths);
+            let rho = rho_millionths as f64 / MILLION as f64;
+            let delta = delta_millionths as f64 / MILLION as f64;
+            let reference = f64_epsilon_millionths_up(rho + 2.0 * (rho * -delta.ln()).sqrt());
+            assert!(
+                actual >= reference,
+                "zCDP conversion must round upward for rho={rho_millionths} delta={delta_millionths}: actual={actual} reference={reference}"
+            );
+            assert!(
+                actual - reference <= 64,
+                "zCDP conversion should stay close to f64 reference for rho={rho_millionths} delta={delta_millionths}: actual={actual} reference={reference}"
+            );
+        }
+    }
+
+    #[test]
+    fn rdp_fixed_point_conversion_matches_f64_reference_conservatively() {
+        for (rho_per_op_millionths, operations, delta_millionths) in [
+            (5_000, 10, 100_000),
+            (5_000, 25, 100_000),
+            (20_000, 8, 10_000),
+        ] {
+            let total_rho_millionths = rho_per_op_millionths * operations;
+            let mut curve = BTreeMap::new();
+            for order in RDP_ORDERS {
+                curve.insert(order, total_rho_millionths * order as i64);
+            }
+
+            let actual = rdp_epsilon_from_curve_millionths(&curve, delta_millionths);
+            let total_rho = total_rho_millionths as f64 / MILLION as f64;
+            let delta = delta_millionths as f64 / MILLION as f64;
+            let ln_delta = -delta.ln();
+            let reference = RDP_ORDERS
+                .iter()
+                .copied()
+                .map(|order| order as f64 * total_rho + ln_delta / (order - 1) as f64)
+                .fold(f64::INFINITY, f64::min);
+            let reference = f64_epsilon_millionths_up(reference);
+            assert!(
+                actual >= reference,
+                "RDP conversion must round upward for rho/op={rho_per_op_millionths} operations={operations} delta={delta_millionths}: actual={actual} reference={reference}"
+            );
+            assert!(
+                actual - reference <= 64,
+                "RDP conversion should stay close to f64 reference for rho/op={rho_per_op_millionths} operations={operations} delta={delta_millionths}: actual={actual} reference={reference}"
+            );
+        }
     }
 
     #[test]

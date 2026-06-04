@@ -556,33 +556,53 @@ fn advanced_composition_consumes_less_than_basic() {
 }
 
 #[test]
-fn renyi_composition_consumes_less_than_basic() {
-    let mut basic = BudgetAccountant::new(test_config()).unwrap();
-    let basic_rec = basic.consume(100_000, 10_000, "op", 2_000_000_000).unwrap();
-
+fn renyi_composition_tracks_native_curve_over_sequence() {
     let mut renyi = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::Renyi,
         ..test_config()
     })
     .unwrap();
-    let renyi_rec = renyi.consume(100_000, 10_000, "op", 2_000_000_000).unwrap();
 
-    assert!(renyi_rec.composed_epsilon_millionths <= basic_rec.composed_epsilon_millionths);
+    for i in 0..10 {
+        renyi
+            .consume(
+                100_000,
+                10_000,
+                &format!("rdp-op-{i}"),
+                (i as u64 + 2) * 1_000_000_000,
+            )
+            .unwrap();
+    }
+
+    assert_eq!(
+        renyi.rdp_epsilon_spent_by_order_millionths().get(&8),
+        Some(&400_000)
+    );
+    assert!(renyi.current_budget.epsilon_spent_millionths < 1_000_000);
+    assert_eq!(renyi.current_budget.delta_spent_millionths, 100_000);
 }
 
 #[test]
-fn zcdp_composition_consumes_less_than_basic() {
-    let mut basic = BudgetAccountant::new(test_config()).unwrap();
-    let basic_rec = basic.consume(100_000, 10_000, "op", 2_000_000_000).unwrap();
-
+fn zcdp_composition_tracks_native_rho_over_sequence() {
     let mut zcdp = BudgetAccountant::new(AccountantConfig {
         composition_method: CompositionMethod::ZeroCdp,
         ..test_config()
     })
     .unwrap();
-    let zcdp_rec = zcdp.consume(100_000, 10_000, "op", 2_000_000_000).unwrap();
 
-    assert!(zcdp_rec.composed_epsilon_millionths <= basic_rec.composed_epsilon_millionths);
+    for i in 0..10 {
+        zcdp.consume(
+            100_000,
+            10_000,
+            &format!("zcdp-op-{i}"),
+            (i as u64 + 2) * 1_000_000_000,
+        )
+        .unwrap();
+    }
+
+    assert_eq!(zcdp.zcdp_rho_spent_millionths(), 50_000);
+    assert!(zcdp.current_budget.epsilon_spent_millionths < 1_000_000);
+    assert_eq!(zcdp.current_budget.delta_spent_millionths, 100_000);
 }
 
 // ---------------------------------------------------------------------------

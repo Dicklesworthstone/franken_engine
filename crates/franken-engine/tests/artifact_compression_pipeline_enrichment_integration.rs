@@ -259,6 +259,7 @@ fn enrichment_artifact_descriptor_json_field_names() {
         "category",
         "size_bytes",
         "content_hash",
+        "content_bytes",
         "canonical_id",
         "already_compressed",
         "epoch",
@@ -338,6 +339,7 @@ fn enrichment_restoration_recipe_json_field_names() {
         "compressed_hash",
         "original_size_bytes",
         "compressed_size_bytes",
+        "compressed_payload",
         "ratio_millionths",
         "epoch",
     ] {

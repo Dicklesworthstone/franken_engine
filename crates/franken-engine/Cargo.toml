@@ -234,6 +234,9 @@ serde_json = { version = "1.0", features = ["unbounded_depth"] }
 proc-macro2 = { version = "1.0", features = ["span-locations"] }
 regex = "1.0"
 sha2 = "0.10"
+flate2 = "1.1"
+lz4_flex = "0.11"
+zstd = "0.13"
 subtle = "2.6"
 hmac = "0.12"
 ed25519-dalek = "2.0"

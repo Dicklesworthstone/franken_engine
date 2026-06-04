@@ -764,6 +764,82 @@ fn pipeline_single_artifact_compression() {
 }
 
 #[test]
+fn pipeline_default_codec_recipe_restores_original_bytes() {
+    let payload = b"cache-entry:".repeat(512);
+    let descriptor = ArtifactDescriptor::new(
+        "byte-backed",
+        ArtifactCategory::Cache,
+        payload.len() as u64,
+        &payload,
+        epoch(),
+    );
+    let pipeline = CompressionPipeline::new(PlannerConfig::new(epoch()));
+    let report = pipeline.run(&[descriptor]);
+
+    assert_eq!(report.restoration_recipes.len(), 1);
+    let recipe = &report.restoration_recipes[0];
+    assert_eq!(recipe.algorithm, CompressionAlgorithm::Zstd);
+    assert!(!recipe.compressed_payload.is_empty());
+    assert_eq!(recipe.restore().unwrap(), payload);
+}
+
+#[test]
+fn pipeline_restores_all_public_codecs() {
+    let payload = b"artifact-payload:".repeat(256);
+    for algorithm in [
+        CompressionAlgorithm::Deflate,
+        CompressionAlgorithm::Zstd,
+        CompressionAlgorithm::Lz4,
+    ] {
+        let descriptor = ArtifactDescriptor::new(
+            format!("codec-{algorithm}"),
+            ArtifactCategory::Cache,
+            payload.len() as u64,
+            &payload,
+            epoch(),
+        );
+        let pipeline =
+            CompressionPipeline::new(PlannerConfig::new(epoch()).with_algorithm(algorithm));
+        let report = pipeline.run(&[descriptor]);
+        let recipe = &report.restoration_recipes[0];
+
+        assert_eq!(recipe.algorithm, algorithm);
+        assert_eq!(
+            recipe.restore().unwrap(),
+            payload,
+            "{algorithm} restore failed"
+        );
+    }
+}
+
+#[test]
+fn recipe_restore_rejects_tampered_payload() {
+    let payload = b"tamper-sensitive:".repeat(256);
+    let descriptor = ArtifactDescriptor::new(
+        "tamper",
+        ArtifactCategory::Cache,
+        payload.len() as u64,
+        &payload,
+        epoch(),
+    );
+    let pipeline = CompressionPipeline::new(
+        PlannerConfig::new(epoch()).with_algorithm(CompressionAlgorithm::Deflate),
+    );
+    let report = pipeline.run(&[descriptor]);
+    let mut recipe = report.restoration_recipes[0].clone();
+    let first = recipe
+        .compressed_payload
+        .first_mut()
+        .expect("byte-backed recipe should carry payload");
+    *first ^= 0x01;
+
+    assert!(matches!(
+        recipe.restore(),
+        Err(CompressionError::CompressedHashMismatch { .. })
+    ));
+}
+
+#[test]
 fn pipeline_excluded_only() {
     let config = PlannerConfig::new(epoch());
     let pipeline = CompressionPipeline::new(config);

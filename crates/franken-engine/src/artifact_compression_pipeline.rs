@@ -1,22 +1,18 @@
 #![forbid(unsafe_code)]
 
-//! Compression-and-deduplication **planning** pipeline for cache, AOT, and
-//! evidence artifacts, with content-addressed restoration recipes.
+//! Compression-and-deduplication pipeline for cache, AOT, and evidence
+//! artifacts, with content-addressed restoration recipes.
 //!
 //! Bead: bd-1lsy.7.18.2 [RGC-618B]
 //!
-//! # Status — codec not yet integrated
+//! # Status — byte-backed codec path
 //!
-//! This module *plans and verifies* compression; it does **not** yet run a
-//! real codec and **cannot** reconstruct original bytes. Byte-level
-//! compression is modelled by a deterministic per-algorithm size estimate
-//! (`CompressionPipeline::simulate_compression`), and a restoration recipe
-//! records only the algorithm plus content-addressed source/target hashes and
-//! sizes — it carries no compressed payload, and there is no
-//! restore/decompress entry point. Consequently the pipeline verifies *plan
-//! correctness* (recipe linkage, epoch monotonicity, budget compliance), not
-//! actual byte recovery. Wiring a real codec and a byte-level restore path is
-//! tracked as future work (bd-5jllt).
+//! Descriptors that carry size-consistent `content_bytes` run through real
+//! codecs and produce restoration recipes with compressed payloads. Those
+//! recipes can reconstruct the original bytes with [`RestorationRecipe::restore`],
+//! which verifies size and content hash before returning. Descriptor-only
+//! inputs deserialized from older reports still get deterministic plan recipes,
+//! but restore fails closed because no compressed payload exists.
 //!
 //! Builds a compression pipeline with four parts:
 //!
@@ -25,9 +21,8 @@
 //!    transformation witnesses, and downstream consumer requirements.
 //! 2. **Restoration recipe** — for every compression action, emits a
 //!    deterministic restoration recipe (algorithm plus content-addressed
-//!    source/target hashes and sizes) describing how recovery would proceed.
-//!    The recipe's linkage is verified; the recipe does not itself recover
-//!    bytes (see Status above).
+//!    source/target hashes, sizes, and a compressed payload when bytes were
+//!    available) describing how recovery proceeds.
 //! 3. **Dedup tracker** — tracks duplicate mass and origin across artifact
 //!    families, with explicit dedup receipts.
 //! 4. **Exclusion policy** — certain artifact families (replay-critical,
@@ -38,7 +33,7 @@
 //!
 //! - **Reversible-by-design plan** — the planner never selects a lossy or
 //!   irreversible action; lossy compression is excluded at the planning stage.
-//!   (No bytes are actually transformed yet — see Status.)
+//!   Byte-backed recipes verify decompression by hash and size.
 //! - **Canonical identity integration** — the pipeline consumes canonical IDs
 //!   from `semantic_canonical_basis` to identify dedup candidates.
 //! - **Deterministic restoration recipe** — every planned artifact carries an
@@ -49,7 +44,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
+use std::io::{Read, Write};
 
+use flate2::{Compression as DeflateCompression, read::ZlibDecoder, write::ZlibEncoder};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -87,6 +84,13 @@ pub const MIN_USEFUL_RATIO: u64 = 900_000; // 90% — 10% savings threshold
 
 /// Maximum dedup chain depth before the pipeline refuses to resolve further.
 pub const MAX_DEDUP_CHAIN_DEPTH: usize = 32;
+
+/// Maximum synthetic bytes retained by [`ArtifactDescriptor::new`] when callers
+/// provide only a small content seed plus a larger declared size.
+const MAX_RETAINED_CONTENT_BYTES: u64 = 1024 * 1024;
+
+/// Zstandard level used by the deterministic byte-backed codec path.
+const ZSTD_COMPRESSION_LEVEL: i32 = 3;
 
 // ---------------------------------------------------------------------------
 // CompressionAlgorithm
@@ -323,6 +327,11 @@ pub struct ArtifactDescriptor {
     pub size_bytes: u64,
     /// Content hash of the uncompressed artifact.
     pub content_hash: ContentHash,
+    /// Uncompressed bytes retained for byte-level restore. Older descriptor-only
+    /// reports may deserialize this as empty; those still support planning but
+    /// cannot produce restorable payloads.
+    #[serde(default)]
+    pub content_bytes: Vec<u8>,
     /// Optional canonical ID from `semantic_canonical_basis`. When present,
     /// the dedup tracker can identify duplicates across artifact boundaries.
     pub canonical_id: Option<ContentHash>,
@@ -341,11 +350,18 @@ impl ArtifactDescriptor {
         content_bytes: &[u8],
         epoch: SecurityEpoch,
     ) -> Self {
+        let retained_content = retained_descriptor_bytes(size_bytes, content_bytes);
+        let hash_input = if retained_content.len() as u64 == size_bytes {
+            retained_content.as_slice()
+        } else {
+            content_bytes
+        };
         Self {
             artifact_id: artifact_id.into(),
             category,
             size_bytes,
-            content_hash: ContentHash::compute(content_bytes),
+            content_hash: ContentHash::compute(hash_input),
+            content_bytes: retained_content,
             canonical_id: None,
             already_compressed: false,
             epoch,
@@ -363,6 +379,40 @@ impl ArtifactDescriptor {
         self.already_compressed = true;
         self
     }
+
+    /// Whether this descriptor carries bytes that match the declared size and
+    /// can therefore produce a byte-restorable recipe.
+    pub fn has_size_consistent_payload(&self) -> bool {
+        self.content_bytes.len() as u64 == self.size_bytes
+    }
+}
+
+fn retained_descriptor_bytes(size_bytes: u64, seed: &[u8]) -> Vec<u8> {
+    if size_bytes > MAX_RETAINED_CONTENT_BYTES {
+        return Vec::new();
+    }
+
+    let Ok(target_len) = usize::try_from(size_bytes) else {
+        return Vec::new();
+    };
+
+    if seed.len() == target_len {
+        return seed.to_vec();
+    }
+    if target_len == 0 {
+        return Vec::new();
+    }
+    if seed.is_empty() {
+        return vec![0; target_len];
+    }
+
+    let mut bytes = Vec::with_capacity(target_len);
+    while bytes.len() < target_len {
+        let remaining = target_len - bytes.len();
+        let take = remaining.min(seed.len());
+        bytes.extend_from_slice(&seed[..take]);
+    }
+    bytes
 }
 
 // ---------------------------------------------------------------------------
@@ -385,12 +435,77 @@ pub struct RestorationRecipe {
     pub original_size_bytes: u64,
     /// Compressed size in bytes.
     pub compressed_size_bytes: u64,
+    /// Compressed payload needed to restore the original bytes. Empty for
+    /// legacy descriptor-only recipes that can verify plan linkage but cannot
+    /// reconstruct bytes.
+    #[serde(default)]
+    pub compressed_payload: Vec<u8>,
     /// Compression ratio in millionths (compressed / original). A ratio of
     /// 500_000 means the compressed version is 50% of the original.
     pub ratio_millionths: u64,
     /// Epoch at which compression was performed.
     pub epoch: SecurityEpoch,
 }
+
+/// Error returned by byte-level compression or restoration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompressionError {
+    /// A recipe has no compressed payload to restore.
+    MissingPayload { algorithm: CompressionAlgorithm },
+    /// The codec rejected compression or decompression.
+    Codec {
+        algorithm: CompressionAlgorithm,
+        operation: &'static str,
+        reason: String,
+    },
+    /// Compressed payload hash does not match the recipe.
+    CompressedHashMismatch {
+        expected: ContentHash,
+        actual: ContentHash,
+    },
+    /// Restored byte length does not match the recipe.
+    SizeMismatch { expected: u64, actual: u64 },
+    /// Restored content hash does not match the recipe.
+    HashMismatch {
+        expected: ContentHash,
+        actual: ContentHash,
+    },
+}
+
+impl fmt::Display for CompressionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingPayload { algorithm } => {
+                write!(f, "{algorithm} recipe has no compressed payload")
+            }
+            Self::Codec {
+                algorithm,
+                operation,
+                reason,
+            } => write!(f, "{algorithm} {operation} failed: {reason}"),
+            Self::CompressedHashMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "compressed payload hash mismatch: expected {expected:?}, got {actual:?}"
+                )
+            }
+            Self::SizeMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "restored size mismatch: expected {expected}, got {actual}"
+                )
+            }
+            Self::HashMismatch { expected, actual } => {
+                write!(
+                    f,
+                    "restored hash mismatch: expected {expected:?}, got {actual:?}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for CompressionError {}
 
 impl RestorationRecipe {
     /// Create a new restoration recipe.
@@ -416,9 +531,72 @@ impl RestorationRecipe {
             compressed_hash,
             original_size_bytes,
             compressed_size_bytes,
+            compressed_payload: Vec::new(),
             ratio_millionths,
             epoch,
         }
+    }
+
+    /// Create a recipe from a real compressed payload.
+    pub fn with_compressed_payload(
+        algorithm: CompressionAlgorithm,
+        original_hash: ContentHash,
+        original_size_bytes: u64,
+        compressed_payload: Vec<u8>,
+        epoch: SecurityEpoch,
+    ) -> Self {
+        let compressed_hash = ContentHash::compute(&compressed_payload);
+        let compressed_size_bytes = compressed_payload.len() as u64;
+        let mut recipe = Self::new(
+            algorithm,
+            original_hash,
+            compressed_hash,
+            original_size_bytes,
+            compressed_size_bytes,
+            epoch,
+        );
+        recipe.compressed_payload = compressed_payload;
+        recipe
+    }
+
+    /// Restore the original bytes from the recipe's compressed payload.
+    pub fn restore(&self) -> Result<Vec<u8>, CompressionError> {
+        if self.compressed_payload.is_empty() && self.original_size_bytes != 0 {
+            return Err(CompressionError::MissingPayload {
+                algorithm: self.algorithm,
+            });
+        }
+
+        let actual_compressed_hash = ContentHash::compute(&self.compressed_payload);
+        if actual_compressed_hash != self.compressed_hash {
+            return Err(CompressionError::CompressedHashMismatch {
+                expected: self.compressed_hash,
+                actual: actual_compressed_hash,
+            });
+        }
+
+        let restored = decompress_payload(
+            self.algorithm,
+            &self.compressed_payload,
+            self.original_size_bytes,
+        )?;
+        let actual_size = restored.len() as u64;
+        if actual_size != self.original_size_bytes {
+            return Err(CompressionError::SizeMismatch {
+                expected: self.original_size_bytes,
+                actual: actual_size,
+            });
+        }
+
+        let actual_hash = ContentHash::compute(&restored);
+        if actual_hash != self.original_hash {
+            return Err(CompressionError::HashMismatch {
+                expected: self.original_hash,
+                actual: actual_hash,
+            });
+        }
+
+        Ok(restored)
     }
 
     /// Whether the compression actually saved space.
@@ -435,6 +613,77 @@ impl RestorationRecipe {
     pub fn savings_bytes(&self) -> u64 {
         self.original_size_bytes
             .saturating_sub(self.compressed_size_bytes)
+    }
+}
+
+fn compress_payload(
+    algorithm: CompressionAlgorithm,
+    input: &[u8],
+) -> Result<Vec<u8>, CompressionError> {
+    if input.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    match algorithm {
+        CompressionAlgorithm::Identity => Ok(input.to_vec()),
+        CompressionAlgorithm::Deflate => {
+            let mut encoder = ZlibEncoder::new(Vec::new(), DeflateCompression::default());
+            encoder
+                .write_all(input)
+                .map_err(|err| codec_error(algorithm, "compress", err))?;
+            encoder
+                .finish()
+                .map_err(|err| codec_error(algorithm, "compress", err))
+        }
+        CompressionAlgorithm::Zstd => zstd::bulk::compress(input, ZSTD_COMPRESSION_LEVEL)
+            .map_err(|err| codec_error(algorithm, "compress", err)),
+        CompressionAlgorithm::Lz4 => Ok(lz4_flex::compress_prepend_size(input)),
+    }
+}
+
+fn decompress_payload(
+    algorithm: CompressionAlgorithm,
+    input: &[u8],
+    expected_size: u64,
+) -> Result<Vec<u8>, CompressionError> {
+    if input.is_empty() && expected_size == 0 {
+        return Ok(Vec::new());
+    }
+
+    match algorithm {
+        CompressionAlgorithm::Identity => Ok(input.to_vec()),
+        CompressionAlgorithm::Deflate => {
+            let mut decoder = ZlibDecoder::new(input);
+            let mut output = Vec::new();
+            decoder
+                .read_to_end(&mut output)
+                .map_err(|err| codec_error(algorithm, "decompress", err))?;
+            Ok(output)
+        }
+        CompressionAlgorithm::Zstd => {
+            let capacity =
+                usize::try_from(expected_size).map_err(|err| CompressionError::Codec {
+                    algorithm,
+                    operation: "decompress",
+                    reason: err.to_string(),
+                })?;
+            zstd::bulk::decompress(input, capacity)
+                .map_err(|err| codec_error(algorithm, "decompress", err))
+        }
+        CompressionAlgorithm::Lz4 => lz4_flex::decompress_size_prepended(input)
+            .map_err(|err| codec_error(algorithm, "decompress", err)),
+    }
+}
+
+fn codec_error(
+    algorithm: CompressionAlgorithm,
+    operation: &'static str,
+    err: impl fmt::Display,
+) -> CompressionError {
+    CompressionError::Codec {
+        algorithm,
+        operation,
+        reason: err.to_string(),
     }
 }
 
@@ -977,30 +1226,9 @@ impl CompressionPipeline {
 
             match entry.action {
                 CompressionAction::Compress => {
-                    // Deterministic size reduction (not a real codec).
-                    // This verifies the compression *plan* is valid and
-                    // produces a restoration recipe.  Plugging in a real
-                    // codec (e.g. zstd) is tracked as future work.
-                    let compressed_size =
-                        self.simulate_compression(desc.size_bytes, entry.algorithm);
-                    let compressed_hash = {
-                        let mut h = Sha256::new();
-                        h.update(b"compressed:");
-                        h.update(desc.content_hash.as_bytes());
-                        h.update(entry.algorithm.as_str().as_bytes());
-                        h.update(compressed_size.to_le_bytes());
-                        h.update(desc.size_bytes.to_le_bytes());
-                        ContentHash::compute(&h.finalize())
-                    };
-                    let recipe = RestorationRecipe::new(
-                        entry.algorithm,
-                        desc.content_hash,
-                        compressed_hash,
-                        desc.size_bytes,
-                        compressed_size,
-                        epoch,
-                    );
-                    total_output_bytes = total_output_bytes.saturating_add(compressed_size);
+                    let recipe = self.compress_descriptor(desc, entry.algorithm, epoch);
+                    total_output_bytes =
+                        total_output_bytes.saturating_add(recipe.compressed_size_bytes);
                     restoration_recipes.push(recipe);
                 }
                 CompressionAction::Dedup => {
@@ -1049,6 +1277,11 @@ impl CompressionPipeline {
         hasher.update(b"compression_report:");
         hasher.update(plan.plan_hash.as_bytes());
         hasher.update(total_output_bytes.to_le_bytes());
+        for recipe in &restoration_recipes {
+            hasher.update(recipe.original_hash.as_bytes());
+            hasher.update(recipe.compressed_hash.as_bytes());
+            hasher.update(recipe.compressed_size_bytes.to_le_bytes());
+        }
         hasher.update(epoch.as_u64().to_le_bytes());
         let report_hash = ContentHash::compute(&hasher.finalize());
 
@@ -1067,12 +1300,9 @@ impl CompressionPipeline {
 
     /// Deterministic size estimate for a given algorithm.
     ///
-    /// Returns a heuristic compressed size based on the algorithm's
-    /// typical ratio, without invoking a real codec.  This is
-    /// intentional: the pipeline contract verifies *plan correctness*
-    /// (recipe linkage, epoch monotonicity, budget compliance) rather
-    /// than actual byte-level compression.  Real codec integration
-    /// is tracked as future work.
+    /// Returns a heuristic compressed size based on the algorithm's typical
+    /// ratio when the descriptor has no retained payload bytes. Byte-backed
+    /// descriptors use the real codec path in `compress_descriptor`.
     fn simulate_compression(&self, original_size: u64, algorithm: CompressionAlgorithm) -> u64 {
         // Deterministic ratio estimates for each algorithm (millionths)
         let ratio = match algorithm {
@@ -1085,6 +1315,44 @@ impl CompressionPipeline {
             .saturating_mul(ratio)
             .checked_div(MILLION)
             .unwrap_or(original_size)
+    }
+
+    fn compress_descriptor(
+        &self,
+        desc: &ArtifactDescriptor,
+        algorithm: CompressionAlgorithm,
+        epoch: SecurityEpoch,
+    ) -> RestorationRecipe {
+        if desc.has_size_consistent_payload()
+            && let Ok(payload) = compress_payload(algorithm, &desc.content_bytes)
+        {
+            return RestorationRecipe::with_compressed_payload(
+                algorithm,
+                desc.content_hash,
+                desc.size_bytes,
+                payload,
+                epoch,
+            );
+        }
+
+        let compressed_size = self.simulate_compression(desc.size_bytes, algorithm);
+        let compressed_hash = {
+            let mut h = Sha256::new();
+            h.update(b"compressed-plan-only:");
+            h.update(desc.content_hash.as_bytes());
+            h.update(algorithm.as_str().as_bytes());
+            h.update(compressed_size.to_le_bytes());
+            h.update(desc.size_bytes.to_le_bytes());
+            ContentHash::compute(&h.finalize())
+        };
+        RestorationRecipe::new(
+            algorithm,
+            desc.content_hash,
+            compressed_hash,
+            desc.size_bytes,
+            compressed_size,
+            epoch,
+        )
     }
 }
 

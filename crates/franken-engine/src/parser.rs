@@ -4320,21 +4320,7 @@ fn parse_primary_expression(
         if split_top_level_commas(inner).len() > 1 {
             let operands = parse_comma_separated_exprs(inner, span, context, recursion_depth + 1)?;
             if operands.len() > 1 {
-                let params: Vec<FunctionParam> = (0..operands.len())
-                    .map(|i| FunctionParam {
-                        pattern: BindingPattern::Identifier(format!("__seq_{i}")),
-                        span: span.clone(),
-                    })
-                    .collect();
-                let last_param = format!("__seq_{}", operands.len() - 1);
-                return Ok(Expression::Call {
-                    callee: Box::new(Expression::ArrowFunction {
-                        params,
-                        body: ArrowBody::Expression(Box::new(Expression::Identifier(last_param))),
-                        is_async: false,
-                    }),
-                    arguments: operands,
-                });
+                return Ok(build_sequence_expression(operands, span));
             }
         }
         return parse_expression(inner, span, context, recursion_depth + 1);
@@ -8332,6 +8318,55 @@ fn find_top_level_else(s: &str) -> Option<usize> {
     None
 }
 
+/// Build the comma/sequence-operator desugar (bd-wo6za, ES2020 §13.16) for a
+/// list of already-parsed operands `e0, e1, …, eN`: an immediately-applied arrow
+/// `((__seq_0, …, __seq_N) => __seq_N)(e0, …, eN)`. Call arguments evaluate
+/// left-to-right (preserving every operand's side effects) and the arrow yields
+/// the final operand, reusing the existing arrow + call lowering so no dedicated
+/// `SequenceExpression` IR is needed. The synthetic `__seq_*` parameters cannot
+/// collide with the operands: operands are evaluated as arguments in the
+/// enclosing scope, never inside the arrow body. Callers must pass
+/// `operands.len() >= 2` (a single operand needs no sequencing).
+fn build_sequence_expression(operands: Vec<Expression>, span: &SourceSpan) -> Expression {
+    debug_assert!(operands.len() >= 2, "sequence needs >= 2 operands");
+    let params: Vec<FunctionParam> = (0..operands.len())
+        .map(|i| FunctionParam {
+            pattern: BindingPattern::Identifier(format!("__seq_{i}")),
+            span: span.clone(),
+        })
+        .collect();
+    let last_param = format!("__seq_{}", operands.len() - 1);
+    Expression::Call {
+        callee: Box::new(Expression::ArrowFunction {
+            params,
+            body: ArrowBody::Expression(Box::new(Expression::Identifier(last_param))),
+            is_async: false,
+        }),
+        arguments: operands,
+    }
+}
+
+/// Parse a C-style `for`-header clause (condition or update) that may be a bare,
+/// unparenthesized comma sequence such as `i++, j--`. Outside parentheses the
+/// sequence operator does not reach the paren-handling desugar in
+/// `parse_primary_expression`, so a comma'd clause would otherwise fall through
+/// to `Expression::Raw` (a string) and fault at runtime (bd-qxkli). Here we
+/// detect a top-level comma and apply the same `build_sequence_expression`
+/// desugar; a single-expression clause parses unchanged.
+fn parse_for_clause_expression(
+    clause_src: &str,
+    span: &SourceSpan,
+    context: &mut ParseExecutionContext<'_>,
+) -> ParseResult<Expression> {
+    if split_top_level_commas(clause_src).len() > 1 {
+        let operands = parse_comma_separated_exprs(clause_src, span, context, 1)?;
+        if operands.len() > 1 {
+            return Ok(build_sequence_expression(operands, span));
+        }
+    }
+    parse_expression(clause_src, span, context, 1)
+}
+
 fn parse_for_statement(
     statement: &str,
     goal: ParseGoal,
@@ -8383,12 +8418,12 @@ fn parse_for_statement(
     let condition = if cond_src.is_empty() {
         None
     } else {
-        Some(parse_expression(cond_src, &span, context, 1)?)
+        Some(parse_for_clause_expression(cond_src, &span, context)?)
     };
     let update = if update_src.is_empty() {
         None
     } else {
-        Some(parse_expression(update_src, &span, context, 1)?)
+        Some(parse_for_clause_expression(update_src, &span, context)?)
     };
 
     let body_src = rest.trim();

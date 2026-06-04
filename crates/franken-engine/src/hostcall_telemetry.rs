@@ -440,6 +440,44 @@ impl Default for RecorderConfig {
 /// - `timestamp_ns` is monotonically non-decreasing.
 /// - Append-only log with bounded capacity (backpressure on full).
 /// - Supports snapshot/checkpoint for replay alignment.
+/// Per-reason counts of telemetry records the recorder refused to append
+/// (and therefore dropped). Each [`TelemetryRecorder::record`] call that
+/// returns `Err(TelemetryError::…)` increments the matching counter BEFORE
+/// returning, so a caller that intentionally ignores the `Result` — the
+/// hostcall path records with `let _ = recorder.record(…)` because telemetry
+/// must never block JS execution — still leaves an observable, monotonic
+/// signal the security guardplane can poll.
+///
+/// Without this, dropped records were completely invisible: a malicious
+/// extension could flood the channel with cheap hostcalls until backpressure
+/// engaged, then hide its real (now-dropped) attack hostcall in the silent
+/// tail (bd-z8w7k). A non-zero [`Self::total`] means the telemetry stream the
+/// guardplane observes is incomplete and must not be treated as a clean,
+/// event-free stream.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TelemetryDropCounts {
+    /// Records dropped because the channel was at capacity (backpressure).
+    pub channel_full: u64,
+    /// Records dropped because the timestamp violated monotonicity.
+    pub monotonicity_violation: u64,
+    /// Records dropped because the extension id was empty.
+    pub empty_extension_id: u64,
+}
+
+impl TelemetryDropCounts {
+    /// Total number of dropped records across all reasons.
+    pub fn total(&self) -> u64 {
+        self.channel_full
+            .saturating_add(self.monotonicity_violation)
+            .saturating_add(self.empty_extension_id)
+    }
+
+    /// Whether any record has been dropped.
+    pub fn any(&self) -> bool {
+        self.total() > 0
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TelemetryRecorder {
     config: RecorderConfig,
@@ -449,6 +487,11 @@ pub struct TelemetryRecorder {
     rolling_hash: ContentHash,
     snapshots: Vec<TelemetrySnapshot>,
     current_epoch: SecurityEpoch,
+    /// Observable counts of records the recorder dropped instead of
+    /// appending. `#[serde(default)]` so recorders persisted before this
+    /// field existed deserialize cleanly (bd-z8w7k).
+    #[serde(default)]
+    dropped: TelemetryDropCounts,
 }
 
 impl TelemetryRecorder {
@@ -462,6 +505,7 @@ impl TelemetryRecorder {
             last_timestamp_ns: 0,
             rolling_hash: ContentHash::compute(TELEMETRY_SCHEMA_DEF),
             snapshots: Vec::new(),
+            dropped: TelemetryDropCounts::default(),
         }
     }
 
@@ -470,13 +514,18 @@ impl TelemetryRecorder {
     /// Assigns `record_id`, validates monotonicity, and appends to log.
     /// Returns the assigned `record_id` on success.
     pub fn record(&mut self, timestamp_ns: u64, input: RecordInput) -> Result<u64, TelemetryError> {
-        // Validate extension ID.
+        // Validate extension ID. Count the drop before returning so the
+        // refusal is observable even though the hostcall caller ignores the
+        // `Result` (bd-z8w7k).
         if input.extension_id.is_empty() {
+            self.dropped.empty_extension_id = self.dropped.empty_extension_id.saturating_add(1);
             return Err(TelemetryError::EmptyExtensionId);
         }
 
         // Validate timestamp monotonicity.
         if timestamp_ns < self.last_timestamp_ns {
+            self.dropped.monotonicity_violation =
+                self.dropped.monotonicity_violation.saturating_add(1);
             return Err(TelemetryError::MonotonicityViolation {
                 field: "timestamp_ns".to_string(),
                 previous: self.last_timestamp_ns,
@@ -484,8 +533,11 @@ impl TelemetryRecorder {
             });
         }
 
-        // Backpressure check.
+        // Backpressure check. A full channel must not silently swallow the
+        // overflow record — count it so a channel-flooding extension cannot
+        // hide its attack hostcall in the dropped tail (bd-z8w7k).
         if self.records.len() >= self.config.channel_capacity {
+            self.dropped.channel_full = self.dropped.channel_full.saturating_add(1);
             return Err(TelemetryError::ChannelFull);
         }
 
@@ -590,6 +642,32 @@ impl TelemetryRecorder {
     /// Access all recorded events.
     pub fn records(&self) -> &[HostcallTelemetryRecord] {
         &self.records
+    }
+
+    /// Per-reason counts of telemetry records this recorder has dropped.
+    ///
+    /// The hostcall path records telemetry with `let _ = recorder.record(…)`
+    /// — observability must never block or fail JS execution. That swallow
+    /// previously made dropped records (channel-full backpressure, a
+    /// monotonicity violation, or an empty extension id) invisible to the
+    /// security guardplane, so a malicious extension could flood the channel
+    /// with cheap hostcalls and hide its real, now-dropped attack hostcall in
+    /// the silent tail (bd-z8w7k). These counts make every drop observable.
+    pub fn drop_counts(&self) -> TelemetryDropCounts {
+        self.dropped
+    }
+
+    /// Total telemetry records dropped across all reasons (see
+    /// [`Self::drop_counts`]). Zero on a healthy, complete stream.
+    pub fn dropped_records(&self) -> u64 {
+        self.dropped.total()
+    }
+
+    /// Whether the recorder has dropped any record — i.e. the telemetry
+    /// stream is incomplete and the guardplane must not read an absence of
+    /// events as an absence of activity.
+    pub fn has_dropped_records(&self) -> bool {
+        self.dropped.any()
     }
 
     /// Get a record by its ID.
@@ -2235,5 +2313,153 @@ mod tests {
         // Snapshot captures latest epoch
         let snap = recorder.snapshot();
         assert_eq!(snap.epoch, SecurityEpoch::from_raw(20));
+    }
+
+    // -----------------------------------------------------------------------
+    // Dropped-record observability (bd-z8w7k)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn fresh_recorder_reports_no_dropped_records() {
+        let recorder = test_recorder();
+        assert_eq!(recorder.dropped_records(), 0);
+        assert!(!recorder.has_dropped_records());
+        assert_eq!(recorder.drop_counts(), TelemetryDropCounts::default());
+    }
+
+    #[test]
+    fn successful_records_never_increment_drop_counts() {
+        let mut recorder = test_recorder();
+        for ts in 1..=5 {
+            recorder
+                .record(ts, test_input("ext-001", HostcallType::FsRead))
+                .expect("valid record");
+        }
+        assert_eq!(recorder.records().len(), 5);
+        assert_eq!(recorder.dropped_records(), 0);
+        assert!(!recorder.has_dropped_records());
+    }
+
+    #[test]
+    fn channel_full_drop_is_counted_not_silent() {
+        // Capacity 2: the third record overflows. The hostcall path ignores
+        // the Err, but the drop must still be observable (bd-z8w7k) so a
+        // channel-flooding extension cannot hide its attack hostcall in the
+        // dropped tail.
+        let mut recorder = small_recorder(2);
+        recorder
+            .record(1, test_input("ext-001", HostcallType::FsRead))
+            .unwrap();
+        recorder
+            .record(2, test_input("ext-001", HostcallType::FsRead))
+            .unwrap();
+
+        // Mirror the production swallow: `let _ = recorder.record(...)`.
+        let dropped = test_input("attacker", HostcallType::FsWrite);
+        let result = recorder.record(3, dropped);
+        assert!(matches!(result, Err(TelemetryError::ChannelFull)));
+
+        assert_eq!(
+            recorder.records().len(),
+            2,
+            "overflow record is not appended"
+        );
+        assert_eq!(recorder.dropped_records(), 1);
+        assert!(recorder.has_dropped_records());
+        assert_eq!(recorder.drop_counts().channel_full, 1);
+        assert_eq!(recorder.drop_counts().monotonicity_violation, 0);
+        assert_eq!(recorder.drop_counts().empty_extension_id, 0);
+
+        // A second overflow accumulates (monotonic signal).
+        let _ = recorder.record(4, test_input("attacker", HostcallType::FsWrite));
+        assert_eq!(recorder.drop_counts().channel_full, 2);
+        assert_eq!(recorder.dropped_records(), 2);
+    }
+
+    #[test]
+    fn monotonicity_violation_drop_is_counted() {
+        let mut recorder = test_recorder();
+        recorder
+            .record(1000, test_input("ext-001", HostcallType::FsRead))
+            .unwrap();
+
+        // A timestamp going backwards is refused; count it.
+        let result = recorder.record(500, test_input("ext-001", HostcallType::FsRead));
+        assert!(matches!(
+            result,
+            Err(TelemetryError::MonotonicityViolation { .. })
+        ));
+
+        assert_eq!(
+            recorder.records().len(),
+            1,
+            "rejected record is not appended"
+        );
+        assert_eq!(recorder.drop_counts().monotonicity_violation, 1);
+        assert_eq!(recorder.dropped_records(), 1);
+        assert!(recorder.has_dropped_records());
+    }
+
+    #[test]
+    fn empty_extension_id_drop_is_counted() {
+        let mut recorder = test_recorder();
+        let result = recorder.record(1, test_input("", HostcallType::FsRead));
+        assert!(matches!(result, Err(TelemetryError::EmptyExtensionId)));
+
+        assert_eq!(recorder.records().len(), 0);
+        assert_eq!(recorder.drop_counts().empty_extension_id, 1);
+        assert_eq!(recorder.dropped_records(), 1);
+    }
+
+    #[test]
+    fn drop_counts_total_sums_every_reason() {
+        let mut recorder = small_recorder(1);
+        recorder
+            .record(10, test_input("ext-001", HostcallType::FsRead))
+            .unwrap();
+        // empty extension id
+        let _ = recorder.record(11, test_input("", HostcallType::FsRead));
+        // monotonicity (timestamp < last)
+        let _ = recorder.record(5, test_input("ext-001", HostcallType::FsRead));
+        // channel full (capacity 1 already used)
+        let _ = recorder.record(12, test_input("ext-001", HostcallType::FsRead));
+
+        let counts = recorder.drop_counts();
+        assert_eq!(counts.empty_extension_id, 1);
+        assert_eq!(counts.monotonicity_violation, 1);
+        assert_eq!(counts.channel_full, 1);
+        assert_eq!(counts.total(), 3);
+        assert_eq!(recorder.dropped_records(), 3);
+    }
+
+    #[test]
+    fn drop_counts_survive_serde_round_trip() {
+        let mut recorder = small_recorder(1);
+        recorder
+            .record(1, test_input("ext-001", HostcallType::FsRead))
+            .unwrap();
+        let _ = recorder.record(2, test_input("ext-001", HostcallType::FsRead)); // channel full
+
+        let json = serde_json::to_string(&recorder).expect("serialize recorder");
+        let restored: TelemetryRecorder =
+            serde_json::from_str(&json).expect("deserialize recorder");
+        assert_eq!(restored.dropped_records(), 1);
+        assert_eq!(restored.drop_counts().channel_full, 1);
+    }
+
+    #[test]
+    fn legacy_recorder_json_without_dropped_field_defaults_to_zero() {
+        // A recorder persisted before the `dropped` field existed must still
+        // deserialize (serde default), reporting zero drops.
+        let recorder = test_recorder();
+        let mut value: serde_json::Value = serde_json::to_value(&recorder).expect("to_value");
+        value
+            .as_object_mut()
+            .expect("recorder serializes as a JSON object")
+            .remove("dropped");
+        let restored: TelemetryRecorder =
+            serde_json::from_value(value).expect("legacy recorder must deserialize");
+        assert_eq!(restored.dropped_records(), 0);
+        assert!(!restored.has_dropped_records());
     }
 }

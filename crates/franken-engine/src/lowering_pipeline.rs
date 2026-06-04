@@ -8698,8 +8698,27 @@ fn lower_expression_to_ir1(
                 &pre_lower_names,
                 binding_lookup,
             );
-            let (fn_free_vars, fn_free_var_ids) =
+            let (mut fn_free_vars, mut fn_free_var_ids) =
                 collect_free_vars(&body_lookup, &pre_lower_names, binding_lookup);
+            // bd-g8blf: a NAMED function expression may reference its own name
+            // inside its body (`let f = function g(n){ ... g(n-1) }`). Unlike a
+            // function declaration, the name `g` is NOT bound in the enclosing
+            // scope, so `collect_free_vars` excludes it and the deferred pass
+            // leaves its load unresolved (an unloaded register => "expected
+            // function, got undefined"). Add the self-name as a free var: the
+            // body then resolves it via LoadScoped from the captured scope, the
+            // deferred pass declares it in its temporary PushScope/PopScope (so
+            // it does NOT leak to the enclosing scope) capturing `undefined`,
+            // and the CreateClosure self-bind (bd-g0aok) supplies the closure
+            // value. No-op for anonymous or non-self-referential expressions.
+            if let Some(self_name) = name
+                && let Some(&self_id) = body_lookup.get(self_name)
+                && !pre_lower_names.contains(self_name)
+                && !fn_free_vars.iter().any(|fv| fv == self_name)
+            {
+                fn_free_vars.push(self_name.clone());
+                fn_free_var_ids.push(self_id);
+            }
             ops.push(Ir1Op::CreateFunction {
                 name: name.clone(),
                 param_names,

@@ -47,6 +47,18 @@ fn self_recursive_countdown_returns_base() {
     );
 }
 
+// bd-g8blf: named function EXPRESSION self-recursion. The expression's own name
+// (`g`) is not bound in the enclosing scope, so lowering adds it as a captured
+// free var (body resolves it via LoadScoped) and the bd-g0aok CreateClosure
+// self-bind supplies the value.
+#[test]
+fn named_function_expression_recursion() {
+    assert_eq!(
+        eval_value("let f = function g(n){ return n <= 1 ? 1 : n * g(n - 1); }; f(5)"),
+        "120"
+    );
+}
+
 #[test]
 #[ignore = "bd-g0aok: mutual recursion needs function-declaration hoisting in lowering (separate from the self-binding fix)"]
 fn mutual_recursion_even_odd() {

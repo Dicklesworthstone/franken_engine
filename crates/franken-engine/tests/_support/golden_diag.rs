@@ -50,7 +50,7 @@ pub static SCRUB_TMP_PATH: LazyLock<Regex> =
 /// Cargo `target/...` build-artifact paths.
 #[allow(dead_code)]
 pub static SCRUB_TARGET_PATH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"target[/\w\-\.]*").unwrap());
+    LazyLock::new(|| Regex::new(r"(?:\.rch-)?target(?:-[\w\-]+)?/[\w\-/\.]*").unwrap());
 
 // ---------------------------------------------------------------------------
 // Build-on-demand for CLI golden tests (bd-ub6x8.20)

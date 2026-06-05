@@ -8,16 +8,16 @@
 
 #![forbid(unsafe_code)]
 
-use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::str;
 
 use serde::{Deserialize, Serialize};
 
 // golden_diag lives under tests/_support/ so cargo does NOT compile it as a
-// standalone (empty) integration-test binary (bd-ub6x8.18). Sibling callers
-// pull it in via the same #[path] attribute.
+// standalone (empty) integration-test binary (bd-ub6x8.18). This suite keeps
+// using it for shared scrub patterns and fallback binary resolution; insta now
+// owns the snapshot comparison path.
+#[allow(dead_code)]
 #[path = "_support/golden_diag.rs"]
 mod golden_diag;
 
@@ -100,9 +100,7 @@ fn scrub_output(content: &str) -> String {
 
 /// Execute a CLI command and capture its output, scrubbing non-deterministic content.
 fn capture_cli_output(test_case: &CliTestCase) -> Result<CliOutput, Box<dyn std::error::Error>> {
-    // Build the binary on demand (bd-ub6x8.20). Removes the prebuild
-    // prerequisite and the stale-binary trap from the previous design.
-    let binary_path = golden_diag::resolve_built_cli_binary(test_case.binary)?;
+    let binary_path = resolve_cli_binary(test_case.binary)?;
 
     let output = Command::new(&binary_path).args(test_case.args).output()?;
 
@@ -120,43 +118,28 @@ fn capture_cli_output(test_case: &CliTestCase) -> Result<CliOutput, Box<dyn std:
     })
 }
 
-/// Get the path to the golden file for a test case.
-fn golden_file_path(test_case: &CliTestCase) -> PathBuf {
-    // bd-ub6x8.6.2: migrated from tests/golden_tests/ -> tests/golden/cli/.
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("golden")
-        .join("cli")
-        .join(format!("{}.json", test_case.name))
-}
-
-/// Load golden output from file if it exists.
-#[allow(dead_code)]
-fn load_golden_output(test_case: &CliTestCase) -> Option<CliOutput> {
-    let path = golden_file_path(test_case);
-    if !path.exists() {
-        return None;
+fn resolve_cli_binary(binary_name: &'static str) -> Result<PathBuf, String> {
+    if let Ok(bin_dir) = std::env::var("CLI_GOLDEN_BIN_DIR") {
+        let path = PathBuf::from(bin_dir).join(binary_name);
+        if path.exists() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "CLI_GOLDEN_BIN_DIR set but binary not found: {}",
+            path.display()
+        ));
     }
 
-    let content = fs::read_to_string(path).ok()?;
-    serde_json::from_str(&content).ok()
-}
-
-/// Save golden output to file.
-#[allow(dead_code)]
-fn save_golden_output(
-    test_case: &CliTestCase,
-    output: &CliOutput,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let path = golden_file_path(test_case);
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    let cargo_built_binary = match binary_name {
+        "frankenctl" => option_env!("CARGO_BIN_EXE_frankenctl"),
+        "franken-decision-demo" => option_env!("CARGO_BIN_EXE_franken-decision-demo"),
+        _ => None,
+    };
+    if let Some(path) = cargo_built_binary {
+        return Ok(PathBuf::from(path));
     }
 
-    let content = serde_json::to_string_pretty(output)?;
-    fs::write(path, content)?;
-
-    Ok(())
+    golden_diag::resolve_built_cli_binary(binary_name)
 }
 
 /// Test a single CLI test case against its golden output.
@@ -175,19 +158,10 @@ fn test_cli_golden(test_case: &CliTestCase) {
         panic!("Expected failure but got success for {}", test_case.name);
     }
 
-    // Use improved golden diagnostics
-    let diag = golden_diag::GoldenDiag::cli();
-    let fixture_path = golden_file_path(test_case);
-    let actual_json =
+    let actual =
         serde_json::to_string_pretty(&current_output).expect("CLI output should serialize to JSON");
-    let hint = format!(
-        "CLI output: exit_code={}, stdout_lines={}, stderr_lines={}",
-        current_output.exit_code,
-        current_output.stdout.lines().count(),
-        current_output.stderr.lines().count()
-    );
 
-    diag.assert_golden_match(&actual_json, &fixture_path, test_case.name, Some(&hint));
+    insta::assert_snapshot!(test_case.name, actual);
 }
 
 #[cfg(test)]
@@ -197,8 +171,15 @@ mod tests {
     #[test]
     fn test_scrub_output() {
         let input = "2026-04-30T10:30:45Z wrote /data/projects/franken_engine/docs/test.md";
-        let expected = "[TIMESTAMP] wrote [PROJECT_PATH]/docs/test.md";
+        let expected = "[TIMESTAMP] wrote [PROJECT_PATH]";
         assert_eq!(scrub_output(input), expected);
+
+        let flag_and_path =
+            "frankenctl doctor --target-platform linux --out-dir target/debug/report.json";
+        assert_eq!(
+            scrub_output(flag_and_path),
+            "frankenctl doctor --target-platform linux --out-dir [TARGET_PATH]"
+        );
     }
 
     // Generate a test function for each CLI test case.

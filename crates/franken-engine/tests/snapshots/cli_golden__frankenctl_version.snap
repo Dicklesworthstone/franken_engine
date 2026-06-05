@@ -1,0 +1,10 @@
+---
+source: tests/cli_golden.rs
+expression: actual
+---
+{
+  "exit_code": 0,
+  "stdout": "frankenctl 0.1.0\n",
+  "stderr": "",
+  "command": "frankenctl version"
+}

@@ -1,34 +1,8 @@
-use std::path::{Path, PathBuf};
-
 use frankenengine_engine::benchmark_behavior_equivalence::{
     BehaviorEquivalenceObservation, EvidenceSurface, OwnerRouteHint, POLICY_ID, build_report,
 };
 use frankenengine_engine::benchmark_evidence_bundle::ParityTarget;
 use frankenengine_engine::security_epoch::SecurityEpoch;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
-
-const GOLDEN_RELATIVE_PATH: &str =
-    "tests/golden/benchmark_behavior_equivalence_build_report_expected.json";
-
-fn golden_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_RELATIVE_PATH)
-}
-
-/// Assert build_report JSON matches golden file.
-/// UPDATE_GOLDENS + read-or-panic + .actual sweep is delegated to
-/// golden_diag::GoldenDiag (bd-ub6x8.3).
-fn assert_golden_json(actual: &str) {
-    let path = golden_path();
-    golden_diag::GoldenDiag {
-        framework_name: "Benchmark behavior equivalence golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(actual, &path, "build_report_golden_snapshot", None);
-}
 
 fn observation(
     workload_id: &str,
@@ -86,5 +60,5 @@ fn build_report_golden_snapshot() {
     let actual =
         serde_json::to_string_pretty(&report).expect("report JSON should serialize") + "\n";
 
-    assert_golden_json(&actual);
+    insta::assert_snapshot!("build_report_golden_snapshot", actual);
 }

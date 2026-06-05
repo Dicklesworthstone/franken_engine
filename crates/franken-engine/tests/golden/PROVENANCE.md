@@ -189,12 +189,21 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
 - **Regen:**
   `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --lib attack_surface_game_model::tests::generate_report_golden`
 
-### `benchmark_behavior_equivalence_build_report_expected.json`
+### `benchmark_behavior_equivalence_golden__build_report_golden_snapshot.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21.2)*
 
-- **Owning test:** `tests/benchmark_behavior_equivalence_golden.rs`
-  (helper `assert_golden_json` over `build_report`).
+- **Owning test:** `tests/benchmark_behavior_equivalence_golden.rs`.
+  Migrated from `golden_diag::GoldenDiag` to `insta::assert_snapshot!`
+  in bd-ub6x8.21 child bead `bd-ub6x8.21.2`. The load-bearing fixture now
+  lives at
+  `tests/snapshots/benchmark_behavior_equivalence_golden__build_report_golden_snapshot.snap`.
+- **Subject under test:** the `build_report` JSON shape for benchmark behavior
+  equivalence classifications and owner routing.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test benchmark_behavior_equivalence_golden`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test benchmark_behavior_equivalence_golden`,
+  followed by `cargo insta review` for interactive blessing. The legacy
+  `tests/golden/benchmark_behavior_equivalence_build_report_expected.json`
+  file is retained for audit history until an explicit deletion/move approval
+  is given.
 
 ### `decode_golden_artifacts__{decode_encode_roundtrip,malformed_input_behavior,schema_hash_determinism}.snap` *(moved to `tests/snapshots/` — bd-drdxa)*
 

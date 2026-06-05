@@ -5,14 +5,7 @@
 //! Tests that security certificates serialize to stable JSON output to catch
 //! serialization regressions that could break security validation.
 
-use std::path::Path;
-
 use frankenengine_engine::hash_tiers::ContentHash;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
 use frankenengine_engine::resource_certificate_governance::{
     CertificateEvidence, CertificateGovernanceEvidenceKind, GovernanceEvaluator, GovernanceVerdict,
     PublicationPolicy, ResourceDimension,
@@ -27,23 +20,6 @@ use frankenengine_engine::timescale_separation_certificate::{
 };
 
 use std::collections::BTreeSet;
-
-/// Test helper: assert golden file matches actual serialization.
-///
-/// The prior inline helper trimmed both sides for comparison; we drop the
-/// trim and rely on the goldens being re-baked to whatever the live JSON
-/// pretty-printer emits today (no trailing newline). bd-ub6x8.3.1 close-note
-/// flagged this site as needing exactly this re-bake, which lands alongside
-/// this commit.
-fn assert_golden(test_name: &str, actual: &str) {
-    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("tests/golden/certificates/{test_name}.golden.json"));
-    golden_diag::GoldenDiag {
-        framework_name: "Certificate serialization golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(actual, &fixture_path, test_name, None);
-}
 
 /// Create deterministic JSON from serde-serializable type.
 fn to_deterministic_json<T: serde::Serialize>(value: &T) -> String {
@@ -143,7 +119,7 @@ fn certificate_evidence_basic() {
     };
 
     let json = to_deterministic_json(&evidence);
-    assert_golden("certificate_evidence_basic", &json);
+    insta::assert_snapshot!("certificate_evidence_basic", json);
 }
 
 #[test]
@@ -160,7 +136,7 @@ fn certificate_evidence_memory() {
     };
 
     let json = to_deterministic_json(&evidence);
-    assert_golden("certificate_evidence_memory", &json);
+    insta::assert_snapshot!("certificate_evidence_memory", json);
 }
 
 #[test]
@@ -177,7 +153,7 @@ fn certificate_evidence_network_io() {
     };
 
     let json = to_deterministic_json(&evidence);
-    assert_golden("certificate_evidence_network_io", &json);
+    insta::assert_snapshot!("certificate_evidence_network_io", json);
 }
 
 #[test]
@@ -194,7 +170,7 @@ fn timescale_separation_certificate_sufficient() {
     });
 
     let json = to_deterministic_json(&cert);
-    assert_golden("timescale_certificate_sufficient", &json);
+    insta::assert_snapshot!("timescale_certificate_sufficient", json);
 }
 
 #[test]
@@ -211,7 +187,7 @@ fn timescale_separation_certificate_marginal() {
     });
 
     let json = to_deterministic_json(&cert);
-    assert_golden("timescale_certificate_marginal", &json);
+    insta::assert_snapshot!("timescale_certificate_marginal", json);
 }
 
 #[test]
@@ -228,7 +204,7 @@ fn timescale_separation_certificate_insufficient() {
     });
 
     let json = to_deterministic_json(&cert);
-    assert_golden("timescale_certificate_insufficient", &json);
+    insta::assert_snapshot!("timescale_certificate_insufficient", json);
 }
 
 #[test]
@@ -269,7 +245,7 @@ fn certificate_bundle_mixed_verdicts() {
     };
 
     let json = to_deterministic_json(&bundle);
-    assert_golden("certificate_bundle_mixed_verdicts", &json);
+    insta::assert_snapshot!("certificate_bundle_mixed_verdicts", json);
 }
 
 #[test]
@@ -311,7 +287,7 @@ fn governance_receipt_comprehensive() {
     assert_eq!(receipt.verdict, GovernanceVerdict::Approved);
 
     let json = to_deterministic_json(&receipt);
-    assert_golden("governance_receipt_comprehensive", &json);
+    insta::assert_snapshot!("governance_receipt_comprehensive", json);
 }
 
 #[test]
@@ -337,7 +313,7 @@ fn governance_receipt_denial() {
     assert_eq!(receipt.verdict, GovernanceVerdict::MultipleViolations);
 
     let json = to_deterministic_json(&receipt);
-    assert_golden("governance_receipt_denial", &json);
+    insta::assert_snapshot!("governance_receipt_denial", json);
 }
 
 // Test that UPDATE_GOLDENS workflow works
@@ -356,5 +332,5 @@ fn golden_file_update_workflow() {
     };
 
     let json = to_deterministic_json(&simple_evidence);
-    assert_golden("golden_workflow_test", &json);
+    insta::assert_snapshot!("golden_workflow_test", json);
 }

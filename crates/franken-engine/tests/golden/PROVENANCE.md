@@ -132,15 +132,18 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
   `early_termination.golden`, `minimal_single_dimension.golden`,
   `repeated_violations.golden`, `shed_decision.golden`.
 
-### `certificates/`
+### `certificate_golden_tests__*.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21.6)*
 
-- **Owning test:** `tests/certificate_golden_tests.rs` (local
-  `assert_golden` helper at L28).
+- **Owning test:** `tests/certificate_golden_tests.rs`. Migrated from the
+  shared `golden_diag::GoldenDiag` helper to `insta::assert_snapshot!` in
+  bd-ub6x8.21 child bead `bd-ub6x8.21.6`; the load-bearing fixtures now live
+  at `tests/snapshots/certificate_golden_tests__*.snap`.
 - **Subject under test:** governance / capability certificate
   serialization, including mixed-verdict bundles and timescale
   separation verdicts.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test certificate_golden_tests`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test certificate_golden_tests`,
+  followed by `cargo insta review` for interactive blessing.
 - **Scrubbing:** none — fixtures are constructed from hand-curated
   inputs with deterministic content hashes.
 - **Fixtures (10):** `certificate_bundle_mixed_verdicts.golden.json`,
@@ -154,6 +157,8 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
   `timescale_certificate_marginal.golden.json`,
   `timescale_certificate_sufficient.golden.json`.
 - **Migrated from:** `tests/goldens/certificates/` (bd-ub6x8.6.4).
+  The legacy `tests/golden/certificates/*.golden.json` files are retained for
+  audit history until explicit deletion/move approval is given.
 
 ### `policy_theorem_compiler/`
 

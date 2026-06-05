@@ -86,7 +86,7 @@
           "binding_id": 0
         }
       },
-      "Pop",
+      "Discard",
       {
         "LoadLiteral": {
           "value": {
@@ -99,7 +99,7 @@
           "binding_id": 1
         }
       },
-      "Pop",
+      "Discard",
       "Return"
     ]
   },
@@ -112,38 +112,38 @@
       },
       "level": "Ir2",
       "source_hash": [
-        130,
-        32,
-        60,
-        34,
-        173,
-        156,
-        123,
-        100,
-        106,
-        49,
-        134,
-        240,
-        168,
-        1,
-        246,
-        98,
-        4,
-        20,
-        37,
-        212,
-        135,
-        79,
-        158,
-        160,
-        189,
-        59,
+        17,
+        143,
+        231,
+        92,
+        176,
+        62,
         235,
+        63,
+        248,
+        192,
+        19,
+        161,
+        3,
+        16,
+        47,
+        105,
+        119,
+        143,
+        170,
+        91,
+        168,
+        148,
+        55,
+        218,
+        107,
         114,
-        132,
-        126,
-        142,
-        203
+        98,
+        94,
+        213,
+        211,
+        21,
+        112
       ],
       "source_label": "variables.js"
     },
@@ -201,7 +201,7 @@
         "flow": null
       },
       {
-        "inner": "Pop",
+        "inner": "Discard",
         "effect": "Pure",
         "required_capability": null,
         "flow": null
@@ -229,7 +229,7 @@
         "flow": null
       },
       {
-        "inner": "Pop",
+        "inner": "Discard",
         "effect": "Pure",
         "required_capability": null,
         "flow": null
@@ -252,38 +252,38 @@
       },
       "level": "Ir3",
       "source_hash": [
-        118,
-        95,
-        199,
-        199,
-        192,
-        130,
-        180,
-        215,
-        64,
-        122,
-        15,
-        151,
-        55,
-        55,
-        169,
-        40,
-        115,
-        244,
-        13,
-        65,
-        187,
-        167,
-        17,
-        36,
-        100,
-        154,
-        133,
+        173,
+        7,
+        48,
+        246,
+        2,
+        77,
+        43,
+        160,
+        2,
+        105,
+        204,
+        212,
+        152,
         11,
+        200,
+        205,
+        65,
         135,
+        51,
+        112,
         134,
-        121,
-        175
+        236,
+        236,
+        27,
+        205,
+        119,
+        48,
+        91,
+        149,
+        224,
+        53,
+        160
       ],
       "source_label": "variables.js"
     },
@@ -301,12 +301,6 @@
         }
       },
       {
-        "Move": {
-          "dst": 0,
-          "src": 1
-        }
-      },
-      {
         "LoadStr": {
           "dst": 2,
           "pool_index": 0
@@ -316,12 +310,6 @@
         "Move": {
           "dst": 3,
           "src": 2
-        }
-      },
-      {
-        "Move": {
-          "dst": 0,
-          "src": 3
         }
       },
       {
@@ -362,7 +350,7 @@
     {
       "pass_id": "ir0_to_ir1",
       "input_hash": "sha256:3e7953e318627fa32afff975e9c0d1675d96ecbeefe5ccb3d8192d54ed87c8a2",
-      "output_hash": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
+      "output_hash": "sha256:118fe75cb03eeb3ff8c013a103102f69778faa5ba89437da6b72625ed5d31570",
       "rollback_token": "sha256:3e7953e318627fa32afff975e9c0d1675d96ecbeefe5ccb3d8192d54ed87c8a2",
       "invariant_checks": [
         {
@@ -379,9 +367,9 @@
     },
     {
       "pass_id": "ir1_to_ir2",
-      "input_hash": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
-      "output_hash": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
-      "rollback_token": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
+      "input_hash": "sha256:118fe75cb03eeb3ff8c013a103102f69778faa5ba89437da6b72625ed5d31570",
+      "output_hash": "sha256:ad0730f6024d2ba00269ccd4980bc8cd4187337086ecec1bcd77305b95e035a0",
+      "rollback_token": "sha256:118fe75cb03eeb3ff8c013a103102f69778faa5ba89437da6b72625ed5d31570",
       "invariant_checks": [
         {
           "name": "source_hash_linkage",
@@ -407,9 +395,9 @@
     },
     {
       "pass_id": "ir2_to_ir3",
-      "input_hash": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
-      "output_hash": "sha256:70b1b97d5e4b669344e640985737e044a3dfef15480a34434aa4e7b4bf858f05",
-      "rollback_token": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
+      "input_hash": "sha256:ad0730f6024d2ba00269ccd4980bc8cd4187337086ecec1bcd77305b95e035a0",
+      "output_hash": "sha256:2902de80a9b465da00ae77c0a37efa9925e95d388fb256b0a172d13d9dc1b38e",
+      "rollback_token": "sha256:ad0730f6024d2ba00269ccd4980bc8cd4187337086ecec1bcd77305b95e035a0",
       "invariant_checks": [
         {
           "name": "source_hash_linkage",
@@ -438,23 +426,23 @@
     {
       "pass_id": "ir0_to_ir1",
       "input_hash": "sha256:3e7953e318627fa32afff975e9c0d1675d96ecbeefe5ccb3d8192d54ed87c8a2",
-      "output_hash": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
+      "output_hash": "sha256:118fe75cb03eeb3ff8c013a103102f69778faa5ba89437da6b72625ed5d31570",
       "input_op_count": 2,
       "output_op_count": 7
     },
     {
       "pass_id": "ir1_to_ir2",
-      "input_hash": "sha256:82203c22ad9c7b646a3186f0a801f662041425d4874f9ea0bd3beb72847e8ecb",
-      "output_hash": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
+      "input_hash": "sha256:118fe75cb03eeb3ff8c013a103102f69778faa5ba89437da6b72625ed5d31570",
+      "output_hash": "sha256:ad0730f6024d2ba00269ccd4980bc8cd4187337086ecec1bcd77305b95e035a0",
       "input_op_count": 7,
       "output_op_count": 7
     },
     {
       "pass_id": "ir2_to_ir3",
-      "input_hash": "sha256:765fc7c7c082b4d7407a0f973737a92873f40d41bba71124649a850b878679af",
-      "output_hash": "sha256:70b1b97d5e4b669344e640985737e044a3dfef15480a34434aa4e7b4bf858f05",
+      "input_hash": "sha256:ad0730f6024d2ba00269ccd4980bc8cd4187337086ecec1bcd77305b95e035a0",
+      "output_hash": "sha256:2902de80a9b465da00ae77c0a37efa9925e95d388fb256b0a172d13d9dc1b38e",
       "input_op_count": 7,
-      "output_op_count": 8
+      "output_op_count": 6
     }
   ],
   "events": [

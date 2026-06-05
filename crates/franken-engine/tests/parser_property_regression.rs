@@ -154,6 +154,7 @@ fn semantic_signature(tree: &SyntaxTree) -> Vec<String> {
             Statement::ForOf(_) => "for_of".to_string(),
             Statement::With(_) => "with".to_string(),
             Statement::ClassDeclaration(_) => "class_decl".to_string(),
+            Statement::Labeled(_) => "labeled".to_string(),
         })
         .collect()
 }

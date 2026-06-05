@@ -8,13 +8,7 @@
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::sync::LazyLock;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so we don't waste a per-crate test-binary compile on the helper alone.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
 
 // Hoisted scrub patterns (bd-ub6x8.13).
 static SCRUB_SHA256: LazyLock<Regex> =
@@ -72,18 +66,8 @@ fn scrub_golden_output(input: &str) -> String {
     scrubbed
 }
 
-// Inline assert_golden + summarize_golden_diff replaced by the shared
-// GoldenDiag helper (bd-ub6x8.3 sweep). The fixture path stays under
-// tests/golden/fuzz_adversarial/<test>.json so existing fixtures keep
-// matching without a re-bake.
 fn assert_golden(test_name: &str, actual: &str) {
-    let fixture_path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join(format!("tests/golden/fuzz_adversarial/{test_name}.json"));
-    golden_diag::GoldenDiag {
-        framework_name: "Fuzz adversarial golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(actual, &fixture_path, test_name, None);
+    insta::assert_snapshot!(test_name, actual);
 }
 
 /// Run parser boundary program and capture golden output

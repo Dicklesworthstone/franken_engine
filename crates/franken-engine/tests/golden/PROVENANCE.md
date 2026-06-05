@@ -70,19 +70,25 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
   `minimal_contract_evaluation.golden`, `policy_update.golden`,
   `security_action_sandbox.golden`
 
-### `fuzz_adversarial/`
+### `golden_fuzz_regression__parser_boundary_*.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21.5)*
 
-- **Owning test:** `tests/golden_fuzz_regression.rs` (helper
-  `assert_golden`), seeded from corpora curated in
+- **Owning test:** `tests/golden_fuzz_regression.rs`. Migrated from the
+  local `golden_diag::GoldenDiag` helper to `insta::assert_snapshot!` in
+  bd-ub6x8.21 child bead `bd-ub6x8.21.5`; the load-bearing fixtures now live
+  at `tests/snapshots/golden_fuzz_regression__parser_boundary_*.snap`.
+  Seeded from corpora curated in
   `tests/fuzz_adversarial.rs::run_parser_boundary_golden`.
 - **Subject under test:** parser-boundary IR for adversarial/regression
   inputs that previously broke or stressed the parser.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test golden_fuzz_regression`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test golden_fuzz_regression`,
+  followed by `cargo insta review` for interactive blessing.
 - **Scrubbing:** SHA256 → `sha256:[HASH]`; raw addresses → `0x[ADDR]`.
-- **Fixtures (7):** `parser_boundary_case_00.json` …
-  `parser_boundary_case_04.json`, `parser_boundary_max_recursion.json`,
-  `parser_boundary_minimal_module.json`.
+- **Fixtures (7):** `parser_boundary_case_00.snap` …
+  `parser_boundary_case_04.snap`, `parser_boundary_max_recursion.snap`,
+  `parser_boundary_minimal_module.snap`. Legacy
+  `tests/golden/fuzz_adversarial/*.json` files are retained for audit history
+  until explicit deletion/move approval is given.
 
 ### `lowering/`
 

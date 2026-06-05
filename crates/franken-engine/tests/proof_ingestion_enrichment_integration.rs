@@ -11,6 +11,7 @@ use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::proof_ingestion::*;
 use frankenengine_engine::proof_schema::OptimizationClass;
 use frankenengine_engine::security_epoch::SecurityEpoch;
+use frankenengine_engine::signature_preimage::{SigningKey, VerificationKey};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -28,10 +29,17 @@ fn test_epoch() -> SecurityEpoch {
     SecurityEpoch::from_raw(100)
 }
 
+fn test_issuer_verification_key() -> VerificationKey {
+    SigningKey::from_bytes(test_key())
+        .expect("test key is a valid Ed25519 seed")
+        .verification_key()
+}
+
 fn test_config() -> IngestionConfig {
     IngestionConfig {
         active_policy_id: "policy-001".to_string(),
         signing_key: test_key(),
+        issuer_verification_key: Some(test_issuer_verification_key()),
         ..Default::default()
     }
 }
@@ -1690,6 +1698,7 @@ fn enrichment_custom_speedup_estimates_reflected_in_hypotheses() {
     let config = IngestionConfig {
         active_policy_id: "pol-custom".to_string(),
         signing_key: test_key(),
+        issuer_verification_key: Some(test_issuer_verification_key()),
         churn_threshold: 10,
         churn_window_ns: 60_000_000_000,
         plas_speedup_estimate: 2_000_000,   // 2.0x

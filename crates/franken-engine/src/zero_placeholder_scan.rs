@@ -28,7 +28,14 @@ pub const ZERO_PLACEHOLDER_SCAN_EVENT_SCHEMA_VERSION: &str =
     "franken-engine.zero-placeholder-scan.event.v1";
 pub const ZERO_PLACEHOLDER_SCAN_COMPONENT: &str = "zero_placeholder_scan";
 pub const ZERO_PLACEHOLDER_SCAN_POLICY_ID: &str = "franken-engine.zero-placeholder-scan.policy.v1";
-pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 18;
+/// Total findings aggregated by [`zero_placeholder_scan_inventory`]. This is a
+/// deliberate tripwire: bump it (and the per-subsystem asserts in
+/// `zero_placeholder_inventory_aggregates_all_subsystems`) only after confirming
+/// a gap-site change is intentional. Composition: 7 parser
+/// (`ParserGapSiteId::ALL`) + 7 lowering (`LoweringGapSiteId::ALL`) + 4 runtime
+/// + 2 cli-docs. (Parser/lowering each gained `TryCatchFinallySemantics` when the
+/// Track-H exception-semantics inventories were promoted in 03817f08.)
+pub const ZERO_PLACEHOLDER_SCAN_FINDING_COUNT: usize = 20;
 
 const DOCS_HELP_AUDIT_CONTRACT_JSON: &str =
     include_str!("../../../docs/rgc_docs_help_surface_audit_v1.json");
@@ -1398,8 +1405,8 @@ mod tests {
             .filter(|finding| finding.subsystem == ZeroPlaceholderSubsystem::CliDocs)
             .count();
 
-        assert_eq!(parser_count, 6);
-        assert_eq!(lowering_count, 6);
+        assert_eq!(parser_count, 7);
+        assert_eq!(lowering_count, 7);
         assert_eq!(runtime_count, 4);
         assert_eq!(cli_docs_count, 2);
     }
@@ -1943,8 +1950,8 @@ mod tests {
     }
 
     #[test]
-    fn finding_count_eighteen() {
-        assert_eq!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT, 18);
+    fn finding_count_twenty() {
+        assert_eq!(ZERO_PLACEHOLDER_SCAN_FINDING_COUNT, 20);
     }
 
     // --- Deep enrichment tests (PearlTower 2026-03-18) ---

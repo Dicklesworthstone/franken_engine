@@ -785,6 +785,19 @@ pub enum BuiltinFunctionKind {
     /// elements at `start` and insert the given items, returning an array of
     /// the removed elements (bd-962ev.1).
     ArraySplice,
+    /// `Array.prototype.toReversed` (ES2023) — returns a reversed copy; the
+    /// receiver is unchanged (bd-ib0ue).
+    ArrayToReversed,
+    /// `Array.prototype.toSorted` (ES2023) — returns a sorted copy using the
+    /// same ordering as `sort` (optional comparator); receiver unchanged
+    /// (bd-ib0ue).
+    ArrayToSorted,
+    /// `Array.prototype.with` (ES2023) — returns a copy with index `i` replaced
+    /// by `value`; throws RangeError on out-of-range index (bd-ib0ue).
+    ArrayWith,
+    /// `Array.prototype.toSpliced` (ES2023) — returns a copy with `splice`
+    /// applied; receiver unchanged (bd-ib0ue).
+    ArrayToSpliced,
     /// `Array.prototype.entries` — receiver-aware runtime iterator over
     /// `[index, value]` pairs (bd-n9oxa).
     ArrayEntries,
@@ -1226,6 +1239,42 @@ impl BuiltinFunction {
     fn array_reverse() -> Self {
         Self {
             kind: BuiltinFunctionKind::ArrayReverse,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_to_reversed() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayToReversed,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_to_sorted() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayToSorted,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_with() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayWith,
+            module_specifier: String::new(),
+            iterator_handle: None,
+            bound_object: None,
+        }
+    }
+
+    fn array_to_spliced() -> Self {
+        Self {
+            kind: BuiltinFunctionKind::ArrayToSpliced,
             module_specifier: String::new(),
             iterator_handle: None,
             bound_object: None,
@@ -1786,6 +1835,10 @@ impl BuiltinFunction {
             BuiltinFunctionKind::ArraySliceMethod => "slice",
             BuiltinFunctionKind::ArrayLastIndexOf => "lastIndexOf",
             BuiltinFunctionKind::ArraySplice => "splice",
+            BuiltinFunctionKind::ArrayToReversed => "toReversed",
+            BuiltinFunctionKind::ArrayToSorted => "toSorted",
+            BuiltinFunctionKind::ArrayWith => "with",
+            BuiltinFunctionKind::ArrayToSpliced => "toSpliced",
             BuiltinFunctionKind::ArrayEntries => "entries",
             BuiltinFunctionKind::ArrayKeys => "keys",
             BuiltinFunctionKind::ArrayValues => "values",
@@ -6615,6 +6668,188 @@ impl InterpreterCore {
                     Value::Int(i64::try_from(removed_len).unwrap_or(i64::MAX)),
                 )?;
                 Ok(Value::Object(removed_arr))
+            }
+            BuiltinFunctionKind::ArrayToReversed => {
+                // ES2023 23.1.3.33: return a reversed COPY; the receiver is left
+                // unchanged (bd-ib0ue).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.toReversed".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let result = self.alloc_array_with_prototype(None)?;
+                for i in 0..len {
+                    let element = self
+                        .array_index_value(arr_id, len - 1 - i)?
+                        .unwrap_or(Value::Undefined);
+                    self.set_object_property(result, i.to_string(), element)?;
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(len).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
+            }
+            BuiltinFunctionKind::ArrayToSorted => {
+                // ES2023 23.1.3.34: return a sorted COPY using the same ordering
+                // as `sort` (optional comparator); receiver unchanged (bd-ib0ue).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.toSorted".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let comparator = match self.builtin_arg(args, 0)? {
+                    Some(Value::Undefined) | None => None,
+                    Some(callback) => Some(callback),
+                };
+                let mut elements = Vec::with_capacity(len);
+                for index in 0..len {
+                    elements.push(
+                        self.array_index_value(arr_id, index)?
+                            .unwrap_or(Value::Undefined),
+                    );
+                }
+                if let Some(comparator) = comparator {
+                    // Insertion sort: keep the comparator's re-entrant call
+                    // outside any closure borrowing `self` (mirrors `sort`).
+                    for i in 1..elements.len() {
+                        let mut j = i;
+                        while j > 0 {
+                            let ordering = self.sort_compare(
+                                module,
+                                &comparator,
+                                &elements[j - 1],
+                                &elements[j],
+                            )?;
+                            if ordering == std::cmp::Ordering::Greater {
+                                elements.swap(j - 1, j);
+                                j -= 1;
+                            } else {
+                                break;
+                            }
+                        }
+                    }
+                } else {
+                    elements
+                        .sort_by(|a, b| Self::sort_string_key(a).cmp(&Self::sort_string_key(b)));
+                }
+                let result = self.alloc_array_with_prototype(None)?;
+                for (index, element) in elements.into_iter().enumerate() {
+                    self.set_object_property(result, index.to_string(), element)?;
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(len).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
+            }
+            BuiltinFunctionKind::ArrayWith => {
+                // ES2023 23.1.3.39: return a COPY with index `i` replaced by
+                // `value`; negative `i` counts from the end; out-of-range throws
+                // RangeError (bd-ib0ue).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.with".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let relative =
+                    Self::value_as_integer(&self.builtin_arg(args, 0)?.unwrap_or(Value::Undefined));
+                let actual = if relative < 0 {
+                    relative + len as i64
+                } else {
+                    relative
+                };
+                if actual < 0 || actual >= len as i64 {
+                    return Err(InterpreterError::RangeError {
+                        message: format!(
+                            "Array.prototype.with: index {relative} is out of range for length {len}"
+                        ),
+                    });
+                }
+                let actual = actual as usize;
+                let value = self.builtin_arg(args, 1)?.unwrap_or(Value::Undefined);
+                let result = self.alloc_array_with_prototype(None)?;
+                for i in 0..len {
+                    let element = if i == actual {
+                        value.clone()
+                    } else {
+                        self.array_index_value(arr_id, i)?
+                            .unwrap_or(Value::Undefined)
+                    };
+                    self.set_object_property(result, i.to_string(), element)?;
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(len).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
+            }
+            BuiltinFunctionKind::ArrayToSpliced => {
+                // ES2023 23.1.3.35: return a COPY with `splice(start, skipCount,
+                // ...items)` applied; the receiver is unchanged and the NEW
+                // array (not the removed elements) is returned (bd-ib0ue).
+                let receiver = receiver.unwrap_or(Value::Undefined);
+                let Value::Object(arr_id) = receiver else {
+                    return Err(InterpreterError::TypeError {
+                        expected: "array receiver for Array.prototype.toSpliced".to_string(),
+                        got: receiver.type_name().to_string(),
+                    });
+                };
+                let len = self.array_like_length(arr_id)?;
+                let start = match self.builtin_arg(args, 0)? {
+                    Some(value) => Self::clamp_relative_index(Self::value_as_integer(&value), len),
+                    None => 0,
+                };
+                let delete_count = match self.builtin_arg(args, 1)? {
+                    None => len - start,
+                    Some(value) => {
+                        let raw = Self::value_as_integer(&value);
+                        if raw < 0 {
+                            0
+                        } else {
+                            (raw as usize).min(len - start)
+                        }
+                    }
+                };
+                let mut items = Vec::new();
+                let mut k = 2u32;
+                while k < args.count {
+                    items.push(self.builtin_arg(args, k)?.unwrap_or(Value::Undefined));
+                    k += 1;
+                }
+                let mut elements: Vec<Value> = Vec::with_capacity(len);
+                for i in 0..len {
+                    elements.push(
+                        self.array_index_value(arr_id, i)?
+                            .unwrap_or(Value::Undefined),
+                    );
+                }
+                let _removed: Vec<Value> = elements
+                    .splice(start..start + delete_count, items)
+                    .collect();
+                let new_len = elements.len();
+                let result = self.alloc_array_with_prototype(None)?;
+                for (i, element) in elements.into_iter().enumerate() {
+                    self.set_object_property(result, i.to_string(), element)?;
+                }
+                self.set_object_property(
+                    result,
+                    "length".to_string(),
+                    Value::Int(i64::try_from(new_len).unwrap_or(i64::MAX)),
+                )?;
+                Ok(Value::Object(result))
             }
             // Map/Set receiver-aware methods (bd-juodx). The receiver is the
             // collection object; `.size` is a plain data property handled by the
@@ -11793,6 +12028,10 @@ impl InterpreterCore {
             "slice" => Some(BuiltinFunction::array_slice_method()),
             "lastIndexOf" => Some(BuiltinFunction::array_last_index_of()),
             "splice" => Some(BuiltinFunction::array_splice()),
+            "toReversed" => Some(BuiltinFunction::array_to_reversed()),
+            "toSorted" => Some(BuiltinFunction::array_to_sorted()),
+            "with" => Some(BuiltinFunction::array_with()),
+            "toSpliced" => Some(BuiltinFunction::array_to_spliced()),
             "entries" => Some(BuiltinFunction::array_entries()),
             "keys" => Some(BuiltinFunction::array_keys()),
             "values" => Some(BuiltinFunction::array_values()),

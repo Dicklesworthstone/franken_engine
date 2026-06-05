@@ -26,15 +26,35 @@
 //!   verification failure (signature, root, inclusion-proof, or key mismatch),
 //!   classified fail-closed as [`AuthFailureType::SignatureInvalid`]. Tracked
 //!   under `bd-x92qq` (follow-up to `bd-unc29`).
-//! - **replay drops, checkpoint violations, revocation checks, cross-zone
-//!   references** — NOT YET WIRED. These `record_*` methods are presently
-//!   invoked only from this module's tests. Their real failure sites (an
-//!   anti-replay session-sequence guard — note `ReplayDropReason` is
-//!   `{DuplicateSeq, StaleSeq, CrossSession}`, i.e. message-sequence dedup, not
-//!   `deterministic_replay::ReplayEngine` divergence — checkpoint enforcement,
-//!   revocation freshness checks, and cross-zone reference decisions) must
-//!   still be wired before the counters reflect production events. Tracked as
-//!   `bd-x92qq` (follow-up to `bd-unc29`).
+//! - **replay drops** — WIRED. `session_hostcall_channel::SessionHostcallChannel::receive_observed`
+//!   classifies anti-replay sequence drops and calls
+//!   [`RuntimeSecurityObservability::record_replay_drop`] (`Duplicate` ->
+//!   [`ReplayDropReason::DuplicateSeq`], `Replay` -> [`ReplayDropReason::StaleSeq`];
+//!   `OutOfOrder` is an ordering violation, not a dedup drop, so it is excluded).
+//!   Note `ReplayDropReason` is `{DuplicateSeq, StaleSeq, CrossSession}`, i.e.
+//!   message-sequence dedup, not `deterministic_replay::ReplayEngine` divergence.
+//! - **checkpoint violations** — WIRED. `fork_detection::ForkDetector::record_checkpoint_observed`
+//!   records [`CheckpointViolationType::ForkDetected`] when a same-sequence
+//!   divergent checkpoint id produces a real fork report. The loop
+//!   `CheckpointGuard` drain/abort path is deliberately NOT treated as a
+//!   violation — it is normal backpressure, not a security event.
+//! - **revocation checks** — WIRED. `revocation_enforcement::RevocationEnforcer`'s
+//!   `check_*_observed` entry points call
+//!   [`RuntimeSecurityObservability::record_revocation_check`] (`Cleared` ->
+//!   [`RevocationCheckOutcome::Pass`], `Denied` -> [`RevocationCheckOutcome::Revoked`]).
+//!   This single-node enforcer has no frontier-staleness model, so it never
+//!   emits [`RevocationCheckOutcome::Stale`].
+//! - **cross-zone reference decisions** — WIRED.
+//!   `capability::trust_zone::ZoneHierarchy::validate_cross_zone_reference_observed`
+//!   calls [`RuntimeSecurityObservability::record_cross_zone_reference`] (`Ok` ->
+//!   [`CrossZoneReferenceType::ProvenanceAllowed`], fail-closed `Err` ->
+//!   [`CrossZoneReferenceType::AuthorityDenied`]).
+//!
+//! All security counters are now wired to their real failure sites (`bd-x92qq`,
+//! follow-up to `bd-unc29`). A remaining ergonomic follow-up is surfacing the
+//! aggregated [`RuntimeSecurityMetrics`] on `ExecutionResult` / orchestrator
+//! output so out-of-interpreter consumers (not just direct `InterpreterCore`
+//! callers) can read the counters.
 //!
 //! Note: capability denials also remain observable through the interpreter's
 //! `WitnessEventKind::CapabilityChecked` witness stream; this surface adds the

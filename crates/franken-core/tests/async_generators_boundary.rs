@@ -10,6 +10,8 @@
 //! - Generator close and return semantics with async cleanup
 //! - Complex async generator patterns (delegation, composition)
 
+#[allow(dead_code)]
+const _OBSOLETE_RUST_ASYNC_GENERATOR_SKETCH: &str = r#"
 use std::time::Duration;
 
 /// Test basic async generator declaration and execution.
@@ -967,4 +969,173 @@ async fn async_generator_mixed_sync_async() {
     assert_eq!(gen.next().await, Some(6));  // 3 * 2
     assert_eq!(gen.next().await, Some(13)); // 3 + 10
     assert_eq!(gen.next().await, None);
+}
+"#;
+
+use frankenengine_core::ast::{Expression, ParseGoal, Statement, SyntaxTree};
+use frankenengine_core::baseline_interpreter::Value;
+use frankenengine_core::ir_contract::{Ir0Module, Ir3Instruction, RegRange};
+use frankenengine_core::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_core::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+fn parse_source(source: &str) -> SyntaxTree {
+    CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .expect("source should parse")
+}
+
+fn parse_and_lower(source: &str) -> Vec<Ir3Instruction> {
+    let ir0 = Ir0Module::from_syntax_tree(parse_source(source), "async_generators_boundary");
+    let context = LoweringContext::new(
+        "async-generators-boundary-trace",
+        "async-generators-boundary-decision",
+        "async-generators-boundary-policy",
+    );
+
+    lower_ir0_to_ir3(&ir0, &context)
+        .expect("source should lower")
+        .ir3
+        .instructions
+}
+
+#[test]
+fn parser_marks_async_generator_declarations() {
+    let tree = parse_source("async function* stream() { yield 1 }");
+
+    match &tree.body[0] {
+        Statement::FunctionDeclaration(function) => {
+            assert_eq!(function.name.as_deref(), Some("stream"));
+            assert!(function.is_async);
+            assert!(function.is_generator);
+        }
+        other => panic!("expected async generator declaration, got {other:?}"),
+    }
+}
+
+#[test]
+fn parser_preserves_plain_yield_in_async_generator_body() {
+    let tree = parse_source("async function* stream() { yield value }");
+
+    let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+        panic!("expected function declaration");
+    };
+    let Statement::Expression(statement) = &function.body.body[0] else {
+        panic!("expected yield expression statement");
+    };
+
+    match &statement.expression {
+        Expression::Yield { argument, delegate } => {
+            assert!(!delegate);
+            assert!(matches!(
+                argument.as_deref(),
+                Some(Expression::Identifier(name)) if name == "value"
+            ));
+        }
+        other => panic!("expected yield expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn parser_allows_await_as_yield_operand_inside_async_generator() {
+    let tree = parse_source("async function* stream() { yield await next() }");
+
+    let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+        panic!("expected function declaration");
+    };
+    let Statement::Expression(statement) = &function.body.body[0] else {
+        panic!("expected yield expression statement");
+    };
+
+    match &statement.expression {
+        Expression::Yield {
+            argument: Some(argument),
+            delegate: false,
+        } => assert!(matches!(argument.as_ref(), Expression::Await(_))),
+        other => panic!("expected yield await expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn lowering_keeps_yield_instructions_for_async_generator_body() {
+    let instructions = parse_and_lower("async function* stream() { yield 1; yield 2; yield 3; }");
+    let yield_count = instructions
+        .iter()
+        .filter(|inst| {
+            matches!(
+                inst,
+                Ir3Instruction::Yield {
+                    delegate: false,
+                    ..
+                }
+            )
+        })
+        .count();
+
+    assert_eq!(yield_count, 3);
+}
+
+#[test]
+fn create_async_generator_instruction_retains_operands() {
+    let instruction = Ir3Instruction::CreateAsyncGenerator {
+        dst: 7,
+        function_index: 11,
+        capture_count: 3,
+    };
+
+    match instruction {
+        Ir3Instruction::CreateAsyncGenerator {
+            dst,
+            function_index,
+            capture_count,
+        } => {
+            assert_eq!(dst, 7);
+            assert_eq!(function_index, 11);
+            assert_eq!(capture_count, 3);
+        }
+        other => panic!("expected CreateAsyncGenerator, got {other:?}"),
+    }
+}
+
+#[test]
+fn async_generator_call_instruction_shape_is_public() {
+    let call = Ir3Instruction::Call {
+        callee: 0,
+        args: RegRange {
+            start: 10,
+            count: 0,
+        },
+        dst: 1,
+    };
+
+    match call {
+        Ir3Instruction::Call { callee, args, dst } => {
+            assert_eq!(callee, 0);
+            assert_eq!(args.start, 10);
+            assert_eq!(args.count, 0);
+            assert_eq!(dst, 1);
+        }
+        other => panic!("expected Call instruction, got {other:?}"),
+    }
+}
+
+#[test]
+fn async_generator_function_value_has_function_shape() {
+    let value = Value::AsyncGeneratorFunction(5);
+
+    assert_eq!(value.type_name(), "function");
+    assert_eq!(value.typeof_name(), "function");
+    assert!(value.is_truthy());
+    assert!(!value.is_nullish());
+    assert_eq!(value.to_string(), "[asyncgeneratorfunction#5]");
+}
+
+#[test]
+fn async_generator_object_value_has_object_shape() {
+    let value = Value::AsyncGeneratorObject(9);
+
+    assert_eq!(value.type_name(), "object");
+    assert_eq!(value.typeof_name(), "object");
+    assert!(value.is_truthy());
+    assert!(!value.is_nullish());
+    assert_eq!(value.to_string(), "[asyncgeneratorobject#9]");
 }

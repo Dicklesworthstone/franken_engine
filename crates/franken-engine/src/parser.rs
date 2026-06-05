@@ -8718,7 +8718,11 @@ fn parse_return_statement(
     let argument = if body.is_empty() {
         None
     } else {
-        Some(parse_expression(body, &span, context, 1)?)
+        // ES2020 §14.10: ReturnStatement argument is an Expression, which
+        // includes the comma/sequence operator (`return a, b, c` yields `c`).
+        // Use the sequence-aware parser so it doesn't fall to Expression::Raw
+        // (bd-h5m8u; mirrors bd-qxkli/bd-j4l7k).
+        Some(parse_expression_allowing_sequence(body, &span, context)?)
     };
     Ok(Statement::Return(ReturnStatement { argument, span }))
 }
@@ -8738,7 +8742,10 @@ fn parse_throw_statement(
             Some(span),
         ));
     }
-    let argument = parse_expression(body, &span, context, 1)?;
+    // ES2020 §14.14: ThrowStatement argument is an Expression (sequence
+    // operator included), so `throw a, b, c` throws `c` rather than falling to
+    // Expression::Raw (bd-h5m8u).
+    let argument = parse_expression_allowing_sequence(body, &span, context)?;
     Ok(Statement::Throw(ThrowStatement { argument, span }))
 }
 

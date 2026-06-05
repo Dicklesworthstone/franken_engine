@@ -2832,7 +2832,16 @@ fn split_statement_segments(line: &str) -> Vec<(usize, usize, &str)> {
                     // the closing brace and the labelled body greedily absorbs
                     // `rest` (bd-t7txt / bd-bg9l1.27.4).
                     let seg_body = strip_leading_labels(seg);
-                    let starts_with_block = starts_with_keyword(seg_body, "function")
+                    let starts_with_block = seg_body.starts_with('{')
+                        // A bare or labelled BLOCK statement (`{..}` / `outer:
+                        // {..}`) is block-terminated too; without this the closing
+                        // brace doesn't split it and a following statement is
+                        // greedily absorbed into the (labelled) body, which then
+                        // falls through to `Expression::Raw` (bd-rj2yz). At
+                        // statement position a leading `{` is always a block —
+                        // object literals in expression position carry a non-`{`
+                        // prefix (`(`, `let x =`, `return`, …) and are unaffected.
+                        || starts_with_keyword(seg_body, "function")
                         // `async function f(){…}` is a block-terminated declaration
                         // too; without this the closing brace doesn't split it and
                         // the following statement is swallowed/dropped (bd-ws5wz).

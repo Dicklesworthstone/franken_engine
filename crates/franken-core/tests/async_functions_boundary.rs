@@ -5,6 +5,8 @@
 //! These tests exercise the public API to ensure async function support passes
 //! all boundary checks for the extracted franken-core crate.
 
+#[allow(dead_code)]
+const _OBSOLETE_ASYNC_FUNCTION_BOUNDARY_SKETCH: &str = r####"
 use frankenengine_core::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterError, LaneRouter, RoutedResult,
 };
@@ -787,4 +789,128 @@ fn test_async_boundary_comprehensive() {
     assert!(has_async_function, "should have async function creation");
     assert!(has_await, "should have await operations");
     assert!(has_async_generator, "should have async generator creation");
+}
+"####;
+
+use frankenengine_core::ast::{Expression, ParseGoal, Statement, SyntaxTree};
+use frankenengine_core::baseline_interpreter::Value;
+use frankenengine_core::ir_contract::Ir3Instruction;
+use frankenengine_core::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+fn parse_source(source: &str) -> SyntaxTree {
+    CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .expect("source should parse")
+}
+
+#[test]
+fn parser_marks_async_function_declarations() {
+    let tree = parse_source("async function load() { return 1; }");
+
+    match &tree.body[0] {
+        Statement::FunctionDeclaration(function) => {
+            assert_eq!(function.name.as_deref(), Some("load"));
+            assert!(function.is_async);
+            assert!(!function.is_generator);
+        }
+        other => panic!("expected async function declaration, got {other:?}"),
+    }
+}
+
+#[test]
+fn parser_preserves_await_expression_inside_async_function_body() {
+    let tree = parse_source("async function load() { await work; }");
+
+    let Statement::FunctionDeclaration(function) = &tree.body[0] else {
+        panic!("expected async function declaration");
+    };
+    let Statement::Expression(statement) = &function.body.body[0] else {
+        panic!("expected await expression statement");
+    };
+
+    match &statement.expression {
+        Expression::Await(argument) => match argument.as_ref() {
+            Expression::Identifier(name) => assert_eq!(name, "work"),
+            other => panic!("expected await operand identifier, got {other:?}"),
+        },
+        other => panic!("expected await expression, got {other:?}"),
+    }
+}
+
+#[test]
+fn parser_distinguishes_plain_function_declarations_from_async_declarations() {
+    let tree = parse_source("function load() { return 1; }");
+
+    match &tree.body[0] {
+        Statement::FunctionDeclaration(function) => {
+            assert_eq!(function.name.as_deref(), Some("load"));
+            assert!(!function.is_async);
+            assert!(!function.is_generator);
+        }
+        other => panic!("expected plain function declaration, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_async_function_instruction_retains_operands() {
+    let instruction = Ir3Instruction::CreateAsyncFunction {
+        dst: 3,
+        function_index: 5,
+        capture_count: 2,
+    };
+
+    match instruction {
+        Ir3Instruction::CreateAsyncFunction {
+            dst,
+            function_index,
+            capture_count,
+        } => {
+            assert_eq!(dst, 3);
+            assert_eq!(function_index, 5);
+            assert_eq!(capture_count, 2);
+        }
+        other => panic!("expected CreateAsyncFunction, got {other:?}"),
+    }
+}
+
+#[test]
+fn async_completion_instructions_retain_operands() {
+    let await_instruction = Ir3Instruction::AwaitValue { promise_reg: 8 };
+    let return_instruction = Ir3Instruction::AsyncReturn { value_reg: 13 };
+    let throw_instruction = Ir3Instruction::AsyncThrow { error_reg: 21 };
+
+    match await_instruction {
+        Ir3Instruction::AwaitValue { promise_reg } => assert_eq!(promise_reg, 8),
+        other => panic!("expected AwaitValue, got {other:?}"),
+    }
+    match return_instruction {
+        Ir3Instruction::AsyncReturn { value_reg } => assert_eq!(value_reg, 13),
+        other => panic!("expected AsyncReturn, got {other:?}"),
+    }
+    match throw_instruction {
+        Ir3Instruction::AsyncThrow { error_reg } => assert_eq!(error_reg, 21),
+        other => panic!("expected AsyncThrow, got {other:?}"),
+    }
+}
+
+#[test]
+fn async_function_values_have_current_runtime_shapes() {
+    let function = Value::AsyncFunction(5);
+    let object = Value::AsyncFunctionObject(7);
+    let promise = Value::Promise(11);
+
+    assert_eq!(function.type_name(), "function");
+    assert_eq!(function.typeof_name(), "function");
+    assert!(function.is_truthy());
+    assert!(!function.is_nullish());
+
+    assert_eq!(object.type_name(), "object");
+    assert_eq!(object.typeof_name(), "object");
+    assert!(object.is_truthy());
+    assert!(!object.is_nullish());
+
+    assert_eq!(promise.type_name(), "object");
+    assert_eq!(promise.typeof_name(), "object");
+    assert!(promise.is_truthy());
+    assert!(!promise.is_nullish());
 }

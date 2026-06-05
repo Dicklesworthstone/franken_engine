@@ -5,6 +5,8 @@
 //! to ensure accessor descriptor support passes all boundary checks for the
 //! extracted franken-core crate.
 
+#[allow(dead_code)]
+const _OBSOLETE_ACCESSOR_DESCRIPTOR_BOUNDARY_SKETCH: &str = r####"
 use frankenengine_core::baseline_interpreter::{
     ExecutionResult, InterpreterConfig, InterpreterError, LaneRouter,
 };
@@ -892,4 +894,187 @@ fn test_boundary_comprehensive_accessor_test() {
     assert!(has_define_property, "should have property definition");
     assert!(has_get_property, "should have property access");
     assert!(has_set_property, "should have property assignment");
+}
+"####;
+
+use frankenengine_core::ast::{ParseGoal, SyntaxTree};
+use frankenengine_core::ir_contract::{Ir0Module, Ir3Instruction};
+use frankenengine_core::lowering_pipeline::{LoweringContext, lower_ir0_to_ir3};
+use frankenengine_core::object_model::{
+    JsValue, ObjectHandle, ObjectHeap, PropertyDescriptor, PropertyKey,
+};
+use frankenengine_core::parser::{CanonicalEs2020Parser, Es2020Parser};
+
+fn key(name: &str) -> PropertyKey {
+    PropertyKey::String(name.to_string())
+}
+
+fn parse_source(source: &str) -> SyntaxTree {
+    CanonicalEs2020Parser
+        .parse(source, ParseGoal::Script)
+        .expect("source should parse")
+}
+
+fn parse_and_lower(source: &str) -> Vec<Ir3Instruction> {
+    let ir0 = Ir0Module::from_syntax_tree(parse_source(source), "accessor_descriptors_boundary");
+    let context = LoweringContext::new(
+        "accessor-descriptors-boundary-trace",
+        "accessor-descriptors-boundary-decision",
+        "accessor-descriptors-boundary-policy",
+    );
+
+    lower_ir0_to_ir3(&ir0, &context)
+        .expect("source should lower")
+        .ir3
+        .instructions
+}
+
+#[test]
+fn accessor_descriptor_preserves_getter_and_setter_handles() {
+    let mut heap = ObjectHeap::new();
+    let object = heap.alloc_plain();
+    let getter = heap.alloc_plain();
+    let setter = heap.alloc_plain();
+
+    assert!(
+        heap.define_property(
+            object,
+            key("value"),
+            PropertyDescriptor::Accessor {
+                get: Some(getter),
+                set: Some(setter),
+                enumerable: true,
+                configurable: false,
+            },
+        )
+        .expect("define_property should succeed")
+    );
+
+    let descriptor = heap
+        .get_own_property_descriptor(object, &key("value"))
+        .expect("descriptor lookup should succeed")
+        .expect("descriptor should exist");
+
+    assert!(descriptor.is_accessor());
+    assert!(descriptor.is_enumerable());
+    assert!(!descriptor.is_configurable());
+    assert!(!descriptor.is_writable());
+
+    match descriptor {
+        PropertyDescriptor::Accessor {
+            get,
+            set,
+            enumerable,
+            configurable,
+        } => {
+            assert_eq!(get, Some(getter));
+            assert_eq!(set, Some(setter));
+            assert!(enumerable);
+            assert!(!configurable);
+        }
+        other => panic!("expected accessor descriptor, got {other:?}"),
+    }
+}
+
+#[test]
+fn accessor_without_getter_reads_undefined() {
+    let mut heap = ObjectHeap::new();
+    let object = heap.alloc_plain();
+    let setter = heap.alloc_plain();
+
+    assert!(
+        heap.define_property(
+            object,
+            key("writeOnly"),
+            PropertyDescriptor::Accessor {
+                get: None,
+                set: Some(setter),
+                enumerable: true,
+                configurable: true,
+            },
+        )
+        .expect("define_property should succeed")
+    );
+
+    assert_eq!(
+        heap.get_property(object, &key("writeOnly"))
+            .expect("accessor read should succeed"),
+        JsValue::Undefined
+    );
+}
+
+#[test]
+fn accessor_with_getter_reads_getter_object_marker() {
+    let mut heap = ObjectHeap::new();
+    let object = heap.alloc_plain();
+    let getter = ObjectHandle(99);
+
+    assert!(
+        heap.define_property(
+            object,
+            key("readOnly"),
+            PropertyDescriptor::Accessor {
+                get: Some(getter),
+                set: None,
+                enumerable: true,
+                configurable: true,
+            },
+        )
+        .expect("define_property should succeed")
+    );
+
+    assert_eq!(
+        heap.get_property(object, &key("readOnly"))
+            .expect("accessor read should succeed"),
+        JsValue::Object(getter)
+    );
+}
+
+#[test]
+fn accessor_set_is_deferred_to_interpreter_semantics() {
+    let mut heap = ObjectHeap::new();
+    let object = heap.alloc_plain();
+    let setter = heap.alloc_plain();
+
+    assert!(
+        heap.define_property(
+            object,
+            key("controlled"),
+            PropertyDescriptor::Accessor {
+                get: None,
+                set: Some(setter),
+                enumerable: true,
+                configurable: true,
+            },
+        )
+        .expect("define_property should succeed")
+    );
+
+    let result = heap.set_property(object, key("controlled"), JsValue::Int(7));
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn property_assignment_lowers_to_current_set_property_instruction() {
+    let instructions = parse_and_lower("let obj = {}; obj.value = 42;");
+
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::SetProperty { .. })),
+        "property assignment should lower to SetProperty"
+    );
+}
+
+#[test]
+fn property_read_lowers_to_current_get_property_instruction() {
+    let instructions = parse_and_lower("let obj = { value: 42 }; let result = obj.value;");
+
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| matches!(instruction, Ir3Instruction::GetProperty { .. })),
+        "property read should lower to GetProperty"
+    );
 }

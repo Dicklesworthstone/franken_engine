@@ -9081,6 +9081,52 @@ fn lower_expression_to_ir1(
                 });
                 return Ok(());
             }
+            // Spread in `new` arguments (bd-8xxcl): `new F(...xs)` must expand the
+            // spread across the constructor's parameters. The plain `Construct`
+            // path below lowers each argument positionally, and a `SpreadElement`
+            // at expression level evaluates only to the inner value (no expansion)
+            // — so `new F(...xs)` would pass the array as a single argument.
+            // Mirror the call-spread desugar (bd-hsv77): build the argument array
+            // (the `ArrayLiteral` lowering expands `SpreadElement` via
+            // `ArrayPush`/`SpreadIntoArray`) and dispatch through
+            // `builtin:ReflectConstruct(target, argumentsList)`, whose handler
+            // unpacks the array into `invoke_inline_construct` with the same
+            // new-object/this-binding semantics as `Construct`. Placed AFTER the
+            // builtin-constructor capability checks above so `new Map(...xs)` /
+            // `new Error(...xs)` etc. keep their existing (non-expanding) behavior:
+            // those globals have no Function/Closure binding and would not satisfy
+            // ReflectConstruct's target check anyway.
+            if arguments
+                .iter()
+                .any(|arg| matches!(arg, Expression::SpreadElement(_)))
+            {
+                // ReflectConstruct reads [target, argumentsList].
+                lower_expression_to_ir1(
+                    callee,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                let args_array =
+                    Expression::ArrayLiteral(arguments.iter().cloned().map(Some).collect());
+                lower_expression_to_ir1(
+                    &args_array,
+                    ops,
+                    bindings,
+                    binding_lookup,
+                    binding_index,
+                    root_scope_id,
+                    label_counter,
+                )?;
+                ops.push(Ir1Op::HostCall {
+                    capability: "builtin:ReflectConstruct".to_string(),
+                    arg_count: 2,
+                });
+                return Ok(());
+            }
             lower_expression_to_ir1(
                 callee,
                 ops,

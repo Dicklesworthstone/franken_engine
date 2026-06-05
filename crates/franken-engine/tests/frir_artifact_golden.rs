@@ -1,8 +1,5 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
-use std::path::PathBuf;
-
 use frankenengine_engine::frir_schema::{
     AssumptionRef, ChainVerification, EffectAnnotation, EquivalenceKind, EquivalenceWitness,
     FRIR_SCHEMA_VERSION, FrirArtifact, FrirLoweringPipeline, FrirPipelineEvent, InvariantCheck,
@@ -11,14 +8,7 @@ use frankenengine_engine::frir_schema::{
 use frankenengine_engine::hash_tiers::ContentHash;
 use frankenengine_engine::ir_contract::EffectBoundary;
 use serde::Serialize;
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
-
-// bd-ub6x8.6.3: migrated from tests/golden_vectors/ to tests/golden/wire_vectors/.
-const GOLDEN_FILE: &str = "tests/golden/wire_vectors/frir_artifact_v1.json";
+use std::collections::BTreeSet;
 
 #[derive(Debug, Serialize)]
 struct FrirArtifactGoldenSnapshot {
@@ -28,13 +18,6 @@ struct FrirArtifactGoldenSnapshot {
     chain_verification: ChainVerification,
     artifact: FrirArtifact,
 }
-
-fn golden_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_FILE)
-}
-
-// Inline assert_golden + summarize_golden_diff replaced by the shared
-// GoldenDiag helper (bd-ub6x8.3).
 
 fn hash(bytes: &[u8]) -> ContentHash {
     ContentHash::compute(bytes)
@@ -181,10 +164,5 @@ fn frir_artifact_snapshot() -> FrirArtifactGoldenSnapshot {
 fn frir_artifact_json_matches_golden() {
     let snapshot = frir_artifact_snapshot();
     let actual = format!("{}\n", serde_json::to_string_pretty(&snapshot).unwrap());
-    let path = golden_path();
-    golden_diag::GoldenDiag {
-        framework_name: "FRIR artifact golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(&actual, &path, "frir_artifact_json_matches_golden", None);
+    insta::assert_snapshot!("frir_artifact_json_matches_golden", actual);
 }

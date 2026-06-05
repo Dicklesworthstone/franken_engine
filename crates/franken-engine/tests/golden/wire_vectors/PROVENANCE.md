@@ -31,13 +31,18 @@ crate-test root.
 
 ## Fixtures
 
-### `frir_artifact_v1.json`
+### `frir_artifact_golden__frir_artifact_json_matches_golden.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21.3)*
 
-- **Owning test:** `tests/frir_artifact_golden.rs` (delegates to
-  `tests/golden_diag.rs::GoldenDiag` after bd-ub6x8.3.1).
+- **Owning test:** `tests/frir_artifact_golden.rs`. Migrated from
+  `golden_diag::GoldenDiag` to `insta::assert_snapshot!` in bd-ub6x8.21
+  child bead `bd-ub6x8.21.3`. The load-bearing fixture now lives at
+  `tests/snapshots/frir_artifact_golden__frir_artifact_json_matches_golden.snap`.
 - **Subject under test:** FRIR replay-artifact wire format v1.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test frir_artifact_golden`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test frir_artifact_golden`,
+  followed by `cargo insta review` for interactive blessing. The legacy
+  `tests/golden/wire_vectors/frir_artifact_v1.json` file is retained for audit
+  history until an explicit deletion/move approval is given.
 
 ### `optimal_stopping_certificate_v1.json`
 

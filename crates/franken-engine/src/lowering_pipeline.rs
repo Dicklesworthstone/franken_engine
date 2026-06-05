@@ -9884,6 +9884,13 @@ fn object_json_builtin_call_capability(
         ("Array", "from") => Some("builtin:ArrayFrom"),
         ("Array", "of") => Some("builtin:ArrayOf"),
         ("String", "fromCharCode") => Some("builtin:StringFromCharCode"),
+        // `String.raw` (bd-bl591): used almost exclusively as a template tag
+        // (`String.raw`x${y}z``). The tagged-template desugar (parser.rs) rewrites
+        // that into `String.raw(<strings-with-.raw>, ...substitutions)`, a normal
+        // `Expression::Call` whose callee is `String.raw` — so this slot-0
+        // interception fires for both the tag form and direct calls. The `String`
+        // global has no eval-scope binding, same as `fromCharCode`. Shadowing-safe.
+        ("String", "raw") => Some("builtin:StringRaw"),
         // Symbol global registry (bd-hitj1): Symbol.for(key)/Symbol.keyFor(sym).
         ("Symbol", "for") => Some("builtin:SymbolFor"),
         ("Symbol", "keyFor") => Some("builtin:SymbolKeyFor"),

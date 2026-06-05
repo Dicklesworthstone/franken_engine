@@ -19704,6 +19704,49 @@ impl InterpreterCore {
                 Ok(Value::str(result))
             }
 
+            "builtin:StringRaw" => {
+                // String.raw(template, ...substitutions) (bd-bl591, ES2015 §21.1.2.4).
+                // `template` is the cooked-strings object carrying a `.raw` array
+                // (the tagged-template desugar in parser.rs attaches it; a direct
+                // call passes any object with a `.raw` array-like). The result
+                // interleaves raw[i] with String(substitutions[i]) and ends with the
+                // final raw segment: raw[0] sub[0] raw[1] sub[1] ... raw[n-1].
+                if args.count == 0 {
+                    return Ok(Value::str(String::new()));
+                }
+                let template = self.read_reg(args.start)?;
+                let raw_id = match template {
+                    Value::Object(obj_id) => {
+                        match self
+                            .heap
+                            .get(obj_id.0 as usize)
+                            .and_then(|obj| obj.properties.get("raw").cloned())
+                        {
+                            Some(Value::Object(raw_id)) => raw_id,
+                            // No usable `.raw` array → spec coerces ToObject/ToLength
+                            // of `undefined.length` to 0, yielding the empty string.
+                            _ => return Ok(Value::str(String::new())),
+                        }
+                    }
+                    _ => return Ok(Value::str(String::new())),
+                };
+                let raw_len = self.array_like_length(raw_id)?;
+                let mut result = String::new();
+                for i in 0..raw_len {
+                    let segment = self
+                        .array_index_value(raw_id, i)?
+                        .unwrap_or(Value::Undefined);
+                    result.push_str(&self.value_to_string(&segment));
+                    // A substitution sits between consecutive raw segments only.
+                    // Substitutions live in slots args.start+1.. (slot 0 is template).
+                    if i + 1 < raw_len && (i as u32) + 1 < args.count {
+                        let sub = self.read_reg(args.start + 1 + i as u32)?;
+                        result.push_str(&self.value_to_string(&sub));
+                    }
+                }
+                Ok(Value::str(result))
+            }
+
             "builtin:ObjectGetOwnPropertyNames" => {
                 // Object.getOwnPropertyNames(obj) implementation
                 if args.count == 0 {

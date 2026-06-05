@@ -44,13 +44,18 @@ crate-test root.
   `tests/golden/wire_vectors/frir_artifact_v1.json` file is retained for audit
   history until an explicit deletion/move approval is given.
 
-### `optimal_stopping_certificate_v1.json`
+### `optimal_stopping_certificate_golden__optimal_stopping_certificate_json_matches_golden.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21.4)*
 
-- **Owning test:** `tests/optimal_stopping_certificate_golden.rs`
-  (delegates to `GoldenDiag` after bd-ub6x8.3.1).
+- **Owning test:** `tests/optimal_stopping_certificate_golden.rs`. Migrated
+  from `golden_diag::GoldenDiag` to `insta::assert_snapshot!` in bd-ub6x8.21
+  child bead `bd-ub6x8.21.4`. The load-bearing fixture now lives at
+  `tests/snapshots/optimal_stopping_certificate_golden__optimal_stopping_certificate_json_matches_golden.snap`.
 - **Subject under test:** optimal-stopping certificate wire format v1.
 - **Regen:**
-  `UPDATE_GOLDENS=1 cargo test -p frankenengine-engine --test optimal_stopping_certificate_golden`
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test optimal_stopping_certificate_golden`,
+  followed by `cargo insta review` for interactive blessing. The legacy
+  `tests/golden/wire_vectors/optimal_stopping_certificate_v1.json` file is
+  retained for audit history until an explicit deletion/move approval is given.
 
 ### `baseline_dispatch_arms.txt`, `baseline_malformed_dispatch_fail_closed.json`
 

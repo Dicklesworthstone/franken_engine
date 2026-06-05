@@ -3,41 +3,16 @@
 //! Golden artifact tests for ProofManifest deterministic serialization.
 //!
 //! Tests that ProofManifest structures serialize to canonical JSON and
-//! survive round-trip serialization without data loss. The expected JSON
-//! lives in `tests/golden/proof_manifest_v1.json` and is regenerated via
-//! `UPDATE_GOLDENS=1` (bd-ub6x8.5) — no more hand-editing a multi-line
-//! `concat!()` literal in this file.
+//! survive round-trip serialization without data loss. The canonical expected
+//! JSON now lives in insta snapshots under `tests/snapshots/` (bd-drdxa).
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-
-// golden_diag lives under tests/_support/ (bd-ub6x8.18); pulled in via #[path]
-// so cargo does not compile it as a standalone integration-test binary.
-#[path = "_support/golden_diag.rs"]
-mod golden_diag;
 
 use chrono::{TimeZone, Utc};
 use frankenengine_engine::proof_artifact::{
     PROOF_MANIFEST_SCHEMA_VERSION, ProofArtifactPaths, ProofArtifactRef, ProofCommand,
     ProofFreshness, ProofManifest, ProofRunStatus, ProofVerifierOutput,
 };
-
-const GOLDEN_RELATIVE_PATH: &str = "tests/golden/proof_manifest_v1.json";
-
-fn golden_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join(GOLDEN_RELATIVE_PATH)
-}
-
-/// Compare `actual` against the on-disk golden fixture via the shared
-/// `golden_diag::GoldenDiag` helper, honoring the project-wide
-/// `UPDATE_GOLDENS=1` regen convention (see `tests/golden/PROVENANCE.md`).
-fn assert_matches_golden(actual: &str, test_name: &str) {
-    golden_diag::GoldenDiag {
-        framework_name: "ProofManifest canonical JSON golden",
-        regen_env_var: "UPDATE_GOLDENS",
-    }
-    .assert_golden_match(actual, &golden_path(), test_name, None);
-}
 
 #[test]
 fn test_proof_manifest_deterministic_round_trip() {
@@ -81,7 +56,7 @@ fn test_proof_manifest_deterministic_serialization() {
         );
     }
 
-    assert_matches_golden(&json1, "test_proof_manifest_deterministic_serialization");
+    insta::assert_snapshot!("test_proof_manifest_deterministic_serialization", json1);
 
     println!("[proof-manifest-golden] deterministic serialization matches the golden fixture");
 }
@@ -112,9 +87,9 @@ fn test_proof_manifest_no_host_specific_tokens_in_serialization() {
         );
     }
 
-    assert_matches_golden(
-        reference_json,
+    insta::assert_snapshot!(
         "test_proof_manifest_no_host_specific_tokens_in_serialization",
+        reference_json
     );
     assert!(!reference_json.contains("windows"));
     assert!(!reference_json.contains("linux"));
@@ -196,7 +171,5 @@ fn create_test_proof_manifest() -> ProofManifest {
     }
 }
 
-// `expected_manifest_json()` removed: the canonical expected JSON now
-// lives at `tests/golden/proof_manifest_v1.json`. `assert_matches_golden`
-// reads it from disk and supports the project-wide `UPDATE_GOLDENS=1`
-// regen flow (bd-ub6x8.5).
+// `expected_manifest_json()` removed: the canonical expected JSON now lives in
+// insta snapshots generated from the production serializer (bd-drdxa).

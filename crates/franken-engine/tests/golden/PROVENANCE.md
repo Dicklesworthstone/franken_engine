@@ -230,6 +230,20 @@ mismatch artifacts) but tracks every `*.golden`, `*.json`, `*.txt`, and
   followed by `cargo insta review` for interactive blessing. The legacy
   `UPDATE_GOLDENS=1` regen flow no longer applies to this suite.
 
+### `proof_manifest_golden_artifacts__{test_proof_manifest_deterministic_serialization,test_proof_manifest_no_host_specific_tokens_in_serialization}.snap` *(moved to `tests/snapshots/` — bd-drdxa)*
+
+- **Owning test:** `tests/proof_manifest_golden_artifacts.rs`. Migrated from
+  the shared `golden_diag::GoldenDiag` helper to `insta::assert_snapshot!` in
+  bd-ub6x8.21 sub-bead `bd-drdxa`, correcting the earlier closeout that
+  accidentally documented the decode-golden suite instead.
+- **Subject under test:** canonical `ProofManifest` JSON serialization for the
+  deterministic proof-artifact manifest used by gate bundles.
+- **Regen:**
+  `INSTA_UPDATE=always cargo test -p frankenengine-engine --test proof_manifest_golden_artifacts`,
+  followed by `cargo insta review` for interactive blessing. The legacy
+  proof-manifest JSON fixture is retained for audit history until an explicit
+  deletion/move approval is given.
+
 ### `policy_bundle_golden_artifacts__{policy_bundle_default,policy_bundle_minimal,policy_bundle_comprehensive}.snap` *(moved to `tests/snapshots/` — bd-ub6x8.21.1)*
 
 - **Owning test:** `tests/policy_bundle_golden_artifacts.rs`. Migrated from

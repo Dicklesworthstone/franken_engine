@@ -22,9 +22,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::ir_contract::{Ir1Op, Ir2Op, Ir3Instruction};
 use crate::policy_theorem_engine::{
-    invoke_z3, write_proof_bundle, EmittedProofBundle, ProofBundleBody, Z3Outcome,
+    EmittedProofBundle, ProofBundleBody, Z3Outcome, invoke_z3, write_proof_bundle,
 };
 
 /// Types of optimization passes supported by proof carriers.
@@ -174,6 +173,35 @@ pub struct ProofObligation {
     pub conclusion: String,
     pub proof_sketch: String,
     pub verification_method: VerificationMethod,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sample_inputs: Vec<OptimizationSampleInput>,
+}
+
+/// Concrete input environment for runner-backed optimization verification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct OptimizationSampleInput {
+    pub bindings: BTreeMap<String, i64>,
+}
+
+impl OptimizationSampleInput {
+    pub fn empty() -> Self {
+        Self {
+            bindings: BTreeMap::new(),
+        }
+    }
+
+    pub fn from_bindings<I, K>(bindings: I) -> Self
+    where
+        I: IntoIterator<Item = (K, i64)>,
+        K: Into<String>,
+    {
+        Self {
+            bindings: bindings
+                .into_iter()
+                .map(|(name, value)| (name.into(), value))
+                .collect(),
+        }
+    }
 }
 
 /// Types of proof obligations for optimizations.
@@ -356,6 +384,7 @@ impl OptimizationProofCarrier {
                 "transformation invariants"
             ),
             verification_method: VerificationMethod::FormalLogic,
+            sample_inputs: Vec::new(),
         });
 
         // Termination preservation obligation
@@ -366,6 +395,7 @@ impl OptimizationProofCarrier {
             conclusion: "Target program terminates".to_string(),
             proof_sketch: "Termination measure preserved by optimization".to_string(),
             verification_method: VerificationMethod::TheoremProving,
+            sample_inputs: Vec::new(),
         });
 
         // Pass-specific obligations
@@ -378,6 +408,7 @@ impl OptimizationProofCarrier {
                     conclusion: "Dead code has no observable effects".to_string(),
                     proof_sketch: "Reachability analysis + effect analysis".to_string(),
                     verification_method: VerificationMethod::ModelChecking,
+                    sample_inputs: vec![OptimizationSampleInput::empty()],
                 });
             }
             OptimizationPass::ConstantFolding | OptimizationPass::ConstantPropagation => {
@@ -388,6 +419,7 @@ impl OptimizationProofCarrier {
                     conclusion: "Computed values equal runtime values".to_string(),
                     proof_sketch: "Arithmetic correctness + range analysis".to_string(),
                     verification_method: VerificationMethod::SymbolicExecution,
+                    sample_inputs: vec![OptimizationSampleInput::empty()],
                 });
             }
             OptimizationPass::LoopUnrolling | OptimizationPass::LoopInvariantHoisting => {
@@ -399,6 +431,7 @@ impl OptimizationProofCarrier {
                     proof_sketch: "Loop invariant preservation + iteration count equivalence"
                         .to_string(),
                     verification_method: VerificationMethod::PropertyTesting,
+                    sample_inputs: vec![OptimizationSampleInput::empty()],
                 });
             }
             OptimizationPass::InlineExpansion => {
@@ -409,6 +442,7 @@ impl OptimizationProofCarrier {
                     conclusion: "Inline expansion preserves call semantics".to_string(),
                     proof_sketch: "Parameter substitution + scope analysis".to_string(),
                     verification_method: VerificationMethod::FormalLogic,
+                    sample_inputs: Vec::new(),
                 });
             }
             _ => {} // Other passes use default obligations
@@ -555,10 +589,11 @@ impl OptimizationProofCarrier {
     ///   premises, so they fail closed; that's the correct signal that
     ///   FE-CLAIM-019 / FE-CLAIM-020 stay `hypothesis` in the matrix until
     ///   the obligation generators are extended to emit SMT-LIB formulas.
-    /// - `DifferentialTesting` / `PropertyTesting` are NOT yet wired to real
-    ///   machinery (no diff-oracle runner; no proptest fixtures). Returning
-    ///   `Verified` here would be the same fabrication this bead is closing;
-    ///   they fail-close to `Failed` until the runners exist.
+    /// - `DifferentialTesting` / `PropertyTesting` route through a bounded
+    ///   deterministic sample runner. The runner executes `source_ir` and
+    ///   `target_ir` under every explicit sample input attached to the
+    ///   obligation and accepts only byte-identical integer return values.
+    ///   Missing samples or unsupported syntax fail closed.
     /// - Any obligation with an empty `premise` or `conclusion` is rejected:
     ///   there's no formula to verify.
     ///
@@ -576,13 +611,11 @@ impl OptimizationProofCarrier {
                 Ok(verify_via_z3(&obligation.premise, &obligation.conclusion))
             }
             VerificationMethod::PropertyTesting | VerificationMethod::DifferentialTesting => {
-                // The bead acknowledges these need separate runner machinery
-                // (proptest fixtures + a diff-oracle that runs both old and
-                // new optimization passes on the obligation's sample
-                // inputs). Until that lands, refuse to fabricate `Verified` —
-                // the upstream emit_proof_bundles will then correctly skip
-                // FE-CLAIM-019 / FE-CLAIM-020 (matrix stays `hypothesis`).
-                Ok(ProofResult::Failed)
+                Ok(verify_with_sample_differential_runner(
+                    &self.source_ir,
+                    &self.target_ir,
+                    &obligation.sample_inputs,
+                ))
             }
         }
     }
@@ -770,6 +803,448 @@ fn verify_via_z3(premise: &str, conclusion: &str) -> ProofResult {
 /// obligations; raise via a follow-up bead if specific optimization passes
 /// emit obligations that genuinely need longer.
 const Z3_VERIFY_TIMEOUT_SECONDS: u32 = 5;
+
+fn verify_with_sample_differential_runner(
+    source_ir: &str,
+    target_ir: &str,
+    sample_inputs: &[OptimizationSampleInput],
+) -> ProofResult {
+    if sample_inputs.is_empty() {
+        return ProofResult::Failed;
+    }
+
+    for sample in sample_inputs {
+        let source_output = match run_optimization_sample_program(source_ir, sample) {
+            Ok(output) => output,
+            Err(_) => return ProofResult::Failed,
+        };
+        let target_output = match run_optimization_sample_program(target_ir, sample) {
+            Ok(output) => output,
+            Err(_) => return ProofResult::Failed,
+        };
+        if source_output != target_output {
+            return ProofResult::Failed;
+        }
+    }
+
+    ProofResult::Verified
+}
+
+fn run_optimization_sample_program(
+    program: &str,
+    sample: &OptimizationSampleInput,
+) -> Result<i64, String> {
+    let lines = normalize_sample_program_lines(program);
+    let mut env = sample.bindings.clone();
+    let mut idx = 0usize;
+    match execute_sample_block(&lines, &mut idx, &mut env)? {
+        Some(value) => Ok(value),
+        None => Err("sample program did not return a value".to_string()),
+    }
+}
+
+fn normalize_sample_program_lines(program: &str) -> Vec<String> {
+    program
+        .lines()
+        .filter_map(|line| {
+            let without_comment = line.split_once("//").map_or(line, |(prefix, _)| prefix);
+            let trimmed = without_comment.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .collect()
+}
+
+fn execute_sample_block(
+    lines: &[String],
+    idx: &mut usize,
+    env: &mut BTreeMap<String, i64>,
+) -> Result<Option<i64>, String> {
+    while *idx < lines.len() {
+        let line = lines[*idx].trim();
+        *idx += 1;
+
+        if line == "}" {
+            return Ok(None);
+        }
+
+        if line.starts_with("if ") {
+            let condition = parse_if_condition(line)?;
+            let nested = collect_braced_sample_block(lines, idx)?;
+            if condition {
+                let mut nested_idx = 0usize;
+                if let Some(value) = execute_sample_block(&nested, &mut nested_idx, env)? {
+                    return Ok(Some(value));
+                }
+            }
+            continue;
+        }
+
+        if line.starts_with("for ") {
+            let loop_spec = parse_for_loop(line)?;
+            let nested = collect_braced_sample_block(lines, idx)?;
+            execute_sample_for_loop(&loop_spec, &nested, env)?;
+            continue;
+        }
+
+        if let Some(expr) = line
+            .strip_prefix("return ")
+            .map(|expr| expr.trim_end_matches(';').trim())
+        {
+            return Ok(Some(eval_sample_expr(expr, env)?));
+        }
+
+        execute_sample_statement(line, env)?;
+    }
+
+    Ok(None)
+}
+
+fn collect_braced_sample_block(lines: &[String], idx: &mut usize) -> Result<Vec<String>, String> {
+    let mut depth = 1usize;
+    let mut nested = Vec::new();
+
+    while *idx < lines.len() {
+        let line = lines[*idx].trim();
+        *idx += 1;
+
+        if line.ends_with('{') {
+            depth = depth.saturating_add(1);
+            nested.push(line.to_string());
+            continue;
+        }
+
+        if line == "}" {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                return Ok(nested);
+            }
+            nested.push(line.to_string());
+            continue;
+        }
+
+        nested.push(line.to_string());
+    }
+
+    Err("unterminated braced block in optimization sample program".to_string())
+}
+
+fn parse_if_condition(line: &str) -> Result<bool, String> {
+    let condition = line
+        .strip_prefix("if")
+        .and_then(|rest| rest.trim().strip_prefix('('))
+        .and_then(|rest| rest.split_once(')'))
+        .map(|(condition, _)| condition.trim())
+        .ok_or_else(|| format!("unsupported if condition syntax: {line}"))?;
+
+    match condition {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        other => Err(format!(
+            "unsupported if condition in sample runner: {other}"
+        )),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SampleForLoop {
+    variable: String,
+    start: i64,
+    end_exclusive: i64,
+    increment: i64,
+}
+
+fn parse_for_loop(line: &str) -> Result<SampleForLoop, String> {
+    let header = line
+        .strip_prefix("for")
+        .and_then(|rest| rest.trim().strip_prefix('('))
+        .and_then(|rest| rest.split_once(')'))
+        .map(|(header, _)| header.trim())
+        .ok_or_else(|| format!("unsupported for-loop syntax: {line}"))?;
+    let mut parts = header.split(';').map(str::trim);
+    let init = parts
+        .next()
+        .ok_or_else(|| format!("missing for-loop initializer: {line}"))?;
+    let condition = parts
+        .next()
+        .ok_or_else(|| format!("missing for-loop condition: {line}"))?;
+    let step = parts
+        .next()
+        .ok_or_else(|| format!("missing for-loop step: {line}"))?;
+
+    if parts.next().is_some() {
+        return Err(format!("too many for-loop header fields: {line}"));
+    }
+
+    let (variable, start_expr) = init
+        .split_once('=')
+        .ok_or_else(|| format!("unsupported for-loop initializer: {init}"))?;
+    let variable = variable.trim().to_string();
+    let start = parse_i64_literal(start_expr.trim())?;
+
+    let (condition_var, end_expr) = condition
+        .split_once('<')
+        .ok_or_else(|| format!("unsupported for-loop condition: {condition}"))?;
+    if condition_var.trim() != variable {
+        return Err(format!(
+            "for-loop condition variable {} does not match initializer {}",
+            condition_var.trim(),
+            variable
+        ));
+    }
+    let end_exclusive = parse_i64_literal(end_expr.trim())?;
+
+    let increment = if step == format!("{variable}++") {
+        1
+    } else if let Some((step_var, value)) = step.split_once("+=") {
+        if step_var.trim() != variable {
+            return Err(format!(
+                "for-loop step variable {} does not match initializer {}",
+                step_var.trim(),
+                variable
+            ));
+        }
+        parse_i64_literal(value.trim())?
+    } else {
+        return Err(format!("unsupported for-loop step: {step}"));
+    };
+
+    if increment <= 0 {
+        return Err("sample for-loop increment must be positive".to_string());
+    }
+
+    Ok(SampleForLoop {
+        variable,
+        start,
+        end_exclusive,
+        increment,
+    })
+}
+
+fn execute_sample_for_loop(
+    loop_spec: &SampleForLoop,
+    nested: &[String],
+    env: &mut BTreeMap<String, i64>,
+) -> Result<(), String> {
+    let mut value = loop_spec.start;
+    let mut iterations = 0usize;
+    while value < loop_spec.end_exclusive {
+        if iterations >= MAX_SAMPLE_LOOP_ITERATIONS {
+            return Err("sample for-loop iteration cap exceeded".to_string());
+        }
+        env.insert(loop_spec.variable.clone(), value);
+        let mut nested_idx = 0usize;
+        if execute_sample_block(nested, &mut nested_idx, env)?.is_some() {
+            return Err("return inside sample for-loop body is unsupported".to_string());
+        }
+        value = value.saturating_add(loop_spec.increment);
+        iterations = iterations.saturating_add(1);
+    }
+    Ok(())
+}
+
+const MAX_SAMPLE_LOOP_ITERATIONS: usize = 1024;
+
+fn execute_sample_statement(line: &str, env: &mut BTreeMap<String, i64>) -> Result<(), String> {
+    let statement = line.trim_end_matches(';').trim();
+    if statement.is_empty() {
+        return Ok(());
+    }
+
+    let statement = statement
+        .strip_prefix("const ")
+        .or_else(|| statement.strip_prefix("let "))
+        .or_else(|| statement.strip_prefix("var "))
+        .unwrap_or(statement);
+
+    if let Some((name, expr)) = statement.split_once("+=") {
+        let current = *env
+            .get(name.trim())
+            .ok_or_else(|| format!("unknown variable in += statement: {}", name.trim()))?;
+        let delta = eval_sample_expr(expr.trim(), env)?;
+        env.insert(name.trim().to_string(), current.saturating_add(delta));
+        return Ok(());
+    }
+
+    if let Some((name, expr)) = statement.split_once('=') {
+        let value = eval_sample_expr(expr.trim(), env)?;
+        env.insert(name.trim().to_string(), value);
+        return Ok(());
+    }
+
+    Err(format!("unsupported sample statement: {line}"))
+}
+
+fn parse_i64_literal(value: &str) -> Result<i64, String> {
+    value
+        .parse::<i64>()
+        .map_err(|err| format!("expected i64 literal `{value}`: {err}"))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SampleToken {
+    Number(i64),
+    Ident(String),
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    LParen,
+    RParen,
+}
+
+fn eval_sample_expr(expr: &str, env: &BTreeMap<String, i64>) -> Result<i64, String> {
+    let tokens = tokenize_sample_expr(expr)?;
+    let mut parser = SampleExprParser {
+        tokens: &tokens,
+        pos: 0,
+        env,
+    };
+    let value = parser.parse_expr()?;
+    if parser.pos != tokens.len() {
+        return Err(format!("trailing tokens in sample expression: {expr}"));
+    }
+    Ok(value)
+}
+
+fn tokenize_sample_expr(expr: &str) -> Result<Vec<SampleToken>, String> {
+    let chars: Vec<char> = expr.chars().collect();
+    let mut tokens = Vec::new();
+    let mut idx = 0usize;
+    while idx < chars.len() {
+        let ch = chars[idx];
+        match ch {
+            ' ' | '\t' | '\r' | '\n' => idx += 1,
+            '+' => {
+                tokens.push(SampleToken::Plus);
+                idx += 1;
+            }
+            '-' => {
+                tokens.push(SampleToken::Minus);
+                idx += 1;
+            }
+            '*' => {
+                tokens.push(SampleToken::Star);
+                idx += 1;
+            }
+            '/' => {
+                tokens.push(SampleToken::Slash);
+                idx += 1;
+            }
+            '(' => {
+                tokens.push(SampleToken::LParen);
+                idx += 1;
+            }
+            ')' => {
+                tokens.push(SampleToken::RParen);
+                idx += 1;
+            }
+            '0'..='9' => {
+                let start = idx;
+                while idx < chars.len() && chars[idx].is_ascii_digit() {
+                    idx += 1;
+                }
+                let literal: String = chars[start..idx].iter().collect();
+                tokens.push(SampleToken::Number(parse_i64_literal(&literal)?));
+            }
+            '_' | 'a'..='z' | 'A'..='Z' => {
+                let start = idx;
+                while idx < chars.len() && (chars[idx] == '_' || chars[idx].is_ascii_alphanumeric())
+                {
+                    idx += 1;
+                }
+                tokens.push(SampleToken::Ident(chars[start..idx].iter().collect()));
+            }
+            _ => {
+                return Err(format!(
+                    "unsupported character `{ch}` in sample expression `{expr}`"
+                ));
+            }
+        }
+    }
+    Ok(tokens)
+}
+
+struct SampleExprParser<'a> {
+    tokens: &'a [SampleToken],
+    pos: usize,
+    env: &'a BTreeMap<String, i64>,
+}
+
+impl SampleExprParser<'_> {
+    fn parse_expr(&mut self) -> Result<i64, String> {
+        let mut value = self.parse_term()?;
+        loop {
+            match self.peek() {
+                Some(SampleToken::Plus) => {
+                    self.pos += 1;
+                    value = value.saturating_add(self.parse_term()?);
+                }
+                Some(SampleToken::Minus) => {
+                    self.pos += 1;
+                    value = value.saturating_sub(self.parse_term()?);
+                }
+                _ => return Ok(value),
+            }
+        }
+    }
+
+    fn parse_term(&mut self) -> Result<i64, String> {
+        let mut value = self.parse_factor()?;
+        loop {
+            match self.peek() {
+                Some(SampleToken::Star) => {
+                    self.pos += 1;
+                    value = value.saturating_mul(self.parse_factor()?);
+                }
+                Some(SampleToken::Slash) => {
+                    self.pos += 1;
+                    let rhs = self.parse_factor()?;
+                    if rhs == 0 {
+                        return Err("division by zero in sample expression".to_string());
+                    }
+                    value /= rhs;
+                }
+                _ => return Ok(value),
+            }
+        }
+    }
+
+    fn parse_factor(&mut self) -> Result<i64, String> {
+        match self.next() {
+            Some(SampleToken::Number(value)) => Ok(value),
+            Some(SampleToken::Ident(name)) => self
+                .env
+                .get(&name)
+                .copied()
+                .ok_or_else(|| format!("unknown sample variable `{name}`")),
+            Some(SampleToken::Minus) => Ok(0i64.saturating_sub(self.parse_factor()?)),
+            Some(SampleToken::LParen) => {
+                let value = self.parse_expr()?;
+                match self.next() {
+                    Some(SampleToken::RParen) => Ok(value),
+                    other => Err(format!("expected `)`, got {other:?}")),
+                }
+            }
+            other => Err(format!("expected sample expression factor, got {other:?}")),
+        }
+    }
+
+    fn peek(&self) -> Option<&SampleToken> {
+        self.tokens.get(self.pos)
+    }
+
+    fn next(&mut self) -> Option<SampleToken> {
+        let token = self.tokens.get(self.pos).cloned();
+        if token.is_some() {
+            self.pos += 1;
+        }
+        token
+    }
+}
 
 impl OptimizationPass {
     /// Get the type name for the optimization pass.
@@ -1257,6 +1732,7 @@ mod tests {
                 conclusion: "".to_string(),
                 proof_sketch: "".to_string(),
                 verification_method: method.clone(),
+                sample_inputs: Vec::new(),
             };
             assert_eq!(
                 carrier.verify_proof_obligation(&obligation).unwrap(),
@@ -1281,18 +1757,84 @@ mod tests {
                 obligation_id: "runner_dependent".to_string(),
                 obligation_type: ObligationType::SemanticPreservation,
                 // Even with a real SMT tautology, these methods MUST fail
-                // closed — the bead requires real runner machinery, not Z3.
+                // closed when no sample inputs are attached — the bead requires
+                // concrete runner inputs, not Z3.
                 premise: "true".to_string(),
                 conclusion: "true".to_string(),
                 proof_sketch: "".to_string(),
                 verification_method: method.clone(),
+                sample_inputs: Vec::new(),
             };
             assert_eq!(
                 carrier.verify_proof_obligation(&obligation).unwrap(),
                 ProofResult::Failed,
-                "{method:?} must fail closed until a real runner is wired",
+                "{method:?} must fail closed without concrete samples",
             );
         }
+    }
+
+    #[test]
+    fn differential_runner_verifies_matching_sample_programs() {
+        let carrier = OptimizationProofCarrier::new(
+            "sum = 0;\nfor (i = 0; i < 4; i++) {\n  sum += i;\n}\nreturn sum;".to_string(),
+            "sum = 0;\nsum += 0;\nsum += 1;\nsum += 2;\nsum += 3;\nreturn sum;".to_string(),
+        );
+        let obligation = ProofObligation {
+            obligation_id: "loop_diff".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "source and target are in bounded sample language".to_string(),
+            conclusion: "sample outputs are equal".to_string(),
+            proof_sketch: "execute both programs over the attached samples".to_string(),
+            verification_method: VerificationMethod::DifferentialTesting,
+            sample_inputs: vec![OptimizationSampleInput::empty()],
+        };
+
+        assert_eq!(
+            carrier.verify_proof_obligation(&obligation).unwrap(),
+            ProofResult::Verified
+        );
+    }
+
+    #[test]
+    fn differential_runner_rejects_output_mismatch() {
+        let carrier =
+            OptimizationProofCarrier::new("return x + 1;".to_string(), "return x + 2;".to_string());
+        let obligation = ProofObligation {
+            obligation_id: "mismatch".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "source and target are in bounded sample language".to_string(),
+            conclusion: "sample outputs are equal".to_string(),
+            proof_sketch: "execute both programs over the attached samples".to_string(),
+            verification_method: VerificationMethod::PropertyTesting,
+            sample_inputs: vec![OptimizationSampleInput::from_bindings([("x", 41)])],
+        };
+
+        assert_eq!(
+            carrier.verify_proof_obligation(&obligation).unwrap(),
+            ProofResult::Failed
+        );
+    }
+
+    #[test]
+    fn differential_runner_rejects_unsupported_syntax() {
+        let carrier = OptimizationProofCarrier::new(
+            "function add(x, y) { return x + y; }\nreturn add(1, 2);".to_string(),
+            "return 3;".to_string(),
+        );
+        let obligation = ProofObligation {
+            obligation_id: "unsupported".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "source and target are in bounded sample language".to_string(),
+            conclusion: "sample outputs are equal".to_string(),
+            proof_sketch: "execute both programs over the attached samples".to_string(),
+            verification_method: VerificationMethod::DifferentialTesting,
+            sample_inputs: vec![OptimizationSampleInput::empty()],
+        };
+
+        assert_eq!(
+            carrier.verify_proof_obligation(&obligation).unwrap(),
+            ProofResult::Failed
+        );
     }
 
     /// Reuse the policy_theorem_engine availability probe.

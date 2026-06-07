@@ -8,10 +8,11 @@
 use std::collections::BTreeSet;
 
 use frankenengine_engine::optimization_proof_carriers::{
-    generate_optimization_test_cases, CertificateType, EquivalenceProof, EquivalenceRelation,
-    IrRegion, ObligationType, OptimizationPass, OptimizationPassApplication,
-    OptimizationProofCarrier, OptimizationVerificationStatus, PerformanceImpact, ProofMethod,
+    CertificateType, EquivalenceProof, EquivalenceRelation, IrRegion, ObligationType,
+    OptimizationPass, OptimizationPassApplication, OptimizationProofCarrier,
+    OptimizationSampleInput, OptimizationVerificationStatus, PerformanceImpact, ProofMethod,
     ProofObligation, ProofResult, TransformationRule, TransformationRuleType, VerificationMethod,
+    generate_optimization_test_cases,
 };
 
 /// Test basic optimization proof carrier creation and configuration.
@@ -226,11 +227,13 @@ fn constant_folding_and_propagation_optimization() {
     assert!(!proof.proof_obligations.is_empty());
 
     // Verify proof obligations include arithmetic correctness
-    assert!(proof
-        .proof_obligations
-        .iter()
-        .any(|po| po.obligation_id.contains("value_preservation")
-            || po.premise.contains("Constant values computed")));
+    assert!(
+        proof
+            .proof_obligations
+            .iter()
+            .any(|po| po.obligation_id.contains("value_preservation")
+                || po.premise.contains("Constant values computed"))
+    );
 }
 
 /// Test loop optimization (unrolling and invariant hoisting).
@@ -351,11 +354,13 @@ fn loop_optimization_unrolling_and_hoisting() {
     );
 
     // Verify loop-specific proof obligations
-    assert!(proof
-        .proof_obligations
-        .iter()
-        .any(|po| po.obligation_id.contains("loop_semantics")
-            || po.conclusion.contains("Loop semantics preserved")));
+    assert!(
+        proof
+            .proof_obligations
+            .iter()
+            .any(|po| po.obligation_id.contains("loop_semantics")
+                || po.conclusion.contains("Loop semantics preserved"))
+    );
 }
 
 /// Test function inlining optimization.
@@ -449,11 +454,13 @@ fn function_inlining_optimization() {
     assert_eq!(proof.proof_method, ProofMethod::ContextualEquivalence);
 
     // Verify inlining-specific proof obligations
-    assert!(proof
-        .proof_obligations
-        .iter()
-        .any(|po| po.obligation_id.contains("inlining_correctness")
-            || po.premise.contains("Function call replaced with body")));
+    assert!(
+        proof
+            .proof_obligations
+            .iter()
+            .any(|po| po.obligation_id.contains("inlining_correctness")
+                || po.premise.contains("Function call replaced with body"))
+    );
 }
 
 /// Test comprehensive optimization verification workflow.
@@ -833,9 +840,11 @@ fn proof_certificate_generation_and_validation() {
     assert!(!performance_certs.is_empty());
 
     let performance_cert = performance_certs[0];
-    assert!(performance_cert
-        .certificate_data
-        .contains("Performance improvement"));
+    assert!(
+        performance_cert
+            .certificate_data
+            .contains("Performance improvement")
+    );
     assert!(performance_cert.certificate_data.contains("35"));
 }
 
@@ -872,6 +881,7 @@ fn fe_claim_019_020_bundle_emission_writes_canonical_bundles() {
             conclusion: "true".to_string(),
             proof_sketch: "checked by upstream verifier".to_string(),
             verification_method: VerificationMethod::FormalLogic,
+            sample_inputs: Vec::new(),
         }],
         verification_result: ProofResult::Verified,
     });
@@ -906,10 +916,12 @@ fn fe_claim_019_020_bundle_emission_writes_canonical_bundles() {
             body["theorem_ids"][0],
             "optimization-equivalence-verified-pass"
         );
-        assert!(body["content_hash"]
-            .as_str()
-            .unwrap()
-            .starts_with("sha256:"));
+        assert!(
+            body["content_hash"]
+                .as_str()
+                .unwrap()
+                .starts_with("sha256:")
+        );
     }
 }
 
@@ -1038,18 +1050,92 @@ fn integration_with_previous_validation_infrastructure() {
     let proof = &carrier.equivalence_proofs[0];
 
     assert_eq!(proof.verification_result, ProofResult::Pending);
-    assert!(carrier.applied_passes[0]
-        .preconditions
-        .iter()
-        .any(|precondition| precondition.contains("G.4")));
-    assert!(carrier.applied_passes[0]
-        .postconditions
-        .iter()
-        .any(|postcondition| postcondition.contains("G.7")));
+    assert!(
+        carrier.applied_passes[0]
+            .preconditions
+            .iter()
+            .any(|precondition| precondition.contains("G.4"))
+    );
+    assert!(
+        carrier.applied_passes[0]
+            .postconditions
+            .iter()
+            .any(|postcondition| postcondition.contains("G.7"))
+    );
 
     let verification_result = carrier.verify_all_proofs().unwrap();
     assert!(!verification_result.optimization_safety_verified);
     assert_eq!(verification_result.verified_proofs, 0);
+}
+
+#[test]
+fn runner_backed_differential_obligation_verifies_sample_equivalence() {
+    let mut carrier = OptimizationProofCarrier::new(
+        "sum = 0;\nfor (i = 0; i < 4; i++) {\n  sum += i;\n}\nreturn sum;".to_string(),
+        "sum = 0;\nsum += 0;\nsum += 1;\nsum += 2;\nsum += 3;\nreturn sum;".to_string(),
+    );
+
+    carrier.equivalence_proofs.push(EquivalenceProof {
+        proof_id: "sample_loop_unroll".to_string(),
+        proof_method: ProofMethod::ProgramLogic,
+        source_semantics: "bounded sample source".to_string(),
+        target_semantics: "bounded sample target".to_string(),
+        equivalence_relation: EquivalenceRelation::WeakEquivalence,
+        proof_obligations: vec![ProofObligation {
+            obligation_id: "sample_loop_unroll_diff".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "source and target are in the bounded sample language".to_string(),
+            conclusion: "all attached samples produce equal returns".to_string(),
+            proof_sketch: "execute source and target under the sample runner".to_string(),
+            verification_method: VerificationMethod::DifferentialTesting,
+            sample_inputs: vec![OptimizationSampleInput::empty()],
+        }],
+        verification_result: ProofResult::Pending,
+    });
+
+    let result = carrier.verify_all_proofs().unwrap();
+
+    assert_eq!(result.total_proofs, 1);
+    assert_eq!(result.verified_proofs, 1);
+    assert_eq!(result.failed_proofs, 0);
+    assert_eq!(
+        carrier.verification_status,
+        OptimizationVerificationStatus::FullyVerified
+    );
+}
+
+#[test]
+fn runner_backed_property_obligation_rejects_sample_mismatch() {
+    let mut carrier =
+        OptimizationProofCarrier::new("return x + 1;".to_string(), "return x + 2;".to_string());
+
+    carrier.equivalence_proofs.push(EquivalenceProof {
+        proof_id: "sample_mismatch".to_string(),
+        proof_method: ProofMethod::ProgramLogic,
+        source_semantics: "bounded sample source".to_string(),
+        target_semantics: "bounded sample target".to_string(),
+        equivalence_relation: EquivalenceRelation::ExactEquivalence,
+        proof_obligations: vec![ProofObligation {
+            obligation_id: "sample_mismatch_property".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "source and target are in the bounded sample language".to_string(),
+            conclusion: "all attached samples produce equal returns".to_string(),
+            proof_sketch: "execute source and target under the sample runner".to_string(),
+            verification_method: VerificationMethod::PropertyTesting,
+            sample_inputs: vec![OptimizationSampleInput::from_bindings([("x", 41)])],
+        }],
+        verification_result: ProofResult::Pending,
+    });
+
+    let result = carrier.verify_all_proofs().unwrap();
+
+    assert_eq!(result.total_proofs, 1);
+    assert_eq!(result.verified_proofs, 0);
+    assert_eq!(result.failed_proofs, 1);
+    assert_eq!(
+        carrier.verification_status,
+        OptimizationVerificationStatus::VerificationFailed
+    );
 }
 
 fn unique_bundle_dir(label: &str) -> std::path::PathBuf {

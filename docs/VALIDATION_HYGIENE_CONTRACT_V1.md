@@ -49,6 +49,52 @@ This contract also covers these recurring classes:
 7. Stale bead state where an implemented bead remains `in_progress` because the
    closeout gate is blocked by unrelated validation infrastructure.
 
+## RCH Sync Contamination Policy
+
+Machine-readable policy:
+[`docs/validation_hygiene_rch_sync_policy_v1.json`](./validation_hygiene_rch_sync_policy_v1.json).
+
+The policy decision is deliberately conservative: do not add broad `.rchignore`
+rules for untracked tests, probe files, diagnostic Rust files, `*.patch`, or
+`*.txt` scratch files. Classify them instead.
+
+The reason is upload-side visibility. In the current RCH transfer pipeline,
+source upload is a project-root `rsync` filtered by configured transfer
+excludes, runtime excludes, and project-local `.rchignore` patterns. It is not a
+Git-tracked-only sync. Therefore an untracked
+`crates/franken-engine/tests/gl_parser_gap_probe.rs` can reach the worker and be
+discovered by package/workspace validation unless a pattern hides it.
+
+Hiding it with a broad ignore is unsafe because the same naming shape can be an
+intentional new regression test for the current bead. A broad exclude such as
+`crates/franken-engine/tests/*.rs` or
+`crates/franken-engine/tests/*probe*.rs` would let a remote `cargo test` or
+`cargo check` report green against a worker tree missing the bead's intended
+test input.
+
+Retrieval is different. RCH artifact retrieval pulls declared artifact patterns,
+applies retrieval-safe excludes, excludes local source roots that are not
+artifact roots, and excludes everything else. That means retrieved artifacts may
+appear locally only when they match the declared artifact patterns for the
+command class. Source contamination risk is primarily upload-side; retrieval
+risk is accidental staging/reporting of generated artifacts, not arbitrary source
+overwrite.
+
+The recommended handling is:
+
+| Path shape | RCH upload visibility | Validation handling |
+|------------|-----------------------|---------------------|
+| `crates/*/tests/*probe*.rs` untracked | Included by default | `untracked_ephemeral_candidate`; block full-gate claims if discoverable. |
+| `crates/*/tests/*.rs` untracked without scratch heuristic | Included by default | `untracked_source_candidate`; block full-gate claims until scoped or reviewed. |
+| `*.patch` scratch file | Included by default, usually ignored by Cargo | Report for handoff/transfer context; do not stage accidentally. |
+| `*.txt` scratch note | Included by default, usually ignored by Cargo | Report for handoff/transfer context; do not stage accidentally. |
+| `target/`, `.rch-target/`, `.cargo-target/` | Excluded by default or `.rchignore` | `ignored_artifact`; safe to keep excluded. |
+| Retrieved coverage/nextest/criterion artifacts | Retrieved only by declared artifact pattern | `ignored_artifact`; cite if relevant, do not stage accidentally. |
+
+Tools consuming this policy must not rewrite the validation command to hide
+untracked files. They may suggest narrower scoped checks, but must keep the
+unverified package/workspace gate visible in closeout language.
+
 ## Classification Principles
 
 Validation-hygiene tooling must use these stable classifications.

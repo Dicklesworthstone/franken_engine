@@ -7,8 +7,9 @@ Machine-readable contract: `docs/franken_core_status_truth_gate_v1.json`
 
 ## Scope
 
-This gate keeps `crates/franken-core` status claims aligned with the real Cargo
-manifests and the graduation contract. The current truthful state is:
+This gate keeps `crates/franken-core` status claims in the root README, the
+franken-core README, status docs, and machine contracts aligned with the real
+Cargo manifests and the graduation contract. The current truthful state is:
 
 - root `Cargo.toml` includes `crates/franken-core` as a workspace member
 - root `Cargo.toml` must not exclude `crates/franken-core`
@@ -78,5 +79,5 @@ bash -n scripts/franken_core_status_truth_gate.sh
 bash -n scripts/e2e/franken_core_status_truth_gate_smoke.sh
 bash scripts/e2e/franken_core_status_truth_gate_smoke.sh check
 bash scripts/e2e/franken_core_status_truth_gate_smoke.sh negative
-git diff --check -- docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md docs/franken_core_status_truth_gate_v1.json scripts/franken_core_status_truth_gate.sh scripts/e2e/franken_core_status_truth_gate_smoke.sh
+git diff --check -- README.md docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md docs/franken_core_status_truth_gate_v1.json scripts/franken_core_status_truth_gate.sh scripts/e2e/franken_core_status_truth_gate_smoke.sh
 ```

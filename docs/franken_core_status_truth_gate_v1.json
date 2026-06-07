@@ -12,6 +12,27 @@
     "gate": "scripts/franken_core_status_truth_gate.sh",
     "smoke": "scripts/e2e/franken_core_status_truth_gate_smoke.sh"
   },
+  "default_claim_files": [
+    "Cargo.toml",
+    "README.md",
+    "crates/franken-core/README.md",
+    "docs/FRANKEN_CORE_GRADUATION_CONTRACT_V1.md",
+    "docs/franken_core_graduation_contract_v1.json",
+    "docs/FRANKEN_CORE_API_PARITY_LEDGER_V1.md",
+    "docs/franken_core_api_parity_ledger_v1.json",
+    "docs/FRANKEN_CORE_VALIDATION_IMPACT_PLANNER_V1.md",
+    "docs/franken_core_validation_impact_planner_v1.json",
+    "docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md",
+    "docs/franken_core_status_truth_gate_v1.json",
+    "docs/FRANKEN_CORE_NO_MOCK_GRADUATION_DRILL_V1.md",
+    "docs/franken_core_no_mock_graduation_drill_v1.json",
+    "docs/FRANKEN_CORE_STAGED_INCLUSION_REHEARSAL_V1.md",
+    "docs/franken_core_staged_inclusion_rehearsal_v1.json",
+    "docs/FRANKEN_CORE_GRADUATION_GOLDEN_REPORTS_V1.md",
+    "docs/franken_core_graduation_golden_reports_v1.json",
+    "docs/FRANKEN_CORE_GRADUATION_ACCEPTANCE_SUITE_V1.md",
+    "docs/franken_core_graduation_acceptance_suite_v1.json"
+  ],
   "canonical_state": {
     "root_workspace_state": "included",
     "root_cargo_exclude": null,
@@ -87,6 +108,6 @@
     "bash -n scripts/e2e/franken_core_status_truth_gate_smoke.sh",
     "bash scripts/e2e/franken_core_status_truth_gate_smoke.sh check",
     "bash scripts/e2e/franken_core_status_truth_gate_smoke.sh negative",
-    "git diff --check -- docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md docs/franken_core_status_truth_gate_v1.json scripts/franken_core_status_truth_gate.sh scripts/e2e/franken_core_status_truth_gate_smoke.sh"
+    "git diff --check -- README.md docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md docs/franken_core_status_truth_gate_v1.json scripts/franken_core_status_truth_gate.sh scripts/e2e/franken_core_status_truth_gate_smoke.sh"
   ]
 }

@@ -163,6 +163,7 @@ run_check() {
     "included" \
     "crates/franken-core is included in the root workspace as a first-class member, while its standalone manifest remains compileable. bd-cixqu.10.8 forbids reintroducing a workspace.exclude entry for crates/franken-core."
   git -C "$root_dir" diff --check -- \
+    README.md \
     docs/FRANKEN_CORE_STATUS_TRUTH_GATE_V1.md \
     docs/franken_core_status_truth_gate_v1.json \
     scripts/franken_core_status_truth_gate.sh \

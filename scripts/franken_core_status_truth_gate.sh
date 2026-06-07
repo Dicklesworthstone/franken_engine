@@ -77,6 +77,7 @@ fi
 if [[ "${#claim_files[@]}" -eq 0 ]]; then
   claim_files=(
     "${root_dir}/Cargo.toml"
+    "${root_dir}/README.md"
     "${root_dir}/crates/franken-core/README.md"
     "${root_dir}/docs/FRANKEN_CORE_GRADUATION_CONTRACT_V1.md"
     "${root_dir}/docs/franken_core_graduation_contract_v1.json"

@@ -108,7 +108,7 @@ The workspace exposes five library crates and six release binaries:
 | `frankenengine-control-plane-integration-tests` | — (library only; holds integration tests gated on `frankenengine-test-support`) |
 | `frankenengine-metamorphic` | `run_metamorphic_suite`, `run_parser_metamorphic` (library + binaries; metamorphic-relation runner) |
 
-The in-progress `franken-core` extraction crate sits under `crates/franken-core/` but is `exclude`-d from the workspace until its API boundary stabilizes (see `Cargo.toml` and the `bd-zsais` series in [`CHANGELOG.md`](./CHANGELOG.md)).
+The `franken-core` extraction crate sits under `crates/franken-core/` and is now included in the root workspace as a first-class member while its standalone manifest remains compileable. The old missing-module/reference-only state was superseded by the `bd-zsais`, `bd-dymfz`, and `bd-nwhcp` series, and `bd-cixqu.10.8` forbids reintroducing a `workspace.exclude` entry for `crates/franken-core`.
 
 ---
 
@@ -279,7 +279,7 @@ A governance overlay (capability framework, security epochs, gate modules, fleet
 
 ```
 franken_engine/
-├── Cargo.toml                       # Workspace; franken-core is excluded pending extraction
+├── Cargo.toml                       # Workspace; franken-core is included as a member
 ├── AGENTS.md                        # Hard rules for AI coding agents
 ├── CHANGELOG.md                     # Synthesized 4-month history
 ├── crates/
@@ -292,7 +292,7 @@ franken_engine/
 │   ├── franken-engine-test-support/ # Mock control-plane adapters + injection helpers
 │   ├── franken-engine-control-plane-integration-tests/ # Holds tests gated on test-support
 │   ├── franken-metamorphic/         # Metamorphic-relation runner (whitespace, roundtrip, equivalence)
-│   └── franken-core/                # In-progress extracted runtime; excluded from workspace
+│   └── franken-core/                # Extracted runtime; included in workspace and standalone compileable
 ├── docs/                            # Charters, contracts, audits, gate specs (672 top-level files + subdirs)
 ├── examples/                        # 13 impossible-by-default capabilities across 20 numbered demo dirs (01..22, gaps at 08/10) + live runtime examples
 ├── scripts/                         # 241 run_*.sh gate runners + e2e/*_replay.sh wrappers
@@ -2135,7 +2135,7 @@ For downstream consumers (e.g. `/dp/franken_node`, sibling crates, integrators) 
 - Deterministic replay and evidence retention increase storage footprint.
 - Full Node ecosystem compatibility is an active target; edge behavior differences can still appear in low-level module or process APIs. `package.json type=module` extensionless relative imports are fail-closed in `native` / `node_compat` modes; only the explicit `bun_compat` bridge enables extension probing.
 - Fleet-level immune features assume stable cryptographic identity and time synchronization across participating nodes.
-- The in-progress `franken-core` extraction crate is excluded from the workspace until its API stabilises (`bd-zsais` series).
+- `crates/franken-core` is included in the root workspace as a first-class member while its standalone manifest remains compileable. `bd-cixqu.10.8` forbids reintroducing a `workspace.exclude` entry for `crates/franken-core`; remaining workspace-wide validation debt is tracked on `bd-cixqu.10.7`.
 
 ---
 
@@ -2191,9 +2191,9 @@ Add a row to `docs/claim_to_proof_matrix_v1.json` (with `allowed_state`, `source
 
 `strict` aborts on the first divergence between the recorded trace and the live re-execution; it's what fail-closed gate verification uses. `validate` records every divergence into the replay report instead, which is the right mode for triaging a flaky test or a suspected non-determinism source. The `bd-2488a` replay-coverage metric gate uses strict mode.
 
-### 12. Why is `franken-core` excluded from the workspace?
+### 12. What changed about `franken-core` workspace inclusion?
 
-It is an in-progress modularization extraction; the standalone manifest compiles, but the API boundary between `franken-core` and the rest of `franken-engine` hasn't stabilised yet. The `bd-zsais` series in May 2026 landed the five extracted runtime modules in a compileable form (class semantics, async functions, async generators, accessor descriptors, heap-backed own-property storage); workspace inclusion will follow once the boundary tests are clean.
+`crates/franken-core` is now included in the root workspace as a first-class member while its standalone manifest remains compileable. The old missing-module/reference-only state was superseded by `bd-zsais`, `bd-dymfz`, and `bd-nwhcp`; `bd-cixqu.10.8` forbids reintroducing a `workspace.exclude` entry for `crates/franken-core`.
 
 ---
 

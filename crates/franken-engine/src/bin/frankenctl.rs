@@ -23,6 +23,7 @@ use frankenengine_engine::benchmark_e2e::{
 };
 use frankenengine_engine::capability::{CapabilityProfile, RuntimeCapability};
 use frankenengine_engine::deterministic_replay::{NondeterminismTrace, ReplayEngine, ReplayMode};
+use frankenengine_engine::differential_oracle::{DifferentialOracleInput, run_differential_oracle};
 use frankenengine_engine::execution_orchestrator::{
     ExecutionOrchestrator, ExtensionPackage, OrchestratorConfig, OrchestratorError,
     OrchestratorResult,
@@ -131,6 +132,7 @@ enum CommandSpec {
     Verify(VerifyArgs),
     Benchmark(BenchmarkArgs),
     Replay(ReplayArgs),
+    DifferentialOracle(DifferentialOracleArgs),
     React(ReactArgs),
     Gates(GatesArgs),
     Reports(ReportsArgs),
@@ -156,6 +158,8 @@ enum HelpTopic {
     BenchmarkVerify,
     Replay,
     ReplayRun,
+    DifferentialOracle,
+    DifferentialOracleRun,
     React,
     ReactCompile,
     ReactBuild,
@@ -186,6 +190,8 @@ impl HelpTopic {
             Self::BenchmarkVerify => benchmark_verify_usage(),
             Self::Replay => replay_usage(),
             Self::ReplayRun => replay_run_usage(),
+            Self::DifferentialOracle => differential_oracle_usage(),
+            Self::DifferentialOracleRun => differential_oracle_run_usage(),
             Self::React => react_usage(),
             Self::ReactCompile => react_compile_usage(),
             Self::ReactBuild => react_build_usage(),
@@ -320,6 +326,24 @@ struct ReplayArgs {
     mode: ReplayMode,
     out: Option<PathBuf>,
     fleet_trace: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DifferentialOracleArgs {
+    mode: DifferentialOracleMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum DifferentialOracleMode {
+    Run(DifferentialOracleRunArgs),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DifferentialOracleRunArgs {
+    input: PathBuf,
+    case_id: Option<String>,
+    timeout_ms: u64,
+    out: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1302,6 +1326,7 @@ fn run(raw_args: Vec<String>) -> Result<i32, String> {
         CommandSpec::Verify(args) => execute_verify(args),
         CommandSpec::Benchmark(args) => execute_benchmark(args),
         CommandSpec::Replay(args) => execute_replay(args),
+        CommandSpec::DifferentialOracle(args) => execute_differential_oracle(args),
         CommandSpec::React(args) => execute_react(args),
         CommandSpec::Gates(args) => execute_gates(args),
         CommandSpec::Reports(args) => execute_reports(args),
@@ -1336,6 +1361,7 @@ fn parse_command(args: &[String]) -> Result<CommandSpec, String> {
         "verify" => parse_verify_command(&args[1..]),
         "benchmark" => parse_benchmark_command(&args[1..]),
         "replay" => parse_replay_command(&args[1..]),
+        "differential-oracle" => parse_differential_oracle_command(&args[1..]),
         "react" => parse_react_command(&args[1..]),
         "gates" => parse_gates_command(&args[1..]),
         "reports" => parse_reports_command(&args[1..]),
@@ -1360,6 +1386,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "verify" => parse_verify_help_command(&args[1..]),
         "benchmark" => parse_benchmark_help_command(&args[1..]),
         "replay" => parse_replay_help_command(&args[1..]),
+        "differential-oracle" => parse_differential_oracle_help_command(&args[1..]),
         "react" => parse_react_help_command(&args[1..]),
         "gates" => parse_leaf_help_topic("gates", HelpTopic::Gates, &args[1..]),
         "reports" => parse_leaf_help_topic("reports", HelpTopic::Reports, &args[1..]),
@@ -1368,7 +1395,7 @@ fn parse_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "orchestrate" => parse_leaf_help_topic("orchestrate", HelpTopic::Orchestrate, &args[1..]),
         "runtime" => parse_leaf_help_topic("runtime", HelpTopic::Runtime, &args[1..]),
         other => Err(format!(
-            "unknown help topic `{other}` (expected compile|run|explain|doctor|verify|benchmark|replay|react|gates|reports|test|synth|orchestrate|runtime)"
+            "unknown help topic `{other}` (expected compile|run|explain|doctor|verify|benchmark|replay|differential-oracle|react|gates|reports|test|synth|orchestrate|runtime)"
         )),
     }
 }
@@ -1432,6 +1459,23 @@ fn parse_replay_help_command(args: &[String]) -> Result<CommandSpec, String> {
         "run" => parse_leaf_help_topic("replay run", HelpTopic::ReplayRun, &args[1..]),
         other => Err(format!(
             "unknown replay help topic `{other}` (expected run)"
+        )),
+    }
+}
+
+fn parse_differential_oracle_help_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() || matches!(args[0].as_str(), "--help" | "-h") {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracle));
+    }
+
+    match args[0].as_str() {
+        "run" => parse_leaf_help_topic(
+            "differential-oracle run",
+            HelpTopic::DifferentialOracleRun,
+            &args[1..],
+        ),
+        other => Err(format!(
+            "unknown differential-oracle help topic `{other}` (expected run)"
         )),
     }
 }
@@ -1986,6 +2030,63 @@ fn parse_replay_run_command(args: &[String]) -> Result<CommandSpec, String> {
         mode,
         out,
         fleet_trace,
+    }))
+}
+
+fn parse_differential_oracle_command(args: &[String]) -> Result<CommandSpec, String> {
+    if args.is_empty() {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracle));
+    }
+
+    match args[0].as_str() {
+        "help" | "--help" | "-h" => match args.get(1).map(String::as_str) {
+            Some("run") => Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracleRun)),
+            Some(other) => Err(format!(
+                "unknown differential-oracle help topic `{other}` (expected run)"
+            )),
+            None => Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracle)),
+        },
+        "run" => parse_differential_oracle_run_command(&args[1..]),
+        other => Err(format!(
+            "unknown differential-oracle subcommand `{other}` (expected run)"
+        )),
+    }
+}
+
+fn parse_differential_oracle_run_command(args: &[String]) -> Result<CommandSpec, String> {
+    if has_help_flag(args) {
+        return Ok(CommandSpec::HelpTopic(HelpTopic::DifferentialOracleRun));
+    }
+
+    let mut input: Option<PathBuf> = None;
+    let mut case_id: Option<String> = None;
+    let mut timeout_ms = 2_000_u64;
+    let mut out: Option<PathBuf> = None;
+
+    let mut index = 0usize;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--input" => input = Some(PathBuf::from(next_arg(args, &mut index, "--input")?)),
+            "--case-id" => case_id = Some(next_arg(args, &mut index, "--case-id")?),
+            "--timeout-ms" => {
+                timeout_ms =
+                    parse_u64(&next_arg(args, &mut index, "--timeout-ms")?, "--timeout-ms")?.max(1)
+            }
+            "--out" => out = Some(PathBuf::from(next_arg(args, &mut index, "--out")?)),
+            flag => return Err(format!("unknown differential-oracle run flag `{flag}`")),
+        }
+        index += 1;
+    }
+
+    Ok(CommandSpec::DifferentialOracle(DifferentialOracleArgs {
+        mode: DifferentialOracleMode::Run(DifferentialOracleRunArgs {
+            input: input.ok_or_else(|| {
+                "differential-oracle run requires --input <source.js>".to_string()
+            })?,
+            case_id,
+            timeout_ms,
+            out,
+        }),
     }))
 }
 
@@ -5183,6 +5284,34 @@ fn execute_replay(args: ReplayArgs) -> Result<i32, String> {
     Ok(0)
 }
 
+fn execute_differential_oracle(args: DifferentialOracleArgs) -> Result<i32, String> {
+    match args.mode {
+        DifferentialOracleMode::Run(args) => execute_differential_oracle_run(args),
+    }
+}
+
+fn execute_differential_oracle_run(args: DifferentialOracleRunArgs) -> Result<i32, String> {
+    let source = fs::read_to_string(&args.input)
+        .map_err(|error| format!("failed to read source `{}`: {error}", args.input.display()))?;
+    let case_id = args.case_id.unwrap_or_else(|| {
+        args.input
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .unwrap_or("differential-oracle-case")
+            .to_string()
+    });
+    let input = DifferentialOracleInput::new(case_id, source)
+        .with_source_path(args.input.display().to_string())
+        .with_timeout_ms(args.timeout_ms);
+    let report = run_differential_oracle(&input);
+
+    if let Some(path) = args.out {
+        write_json_file(&path, &report)?;
+    }
+    print_json(&report)?;
+    Ok(0)
+}
+
 fn execute_react(args: ReactArgs) -> Result<i32, String> {
     match args {
         ReactArgs::Compile(args) => execute_react_compile(args),
@@ -6568,6 +6697,8 @@ fn usage() -> String {
         "  frankenctl benchmark verify --bundle <dir> [--summary] [--output <report.json>]",
         "  frankenctl replay run --trace <trace.json> [--compare-trace <trace.json>]",
         "      [--mode strict|best-effort|validate] [--out <report.json>]",
+        "  frankenctl differential-oracle run --input <source.js>",
+        "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
         "  frankenctl react compile|build|doctor|contract [options]  # React integration surfaces",
         "",
         "OPERATOR/DEVELOPMENT SURFACES (unsupported in production):",
@@ -6604,6 +6735,7 @@ fn command_label(command: &CommandSpec) -> &'static str {
         CommandSpec::Verify(_) => "verify",
         CommandSpec::Benchmark(_) => "benchmark",
         CommandSpec::Replay(_) => "replay",
+        CommandSpec::DifferentialOracle(_) => "differential-oracle",
         CommandSpec::React(ReactArgs::Compile(_)) => "react-compile",
         CommandSpec::React(ReactArgs::Build(_)) => "react-build",
         CommandSpec::React(ReactArgs::Doctor(_)) => "react-doctor",
@@ -6648,6 +6780,9 @@ fn command_remediation(command: &str) -> &'static str {
             "Validate benchmark subcommand args (run|score|verify), then rerun `frankenctl benchmark ...`."
         }
         "replay" => "Validate trace JSON and mode, then rerun `frankenctl replay run`.",
+        "differential-oracle" => {
+            "Validate the JS fixture path and timeout, then rerun `frankenctl differential-oracle run`."
+        }
         "react-compile" | "react-build" => {
             "Inspect `frankenctl react contract` and rerun with a declared source-form/runtime/target combination."
         }
@@ -6805,6 +6940,28 @@ fn replay_run_usage() -> String {
         "  payload hash). Pass a directory of per-node traces (one file == one",
         "  node) or a single additional per-node trace file; --trace is the",
         "  anchor node.",
+    ]
+    .join("\n")
+}
+
+fn differential_oracle_usage() -> String {
+    [
+        "differential-oracle usage:",
+        "  frankenctl differential-oracle run --input <source.js>",
+        "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
+        "",
+        "behavior:",
+        "  executes one JS fixture across Node, Bun, franken-engine, and the franken-core-compatible baseline lane.",
+        "  missing external runtimes produce unavailable backend receipts instead of failing the run.",
+    ]
+    .join("\n")
+}
+
+fn differential_oracle_run_usage() -> String {
+    [
+        "differential-oracle run usage:",
+        "  frankenctl differential-oracle run --input <source.js>",
+        "      [--case-id <id>] [--timeout-ms <u64>] [--out <report.json>]",
     ]
     .join("\n")
 }
@@ -7088,6 +7245,34 @@ mod tests {
                 assert_eq!(spec.explain_out, Some(PathBuf::from("explain.json")));
             }
             other => panic!("expected run command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_differential_oracle_run_command() {
+        let args = vec![
+            "differential-oracle".to_string(),
+            "run".to_string(),
+            "--input".to_string(),
+            "fixture.js".to_string(),
+            "--case-id".to_string(),
+            "case-001".to_string(),
+            "--timeout-ms".to_string(),
+            "750".to_string(),
+            "--out".to_string(),
+            "oracle.json".to_string(),
+        ];
+        let parsed = parse_command(&args).expect("differential oracle command should parse");
+        match parsed {
+            CommandSpec::DifferentialOracle(DifferentialOracleArgs {
+                mode: DifferentialOracleMode::Run(spec),
+            }) => {
+                assert_eq!(spec.input, PathBuf::from("fixture.js"));
+                assert_eq!(spec.case_id.as_deref(), Some("case-001"));
+                assert_eq!(spec.timeout_ms, 750);
+                assert_eq!(spec.out, Some(PathBuf::from("oracle.json")));
+            }
+            other => panic!("expected differential-oracle command, got {other:?}"),
         }
     }
 

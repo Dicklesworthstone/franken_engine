@@ -1008,6 +1008,74 @@ fn model_checking_obligation_rejects_bounded_counterexample_when_z3_available() 
 }
 
 #[test]
+fn property_testing_obligation_verifies_generated_bounded_samples() {
+    let mut carrier =
+        OptimizationProofCarrier::new("return x + 1;".to_string(), "return 1 + x;".to_string());
+    carrier.equivalence_proofs.push(EquivalenceProof {
+        proof_id: "property_equivalent_samples".to_string(),
+        proof_method: ProofMethod::ObservationalEquivalence,
+        source_semantics: "source integer expression".to_string(),
+        target_semantics: "target integer expression".to_string(),
+        equivalence_relation: EquivalenceRelation::ExactEquivalence,
+        proof_obligations: vec![ProofObligation {
+            obligation_id: "generated_commutative_addition".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "Source and target execute in the bounded optimization sample language"
+                .to_string(),
+            conclusion: "Source and target return equal values for generated samples".to_string(),
+            proof_sketch: "deterministic proptest fixture execution".to_string(),
+            verification_method: VerificationMethod::PropertyTesting,
+            sample_inputs: vec![OptimizationSampleInput::from_bindings([("x", 0)])],
+        }],
+        verification_result: ProofResult::Pending,
+    });
+
+    let result = carrier.verify_all_proofs().unwrap();
+
+    assert_eq!(result.total_proofs, 1);
+    assert_eq!(result.verified_proofs, 1);
+    assert_eq!(result.failed_proofs, 0);
+    assert_eq!(
+        carrier.verification_status,
+        OptimizationVerificationStatus::FullyVerified
+    );
+}
+
+#[test]
+fn property_testing_obligation_rejects_generated_counterexample() {
+    let mut carrier =
+        OptimizationProofCarrier::new("return x;".to_string(), "return 1;".to_string());
+    carrier.equivalence_proofs.push(EquivalenceProof {
+        proof_id: "property_counterexample".to_string(),
+        proof_method: ProofMethod::ObservationalEquivalence,
+        source_semantics: "source identity expression".to_string(),
+        target_semantics: "target constant expression".to_string(),
+        equivalence_relation: EquivalenceRelation::ExactEquivalence,
+        proof_obligations: vec![ProofObligation {
+            obligation_id: "generated_identity_counterexample".to_string(),
+            obligation_type: ObligationType::SemanticPreservation,
+            premise: "Source and target execute in the bounded optimization sample language"
+                .to_string(),
+            conclusion: "Source and target return equal values for generated samples".to_string(),
+            proof_sketch: "deterministic proptest fixture execution".to_string(),
+            verification_method: VerificationMethod::PropertyTesting,
+            sample_inputs: vec![OptimizationSampleInput::from_bindings([("x", 1)])],
+        }],
+        verification_result: ProofResult::Pending,
+    });
+
+    let result = carrier.verify_all_proofs().unwrap();
+
+    assert_eq!(result.total_proofs, 1);
+    assert_eq!(result.verified_proofs, 0);
+    assert_eq!(result.failed_proofs, 1);
+    assert_eq!(
+        carrier.verification_status,
+        OptimizationVerificationStatus::VerificationFailed
+    );
+}
+
+#[test]
 fn generated_sample_language_obligations_verify_and_emit_bundles() {
     for test_case_name in [
         "dead_code_elimination_simple",

@@ -20,6 +20,11 @@ use std::{
     path::Path,
 };
 
+use proptest::{
+    collection::vec as prop_vec,
+    prelude::{Just, Strategy},
+    test_runner::{Config as ProptestConfig, TestCaseError, TestRng, TestRunner},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::policy_theorem_engine::{
@@ -637,13 +642,16 @@ impl OptimizationProofCarrier {
             VerificationMethod::ModelChecking | VerificationMethod::SymbolicExecution => Ok(
                 verify_via_bounded_z3_model(&obligation.premise, &obligation.conclusion),
             ),
-            VerificationMethod::PropertyTesting | VerificationMethod::DifferentialTesting => {
-                Ok(verify_with_sample_differential_runner(
-                    &self.source_ir,
-                    &self.target_ir,
-                    &obligation.sample_inputs,
-                ))
-            }
+            VerificationMethod::PropertyTesting => Ok(verify_with_sample_property_runner(
+                &self.source_ir,
+                &self.target_ir,
+                &obligation.sample_inputs,
+            )),
+            VerificationMethod::DifferentialTesting => Ok(verify_with_sample_differential_runner(
+                &self.source_ir,
+                &self.target_ir,
+                &obligation.sample_inputs,
+            )),
         }
     }
 
@@ -865,6 +873,11 @@ fn verify_via_bounded_z3_model(premise: &str, conclusion: &str) -> ProofResult {
 /// obligations; raise via a follow-up bead if specific optimization passes
 /// emit obligations that genuinely need longer.
 const Z3_VERIFY_TIMEOUT_SECONDS: u32 = 5;
+const PROPERTY_TEST_CASES: u32 = 64;
+const PROPERTY_TEST_VALUE_MIN: i64 = -16;
+const PROPERTY_TEST_VALUE_MAX: i64 = 16;
+const PROPERTY_TEST_FIXTURE_VALUES: [i64; 5] =
+    [PROPERTY_TEST_VALUE_MIN, -1, 0, 1, PROPERTY_TEST_VALUE_MAX];
 
 fn verify_with_sample_differential_runner(
     source_ir: &str,
@@ -876,20 +889,149 @@ fn verify_with_sample_differential_runner(
     }
 
     for sample in sample_inputs {
-        let source_output = match run_optimization_sample_program(source_ir, sample) {
-            Ok(output) => output,
-            Err(_) => return ProofResult::Failed,
-        };
-        let target_output = match run_optimization_sample_program(target_ir, sample) {
-            Ok(output) => output,
-            Err(_) => return ProofResult::Failed,
-        };
-        if source_output != target_output {
+        if compare_optimization_sample_outputs(source_ir, target_ir, sample).is_err() {
             return ProofResult::Failed;
         }
     }
 
     ProofResult::Verified
+}
+
+fn verify_with_sample_property_runner(
+    source_ir: &str,
+    target_ir: &str,
+    sample_inputs: &[OptimizationSampleInput],
+) -> ProofResult {
+    if sample_inputs.is_empty() {
+        return ProofResult::Failed;
+    }
+
+    for fixture in property_sample_fixtures(sample_inputs) {
+        let mut runner = deterministic_proptest_runner(1);
+        if runner
+            .run(&Just(fixture), |sample| {
+                compare_optimization_sample_outputs(source_ir, target_ir, &sample)
+                    .map_err(TestCaseError::fail)
+            })
+            .is_err()
+        {
+            return ProofResult::Failed;
+        }
+    }
+
+    let variable_names = property_sample_variable_names(sample_inputs);
+    if !variable_names.is_empty() {
+        let mut runner = deterministic_proptest_runner(PROPERTY_TEST_CASES);
+        let generated_samples = property_sample_strategy(variable_names);
+        if runner
+            .run(&generated_samples, |sample| {
+                compare_optimization_sample_outputs(source_ir, target_ir, &sample)
+                    .map_err(TestCaseError::fail)
+            })
+            .is_err()
+        {
+            return ProofResult::Failed;
+        }
+    }
+
+    ProofResult::Verified
+}
+
+fn deterministic_proptest_runner(cases: u32) -> TestRunner {
+    let config = ProptestConfig {
+        cases,
+        ..ProptestConfig::default()
+    };
+    let algorithm = config.rng_algorithm;
+    TestRunner::new_with_rng(config, TestRng::deterministic_rng(algorithm))
+}
+
+fn property_sample_variable_names(sample_inputs: &[OptimizationSampleInput]) -> Vec<String> {
+    sample_inputs
+        .iter()
+        .flat_map(|sample| sample.bindings.keys().cloned())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn property_sample_fixtures(
+    sample_inputs: &[OptimizationSampleInput],
+) -> Vec<OptimizationSampleInput> {
+    let variable_names = property_sample_variable_names(sample_inputs);
+    let mut fixtures = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for sample in sample_inputs {
+        push_unique_property_sample(&mut fixtures, &mut seen, sample.clone());
+    }
+
+    if !variable_names.is_empty() {
+        for value in PROPERTY_TEST_FIXTURE_VALUES {
+            push_unique_property_sample(
+                &mut fixtures,
+                &mut seen,
+                OptimizationSampleInput::from_bindings(
+                    variable_names.iter().cloned().map(|name| (name, value)),
+                ),
+            );
+        }
+
+        for variable_name in &variable_names {
+            for value in PROPERTY_TEST_FIXTURE_VALUES {
+                let bindings = variable_names.iter().cloned().map(|name| {
+                    let bound_value = if &name == variable_name { value } else { 0 };
+                    (name, bound_value)
+                });
+                push_unique_property_sample(
+                    &mut fixtures,
+                    &mut seen,
+                    OptimizationSampleInput::from_bindings(bindings),
+                );
+            }
+        }
+    }
+
+    fixtures
+}
+
+fn push_unique_property_sample(
+    fixtures: &mut Vec<OptimizationSampleInput>,
+    seen: &mut BTreeSet<BTreeMap<String, i64>>,
+    sample: OptimizationSampleInput,
+) {
+    if seen.insert(sample.bindings.clone()) {
+        fixtures.push(sample);
+    }
+}
+
+fn property_sample_strategy(
+    variable_names: Vec<String>,
+) -> impl Strategy<Value = OptimizationSampleInput> {
+    prop_vec(
+        PROPERTY_TEST_VALUE_MIN..=PROPERTY_TEST_VALUE_MAX,
+        variable_names.len()..=variable_names.len(),
+    )
+    .prop_map(move |values| {
+        OptimizationSampleInput::from_bindings(variable_names.iter().cloned().zip(values))
+    })
+}
+
+fn compare_optimization_sample_outputs(
+    source_ir: &str,
+    target_ir: &str,
+    sample: &OptimizationSampleInput,
+) -> Result<(), String> {
+    let source_output = run_optimization_sample_program(source_ir, sample)?;
+    let target_output = run_optimization_sample_program(target_ir, sample)?;
+    if source_output == target_output {
+        Ok(())
+    } else {
+        Err(format!(
+            "sample output mismatch for bindings {:?}: source returned {}, target returned {}",
+            sample.bindings, source_output, target_output
+        ))
+    }
 }
 
 fn run_optimization_sample_program(
